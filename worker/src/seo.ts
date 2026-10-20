@@ -8,7 +8,7 @@ import type { Env } from './util';
 import { ROUTES, TABS, EXPLAINER_ROUTES, classifyPath, routeByPath, fullTitle, type RouteDef } from '../../shared/routes';
 import { SITE, BODY, NOT_FOUND, type FactKey, type PageCopy } from '../../shared/copy';
 import { metricAt, cachedChainParams, coverageOf, unbondingWait } from './analytics';
-import { HOLDER_COUNTS_SQL, NAMADA_TOP10_SQL } from './holders';
+import { HOLDER_COUNTS_SQL, NAMADA_TOP10_SQL, listingTimes } from './holders';
 
 export type { FactKey };
 export { BODY };
@@ -29,12 +29,13 @@ export async function facts(env: Env): Promise<Facts> {
   if (hit) return hit.json();
   const db = env.DB;
   const now = Date.now();
+  const listed = await listingTimes(db);
   const [price, total, bonded, shielded, osmosis, liquidity, pools, counts, top10, vol, cov, params] = await Promise.all([
     // Staked: the chain's own total stake, not the staking account's balance (which also holds NAM on its way out).
     metricAt(db, 'price.usd', now), metricAt(db, 'supply.total', now), metricAt(db, 'supply.total_stake', now), metricAt(db, 'supply.masp_shielded', now),
     metricAt(db, 'supply.osmosis', now), metricAt(db, 'dex.liquidity_usd', now), metricAt(db, 'dex.pool_count', now),
     db.prepare(HOLDER_COUNTS_SQL).first<{ namada: number | null; osmosis: number | null; namada_at: number | null; osmosis_at: number | null }>().catch(() => null),
-    db.prepare(NAMADA_TOP10_SQL).first<{ s: number | null; at: number | null }>().catch(() => null),
+    db.prepare(NAMADA_TOP10_SQL).bind(listed.balance ?? 0, listed.bond ?? 0).first<{ s: number | null; at: number | null }>().catch(() => null),
     db.prepare(`SELECT SUM(amount_num) nam, COUNT(*) n FROM flows WHERE chain='osmosis' AND kind IN ('buy','sell') AND ts >= ? AND ts < ?
                 AND (meta IS NULL OR meta NOT LIKE '%"arb":true%')`).bind(now - D, now).first<{ nam: number | null; n: number }>().catch(() => null),
     coverageOf(db, now, false).catch(() => null),
@@ -58,8 +59,10 @@ export async function facts(env: Env): Promise<Facts> {
       ? { text: `Bought and sold on Osmosis in the last 24 hours: ${num(vol.nam ?? 0)} NAM${usd} in ${num(vol.n)} trades, bot round trips removed`, at: osmoAt, source: 'NamadaTrade flow index' }
       : { text: 'No NAM was bought or sold on Osmosis in the last 24 hours (bot round trips removed)', at: osmoAt, source: 'NamadaTrade flow index' };
   }
-  // Holder facts carry the time their data was written or read, not the time of this request.
-  const countsAt = counts?.namada_at != null && counts?.osmosis_at != null ? Math.min(counts.namada_at, counts.osmosis_at) : null;
+  // Holder facts carry the time their data was written or read, not the time of this request: for Namada the last
+  // complete balance listing (every address compared then), else the newest row write.
+  const namadaAt = listed.balance ?? counts?.namada_at ?? null;
+  const countsAt = namadaAt != null && counts?.osmosis_at != null ? Math.min(namadaAt, counts.osmosis_at) : null;
   if (counts?.namada != null && counts?.osmosis != null && countsAt != null) f.holders = { text: `Holders: ${num(counts.namada)} on Namada (spendable or staked NAM), ${num(counts.osmosis)} on Osmosis; protocol and pool accounts left out`, at: countsAt, source: 'NamadaTrade holder index' };
   if (top10?.s != null && top10.at != null && total) f.top10 = { text: `The 10 largest holders on Namada own ${((top10.s / total.value) * 100).toFixed(1)}% of all NAM (spendable and staked; protocol accounts left out)`, at: top10.at, source: 'NamadaTrade holder index' };
   const wait = unbondingWait(params);

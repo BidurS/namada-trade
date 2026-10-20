@@ -1,18 +1,17 @@
-// W2 (holder status, owner decision 7) and W13 (rolling refresh of spendable balances, real 24 h / 7 d changes).
+// W2 (holder status, owner decision 7) and W13 (recorded chain reads of spendable balances, real 24 h / 7 d changes).
+// The balance listing that feeds the readings since 2026-10-20 is in test/bulk-index.test.ts.
 import { describe, it, expect } from 'vitest';
 import {
-  holderStatus, balanceAt, changeOver, spanStmts, liquidReadStmt, osmosisDroppedStmt, pruneSpansStmt, liquidChanges,
-  LIQUID_DUE_SQL, LIQUID_PER_TICK, LIQUID_STALE_MS, SPAN_MAX_GAP_MS, type HolderStatusInput, type Span,
+  holderStatus, balanceAt, changeOver, spanStmts, listingBalanceStmts, osmosisDroppedStmt, pruneSpansStmt, liquidChanges,
+  LIQUID_STALE_MS, SPAN_MAX_GAP_MS, type HolderStatusInput, type Span,
 } from '../worker/src/holders';
-import { refreshLiquidBalances } from '../worker/src/cron';
 import { app } from '../worker/src/api';
 import { testD1, insert, runStmts, type TestD1 } from './d1-sqlite';
-import type { HoldersResponse, SourceHealth } from '../shared/types';
+import type { HoldersResponse } from '../shared/types';
 
 const H = 3600000, D = 86400000;
 const NOW = Date.UTC(2026, 9, 17, 17, 0);
 const POS = 'tnam1qgqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqc8j2fp';
-const MASP = 'tnam1pcqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqzmefah';
 
 const base: HolderStatusInput = { chain: 'namada', verifiedAt: NOW - H, hasLiquidRow: true, bondedRead: null, bondedVerifiedAt: null, bondedEstimated: null };
 
@@ -80,9 +79,9 @@ function holder(db: TestD1, chain: string, address: string, balance: string, ext
   insert(db, 'holders', [{ chain, address, balance, balance_num: Number(balance) / 1e6, updated_height: 1, updated_at: NOW - 3 * D, ...extra }]);
 }
 
-/** A chain read of `address` at `at` as the cron makes it, then the span bookkeeping for that batch. */
+/** A chain read of `address` at `at` (the listing's statement, one height per read here), then the span bookkeeping for that batch. */
 async function readAt(db: TestD1, at: number, reads: [string, string, number][]) {
-  await runStmts(db, reads.map(([a, bal, h]) => liquidReadStmt('namada', a, bal, h, at, 'test')));
+  await runStmts(db, reads.flatMap(([a, bal, h]) => listingBalanceStmts([{ address: a, balance: bal }], h, at, 'test')));
   await runStmts(db, spanStmts('namada', at));
 }
 
@@ -156,58 +155,6 @@ describe('D1 limits', () => {
     expect(ch.size).toBe(150);
     expect(ch.get('tnam1many149')).toEqual({ d24: 49, d7: null });
     expect(() => spanStmts('namada', NOW, Array.from({ length: 91 }, (_, i) => `a${i}`))).toThrow();
-  });
-});
-
-describe('the rolling refresh (W13)', () => {
-  it('reads the addresses checked longest ago first, skips protocol accounts, and records what it read', async () => {
-    const db = testD1();
-    holder(db, 'namada', POS, '1', { verified_at: null });
-    holder(db, 'namada', MASP, '1', { verified_at: null });
-    holder(db, 'namada', 'tnam1never', '1000000', { verified_at: null });
-    holder(db, 'namada', 'tnam1old', '2000000', { verified_at: NOW - 3 * D });
-    holder(db, 'namada', 'tnam1fresh', '3000000', { verified_at: Date.now() - 60000 });
-    insert(db, 'stakes', [{ address: 'tnam1stakeronly', estimated_num: 50, updated_at: NOW }]);
-    insert(db, 'stakes', [{ address: 'tnam1never', bonded_num: 1.5, updated_at: NOW }]);
-    const due = await db.prepare(LIQUID_DUE_SQL).bind(Date.now() - LIQUID_STALE_MS, 10).all<{ address: string }>();
-    // old or never read first, largest holding first (spendable + staked: 50, 2, 1 + 1.5), then fresh rows oldest first
-    expect(due.results.map((r) => r.address)).toEqual(['tnam1stakeronly', 'tnam1never', 'tnam1old', 'tnam1fresh']);
-    const fresh2 = { chain: 'namada', balance: '1', balance_num: 0.000001, updated_height: 1, updated_at: NOW };
-    insert(db, 'holders', [{ ...fresh2, address: 'tnam1fresher', verified_at: Date.now() - 1000 }, { ...fresh2, address: 'tnam1fresh2', verified_at: Date.now() - 2 * H }]);
-    const due2 = await db.prepare(LIQUID_DUE_SQL).bind(Date.now() - LIQUID_STALE_MS, 10).all<{ address: string }>();
-    expect(due2.results.map((r) => r.address).slice(3)).toEqual(['tnam1fresh2', 'tnam1fresh', 'tnam1fresher']);
-    db.raw.prepare("DELETE FROM holders WHERE address IN ('tnam1fresher','tnam1fresh2')").run();
-
-    const health: SourceHealth[] = [];
-    const seen: string[] = [];
-    const fakeRead = async (a: string) => {
-      seen.push(a);
-      if (a === 'tnam1old') throw new Error('node timeout');
-      return { balance: a === 'tnam1never' ? 1500000n : 0n, height: 900, provider: 'TestNode' };
-    };
-    const r = await refreshLiquidBalances({ DB: db } as any, health, fakeRead);
-    expect(r).toEqual({ read: 3, failed: 1, landed: 3, rejected: 0 });
-    expect(seen).not.toContain(POS);
-    expect(seen.length).toBeLessThanOrEqual(LIQUID_PER_TICK);
-    const rows = db.raw.prepare("SELECT address, balance, verified_src FROM holders WHERE verified_src = 'TestNode' ORDER BY address").all().map((x: any) => ({ ...x }));
-    expect(rows).toEqual([
-      { address: 'tnam1fresh', balance: '0', verified_src: 'TestNode' },
-      { address: 'tnam1never', balance: '1500000', verified_src: 'TestNode' },
-      { address: 'tnam1stakeronly', balance: '0', verified_src: 'TestNode' }, // a staker now has a spendable reading too
-    ]);
-    // the failed read leaves the old row as it was, first in line next tick
-    expect(db.raw.prepare("SELECT verified_at FROM holders WHERE address='tnam1old'").get().verified_at).toBe(NOW - 3 * D);
-    expect(db.raw.prepare('SELECT COUNT(*) n FROM balance_spans').get().n).toBe(3);
-    expect(health[0]).toMatchObject({ name: 'Namada RPC (balance refresh)', ok: true });
-    expect(health[0].note).toMatch(/^3 spendable balances read from the chain and written this tick, 1 failed/);
-  });
-
-  it('does not use a read without a block height', async () => {
-    const db = testD1();
-    holder(db, 'namada', 'tnam1z', '1000000');
-    const r = await refreshLiquidBalances({ DB: db } as any, [], async () => ({ balance: 5n, height: 0, provider: 'x' }));
-    expect(r).toEqual({ read: 0, failed: 1, landed: 0, rejected: 0 });
-    expect(db.raw.prepare("SELECT balance FROM holders WHERE address='tnam1z'").get().balance).toBe('1000000');
   });
 });
 

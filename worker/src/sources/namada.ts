@@ -1,5 +1,5 @@
 import { NAM, NAMADA } from '../config';
-import { decodeU256LE, decodeU64LE, fetchJson, withFailover } from '../util';
+import { decodeU256LE, decodeU64LE, fetchJson, fetchText, withFailover, ReadCutError } from '../util';
 import { bech32m } from '@scure/base';
 import type { NamadaBlock } from '../parse/namada';
 
@@ -23,9 +23,13 @@ export async function namadaStatusAll(opts: { timeoutMs?: number; retries?: numb
   return Promise.all(RPCS.map((r) => namadaStatus(r, opts).catch((e) => ({ provider: r.provider, error: String(e) }))));
 }
 
-/** The nodes in `RPCS` order whose status answered, for a circuit breaker; all of them when none answered. */
-export function answeringRpcs(statuses: { provider: string; error?: string }[]): readonly Rpc[] {
-  const ok = RPCS.filter((r) => statuses.some((s) => s.provider === r.provider && !s.error));
+/**
+ * The nodes in `RPCS` order whose status answered and that are not catching up (a node replaying blocks after a
+ * restart answers queries from an old state: its listing would be applied as the chain's current one); all of
+ * them when none answered.
+ */
+export function answeringRpcs(statuses: { provider: string; error?: string; catchingUp?: boolean }[]): readonly Rpc[] {
+  const ok = RPCS.filter((r) => statuses.some((s) => s.provider === r.provider && !s.error && !s.catchingUp));
   return ok.length ? ok : RPCS;
 }
 
@@ -142,7 +146,9 @@ export class RpcBreaker {
 
 /** The node answered, with an error code: an answer about the query (no such bond, no such path), not a failure. */
 export class AbciCodeError extends Error {
-  constructor(public path: string, public code: number, info: string) { super(`abci ${path} code ${code}: ${info}`); }
+  readonly path: string;
+  readonly code: number;
+  constructor(path: string, code: number, info: string) { super(`abci ${path} code ${code}: ${info}`); this.path = path; this.code = code; }
 }
 
 async function abci(path: string, opts: ReadOpts = {}) {
@@ -167,18 +173,38 @@ async function abci(path: string, opts: ReadOpts = {}) {
   return { value: resp.value as string | null, height: Number(resp.height || 0), provider };
 }
 
+/** What a listing read answers: the ABCI value with the node, height, bytes and time of the read. */
+export interface ListingAnswer { value: string | null; height: number; provider: string; bytes: number; readMs: number }
+
+/**
+ * One multi-megabyte ABCI answer, read by streaming (util.ts fetchText) so a read cut short says how much arrived:
+ * one attempt per node in `opts.rpcs` order, each with the whole `timeoutMs` for its stream. No breaker: a node
+ * that streams slowly answers; it is not "no answer". When every node fails, the error names each node's outcome
+ * ("5ElementsNodes: timeout: 4.2 MB of 12.0 MB arrived in 180 s (first byte after 5.8 s); Papadritta: …").
+ */
+async function abciListing(path: string, opts: ReadOpts = {}): Promise<ListingAnswer> {
+  const list = opts.rpcs?.length ? opts.rpcs : RPCS;
+  const notes: string[] = [];
+  for (const r of list) {
+    if (opts.signal?.aborted) { notes.push(`${r.provider}: not asked, the deadline had passed`); break; }
+    const t0 = Date.now();
+    try {
+      const { text, bytes } = await fetchText(`${r.url}/abci_query?path=${encodeURIComponent(`"${path}"`)}`, { timeoutMs: opts.timeoutMs ?? 180_000, signal: opts.signal });
+      const resp = JSON.parse(text)?.result?.response;
+      if (!resp) throw new Error('answer without a response');
+      if (resp.code && resp.code !== 0) throw new AbciCodeError(path, Number(resp.code), String(resp.info || resp.log || ''));
+      return { value: (resp.value as string | null) ?? null, height: Number(resp.height || 0), provider: r.provider, bytes, readMs: Date.now() - t0 };
+    } catch (e) {
+      notes.push(`${r.provider}: ${e instanceof ReadCutError ? e.message : String(e instanceof Error ? e.message : e).slice(0, 120)}`);
+    }
+  }
+  throw new Error(notes.join('; ') || `abci ${path}: no node to ask`);
+}
+
 /** Live NAM balance (base units) of a Namada address */
 export async function namBalance(owner: string, opts: ReadOpts = {}) {
   const r = await abci(`/shell/value/#${NAMADA.multitoken}/#${NAM.namadaToken}/balance/#${owner}`, opts);
   return { balance: decodeU256LE(r.value), height: r.height, provider: r.provider };
-}
-
-/**
- * The same read for the cron's rolling refresh: one attempt per node (no retries) and a short timeout, so a
- * batch of addresses costs at most two requests each and a slow node cannot stall the tick.
- */
-export async function namBalanceQuick(owner: string, opts: ReadOpts = {}) {
-  return namBalance(owner, { ...QUICK, ...opts });
 }
 
 export async function namTotalSupply(opts: ReadOpts = {}) {
@@ -214,8 +240,11 @@ function u256At(b: Uint8Array, o: number): bigint {
 }
 
 /**
- * All bonds of an owner at an epoch: delegations (HashMap<Address, Amount>) plus, if the owner is a
- * validator, its self-bond. Amounts are NAM. Throws when the RPCs fail; never returns a guess.
+ * All bonds of an owner at an epoch: delegations (HashMap<Address, Amount>), self-bond included. Amounts are NAM.
+ * Throws when the RPCs fail; never returns a guess. Checked on 2026-10-20 on three validators: delegations_at
+ * already lists a validator's own bond (53 NAM for tnam1q82gt…, the same as /vp/pos/bond/<v>/<v>), so the
+ * self-bond read below is only a guard for an answer that leaves it out; before this it was added on top, so
+ * every validator's stake was counted twice by the per-address verification.
  */
 export async function delegationsAt(owner: string, epoch: number, opts: ReadOpts = {}) {
   const r = await abci(`/vp/pos/delegations_at/${owner}/${epoch}`, opts);
@@ -228,12 +257,12 @@ export async function delegationsAt(owner: string, epoch: number, opts: ReadOpts
     const amt = u256At(b, o); o += 32;
     if (amt > 0n) out.push({ validator, amountNam: Number(amt) / 1e6 });
   }
-  // Self-bond (validators bonding to themselves are not "delegations"). An address with no self-bond gets an
-  // answer with code 1 ("Cannot find bond"): that is "none". A read that got no answer (a timeout, a hung node,
-  // the tick's deadline) throws, so the delegations alone are never written as the address's whole stake.
+  // The self-bond, when the list above left it out. An address with no self-bond gets an answer with code 1
+  // ("Cannot find bond"): that is "none". A read that got no answer (a timeout, a hung node, the tick's deadline)
+  // throws, so the delegations alone are never written as the address's whole stake.
   try {
     const sb = await abci(`/vp/pos/bond/${owner}/${owner}`, opts);
-    if (sb.value) {
+    if (sb.value && !out.some((d) => d.validator === owner)) {
       const v = decodeU256LE(sb.value);
       if (v > 0n) out.push({ validator: owner, amountNam: Number(v) / 1e6 });
     }
@@ -243,78 +272,236 @@ export async function delegationsAt(owner: string, epoch: number, opts: ReadOpts
   return { epoch, delegations: out, bondedNam: out.reduce((a, d) => a + d.amountNam, 0), provider: r.provider, height: r.height };
 }
 
-// ---------------------------------------------------------------- staker discovery
-//
-// The site used to learn of a staker only from its own flow index (from block 7,682,174) or the holder list, so
-// genesis and early delegators were never read: on 2026-10-19 it tracked 862 of the chain's 21,443 delegators and
-// "Staked NAM is traced address by address" stopped at 87.3%. The chain lists every delegation to a validator in
-// one query (/vp/pos/bonds_and_unbonds/to/<validator>, about 18 KB for 137 delegators, 414 KB for the largest).
 
-/** A borsh reader over an ABCI value (base64). */
+// ---------------------------------------------------------------- the bulk index: every balance, every bond
+//
+// The site used to learn of a Namada address only from its own flow index (from block 7,682,174), a one-off
+// import, and a per-validator pass: on 2026-10-19 it tracked 3,636 of the 64,373 addresses that hold NAM and
+// read spendable balances 50 at a time. The chain lists everything in one ABCI query each (both checked on
+// 2026-10-20 against rpc-namada.5elementsnodes.com, neither node compresses its answer):
+// - every NAM balance: /shell/prefix/#<multitoken>/#<NAM>/balance, 90,783 keys, 9.0 MB borsh (12 MB JSON), ~3 s;
+// - every bond: /vp/pos/bonds_and_unbonds/to (both parts empty), 30,271 source × validator entries, 4.0 MB, ~3 s.
+// Both parsers read the answer byte for byte into typed arrays (no string building) and refuse a truncated or
+// malformed answer whole, so nothing is ever half-applied. The listings are read on their own schedule (cron.ts
+// runListings, every LISTING_CRON): a public node can take a minute or more to stream 12 MB, which no per-minute
+// tick can wait for.
+
+const B64 = new Int16Array(256).fill(-1);
+for (let i = 0; i < 64; i++) B64['ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/'.charCodeAt(i)] = i;
+
+/** base64 → bytes straight into a Uint8Array (atob on a 12 MB answer would first build an 18 MB UTF-16 string). */
+export function base64Bytes(s: string): Uint8Array {
+  let n = s.length;
+  while (n > 0 && s.charCodeAt(n - 1) === 61) n--; // '=' padding
+  const out = new Uint8Array(Math.floor((n * 3) / 4));
+  let acc = 0, bits = 0, o = 0;
+  for (let i = 0; i < n; i++) {
+    const v = B64[s.charCodeAt(i)];
+    if (v < 0) throw new Error(`base64: bad character at ${i}`);
+    acc = (acc << 6) | v;
+    bits += 6;
+    if (bits >= 8) { bits -= 8; out[o++] = (acc >> bits) & 0xff; }
+  }
+  return o === out.length ? out : out.subarray(0, o);
+}
+
+/** The raw 21-byte form (bech32m payload) of a tnam address: [discriminant, 20 bytes]. */
+function rawAddress(addr: string): Uint8Array {
+  return bech32m.fromWords(bech32m.decode(addr as `${string}1${string}`, 100).words);
+}
+const MULTITOKEN_RAW = rawAddress(NAMADA.multitoken);
+const NAM_RAW = rawAddress(NAM.namadaToken);
+const sameBytes = (a: Uint8Array, b: Uint8Array) => a.length === b.length && a.every((x, i) => x === b[i]);
+
+/**
+ * Borsh `InternalAddress` variant → raw address discriminant (namada_core address::raw). Variants 4 (IbcToken), 8
+ * (Erc20) and 9 (Nut) carry 20 more bytes; the others encode as the discriminant followed by 20 zero bytes, which
+ * is why the protocol accounts read tnam1qgqqq… (PoS, 2), tnam1qcqqq… (IBC, 6), tnam1q5qqq… (governance, 5),
+ * tnam1pyqqq… (multitoken, 9), tnam1pgqqq… (PGF, 10) and tnam1pcqqq… (MASP, 14). Checked against config.ts.
+ */
+const INTERNAL_DISCRIMINANT = [2, 3, 4, 6, 13, 5, 7, 8, 11, 12, 9, 10, 14, 15, 16];
+const INTERNAL_WITH_HASH = new Set([4, 8, 9]);
+
+/** A borsh reader over an ABCI answer. Every read past the end throws, so a cut answer is refused, never half-read. */
 class Borsh {
   private p = 0;
-  constructor(private readonly b: Uint8Array) {}
+  private readonly raw = new Uint8Array(21);
+  private readonly view: DataView;
+  private readonly b: Uint8Array;
+  // no parameter properties: Node's type stripping (scripts/backfill-namada.ts imports this module) does not take them
+  constructor(b: Uint8Array) { this.b = b; this.view = new DataView(b.buffer, b.byteOffset, b.byteLength); }
   get done() { return this.p === this.b.length; }
+  get offset() { return this.p; }
   private take(n: number) {
-    if (this.p + n > this.b.length) throw new Error('borsh: value ends early');
+    if (this.p + n > this.b.length) throw new Error(`borsh: value ends early at byte ${this.p}`);
     const s = this.b.subarray(this.p, this.p + n);
     this.p += n;
     return s;
   }
   u8() { return this.take(1)[0]; }
-  u32() { const s = this.take(4); return (s[0] | (s[1] << 8) | (s[2] << 16) | (s[3] << 24)) >>> 0; }
+  u32() { const v = this.view.getUint32(this.p, true); this.p += 4; return v; }
   skip(n: number) { this.take(n); }
-  /** token::Amount: 32 bytes little-endian; returned in NAM (6 decimals), exact enough for sums of stakes. */
-  amountNam() {
+  /** token::Amount: 32 bytes little-endian, exact (base units). */
+  amount(): bigint {
     const s = this.take(32);
     let v = 0n;
     for (let i = 31; i >= 0; i--) v = (v << 8n) | BigInt(s[i]);
-    return Number(v) / 1e6;
+    return v;
   }
-  /** Address: borsh tag 0 Established, 1 Implicit (+ 20 bytes). The bech32m payload's first byte is 1 for
-   *  established and 0 for implicit. Internal addresses (tag 2) never stake and stop the read. */
-  address() {
+  /** A borsh String (u32 length + UTF-8). */
+  string() { return new TextDecoder().decode(this.take(this.u32())); }
+  /**
+   * Address, in its raw 21-byte form: tag 0 Established and 1 Implicit (+ 20 bytes; the raw discriminant is 1 for
+   * established, 0 for implicit), tag 2 Internal (a variant byte, then 20 bytes for the three hashed variants).
+   * The returned view is reused by the next call: copy or encode it before reading on.
+   */
+  addressRaw(): { raw: Uint8Array; internal: boolean } {
     const tag = this.u8();
-    if (tag !== 0 && tag !== 1) throw new Error(`borsh: unexpected address kind ${tag}`);
-    const hash = this.take(20);
-    return bech32m.encode('tnam', bech32m.toWords(new Uint8Array([tag === 0 ? 1 : 0, ...hash])), 100);
+    const raw = this.raw;
+    if (tag === 0 || tag === 1) {
+      raw[0] = tag === 0 ? 1 : 0;
+      raw.set(this.take(20), 1);
+      return { raw, internal: false };
+    }
+    if (tag !== 2) throw new Error(`borsh: unexpected address kind ${tag} at byte ${this.p - 1}`);
+    const variant = this.u8();
+    const disc = INTERNAL_DISCRIMINANT[variant];
+    if (disc == null) throw new Error(`borsh: unknown internal address variant ${variant}`);
+    raw[0] = disc;
+    if (INTERNAL_WITH_HASH.has(variant)) raw.set(this.take(20), 1);
+    else raw.fill(0, 1);
+    return { raw, internal: true };
   }
+  address() { const a = this.addressRaw(); return { address: encodeAddress(a.raw), internal: a.internal }; }
 }
-const b64bytes = (v: string | null) => (v ? Uint8Array.from(atob(v), (c) => c.charCodeAt(0)) : new Uint8Array());
+const encodeAddress = (raw: Uint8Array) => bech32m.encode('tnam', bech32m.toWords(raw), 100);
 
-/** Every validator address the chain knows (HashSet<Address>). */
-export async function validatorAddresses(opts: ReadOpts = {}): Promise<string[]> {
-  return parseAddressSet((await abci('/vp/pos/validator/addresses', opts)).value);
-}
-export function parseAddressSet(value: string | null): string[] {
-  const b = new Borsh(b64bytes(value));
-  const out: string[] = [];
-  for (let i = b.u32(); i > 0; i--) out.push(b.address());
-  if (!b.done) throw new Error('validator addresses: unread bytes');
-  return out;
+/** What one balance listing answer holds, decoded. */
+export interface BalanceListing {
+  /** every user (established or implicit) key the chain holds under the NAM balance prefix, in base units; zero
+   *  balances included (26,404 of 90,777 on 2026-10-20), so a caller can tell "listed as 0" from "not listed" */
+  entries: Map<string, string>;
+  /** the protocol accounts (PoS, IBC escrow, MASP, PGF, governance…), base units: not holders, read separately */
+  internal: Map<string, string>;
+  /** the token's `balance/minted` key: the minted total, never a holder; null when the answer lacks it */
+  minted: string | null;
+  /** keys in the answer (entries + internal + the minted key) and the answer's decoded size */
+  keys: number;
+  bytes: number;
 }
 
 /**
- * Every address with a bond or an unbond at `validator` (BondsAndUnbondsDetails: HashMap<BondId, Detail> with
- * bonds {start, amount, slashed?}, unbonds {start, withdraw, amount, slashed?}, slashes {epoch, height, type, rate}),
- * with the sum of its bond entries in NAM. The sum includes bonds still in the pipeline, so it is a lead for the
- * stake verifier (delegationsAt), never shown as the staked figure itself.
+ * Decode a /shell/prefix/#<multitoken>/#<NAM>/balance answer: borsh Vec<PrefixValue { key: Key { segments:
+ * Vec<DbKeySeg> }, value: Vec<u8> }>, DbKeySeg 0 = AddressSeg(Address), 1 = StringSeg(String). Every key must be
+ * exactly [multitoken, NAM, "balance", owner] (owner an address, or the string "minted") with a 32-byte Amount
+ * value; anything else, and any answer that ends early or has bytes left over, throws.
  */
-export async function delegatorsOf(validator: string, opts: ReadOpts = {}): Promise<Map<string, number>> {
-  return parseDelegators((await abci(`/vp/pos/bonds_and_unbonds/to/${validator}`, opts)).value);
+export function parseBalanceListing(value: string | null): BalanceListing {
+  const bytes = base64Bytes(value ?? '');
+  const b = new Borsh(bytes);
+  const entries = new Map<string, string>();
+  const internal = new Map<string, string>();
+  let minted: string | null = null;
+  const n = b.u32();
+  for (let i = 0; i < n; i++) {
+    const segs = b.u32();
+    if (segs !== 4) throw new Error(`balance listing: key ${i} has ${segs} segments, not 4`);
+    if (b.u8() !== 0 || !sameBytes(b.addressRaw().raw, MULTITOKEN_RAW)) throw new Error(`balance listing: key ${i} is not under the multitoken account`);
+    if (b.u8() !== 0 || !sameBytes(b.addressRaw().raw, NAM_RAW)) throw new Error(`balance listing: key ${i} is not a NAM key`);
+    if (b.u8() !== 1 || b.string() !== 'balance') throw new Error(`balance listing: key ${i} is not a balance key`);
+    const tag = b.u8();
+    let owner: { address: string; internal: boolean } | null = null;
+    if (tag === 0) owner = b.address();
+    else if (tag === 1) { const s = b.string(); if (s !== 'minted') throw new Error(`balance listing: key ${i} ends in "${s}"`); }
+    else throw new Error(`balance listing: key ${i} has an unknown segment kind ${tag}`);
+    if (b.u32() !== 32) throw new Error(`balance listing: key ${i} has a value that is not a 32-byte amount`);
+    const amount = b.amount().toString();
+    if (!owner) minted = amount;
+    else if (owner.internal) internal.set(owner.address, amount);
+    else entries.set(owner.address, amount);
+  }
+  if (!b.done) throw new Error(`balance listing: ${bytes.length - b.offset} unread bytes`);
+  return { entries, internal, minted, keys: n, bytes: bytes.length };
 }
-export function parseDelegators(value: string | null): Map<string, number> {
-  const b = new Borsh(b64bytes(value));
-  const out = new Map<string, number>();
-  for (let n = b.u32(); n > 0; n--) {
+
+/** What a listing read adds to the decoded answer: the node and height that answered, the read's time. */
+export interface ListingRead { height: number; provider: string; readMs: number }
+
+/** Every NAM balance on the chain in one query (see parseBalanceListing), with the node and height that answered. */
+export async function allNamBalances(opts: ReadOpts = {}): Promise<BalanceListing & ListingRead> {
+  const r = await abciListing(`/shell/prefix/#${NAMADA.multitoken}/#${NAM.namadaToken}/balance`, opts);
+  if (!r.value) throw new Error(`balance listing: empty answer from ${r.provider}`);
+  if (!(r.height > 0)) throw new Error(`balance listing: answer without a height from ${r.provider}`);
+  return { ...parseBalanceListing(r.value), height: r.height, provider: r.provider, readMs: r.readMs };
+}
+
+/**
+ * One source's bonds from the bond listing: the sum of its bond entries net of what was slashed from them (base
+ * units; `grossBase` before the deduction, `slashedBase` the deduction) and the per-validator split, net as well.
+ */
+export interface BondedSource { bondedBase: bigint; grossBase: bigint; slashedBase: bigint; delegations: { validator: string; amountNam: number }[] }
+
+export interface BondListing {
+  /** source address → its bonds; sources whose bonds sum to 0 (unbonds only, or slashed whole) are listed with bondedBase 0n */
+  sources: Map<string, BondedSource>;
+  /** source × validator entries in the answer; the sum of every bond entry net of slashing, gross, and the slashed total; the decoded size */
+  entries: number;
+  totalBase: bigint;
+  grossBase: bigint;
+  slashedBase: bigint;
+  bytes: number;
+}
+
+/**
+ * Decode a /vp/pos/bonds_and_unbonds/to answer (every bond on the chain; the per-validator variant
+ * …/to/<validator> has the same layout): borsh HashMap<BondId { source, validator }, Detail { bonds: Vec<{ start
+ * u64, amount Amount, slashed Option<Amount> }>, unbonds: Vec<{ start u64, withdraw u64, amount, slashed Option }>,
+ * slashes: Vec<{ epoch u64, block u64, type u8, rate Amount }> }>, count first. A bond entry's `slashed` is what a
+ * slash took from its `amount`, so a source's stake is amount − slashed (on 2026-10-20: 268,038,299 NAM gross, of
+ * which 860,517 NAM slashed, against a total stake of 267,175,777 NAM; the 2,006 NAM left over are bonds still in
+ * the pipeline, listed before they count). Throws on a cut or malformed answer.
+ */
+export function parseBondListing(value: string | null): BondListing {
+  const bytes = base64Bytes(value ?? '');
+  const b = new Borsh(bytes);
+  const sources = new Map<string, Map<string, { gross: bigint; slashed: bigint }>>();
+  const n = b.u32();
+  let gross = 0n, slashed = 0n;
+  for (let i = 0; i < n; i++) {
     const source = b.address();
-    b.address(); // the validator itself
-    let bonded = 0;
-    for (let k = b.u32(); k > 0; k--) { b.skip(8); bonded += b.amountNam(); if (b.u8() === 1) b.skip(32); }
+    const validator = b.address();
+    if (source.internal || validator.internal) throw new Error(`bond listing: entry ${i} names an internal address`);
+    let g = 0n, sl = 0n;
+    for (let k = b.u32(); k > 0; k--) { b.skip(8); g += b.amount(); if (b.u8() === 1) sl += b.amount(); }
     for (let k = b.u32(); k > 0; k--) { b.skip(16); b.skip(32); if (b.u8() === 1) b.skip(32); }
     for (let k = b.u32(); k > 0; k--) { b.skip(16); b.u8(); b.skip(32); }
-    out.set(source, (out.get(source) ?? 0) + bonded);
+    if (sl > g) throw new Error(`bond listing: entry ${i} has more slashed than bonded`);
+    const byValidator = sources.get(source.address) ?? sources.set(source.address, new Map()).get(source.address)!;
+    const v = byValidator.get(validator.address) ?? byValidator.set(validator.address, { gross: 0n, slashed: 0n }).get(validator.address)!;
+    v.gross += g; v.slashed += sl;
+    gross += g; slashed += sl;
   }
-  if (!b.done) throw new Error('delegators: unread bytes');
-  return out;
+  if (!b.done) throw new Error(`bond listing: ${bytes.length - b.offset} unread bytes`);
+  const out = new Map<string, BondedSource>();
+  for (const [source, byValidator] of sources) {
+    let bondedBase = 0n, grossBase = 0n, slashedBase = 0n;
+    const delegations: BondedSource['delegations'] = [];
+    for (const [validator, v] of byValidator) {
+      const net = v.gross - v.slashed;
+      bondedBase += net; grossBase += v.gross; slashedBase += v.slashed;
+      if (net > 0n) delegations.push({ validator, amountNam: Number(net) / 1e6 });
+    }
+    // sorted, so the same bonds always give the same JSON (the cron writes only rows whose JSON changed)
+    delegations.sort((x, y) => (x.validator < y.validator ? -1 : x.validator > y.validator ? 1 : 0));
+    out.set(source, { bondedBase, grossBase, slashedBase, delegations });
+  }
+  return { sources: out, entries: n, totalBase: gross - slashed, grossBase: gross, slashedBase: slashed, bytes: bytes.length };
+}
+
+/** Every bond on the chain in one query (see parseBondListing), with the node and height that answered. */
+export async function allBonds(opts: ReadOpts = {}): Promise<BondListing & ListingRead> {
+  const r = await abciListing('/vp/pos/bonds_and_unbonds/to', opts);
+  if (!r.value) throw new Error(`bond listing: empty answer from ${r.provider}`);
+  if (!(r.height > 0)) throw new Error(`bond listing: answer without a height from ${r.provider}`);
+  return { ...parseBondListing(r.value), height: r.height, provider: r.provider, readMs: r.readMs };
 }

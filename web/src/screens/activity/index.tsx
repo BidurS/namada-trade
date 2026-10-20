@@ -155,6 +155,8 @@ function HolderFacts({ overview: o, rewoundAt }: { overview: Overview | null; re
     { n: top10o ? <Num v={o.concentration.osmosisTop10Pct} prov={top10o} fmt={pct} showAge={false} /> : sk, label: HOLDER_LABELS[3], scope: top10o ? { label: 'Share of all NAM on Osmosis, pools included, held by the top 10 wallets', p: top10o } : undefined },
   ];
   const scope = items.map((i) => i.scope).filter((x): x is NonNullable<FactItem['scope']> => !!x);
+  // Every address with any NAM counts, fee dust included; the server says how many hold under 1 NAM in all.
+  const dust = o.namada.holdersUnder1Nam ?? null;
   // live: one chain's figures can be old while the other's are fresh; the old ones are dimmed and said once
   const oldChains = rewoundAt ? [] : ([['Namada', namP], ['Osmosis', osmP]] as const).filter(([, p]) => p?.status === 'stale');
   const oldLine = oldChains.length ? (
@@ -180,6 +182,12 @@ function HolderFacts({ overview: o, rewoundAt }: { overview: Overview | null; re
       sourceText={rewoundAt ? ` · ${sourcesText(scope)} · current, not as of the rewound time` : undefined}
     >
       {oldLine}
+      {namP && o.namada.holders != null ? (
+        <p className="cap act-facts__note">
+          Every address with any NAM counts as a holder, however small the amount
+          {dust != null ? <>: <Num v={dust} prov={namP} fmt={fmtCount} showAge={false} /> of the holders on Namada hold under one NAM in all</> : null}.
+        </p>
+      ) : null}
     </Fact>
   );
 }

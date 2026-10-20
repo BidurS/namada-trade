@@ -12,7 +12,7 @@ import { NOT_LEGACY_TWIN, NOT_BOT } from '../worker/src/flows-query';
 import { normFromTxSearch, parseOsmosisTx, type OsmoCtx } from '../worker/src/parse/osmosis';
 import { quoteBuyFor, safeClip, BUY_TOLERANCE } from '../worker/src/sources/sqs';
 import { fetchOsmosisHolderList } from '../worker/src/sources/osmosis';
-import { refreshLiquidBalances, osmosisListCheck, unpairedCrossings, takeTickLock, releaseTickLock } from '../worker/src/cron';
+import { osmosisListCheck, unpairedCrossings, takeTickLock, releaseTickLock } from '../worker/src/cron';
 import { stmt } from '../worker/src/db';
 import { osmosisDroppedStmt, HOLDER_COUNTS_SQL, OSMOSIS_TOP10_SQL, NAMADA_TOP10_SQL } from '../worker/src/holders';
 import { cachedApi, inlineScriptHashes, pagePolicies, BROWSER_CACHE, cacheKeyUrl, rateLimited } from '../worker/src/http';
@@ -384,43 +384,6 @@ describe('pool accounts are not holders', () => {
   });
 });
 
-// ------------------------------------------------------------------ worker/refresh-health-false-green
-describe('the balance-refresh health says what landed', () => {
-  const seed = () => {
-    const db = testD1();
-    insert(db, 'holders', ['tnam1a', 'tnam1b'].map((a) => ({ chain: 'namada', address: a, balance: '1', balance_num: 1, updated_height: 1000, updated_at: NOW - D, verified_at: NOW - D })));
-    return db;
-  };
-  it('every read failed: not ok', async () => {
-    const health: any[] = [];
-    await refreshLiquidBalances(env(seed()), health, async () => { throw new Error('timeout'); });
-    expect(health[0]).toMatchObject({ ok: false });
-  });
-  it('every read lost to a newer post-balance: not ok, and named', async () => {
-    const health: any[] = [];
-    const r = await refreshLiquidBalances(env(seed()), health, async () => ({ balance: 5n, height: 900, provider: 'Stuck' }));
-    expect(r).toMatchObject({ read: 2, landed: 0, rejected: 2 });
-    expect(health[0].ok).toBe(false);
-    expect(health[0].note).toMatch(/2 reads older than a transfer already recorded/);
-  });
-  it('a lagging node\'s answer is retried on the other node', async () => {
-    const health: any[] = [];
-    const seen: string[] = [];
-    const read = async (_a: string, o?: any) => { const p = o?.rpcs?.[0]?.provider ?? 'A'; seen.push(p); return { balance: 7n, height: p === 'A' ? 1500 : 2000, provider: p }; };
-    const r = await refreshLiquidBalances(env(seed()), health, read, { rpcs: [{ provider: 'A', url: 'a' }, { provider: 'B', url: 'b' }], headHeight: 2001 });
-    expect(r.landed).toBe(2);
-    expect(seen).toContain('B');
-  });
-  it('the due list failing is reported, not hidden', async () => {
-    const db = seed();
-    db.exec('DROP TABLE stakes');
-    const health: any[] = [];
-    await refreshLiquidBalances(env(db), health, async () => ({ balance: 1n, height: 1, provider: 'x' }));
-    expect(health[0]).toMatchObject({ ok: false });
-    expect(health[0].note).toMatch(/could not be loaded/);
-  });
-});
-
 // ------------------------------------------------------------------ worker/public-cron-tick-and-osmosis-zero-race
 describe('no public cron trigger, and an older run cannot zero holders', () => {
   it('GET /api/cron/tick is gone', async () => {
@@ -657,7 +620,7 @@ describe('holder facts carry their data\'s time', () => {
       { chain: 'osmosis', address: 'osmo1a', balance: '1', balance_num: 5, updated_at: NOW - 5 * M, verified_at: NOW - 5 * M },
     ]);
     insert(db, 'stakes', [{ address: 'tnam1a', bonded_num: 10, verified_at: NOW - 2 * H, updated_at: NOW - M }]);
-    expect(db.raw.prepare(NAMADA_TOP10_SQL).get().at).toBe(NOW - 67 * H);
+    expect(db.raw.prepare(NAMADA_TOP10_SQL).get(0, 0).at).toBe(NOW - 67 * H); // no listing yet: the rows' own times
     expect(db.raw.prepare(HOLDER_COUNTS_SQL).get()).toMatchObject({ namada_at: NOW - H, osmosis_at: NOW - 5 * M });
   });
 });

@@ -12,6 +12,8 @@ describe('cross-check wording', () => {
   });
   it('the staking check says what it traced and what is still being read', () => {
     expect(checkDetail(c('bonded_coverage', { coveragePct: '99.6%', stakers: 21443, pendingAddresses: 120 }))).toBe('99.6% of staked NAM traced to 21,443 addresses; 120 more addresses are still being read');
+    // the chain's bond listing counts bonds still waiting to start, so it can exceed the total stake a little
+    expect(checkDetail(c('bonded_coverage', { coveragePct: '100.3%', stakers: 19454, pendingAddresses: 0 }))).toBe('All staked NAM traced to 19,454 addresses; their bonds add up to 100.3% of the total stake because bonds still waiting to start are listed too');
   });
   it('NAM in the staking account that is not staked is not called "leaving staking"', () => {
     expect(checkDetail(c('stake_within_staking_account', { notStakedNam: 74946181 }))).toContain('not staked: unstaking, ready to withdraw, or unclaimed rewards');

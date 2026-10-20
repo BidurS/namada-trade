@@ -2,7 +2,7 @@ import type { Env } from './util';
 import { runBatch, stmt, kvGet, kvSet, kvGetJson } from './db';
 import { fetchOsmosisHolderList, fetchOsmosisSupplyBase, OSMOSIS_HOLDER_PAGES } from './sources/osmosis';
 import { fetchNamPools, fetchNamPrice } from './sources/sqs';
-import { namBalance, namBalanceQuick, namTotalSupply, namTotalStake, namadaEpoch, namadaStatusAll, delegationsAt, answeringRpcs, QUICK, RpcBreaker, validatorAddresses, delegatorsOf, type ReadOpts, type Rpc } from './sources/namada';
+import { namBalance, namTotalSupply, namTotalStake, namadaEpoch, namadaStatusAll, delegationsAt, answeringRpcs, QUICK, RpcBreaker, allNamBalances, allBonds, type BalanceListing, type BondListing, type ReadOpts, type Rpc } from './sources/namada';
 import { fetchIntel } from './sources/intel';
 import { sendDiscordForumAlert, sendDiscordGovAlert } from './sources/discord';
 import { NAM, NAMADA, OSMOSIS, IBC_STUCK } from './config';
@@ -16,8 +16,8 @@ import { chainParams, indexState, NAMADA_CURSOR_MAX_LAG, NAMADA_CURSOR_STALE_MS,
 import type { LiveUnbondStatus, LiveScanStatus } from './live-hub';
 import type { AlertsSkipped } from './sources/discord';
 import {
-  LIQUID_DUE_SQL, LIQUID_PER_TICK, LIQUID_CONCURRENCY, LIQUID_TIME_BUDGET_MS, LIQUID_STALE_MS, INTERNAL_ADDRS,
-  liquidReadStmt, osmosisDroppedStmt, spanStmts, pruneSpansStmt, chunks,
+  INTERNAL_ADDRS, BALANCE_LISTING_SRC, BOND_LISTING_SRC, SPAN_EXTEND_MS,
+  osmosisDroppedStmt, spanStmts, listingBalanceStmts, listingZeroStmts, listingSpanStmts, pruneSpansStmt, type ListedBalance,
 } from './holders';
 
 const INDEXER = 'https://indexer.namada.net/api/v1';
@@ -95,24 +95,39 @@ async function probe<T>(health: SourceHealth[], name: string, fn: () => Promise<
   }
 }
 
-/** Namada addresses whose stake is read from the chain per tick, and how many at once. */
-export const STAKE_PER_TICK = 120;
-export const STAKE_CONCURRENCY = 6;
-/** Validators whose delegations are listed per tick (staker discovery): 252 validators, a full pass about hourly. */
-export const DISCOVER_PER_TICK = 4;
+/**
+ * How often each chain listing is read (worker/src/sources/namada.ts allNamBalances, allBonds). Neither public node
+ * compresses its answer (checked 2026-10-20 with Accept-Encoding gzip: the bond answer came back as 5,369,673 bytes
+ * either way), so a listing costs the node its whole JSON size: 11.98 MB for the balances, 5.37 MB for the bonds.
+ * One balance listing an hour and one bond listing every 40 minutes is 24 × 11.98 + 36 × 5.37 = 287.5 + 193.3 =
+ * 481 MB a day across both nodes (a tick that carries a listing's writes over re-reads it; only a first run on an
+ * empty table needs that). The block follower (live-hub.ts) keeps moved addresses current between listings, so a
+ * listing is reconciliation, not the only source of a balance.
+ */
+export const BALANCE_LISTING_MS = 60 * 60_000;
+export const BOND_LISTING_MS = 40 * 60_000;
+/** Rows a listing writes in one tick; the rest is written next tick (after re-reading the listing), nothing is lost. */
+export const LISTING_WRITE_CAP = 3000;
+/** The stake sample's reads end this long before the deadline, so the listing's writes (a SELECT of every stored row, then the diff) get their turn. */
+export const LISTING_RESERVE_MS = 20_000;
+/** One attempt per node for a listing, started with the tick; a healthy node answers in 3 to 4 s, a loaded one has taken 33 s. */
+export const LISTING_TIMEOUT_MS = 20_000;
+/** Stakes re-read per tick with delegations_at (2 requests each), as a sample against the bond listing's rows. */
+export const SAMPLE_PER_TICK = 24;
+export const SAMPLE_CONCURRENCY = 6;
+/** Sample disagreements are reported by the coverage check for this long. */
+export const SAMPLE_KEEP_MS = 24 * 3600_000;
+/**
+ * After a listing read fails (both nodes past the timeout, the deadline), the next try waits this long: a slow day
+ * must not cost the nodes a cut-off download every minute (a node streaming at 0.4 MB/s sends 8 MB in the 20 s).
+ */
+export const LISTING_RETRY_MS = 5 * 60_000;
 /**
  * One deadline for the whole tick. Cloudflare stops a scheduled run after 15 minutes and the trigger fires every
  * minute, so a tick that waits on a node that accepts requests and never answers must end well inside a minute:
  * batches are not started after this, and reads still running are aborted at it.
  */
 export const TICK_DEADLINE_MS = 45_000;
-/**
- * Time kept for the balance refresh (W13) at the end of the tick: stake reads stop starting this long before the
- * deadline, and the ones still running are ended then, so slow stake reads can never take the refresh's turn.
- * Enough for the refresh's 50 reads at a healthy node's speed (2 to 3 s measured) and one batch that waits out a
- * quick timeout (8 s) before the other node answers.
- */
-export const REFRESH_RESERVE_MS = 12_000;
 /** Keplr REST reads in a tick: a short timeout and one retry, inside the tick's deadline. */
 export const KEPLR_TICK = { timeoutMs: 10_000, retries: 1 } as const;
 
@@ -127,9 +142,6 @@ export function phaseSignal(parent: AbortSignal, endAt: number): { signal: Abort
 }
 /** A tick that finds the lock held by another, younger than this, records "skipped" and does nothing. */
 export const TICK_LOCK_MS = 90_000;
-/** A balance read answered at a height more than this many blocks below the node head is from a lagging node. */
-export const LAGGING_BLOCKS = 5;
-
 /** Take the tick lock (kv cron.lock) unless another tick holds it and has not expired; true when taken. */
 export async function takeTickLock(db: D1Database, id: string, now: number): Promise<boolean> {
   const r = await db.prepare(`INSERT INTO kv (key, value, updated_at) VALUES ('cron.lock', ?, ?)
@@ -142,97 +154,14 @@ export async function releaseTickLock(db: D1Database, id: string) {
   await db.prepare(`DELETE FROM kv WHERE key = 'cron.lock' AND value = ?`).bind(id).run().catch(() => {});
 }
 
-export interface RefreshOpts {
-  /** the nodes to read from this tick (status answered), in order */
-  rpcs?: readonly Rpc[];
-  /** the highest node height this tick: a read answered more than LAGGING_BLOCKS below it is retried on another node */
-  headHeight?: number | null;
-  /** the tick's deadline: no batch starts after it, and reads still running end at it */
-  signal?: AbortSignal;
-  deadlineAt?: number;
-  /** the tick's record of nodes that failed a read (they are asked last) */
-  breaker?: RpcBreaker;
-}
-
 /**
- * The health of a batch of chain reads (the stake verification, the balance refresh): ok only when something was
- * written, or nothing was due, and fewer than half of the reads that ran failed. `due` counts every address in
- * line this tick, `attempted` only the reads that ran to an answer or a failure (not those the time limit left).
- * So a tick that wrote nothing, because every read failed, every answer was refused, or the time limit left every
- * address, is not ok, and the Sources sheet shows its note.
+ * The health of a batch of chain reads (the stake sample): ok only when something was read, or nothing was due,
+ * and fewer than half of the reads that ran failed. `due` counts every address in line this tick, `attempted`
+ * only the reads that ran to an answer or a failure (not those the time limit left). So a tick that read nothing,
+ * because every read failed or the time limit left every address, is not ok, and the Sources sheet shows its note.
  */
 export function batchHealthOk(due: number, written: number, attempted: number, failed: number): boolean {
   return (due === 0 || written > 0) && failed < Math.max(1, attempted / 2);
-}
-
-/**
- * Re-read a rolling batch of Namada spendable balances from the chain (W13). Before this existed, an address that
- * did not move kept the balance and date of the 2026-10-15 backfill.
- *
- * Health counts what landed, not what was built: `landed` rows were written; `rejected` reads were older than the
- * row's newest post-balance (the guard in liquidReadStmt) and changed nothing; `failed` reads got no answer, no
- * height, or only a lagging node's answer. Addresses the time budget left for the next tick are not counted as
- * attempted. ok = something landed (or nothing was due) and fewer than half the attempts failed.
- */
-export async function refreshLiquidBalances(
-  env: Env, health: SourceHealth[], read: (owner: string, opts?: ReadOpts) => Promise<{ balance: bigint; height: number; provider: string }> = namBalanceQuick,
-  opts: RefreshOpts = {},
-): Promise<{ read: number; failed: number; landed: number; rejected: number }> {
-  const stamp = Date.now();
-  const name = 'Namada RPC (balance refresh)';
-  let due: { address: string }[];
-  try {
-    due = (await env.DB.prepare(LIQUID_DUE_SQL).bind(stamp - LIQUID_STALE_MS, LIQUID_PER_TICK).all<{ address: string }>()).results || [];
-  } catch (e) {
-    health.push({ name, ok: false, at: stamp, note: `The list of balances to re-read could not be loaded: ${String(e).slice(0, 120)}` });
-    return { read: 0, failed: 0, landed: 0, rejected: 0 };
-  }
-  const list = due.map((r) => r.address).filter((a) => !INTERNAL_ADDRS.includes(a));
-  const rpcs = opts.rpcs;
-  const minHeight = opts.headHeight ? opts.headHeight - LAGGING_BLOCKS : 0;
-  const stmts: Stmt[] = [];
-  let failed = 0, lagging = 0, attempted = 0;
-  const readOne = async (a: string) => {
-    const base: ReadOpts = { ...(rpcs ? { rpcs } : {}), ...(opts.signal ? { signal: opts.signal } : {}), ...(opts.breaker ? { breaker: opts.breaker } : {}) };
-    let r = await read(a, base).catch(() => null);
-    // A node stuck at an older height still answers, so it would never fail over by itself: ask the others.
-    if (r && minHeight > 0 && r.height > 0 && r.height < minHeight) {
-      const others = (rpcs ?? []).filter((x) => x.provider !== r!.provider);
-      const again = others.length ? await read(a, { ...base, rpcs: others }).catch(() => null) : null;
-      if (again && again.height >= minHeight) r = again;
-      else { lagging++; return null; }
-    }
-    return r;
-  };
-  const budgetEnd = Math.min(stamp + LIQUID_TIME_BUDGET_MS, opts.deadlineAt ?? Infinity);
-  for (let i = 0; i < list.length && Date.now() < budgetEnd && !opts.signal?.aborted; i += LIQUID_CONCURRENCY) {
-    const part = list.slice(i, i + LIQUID_CONCURRENCY);
-    attempted += part.length;
-    const batch = await Promise.all(part.map((a) => readOne(a).then((r) => ({ a, r }))));
-    for (const x of batch) {
-      // A read without a block height cannot be ordered against the LiveHub's post-balances: not used.
-      if (x.r && x.r.height > 0) stmts.push(liquidReadStmt('namada', x.a, x.r.balance.toString(), x.r.height, stamp, x.r.provider));
-      else failed++;
-    }
-  }
-  let landed = 0;
-  if (stmts.length) {
-    landed = await runBatch(env.DB, stmts);
-    // A separate batch: if the spans table is missing (migration not applied yet) the balances still land.
-    const readAddrs = stmts.map((s) => s.params[1] as string);
-    await runBatch(env.DB, chunks(readAddrs, 10).flatMap((part) => spanStmts('namada', stamp, part))).catch((e) => console.error('namada balance spans', e));
-  }
-  const rejected = stmts.length - landed;
-  const skipped = list.length - attempted;
-  const ok = batchHealthOk(list.length, landed, attempted, failed);
-  const parts = [
-    `${landed} spendable balances read from the chain and written this tick`,
-    rejected > 0 ? `${rejected} reads older than a transfer already recorded (not written)` : '',
-    failed > 0 ? `${failed} failed${lagging ? ` (${lagging} only from a node behind the chain)` : ''}` : '',
-    skipped > 0 ? `${skipped} left for the next tick (time budget)` : '',
-  ].filter(Boolean);
-  health.push({ name, ok, at: stamp, note: parts.join(', ') });
-  return { read: stmts.length, failed, landed, rejected };
 }
 
 /**
@@ -273,6 +202,312 @@ export function unpairedCrossings(namada: any[], osmosis: any[], now: number): {
   }
   const osmosisOnly = osmosis.filter((o) => !used.has(o) && now - o.ts > SETTLE);
   return { namadaOnly, osmosisOnly };
+}
+
+// ---------------------------------------------------------------- the bulk index: the two chain listings
+//
+// Every NAM balance and every bond on the chain come from one ABCI answer each (sources/namada.ts). A listing is
+// diffed against the stored rows and only the rows that differ are written, so a listing that finds the index
+// current costs reads, not writes; a first run on an empty table writes LISTING_WRITE_CAP rows a tick and re-reads
+// the listing next tick for the rest. A record of the last listing (kv balance.listing / bond.listing) carries its
+// time, height and counts: the overview stamps the holder count with it, and the API treats a row a listing left
+// unchanged as confirmed at that time (holders.ts confirmedAt).
+
+/** The record of the last balance listing (kv balance.listing). */
+export interface BalanceListingRecord {
+  /** when the listing was last read, and when it last went through completely (every differing row written) */
+  at: number; completeAt: number | null;
+  height: number; provider: string;
+  /** keys in the answer; user addresses holding NAM (> 0); their NAM; the answer's decoded size */
+  keys: number; holders: number; totalNam: number; bytes: number;
+  /** rows written and zeroed this tick, rows still to write, ticks this pass has taken, the read's time */
+  written: number; zeroed: number; remaining: number; ticks: number; durationMs: number;
+  /** when the span bookkeeping last ran (a complete pass) and when every unchanged span was last extended */
+  spansAt: number | null; extendedAt: number | null;
+  /** the last read that failed (both nodes), and the last error applying or reading the listing */
+  failedAt?: number | null;
+  error?: string;
+}
+
+/** The record of the last bond listing (kv bond.listing). */
+export interface BondListingRecord {
+  at: number; completeAt: number | null;
+  height: number; epoch: number; provider: string;
+  /** sources listed (with or without bonds left), sources with bonds, the sum of every bond entry in NAM, decoded size */
+  sources: number; stakers: number; totalNam: number; bytes: number;
+  written: number; zeroed: number; remaining: number; ticks: number; durationMs: number;
+  failedAt?: number | null;
+  error?: string;
+}
+
+/** The record of the stake sample (kv stake.sample): a rolling re-read of stakes against the bond listing. */
+export interface StakeSampleRecord {
+  at: number;
+  /** the last address sampled; the next tick continues after it, and starts over after the last one */
+  cursor: string;
+  checked: number; agreed: number; failed: number;
+  /** full passes over every staker so far */
+  passes: number;
+  /** disagreements of the last SAMPLE_KEEP_MS (a staker is listed once, with its latest sample) */
+  disagreements: { address: string; listingNam: number; chainNam: number; epoch: number; at: number }[];
+}
+
+/**
+ * A listing is due when there is none, when its last pass has rows left to write, or when its interval has passed;
+ * not within LISTING_RETRY_MS of a failed read.
+ */
+export function listingDue(rec: { at: number; remaining: number; failedAt?: number | null } | null | undefined, everyMs: number, now: number): boolean {
+  if (rec?.failedAt != null && now - rec.failedAt < LISTING_RETRY_MS) return false;
+  return !rec || rec.remaining > 0 || now - rec.at >= everyMs;
+}
+
+const mb = (bytes: number) => `${(bytes / 1e6).toFixed(1)} MB`;
+
+/** `rpcs` with the node named `provider` first (the one that served the last listing), the rest in their order. */
+export function preferProvider(rpcs: readonly Rpc[], provider: string | null | undefined): readonly Rpc[] {
+  const i = provider ? rpcs.findIndex((r) => r.provider === provider) : -1;
+  return i > 0 ? [rpcs[i], ...rpcs.slice(0, i), ...rpcs.slice(i + 1)] : rpcs;
+}
+const sameBalance = (a: string | null | undefined, b: string) => a === b || BigInt(a || '0') === BigInt(b);
+
+/** Every row of a table in address order, a page at a time (a page of 20,000 rows is about 2 MB of D1 answer). */
+async function pagedRows<T extends { address: string }>(db: D1Database, select: string, pageSize = 20_000): Promise<T[]> {
+  const out: T[] = [];
+  let after = '';
+  for (;;) {
+    const page = (await db.prepare(`${select} AND address > ? ORDER BY address LIMIT ?`).bind(after, pageSize).all<T>()).results || [];
+    out.push(...page);
+    if (page.length < pageSize) return out;
+    after = page[page.length - 1].address;
+  }
+}
+
+export type BalanceLister = (opts: ReadOpts) => Promise<BalanceListing & { height: number; provider: string }>;
+export type BondLister = (opts: ReadOpts) => Promise<BondListing & { height: number; provider: string }>;
+
+/**
+ * Read every NAM balance from the chain and reconcile the Namada holder rows with it: rows whose stored balance
+ * differs (or that are new and hold NAM, or were last written by another source) are written with the listing's
+ * height and time; stored rows the listing no longer has are zeroed; the balance spans are kept (holders.ts
+ * listingSpanStmts) once a pass is complete. At most LISTING_WRITE_CAP rows a tick: what is left is written next
+ * tick, after re-reading the listing (the diff is recomputed, so nothing is written twice or lost). Zero balances
+ * the chain lists are not given rows (26,404 of 90,777 keys on 2026-10-20 held nothing).
+ */
+export async function runBalanceListing(env: Env, health: SourceHealth[], now: number, read: ReadOpts, list: BalanceLister = allNamBalances, cap = LISTING_WRITE_CAP): Promise<BalanceListingRecord | null> {
+  const name = 'Namada RPC (balance listing)';
+  const prev = await kvGetJson<BalanceListingRecord>(env.DB, 'balance.listing').catch(() => null);
+  const t0 = Date.now();
+  let listing: Awaited<ReturnType<BalanceLister>>;
+  try {
+    listing = await list({ timeoutMs: LISTING_TIMEOUT_MS, retries: 0, ...read });
+  } catch (e) {
+    health.push({ name, ok: false, at: now, note: `The balance listing could not be read: ${String(e).slice(0, 120)}` });
+    // The record remembers the failure (the next try waits LISTING_RETRY_MS); a pass already complete stays complete.
+    const failed: BalanceListingRecord = { ...(prev ?? { at: 0, completeAt: null, height: 0, provider: '', keys: 0, holders: 0, totalNam: 0, bytes: 0, written: 0, zeroed: 0, remaining: 0, ticks: 0, durationMs: 0, spansAt: null, extendedAt: null }), failedAt: now, error: String(e).slice(0, 160) };
+    await kvSet(env.DB, 'balance.listing', failed).catch(() => {});
+    return failed;
+  }
+  const ticks = (prev && prev.remaining > 0 ? prev.ticks : 0) + 1;
+  const rec: BalanceListingRecord = {
+    at: now, completeAt: prev?.completeAt ?? null, height: listing.height, provider: listing.provider,
+    keys: listing.keys, holders: 0, totalNam: 0, bytes: listing.bytes,
+    written: 0, zeroed: 0, remaining: 0, ticks, durationMs: 0, spansAt: prev?.spansAt ?? null, extendedAt: prev?.extendedAt ?? null, failedAt: null,
+  };
+  try {
+    const stored = await pagedRows<{ address: string; balance: string; balance_num: number; updated_height: number | null; verified_src: string | null }>(
+      env.DB, `SELECT address, balance, balance_num, updated_height, verified_src FROM holders WHERE chain = 'namada'`);
+    const storedBy = new Map(stored.map((r) => [r.address, r]));
+    const toWrite: ListedBalance[] = [];
+    let totalBase = 0n;
+    for (const [address, balance] of listing.entries) {
+      if (balance !== '0') { rec.holders++; totalBase += BigInt(balance); }
+      const s = storedBy.get(address);
+      if (!s) { if (balance !== '0') toWrite.push({ address, balance }); continue; }
+      // The block follower wrote this row from a later block than the listing's: its post-balance is newer (the
+      // write guard would refuse the listing's anyway), so the row is not counted as pending.
+      if ((s.updated_height ?? 0) > listing.height) continue;
+      if (s.verified_src !== BALANCE_LISTING_SRC || !sameBalance(s.balance, balance)) toWrite.push({ address, balance });
+    }
+    rec.totalNam = Number(totalBase) / 1e6;
+    const toZero = stored.filter((s) => !listing.entries.has(s.address) && s.balance_num > 0 && !INTERNAL_ADDRS.includes(s.address) && (s.updated_height ?? 0) <= listing.height).map((s) => s.address);
+    toWrite.sort((a, b) => (a.address < b.address ? -1 : a.address > b.address ? 1 : 0));
+    const part = toWrite.slice(0, cap);
+    rec.remaining = toWrite.length - part.length;
+    if (part.length) rec.written = await runBatch(env.DB, listingBalanceStmts(part, listing.height, now));
+    if (rec.remaining === 0) {
+      if (toZero.length) rec.zeroed = await runBatch(env.DB, listingZeroStmts(toZero, listing.height, now));
+      rec.completeAt = now;
+      // Spans: a separate batch, so a missing table (migration not applied) never undoes the balances.
+      const extend = rec.extendedAt == null || now - rec.extendedAt >= SPAN_EXTEND_MS;
+      try {
+        await runBatch(env.DB, listingSpanStmts(now, listing.height, rec.spansAt, extend));
+        rec.spansAt = now;
+        if (extend) rec.extendedAt = now;
+      } catch (e) {
+        console.error('namada balance spans', e);
+      }
+    }
+    rec.durationMs = Date.now() - t0;
+    health.push({ name, ok: true, at: now, latencyMs: rec.durationMs, note:
+      `${listing.keys.toLocaleString('en-US')} balance keys at height ${listing.height.toLocaleString('en-US')} (${mb(listing.bytes)} from ${listing.provider}): `
+      + `${rec.holders.toLocaleString('en-US')} addresses hold ${Math.round(rec.totalNam).toLocaleString('en-US')} NAM; ${rec.written.toLocaleString('en-US')} rows written`
+      + (rec.zeroed ? `, ${rec.zeroed} zeroed` : '') + (rec.remaining ? `, ${rec.remaining.toLocaleString('en-US')} left for the next tick` : '') });
+  } catch (e) {
+    // Not applied: the record says so and keeps the pass open, so the next tick reads the listing again.
+    rec.remaining = Math.max(1, rec.remaining);
+    rec.error = String(e).slice(0, 160);
+    rec.durationMs = Date.now() - t0;
+    health.push({ name, ok: false, at: now, latencyMs: rec.durationMs, note: `The balance listing was read but not applied: ${rec.error.slice(0, 120)}` });
+  }
+  await kvSet(env.DB, 'balance.listing', rec).catch(() => {});
+  return rec;
+}
+
+/**
+ * Read every bond from the chain and reconcile the stakes rows with it: each source's bonded sum and per-validator
+ * delegations go to `stakes` (bonded_num, delegations, verified_epoch, verified_at, verified_src BOND_LISTING_SRC)
+ * when they differ from the row, with the same cap and carry-over as the balance listing; stored rows with
+ * bonded_num > 0 that the listing does not name are set to 0. Sources the listing names with no bond left (only
+ * unbonds or slashes) get no new row. The sum includes bonds still in the pipeline: the coverage check says so.
+ */
+export async function runBondListing(env: Env, health: SourceHealth[], now: number, epoch: number, read: ReadOpts, list: BondLister = allBonds, cap = LISTING_WRITE_CAP): Promise<BondListingRecord | null> {
+  const name = 'Namada RPC (bond listing)';
+  const prev = await kvGetJson<BondListingRecord>(env.DB, 'bond.listing').catch(() => null);
+  const t0 = Date.now();
+  let listing: Awaited<ReturnType<BondLister>>;
+  try {
+    listing = await list({ timeoutMs: LISTING_TIMEOUT_MS, retries: 0, ...read });
+  } catch (e) {
+    health.push({ name, ok: false, at: now, note: `The bond listing could not be read: ${String(e).slice(0, 120)}` });
+    const failed: BondListingRecord = { ...(prev ?? { at: 0, completeAt: null, height: 0, epoch, provider: '', sources: 0, stakers: 0, totalNam: 0, bytes: 0, written: 0, zeroed: 0, remaining: 0, ticks: 0, durationMs: 0 }), failedAt: now, error: String(e).slice(0, 160) };
+    await kvSet(env.DB, 'bond.listing', failed).catch(() => {});
+    return failed;
+  }
+  const ticks = (prev && prev.remaining > 0 ? prev.ticks : 0) + 1;
+  const rec: BondListingRecord = {
+    at: now, completeAt: prev?.completeAt ?? null, height: listing.height, epoch, provider: listing.provider,
+    sources: listing.sources.size, stakers: 0, totalNam: Number(listing.totalBase) / 1e6, bytes: listing.bytes,
+    written: 0, zeroed: 0, remaining: 0, ticks, durationMs: 0, failedAt: null,
+  };
+  try {
+    const stored = await pagedRows<{ address: string; bonded_num: number | null; delegations: string | null; verified_src: string | null }>(
+      env.DB, `SELECT address, bonded_num, delegations, verified_src FROM stakes WHERE 1 = 1`);
+    const storedBy = new Map(stored.map((r) => [r.address, r]));
+    const toWrite: { address: string; bondedNam: number; delegations: { validator: string; amountNam: number }[] }[] = [];
+    for (const [address, b] of listing.sources) {
+      const bondedNam = Number(b.bondedBase) / 1e6;
+      if (b.bondedBase > 0n) rec.stakers++;
+      const s = storedBy.get(address);
+      if (!s) { if (b.bondedBase > 0n) toWrite.push({ address, bondedNam, delegations: b.delegations }); continue; }
+      if (s.verified_src !== BOND_LISTING_SRC || s.bonded_num !== bondedNam || s.delegations !== JSON.stringify(b.delegations)) toWrite.push({ address, bondedNam, delegations: b.delegations });
+    }
+    const toZero = stored.filter((s) => !listing.sources.has(s.address) && (s.bonded_num ?? 0) > 0).map((s) => s.address);
+    toWrite.sort((a, b) => (a.address < b.address ? -1 : a.address > b.address ? 1 : 0));
+    const part = toWrite.slice(0, cap);
+    rec.remaining = toWrite.length - part.length;
+    if (part.length) rec.written = await runBatch(env.DB, stmt.stakesVerified(part, epoch, now, BOND_LISTING_SRC));
+    if (rec.remaining === 0) {
+      if (toZero.length) rec.zeroed = await runBatch(env.DB, stmt.stakesVerified(toZero.map((address) => ({ address, bondedNam: 0, delegations: [] })), epoch, now, BOND_LISTING_SRC));
+      rec.completeAt = now;
+    }
+    rec.durationMs = Date.now() - t0;
+    health.push({ name, ok: true, at: now, latencyMs: rec.durationMs, note:
+      `${listing.entries.toLocaleString('en-US')} bond entries at height ${listing.height.toLocaleString('en-US')} (${mb(listing.bytes)} from ${listing.provider}): `
+      + `${rec.stakers.toLocaleString('en-US')} addresses stake ${Math.round(rec.totalNam).toLocaleString('en-US')} NAM, bonds in the pipeline included; ${rec.written.toLocaleString('en-US')} rows written`
+      + (rec.zeroed ? `, ${rec.zeroed} set to 0` : '') + (rec.remaining ? `, ${rec.remaining.toLocaleString('en-US')} left for the next tick` : '') });
+  } catch (e) {
+    rec.remaining = Math.max(1, rec.remaining);
+    rec.error = String(e).slice(0, 160);
+    rec.durationMs = Date.now() - t0;
+    health.push({ name, ok: false, at: now, latencyMs: rec.durationMs, note: `The bond listing was read but not applied: ${rec.error.slice(0, 120)}` });
+  }
+  await kvSet(env.DB, 'bond.listing', rec).catch(() => {});
+  return rec;
+}
+
+/**
+ * A sample of stakers re-read with delegations_at (the chain's bonded amount at this epoch, self-bond included) and
+ * compared with the bond listing's row: SAMPLE_PER_TICK a tick in address order, round and round. A difference
+ * (a bond still in the pipeline, a slash) is recorded for the coverage check, never written to the row (owner
+ * decision 7: the listing is the chain's figure too, and a row is not marked for a known reason).
+ */
+export async function sampleStakes(env: Env, health: SourceHealth[], now: number, epoch: number, read: ReadOpts): Promise<StakeSampleRecord | null> {
+  const name = 'Namada RPC (stake sample)';
+  const prev = await kvGetJson<StakeSampleRecord>(env.DB, 'stake.sample').catch(() => null);
+  const rec: StakeSampleRecord = {
+    at: now, cursor: prev?.cursor ?? '', checked: 0, agreed: 0, failed: 0, passes: prev?.passes ?? 0,
+    disagreements: (prev?.disagreements ?? []).filter((d) => now - d.at < SAMPLE_KEEP_MS),
+  };
+  let rows: { address: string; bonded_num: number }[];
+  try {
+    const q = `SELECT address, bonded_num FROM stakes WHERE verified_src = ? AND bonded_num > 0 AND address > ? ORDER BY address LIMIT ?`;
+    rows = (await env.DB.prepare(q).bind(BOND_LISTING_SRC, rec.cursor, SAMPLE_PER_TICK).all<{ address: string; bonded_num: number }>()).results || [];
+    if (rows.length < SAMPLE_PER_TICK) { rec.cursor = ''; if (rows.length) rec.passes++; } else rec.cursor = rows[rows.length - 1].address;
+  } catch (e) {
+    health.push({ name, ok: false, at: now, note: `The stakes to sample could not be listed: ${String(e).slice(0, 120)}` });
+    return prev;
+  }
+  let attempted = 0, cut = 0;
+  const fresh = new Map<string, StakeSampleRecord['disagreements'][number]>();
+  for (let i = 0; i < rows.length && !read.signal?.aborted; i += SAMPLE_CONCURRENCY) {
+    const part = rows.slice(i, i + SAMPLE_CONCURRENCY);
+    const batch = await Promise.all(part.map((r) => delegationsAt(r.address, epoch, read).then((d) => ({ r, d }), () => ({ r, d: null }))));
+    for (const { r, d } of batch) {
+      if (!d) { if (read.signal?.aborted) cut++; else { attempted++; rec.failed++; } continue; }
+      attempted++;
+      rec.checked++;
+      if (Math.abs(d.bondedNam - r.bonded_num) <= 1e-6) rec.agreed++;
+      else fresh.set(r.address, { address: r.address, listingNam: r.bonded_num, chainNam: d.bondedNam, epoch, at: now });
+    }
+  }
+  rec.disagreements = [...rec.disagreements.filter((d) => !rows.some((r) => r.address === d.address)), ...fresh.values()].slice(-200);
+  const differ = fresh.size;
+  const ok = batchHealthOk(rows.length, rec.checked, attempted, rec.failed);
+  health.push({ name, ok, at: now, note: rows.length === 0
+    ? 'No stakes from the bond listing to sample yet.'
+    : `${rec.agreed} of ${rec.checked} sampled stakes match the bond listing to the base unit`
+      + (differ ? `, ${differ} differ (bonds still in the pipeline, or slashed)` : '') + (rec.failed ? `, ${rec.failed} reads failed` : '')
+      + (cut ? `, ${cut} left for the next tick (time limit)` : '') + `; ${rec.passes} full passes so far` });
+  await kvSet(env.DB, 'stake.sample', rec).catch(() => {});
+  return rec;
+}
+
+/**
+ * The bonded-coverage check: the bond listing's sum against the chain's total stake. The listing runs slightly
+ * above the total stake (bonds in the pipeline are listed before they count, and slashes are not deducted), so
+ * it passes within 2% when its last pass is complete and recent. The detail carries what the UI reads
+ * (coveragePct, stakers, pendingAddresses, knownAddresses), the listing's and the chain's totals, the sample's
+ * disagreements, and (owner decision 7) where the chain figure and the flow-history estimate differ.
+ */
+export async function bondedCoverageCheck(db: D1Database, now: number, stakeNam: number, posNam: number | null, bond: BondListingRecord | null, sample: StakeSampleRecord | null): Promise<Stmt> {
+  const title = "Bonded stake: the chain's bond listing (every bond, pipeline included) vs its total stake";
+  const cov = await db.prepare(`SELECT SUM(bonded_num) v, COUNT(bonded_num) n, SUM(CASE WHEN bonded_num > 0 THEN 1 ELSE 0 END) stakers FROM stakes WHERE verified_src = ?`)
+    .bind(BOND_LISTING_SRC).first<{ v: number | null; n: number; stakers: number | null }>().catch(() => null);
+  const mis = await db.prepare(`SELECT COUNT(*) n, SUM(ABS(estimated_num - bonded_num)) total,
+        (SELECT address FROM stakes WHERE bonded_num IS NOT NULL AND estimated_num IS NOT NULL ORDER BY ABS(estimated_num - bonded_num) DESC LIMIT 1) top_addr,
+        MAX(ABS(estimated_num - bonded_num)) top_nam
+      FROM stakes WHERE bonded_num IS NOT NULL AND estimated_num IS NOT NULL AND ABS(estimated_num - bonded_num) > 1`)
+    .first<{ n: number; total: number | null; top_addr: string | null; top_nam: number | null }>().catch(() => null);
+  const sampled = sample ? { at: sample.at, checked: sample.checked, agreed: sample.agreed, failed: sample.failed, passes: sample.passes, examples: sample.disagreements.slice(0, 5) } : null;
+  const common = {
+    verifiedAddresses: cov?.n ?? 0, storedSumNam: cov?.v ?? null, totalStakeNam: stakeNam, posBalanceNam: posNam,
+    sampledDisagreements: sample?.disagreements.length ?? 0, sampled,
+    estimateMismatches: mis?.n ?? null, estimateMismatchNam: mis?.total ?? null,
+    largestMismatch: mis?.top_nam ? { address: mis.top_addr, nam: mis.top_nam } : null,
+  };
+  if (!bond || !(bond.at > 0)) {
+    const note = bond?.error ? `The bond listing could not be read: ${bond.error}` : 'The bond listing has not been read yet.';
+    return stmt.check('bonded_coverage', 'warn', title, { ...common, coveragePct: null, stakers: cov?.stakers ?? null, knownAddresses: null, pendingAddresses: null, listingTotalNam: null, note }, now);
+  }
+  const pct = (bond.totalNam / stakeNam) * 100;
+  const recent = now - bond.at < 3 * BOND_LISTING_MS;
+  const ok = Math.abs(100 - pct) < 2 && bond.remaining === 0 && recent && !bond.error;
+  return stmt.check('bonded_coverage', ok ? 'ok' : 'warn', title, {
+    ...common,
+    coveragePct: pct.toFixed(1) + '%', stakers: bond.stakers, knownAddresses: bond.sources, pendingAddresses: bond.remaining,
+    listingTotalNam: bond.totalNam, listingAt: bond.at, listingHeight: bond.height, listingEpoch: bond.epoch, listingCompleteAt: bond.completeAt,
+    note: !recent ? 'The bond listing is older than three of its intervals.' : bond.error ? `The last bond listing failed: ${bond.error}` : bond.remaining ? `${bond.remaining} addresses are still being written.` : undefined,
+  }, now);
 }
 
 export async function runCron(env: Env) {
@@ -342,6 +577,18 @@ export async function runCron(env: Env) {
       probe(health, 'Namada RPC (PGF balance)', () => namBalance(NAMADA.internal.pgf, nread)),
       probe(health, 'Namada RPC (epoch)', () => namadaEpoch(nread)),
     ]);
+    // The chain listing this tick reads (5a/5d), if one is due, starts now, right after the quick reads above have
+    // shown the breaker which node answers: a node can take 30 s to stream the 12 MB balance answer (5ElementsNodes
+    // did on 2026-10-20 while Papadritta took 3.5 s), so the read gets the rest of the tick, not what the checks
+    // leave. The node that served the last listing is asked first (unless it failed a read this tick); one listing
+    // a tick, the bond listing (the shorter interval) before the balance listing.
+    const [balPrev, bondPrev] = await Promise.all([kvGetJson<BalanceListingRecord>(env.DB, 'balance.listing').catch(() => null), kvGetJson<BondListingRecord>(env.DB, 'bond.listing').catch(() => null)]);
+    const which: 'bond' | 'balance' | null = late() ? null : listingDue(bondPrev, BOND_LISTING_MS, now) ? 'bond' : listingDue(balPrev, BALANCE_LISTING_MS, now) ? 'balance' : null;
+    const lread: ReadOpts = { rpcs: preferProvider(rpcs, (which === 'bond' ? bondPrev : balPrev)?.provider), signal, breaker };
+    const bondRead = which === 'bond' ? allBonds({ timeoutMs: LISTING_TIMEOUT_MS, retries: 0, ...lread }).then((v) => ({ v }), (e) => ({ e })) : null;
+    const balRead = which === 'balance' ? allNamBalances({ timeoutMs: LISTING_TIMEOUT_MS, retries: 0, ...lread }).then((v) => ({ v }), (e) => ({ e })) : null;
+    const started = <T,>(p: Promise<{ v?: T; e?: unknown }>) => async () => { const r = await p; if (r.e !== undefined || !r.v) throw r.e ?? new Error('listing: no answer'); return r.v; };
+
     const osmoSupply = osmoSupplyRes ? toNam(osmoSupplyRes) : null;
     health.push({ name: 'Osmosis SQS (price)', ok: price.usd != null, at: price.at, note: price.error });
     health.push({ name: 'Osmosis SQS (pools)', ok: poolRes.pools.length > 0, at: poolRes.at, note: poolRes.error });
@@ -532,8 +779,9 @@ export async function runCron(env: Env) {
     // What has been learnt so far is written now: a stall in the stake phase must not hide it.
     await mergeHealth(env, health);
 
-    // 5. Bonded stake. Estimates for every address from bond/unbond history (every 10 min); chain verification of up
-    //    to STAKE_PER_TICK addresses per tick, most-stale first, written batch by batch (partial progress lands).
+    // 5. Bonded stake. Estimates for every address from bond/unbond history (every 10 min). Who stakes comes from the
+    //    chain's bond listing (5a): an address the listing does not name has no bonds, so holders no longer need a
+    //    stakes row of their own.
     if (now % 600000 < 60000 || !(await env.DB.prepare('SELECT 1 FROM stakes LIMIT 1').first().catch(() => null))) {
       await env.DB.prepare(`INSERT INTO stakes (address, estimated_num, updated_at)
         SELECT addr, SUM(amt), ? FROM (
@@ -541,116 +789,34 @@ export async function runCron(env: Env) {
           UNION ALL SELECT to_addr, -amount_num FROM flows WHERE chain='namada' AND kind='unbond' AND to_addr IS NOT NULL
         ) GROUP BY addr
         ON CONFLICT(address) DO UPDATE SET estimated_num=excluded.estimated_num, updated_at=excluded.updated_at`).bind(now).run().catch((e) => console.error('stake estimates', e));
-      // Genesis-bonded accounts have no bond tx; make sure every liquid holder is verified on chain too.
-      await env.DB.prepare(`INSERT OR IGNORE INTO stakes (address, updated_at) SELECT address, ? FROM holders WHERE chain='namada' AND address LIKE 'tnam1q%'`).bind(now).run().catch(() => {});
-    }
-    // 4b. Staker discovery: every delegation the chain lists, a few validators a tick (a full pass about hourly),
-    //     so stakers that never moved since the flow index began (genesis and early delegators) are read too.
-    //     New addresses enter `stakes` unverified; the verifier below reads them first.
-    if (!late()) {
-      const discName = 'Namada RPC (staker discovery)';
-      try {
-        type Discovery = { validators: string[]; listedAt: number; next: number; found: number; passAt: number | null };
-        let disc = await kvGetJson<Discovery>(env.DB, 'stake.discovery');
-        if (!disc || !disc.validators?.length || now - disc.listedAt > 6 * 3600_000) {
-          const validators = await validatorAddresses(nread);
-          disc = { validators, listedAt: now, next: (disc?.next ?? 0) % Math.max(1, validators.length), found: disc?.found ?? 0, passAt: disc?.passAt ?? null };
-        }
-        let read = 0, found = 0, failed = 0;
-        for (let k = 0; k < DISCOVER_PER_TICK && !late(); k++) {
-          const v = disc.validators[disc.next];
-          try {
-            const addrs = [...(await delegatorsOf(v, nread)).keys()].filter((a) => a.startsWith('tnam1q'));
-            const stmts: Stmt[] = [];
-            for (let i = 0; i < addrs.length; i += 45) {
-              const part = addrs.slice(i, i + 45);
-              stmts.push({ sql: `INSERT OR IGNORE INTO stakes (address, updated_at) VALUES ${part.map(() => '(?, ?)').join(',')}`, params: part.flatMap((a) => [a, now]) });
-            }
-            found += stmts.length ? await runBatch(env.DB, stmts) : 0;
-            read++;
-          } catch (e) {
-            failed++;
-            if (signal.aborted) break;
-          }
-          disc.next = (disc.next + 1) % disc.validators.length;
-          if (disc.next === 0) disc.passAt = now;
-        }
-        disc.found += found;
-        await kvSet(env.DB, 'stake.discovery', disc);
-        health.push({ name: discName, ok: read > 0 || failed === 0, at: now,
-          note: `${read} validators read this tick, ${found} new stakers found${failed ? `, ${failed} failed` : ''}; ${disc.validators.length} validators in all` });
-      } catch (e) {
-        health.push({ name: discName, ok: false, at: now, note: `Validator list not read: ${String(e).slice(0, 100)}` });
-      }
     }
 
-    const stakeName = 'Namada RPC (stake verification)';
-    if (epoch) {
-      const todo = await env.DB.prepare(`SELECT address FROM stakes ORDER BY COALESCE(verified_at, 0) ASC, COALESCE(bonded_num, estimated_num, 0) DESC LIMIT ?`).bind(STAKE_PER_TICK).all<{ address: string }>().catch(() => ({ results: [] as { address: string }[] }));
-      // `done`: rows written (D1's own count); `fails`: reads that got no usable answer; reads still running when
-      // the stake phase ended (REFRESH_RESERVE_MS before the deadline) are neither: they are left for the next tick.
-      let fails = 0, done = 0, attempted = 0;
-      const list = todo.results || [];
-      const stakeEnd = deadlineAt - REFRESH_RESERVE_MS;
-      const phase = phaseSignal(signal, stakeEnd);
-      const quick: ReadOpts = { ...QUICK, rpcs, signal: phase.signal, breaker };
-      try {
-        for (let i = 0; i < list.length && Date.now() < stakeEnd && !phase.signal.aborted; i += STAKE_CONCURRENCY) {
-          const part = list.slice(i, i + STAKE_CONCURRENCY);
-          const batch = await Promise.all(part.map((r) => delegationsAt(r.address, epoch, quick)
-            .then((d) => ({ a: r.address, d, cut: false }), () => ({ a: r.address, d: null, cut: phase.signal.aborted }))));
-          for (const x of batch) {
-            if (x.d) attempted++;
-            else if (!x.cut) { attempted++; fails++; }
-          }
-          const stmts = batch.flatMap((x) => (x.d ? [stmt.stakeVerified(x.a, x.d.bondedNam, x.d.delegations, epoch, now, x.d.provider)] : []));
-          if (stmts.length) done += await runBatch(env.DB, stmts);
-        }
-      } finally {
-        phase.done();
+    // 5a. The chain listings, never both in one tick (each is a multi-megabyte answer): the bond listing when due
+    //     (it needs the epoch for the rows' verified_epoch), else the balance listing when due (5d). The read was
+    //     started with the tick (above); here its answer is reconciled with the rows.
+    let bondRec = bondPrev;
+    if (bondRead) {
+      if (epoch) bondRec = await runBondListing(env, health, now, epoch, lread, started(bondRead));
+      else {
+        // Without the epoch the rows cannot be stamped (verified_epoch): the answer, if any, is let go.
+        await bondRead;
+        health.push({ name: 'Namada RPC (bond listing)', ok: false, at: now, note: 'Not applied this tick: the epoch could not be read from the chain.' });
       }
-      const left = list.length - attempted;
-      // As the refresh: ok only when something was written (or nothing was due) and fewer than half the reads failed,
-      // so a tick whose time limit left every address reads as not ok, with the note shown.
-      const ok = batchHealthOk(list.length, done, attempted, fails);
-      health.push({ name: stakeName, ok, at: now, note: `${done} addresses verified this tick, ${fails} failed${left > 0 ? `, ${left} left for the next tick (time limit)` : ''}` });
-
-      const cov = await env.DB.prepare(`SELECT SUM(bonded_num) v, COUNT(bonded_num) n, COUNT(*) total, SUM(CASE WHEN bonded_num > 0 THEN 1 ELSE 0 END) stakers FROM stakes`).first<{ v: number | null; n: number; total: number; stakers: number | null }>().catch(() => null);
-      // Owner decision 7: where the chain read and the flow-history estimate differ, that is reported here, not on the row.
-      const mis = await env.DB.prepare(`SELECT COUNT(*) n, SUM(ABS(estimated_num - bonded_num)) total,
-            (SELECT address FROM stakes WHERE bonded_num IS NOT NULL AND estimated_num IS NOT NULL ORDER BY ABS(estimated_num - bonded_num) DESC LIMIT 1) top_addr,
-            MAX(ABS(estimated_num - bonded_num)) top_nam
-          FROM stakes WHERE bonded_num IS NOT NULL AND estimated_num IS NOT NULL AND ABS(estimated_num - bonded_num) > 1`)
-        .first<{ n: number; total: number | null; top_addr: string | null; top_nam: number | null }>().catch(() => null);
-      // Measured against what is staked (the chain's total stake), not the staking account's balance, which also
-      // holds NAM on its way out and would make full coverage read as 78%.
-      if (cov && stakeNam != null && cov.n > 0) {
-        const pct = (cov.v ?? 0) / stakeNam * 100;
-        // Passes when the addresses read so far add up to the chain's total stake (within 2%); addresses still
-        // waiting to be read are reported, not counted as a fault.
-        await runBatch(env.DB, [stmt.check('bonded_coverage', Math.abs(100 - pct) < 2 ? 'ok' : 'warn',
-          'Bonded stake: Σ verified per-address bonds vs the chain\'s total stake',
-          {
-            verifiedAddresses: cov.n, knownAddresses: cov.total, pendingAddresses: cov.total - cov.n, stakers: cov.stakers ?? null,
-            sumVerifiedNam: cov.v, totalStakeNam: stakeNam, posBalanceNam: posNam, coveragePct: pct.toFixed(1) + '%',
-            estimateMismatches: mis?.n ?? null, estimateMismatchNam: mis?.total ?? null,
-            largestMismatch: mis?.top_nam ? { address: mis.top_addr, nam: mis.top_nam } : null,
-          }, now)]).catch(() => {});
-      }
-    } else {
-      // Without the epoch no stake can be read: say so, rather than keep showing the last tick's result.
-      health.push({ name: stakeName, ok: false, at: now, note: 'Not run this tick: the epoch could not be read from the chain.' });
     }
-
-    // 5b. Spendable Namada balances (W13): re-read from the chain the addresses checked longest ago, a bounded batch
-    //     per tick (≤ LIQUID_PER_TICK addresses, one attempt per answering node, stops at the budget or the deadline).
-    if (!late()) {
-      await refreshLiquidBalances(env, health, namBalanceQuick, { rpcs, headHeight, signal, deadlineAt, breaker }).catch((e) => {
-        health.push({ name: 'Namada RPC (balance refresh)', ok: false, at: Date.now(), note: String(e).slice(0, 160) });
-      });
-    } else {
-      health.push({ name: 'Namada RPC (balance refresh)', ok: false, at: Date.now(), note: 'Not run this tick: the tick ran out of time on slower reads.' });
+    // 5b. A sample of stakes re-read with delegations_at (the chain's bonded amount at this epoch) against the listing.
+    //     Its reads end LISTING_RESERVE_MS before the deadline, so a slow node can never take the listing's turn.
+    let sampleRec: StakeSampleRecord | null = null;
+    if (epoch && !late()) {
+      const phase = phaseSignal(signal, deadlineAt - LISTING_RESERVE_MS);
+      try { sampleRec = await sampleStakes(env, health, now, epoch, { ...nread, signal: phase.signal }); } finally { phase.done(); }
+    } else health.push({ name: 'Namada RPC (stake sample)', ok: false, at: now, note: epoch ? 'Not run this tick: the tick ran out of time on slower reads.' : 'Not run this tick: the epoch could not be read from the chain.' });
+    // 5c. The coverage check, every tick: the listing's sum (at most a few intervals old) against this tick's total stake.
+    if (stakeNam != null) {
+      const sample = sampleRec ?? (await kvGetJson<StakeSampleRecord>(env.DB, 'stake.sample').catch(() => null));
+      await runBatch(env.DB, [await bondedCoverageCheck(env.DB, now, stakeNam, posNam, bondRec, sample)]).catch(() => {});
     }
+    // 5d. Spendable balances: the balance listing, when it was the listing due this tick.
+    if (balRead) await runBalanceListing(env, health, now, lread, started(balRead));
 
     // 6. The Osmosis holder list, read beside everything above.
     const holderList = await holderSync;
@@ -707,9 +873,13 @@ export async function runCron(env: Env) {
   }
 }
 
+/** Probes that no longer run (replaced by the listings on 2026-10-20); their last result is dropped from the map. */
+export const RETIRED_HEALTH = ['Namada RPC (balance refresh)', 'Namada RPC (stake verification)', 'Namada RPC (staker discovery)'];
+
 /** Merge into the stored health map so a probe that did not run this tick keeps its last result. */
 async function mergeHealth(env: Env, health: SourceHealth[]) {
   const prev = (await kvGetJson<Record<string, SourceHealth>>(env.DB, 'source.health').catch(() => null)) ?? {};
+  for (const n of RETIRED_HEALTH) delete prev[n];
   for (const h of health) prev[h.name] = h;
   await kvSet(env.DB, 'source.health', prev).catch(() => {});
 }

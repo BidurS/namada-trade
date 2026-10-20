@@ -242,6 +242,8 @@ export interface Overview {
   namada: {
     /** holders on Namada (spendable or staked, protocol accounts excluded); null when unknown. Current, not as of ?at= */
     holders: number | null;
+    /** of those, how many hold under 1 NAM in all (fee dust and test amounts count as holders); null when unknown or on older servers */
+    holdersUnder1Nam?: number | null;
     flows24h: number;
     bonded24h: number;
     withdrawn24h: number;
