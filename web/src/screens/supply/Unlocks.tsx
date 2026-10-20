@@ -31,7 +31,7 @@ function outcomeOf(u: UnlockEntry, asOf: number, st: UnbondState | undefined, sh
   if (u.kind === 'unbond') {
     if (!st || st.kind === 'unknown') return { tag: 'Wait not known', strong: false };
     // where the end of the wait comes from: the indexer's own withdraw time, or the request time + the measured wait
-    const src = u.liquidAtSource === 'indexer' ? ' (withdraw time from the Namada indexer)' : u.liquidAtSource === 'estimate' ? ` (estimate: ${waitWords})` : '';
+    const src = u.liquidAtSource === 'consensus' ? ' (withdraw epoch from the chain, the time from the measured epoch length)' : u.liquidAtSource === 'indexer' ? ' (withdraw time from the Namada indexer)' : u.liquidAtSource === 'estimate' ? ` (estimate: ${waitWords})` : '';
     if (st.kind === 'waiting') return { tag: `Sellable in ${fmtAge(st.liquidAt - asOf)}`, strong: true, detail: <>The wait ends {fmtDayClock(st.liquidAt)}{src}.</> };
     if (st.kind === 'withdrawn') return { tag: `Withdrawn ${fmtDayMonth(st.withdrawnAt)}`, strong: false, detail: <>The wait ended {fmtDayMonth(st.liquidAt)}{src}; the withdrawal is listed here too.</> };
     return { tag: `Wait over since ${fmtDayMonth(st.liquidAt)}`, strong: true, detail: <>The wait ended {fmtDayMonth(st.liquidAt)}{src}. No withdrawal of it is recorded: it can be withdrawn and moved at any time.</> };
@@ -193,9 +193,9 @@ export function Unlocks({
     // Also incorporate consensus ABCI unbond term structure buckets if present and higher than indexed large unbonds
     if (data.unbondTermStructure?.buckets?.length) {
       for (const cb of data.unbondTermStructure.buckets) {
-        const d = cb.withdrawableNow || cb.estimatedAt == null
-          ? 0
-          : Math.max(1, Math.min(14, Math.ceil((cb.estimatedAt - data.asOf) / DAY)));
+        // a bucket still in flight whose time is not known (no epoch length was read) has no day to go in
+        if (!cb.withdrawableNow && cb.estimatedAt == null) continue;
+        const d = cb.withdrawableNow ? 0 : Math.max(1, Math.min(14, Math.ceil((cb.estimatedAt! - data.asOf) / DAY)));
         const b = buckets[d];
         if (cb.amountNam > b.totalNam) {
           const diff = cb.amountNam - b.totalNam;

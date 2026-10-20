@@ -267,10 +267,18 @@ export async function cachedChainParams(db: D1Database): Promise<ChainParams | n
   return v && Number.isFinite(v.unbondingLength) && Number.isFinite(v.pipelineLength) && Number(v.minEpochSec) > 0 ? v : null;
 }
 
+/** The term structure is rewritten when a bond listing completes (every BOND_LISTING_MS, cron.ts); older than three intervals it is stale. */
+export const UNBOND_TERM_STALE_MS = 3 * 40 * 60_000;
+/** A burner's upstream origin counts only from transfers in this window before its NAM first arrived on Osmosis ... */
+export const HOP_ORIGIN_WINDOW_MS = 48 * 3600_000;
+/** ... that add up to at least this many NAM and this share of what crossed. */
+export const HOP_ORIGIN_MIN_NAM = 1_000;
+export const HOP_ORIGIN_SHARE = 0.1;
+
 /** kv `unbond.withdraw`: pending unbonds of addresses in the unlock list (consensus bond listing or indexer fallback). */
 export interface UnbondWithdrawCache {
   at: number;
-  byAddress: Record<string, { validator: string; amountNam: number; withdrawEpoch: number; withdrawTime: number; source?: 'consensus' | 'indexer' }[]>;
+  byAddress: Record<string, { validator: string; amountNam: number; withdrawEpoch: number; withdrawTime: number | null; source?: 'consensus' | 'indexer' }[]>;
 }
 
 /**
@@ -283,9 +291,12 @@ export function buildUnbondTermStructure(
   height: number,
   currentEpoch: number,
   at: number,
-  epochSec: number | null = 21600,
+  epochSec: number | null,
+  epochSecSource: string | null = null,
 ): { termStructure: UnbondTermStructure; withdrawCache: UnbondWithdrawCache } {
-  const sec = epochSec && epochSec > 0 ? epochSec : 21600;
+  // The withdraw epoch is the chain's; the clock time is epochs × the measured epoch length. Without a measured
+  // length there is no time (never a stand-in figure): the entry carries the epoch and a null time.
+  const sec = epochSec && epochSec > 0 ? epochSec : null;
   let withdrawableNowBase = 0n;
   let inFlightBase = 0n;
   const bucketMap = new Map<number, { amountBase: bigint; count: number }>();
@@ -306,7 +317,7 @@ export function buildUnbondTermStructure(
       bucketMap.set(u.withdrawEpoch, b);
 
       const epochsRemaining = Math.max(0, u.withdrawEpoch - currentEpoch);
-      const withdrawTime = at + epochsRemaining * sec * 1000;
+      const withdrawTime = epochsRemaining === 0 ? at : sec ? at + epochsRemaining * sec * 1000 : null;
       addrList.push({
         validator: u.validator,
         amountNam: u.amountNam,
@@ -325,7 +336,7 @@ export function buildUnbondTermStructure(
       const epochsRemaining = Math.max(0, withdrawEpoch - currentEpoch);
       return {
         withdrawEpoch,
-        estimatedAt: at + epochsRemaining * sec * 1000,
+        estimatedAt: epochsRemaining === 0 ? at : sec ? at + epochsRemaining * sec * 1000 : null,
         withdrawableNow,
         amountNam: Number(b.amountBase) / 1e6,
         count: b.count,
@@ -339,6 +350,8 @@ export function buildUnbondTermStructure(
       at,
       height,
       currentEpoch,
+      epochSec: sec,
+      epochSecSource: sec ? epochSecSource : null,
       withdrawableNowNam,
       inFlightNam,
       totalUnbondingNam: withdrawableNowNam + inFlightNam,
@@ -481,10 +494,15 @@ export async function pressure(db: D1Database, asOf: number, replay: boolean, wi
     cachedChainParams(db),
     kvGetJson<IntelResponse>(db, 'intel.cache'),
   ]);
-  const [withdrawTimes, unbondTermStructure] = await Promise.all([
+  const [withdrawTimes, termStored] = await Promise.all([
     kvGetJson<UnbondWithdrawCache>(db, 'unbond.withdraw').catch(() => null),
     kvGetJson<UnbondTermStructure>(db, 'unbond.term_structure').catch(() => null),
   ]);
+  // The term structure is rewritten only when a bond listing completes; like every other figure it is stamped by
+  // its age (stale past UNBOND_TERM_STALE_MS, missing when there is none or it was written after `asOf`).
+  const unbondTermStructure = termStored && termStored.at <= asOf ? termStored : null;
+  const unbondTermStructureProv = provAt('Namada RPC (bond listing: every unbond on the chain)', unbondTermStructure?.at ?? null, asOf, UNBOND_TERM_STALE_MS,
+    unbondTermStructure ? { height: unbondTermStructure.height } : { note: termStored ? 'The bond listing had not been read at this moment.' : 'The bond listing has not been read yet.' });
 
   // D2: inventory on deck
   const sellsByAddr = new Map<string, { ts: number; nam: number }[]>();
@@ -500,28 +518,44 @@ export async function pressure(db: D1Database, asOf: number, replay: boolean, wi
   const linkOf = new Map<string, { addr: string; label: string | null; source: string | null; author: string | null }>();
   for (const l of links.results || []) if (!linkOf.has(l.osmo_addr)) linkOf.set(l.osmo_addr, { addr: l.namada_addr, label: l.label ?? INTERNAL_LABELS[l.namada_addr]?.label ?? null, source: l.label ? l.source ?? null : INTERNAL_LABELS[l.namada_addr] ? 'auto' : null, author: l.author ?? null });
 
-  // 2-hop burner attribution for unlabeled linkedNamada origins: if an unlabeled tnam1 bridge sender received
-  // Namada transfers within 48h prior to bridging, surface the upstream origin.
+  // 2-hop burner attribution for unlabeled linkedNamada origins: an unlabeled tnam1 bridge sender that received
+  // Namada transfers in the 48 h before its NAM first arrived on Osmosis names the upstream origin, when those
+  // transfers are a meaningful part of what crossed (HOP_ORIGIN_SHARE of it, and at least HOP_ORIGIN_MIN_NAM): a
+  // dust transfer eight days earlier is neither.
   const unlabeledLinked = [...new Set([...linkOf.values()].filter((l) => !l.label && !isInternal(l.addr)).map((l) => l.addr))];
-  const hopOriginByBurner = new Map<string, { address: string; label: string | null; labelPlain: string | null }>();
+  const hopRowsByBurner = new Map<string, { origin: string; nam: number; ts: number; label: string | null; source: string | null }[]>();
   if (unlabeledLinked.length) {
+    const firsts = (ibcIn.results || []).map((r: any) => Number(r.first_ts)).filter((t: number) => Number.isFinite(t));
+    const lo = (firsts.length ? Math.min(...firsts) : from) - HOP_ORIGIN_WINDOW_MS;
+    const hi = firsts.length ? Math.max(...firsts) : asOf;
     const hopRows = await db.prepare(
-      `SELECT f.to_addr AS burner, f.from_addr AS origin, SUM(f.amount_num) AS nam, l.label, l.source
+      `SELECT f.to_addr AS burner, f.from_addr AS origin, f.amount_num AS nam, f.ts, l.label, l.source
        FROM flows f LEFT JOIN labels l ON l.address = f.from_addr
        WHERE f.chain='namada' AND f.kind='transfer' AND f.to_addr IN (${unlabeledLinked.map(() => '?').join(',')})
-         AND f.from_addr IS NOT NULL AND f.ts >= ? AND f.ts < ? AND ${NOT_LEGACY_TWIN}
-       GROUP BY f.to_addr, f.from_addr ORDER BY nam DESC`,
-    ).bind(...unlabeledLinked, from - 48 * H, asOf).all<any>().catch(() => ({ results: [] as any[] }));
+         AND f.from_addr IS NOT NULL AND f.amount_num >= ? AND f.ts >= ? AND f.ts < ? AND ${NOT_LEGACY_TWIN}
+       ORDER BY f.amount_num DESC LIMIT 500`,
+    ).bind(...unlabeledLinked, HOP_ORIGIN_MIN_NAM, lo, hi).all<any>().catch(() => ({ results: [] as any[] }));
     for (const hr of hopRows.results || []) {
-      if (!hr.burner || !hr.origin || isInternal(hr.origin) || hopOriginByBurner.has(hr.burner)) continue;
-      const lbl = hr.label ?? INTERNAL_LABELS[hr.origin]?.label ?? null;
-      hopOriginByBurner.set(hr.burner, {
-        address: hr.origin,
-        label: lbl,
-        labelPlain: label_plain(lbl, hr.origin, hr.source),
-      });
+      if (!hr.burner || !hr.origin || isInternal(hr.origin)) continue;
+      (hopRowsByBurner.get(hr.burner) ?? hopRowsByBurner.set(hr.burner, []).get(hr.burner)!).push({ origin: hr.origin, nam: hr.nam, ts: hr.ts, label: hr.label ?? null, source: hr.source ?? null });
     }
   }
+  /** The largest origin of the burner's transfers in the 48 h before `firstTs`, when it sent at least the floor and HOP_ORIGIN_SHARE of `bridgedIn`. */
+  const hopOriginOf = (burner: string, firstTs: number, bridgedIn: number) => {
+    const rows = hopRowsByBurner.get(burner);
+    if (!rows) return null;
+    const byOrigin = new Map<string, { nam: number; label: string | null; source: string | null }>();
+    for (const r of rows) {
+      if (r.ts < firstTs - HOP_ORIGIN_WINDOW_MS || r.ts >= firstTs) continue;
+      const o = byOrigin.get(r.origin) ?? byOrigin.set(r.origin, { nam: 0, label: r.label, source: r.source }).get(r.origin)!;
+      o.nam += r.nam;
+    }
+    let best: { address: string; nam: number; label: string | null; source: string | null } | null = null;
+    for (const [address, o] of byOrigin) if (!best || o.nam > best.nam) best = { address, ...o };
+    if (!best || best.nam < Math.max(HOP_ORIGIN_MIN_NAM, bridgedIn * HOP_ORIGIN_SHARE)) return null;
+    const lbl = best.label ?? INTERNAL_LABELS[best.address]?.label ?? null;
+    return { address: best.address, label: lbl, labelPlain: label_plain(lbl, best.address, best.source) };
+  };
 
   const onDeck: OnDeckEntry[] = (ibcIn.results || [])
     .filter((r: any) => !isInternal(r.addr))
@@ -533,7 +567,7 @@ export async function pressure(db: D1Database, asOf: number, replay: boolean, wi
       const soldCounted = Math.min(soldSince, r.nam);
       const sentBackCounted = Math.min(bridgedOutSince, r.nam - soldCounted);
       const link = linkOf.get(r.addr);
-      const hopOriginNamada = link?.addr ? hopOriginByBurner.get(link.addr) ?? null : null;
+      const hopOriginNamada = link?.addr ? hopOriginOf(link.addr, r.first_ts, r.nam) : null;
       // Empirical Bayesian Beta-Binomial dump hazard score in [0, 1]
       const empiricalPropensity = (soldCounted + priorSells30d + 5_000) / (r.nam + priorSells30d + 25_000);
       const hazardBoost = (soldCounted > 0 ? 0.25 : 0) + (priorSells30d > 0 ? 0.15 : 0) + (hopOriginNamada ? 0.1 : 0);
@@ -581,11 +615,17 @@ export async function pressure(db: D1Database, asOf: number, replay: boolean, wi
     const author = f.kind === 'bond' ? f.fromLabelAuthor : f.toLabelAuthor;
     // Consensus bond listing or indexer withdraw time for this unbond (address, validator, amount) when listed; else ts + the wait.
     const listed = f.kind === 'unbond' && user ? withdrawTimes?.byAddress?.[user]?.find((u) => Math.abs(u.amountNam - f.amount) < 1e-6 && (!f.meta?.validator || u.validator === f.meta.validator)) : undefined;
+    // A listed unbond whose time could not be computed (the chain's epoch length was not read when the listing was
+    // applied) stays without a time: the epoch is known, the clock time is not, and nothing stands in for it.
     const liquidAt = f.kind !== 'unbond' ? null : listed ? listed.withdrawTime : wait ? f.ts + wait.epochs * wait.epochSec * 1000 : null;
+    const liquidAtNote = f.kind === 'unbond' && listed && listed.withdrawTime == null
+      ? `Withdrawable from epoch ${listed.withdrawEpoch.toLocaleString('en-US')} (the chain's bond listing); the time is not known because the epoch length could not be read.`
+      : undefined;
     return {
       address: user ?? '', label, labelPlain: label_plain(label, user, src), labelSource: label ? src ?? null : null, labelAuthor: label ? author ?? null : null, kind: f.kind as UnlockEntry['kind'],
       amountNam: f.amount, ts: f.ts, txHash: f.txHash, explorerHash: f.explorerHash,
       liquidAt, liquidAtSource: liquidAt == null ? null : listed ? (listed.source ?? 'indexer') : 'estimate',
+      ...(liquidAtNote ? { liquidAtNote } : {}),
       outcome: null,
     };
   });
@@ -621,7 +661,10 @@ export async function pressure(db: D1Database, asOf: number, replay: boolean, wi
           .bind(...burners, minW, maxFollow).all<any>().catch(() => ({ results: [] as any[] })),
         db.prepare(`SELECT osmo_addr, namada_addr FROM address_links WHERE namada_addr IN (${burners.map(() => '?').join(',')})`).bind(...burners).all<any>().catch(() => ({ results: [] as any[] })),
       ]);
-      const burnerOsmo = new Map((burnerLinks.results || []).map((l: any) => [l.namada_addr, l.osmo_addr]));
+      // An Osmosis account linked to a withdrawer and to its burner is one seller: its sales are attributed through
+      // the withdrawer's own link, never again through the burner's.
+      const directOsmo = new Set(osmoOf.values());
+      const burnerOsmo = new Map((burnerLinks.results || []).filter((l: any) => !directOsmo.has(l.osmo_addr)).map((l: any) => [l.namada_addr, l.osmo_addr]));
       const burnerSold = burnerOsmo.size
         ? await db.prepare(`SELECT from_addr, ts, amount_num FROM flows WHERE chain='osmosis' AND kind='sell' AND from_addr IN (${[...burnerOsmo.values()].map(() => '?').join(',')}) AND ts >= ? AND ts < ?`)
             .bind(...burnerOsmo.values(), minW, asOf).all<any>().catch(() => ({ results: [] as any[] }))
@@ -749,7 +792,7 @@ export async function pressure(db: D1Database, asOf: number, replay: boolean, wi
     unlocks, unlocksWindowDays: Math.max(UNLOCKS_WINDOW_DAYS, windowDays), unlocksMinNam: UNLOCKS_MIN_NAM, unbondingAll,
     unbondingDays: wait ? wait.days : null, unbondingEpochs: wait?.epochs ?? null, epochHours: wait ? wait.epochSec / 3600 : null,
     unbondingProv, chainParams: params,
-    ...(unbondTermStructure ? { unbondTermStructure } : {}),
+    ...(unbondTermStructure ? { unbondTermStructure } : {}), unbondTermStructureProv,
     pipelineSummary,
     bondedTrend: bondedTrend.map((p) => ({ ts: p.ts, value: p.value })), movers, proposals, proposalsProv,
     coverage: cov.both,

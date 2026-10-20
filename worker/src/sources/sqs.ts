@@ -269,24 +269,28 @@ export function annotateSlippageCurve(
   let liquidityCliffNam: number | null = null;
   let cliffNote: string | null = null;
   let prevNam = 0;
+  // The sell-side baseline (NAM and USDC) moves only on rungs that have a sell quote, so a rung without one (the
+  // quote service refused that tier) does not make the next slice look wider than it is.
+  let prevSellNam = 0;
   let prevSellUsdc = 0;
   let prevBuyUsdc = 0;
   let prevBuyNam = 0;
   let prevMarginalImpact = 0;
 
   const annotated = sorted.map((p, idx) => {
-    const dNam = p.amountNam - prevNam;
+    const dSellNam = p.amountNam - prevSellNam;
     let marginalSellUsd: number | null = null;
     let marginalSellImpactPct: number | null = null;
     let marginalBuyUsd: number | null = null;
 
-    if (dNam > 0 && p.sellOutUsdc != null) {
+    if (dSellNam > 0 && p.sellOutUsdc != null) {
       const dUsdc = p.sellOutUsdc - prevSellUsdc;
-      marginalSellUsd = Math.max(0, dUsdc / dNam);
+      marginalSellUsd = Math.max(0, dUsdc / dSellNam);
       if (spotUsd && spotUsd > 0) {
         marginalSellImpactPct = Math.max(0, ((spotUsd - marginalSellUsd) / spotUsd) * 100);
       }
       prevSellUsdc = p.sellOutUsdc;
+      prevSellNam = p.amountNam;
     }
     const actualBuyNam = p.buyOutNam ?? p.amountNam;
     const dBuyNam = actualBuyNam - prevBuyNam;

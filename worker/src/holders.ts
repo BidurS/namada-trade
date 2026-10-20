@@ -3,11 +3,12 @@
 //
 // How a holder's spendable (liquid) balance is written:
 // - Namada: the chain lists every NAM balance in one query (worker/src/sources/namada.ts allNamBalances),
-//   which the listing run (cron.ts runListings, its own schedule) reads every BALANCE_LISTING_MS and reconciles
+//   which the per-minute cron tick reads once every BALANCE_LISTING_MS (cron.ts runBalanceListing: the read starts
+//   with the tick and gets LISTING_TIMEOUT_MS a node; never in the same tick as the bond listing) and reconciles
 //   against the stored rows: only rows whose balance differs, or that are new, are written
 //   (`listingBalanceStmts`, verified_src BALANCE_LISTING_SRC); stored rows the listing no longer has are zeroed.
-//   A listing is applied only when it is from a current height and adds up to the chain's minted total (cron.ts
-//   balanceGate). Between listings the LiveHub writes the post-balance of every NAM transfer it sees in a block
+//   A listing is applied only when its node is at the head, it is not older than the one applied, and it adds up
+//   to the chain's minted total and to this tick's supply read (cron.ts balanceGate). Between listings the LiveHub writes the post-balance of every NAM transfer it sees in a block
 //   (`stmt.namadaBalance`, `updated_at` only). A row the listing left unchanged was confirmed by it: its reading
 //   is as fresh as the listing (`confirmedAt`); an address with no row after a complete listing was listed with
 //   no NAM (the API says so, rather than "not read yet").
@@ -159,7 +160,7 @@ export function listingBalanceStmts(rows: ListedBalance[], height: number, at: n
             ON CONFLICT(chain,address) DO UPDATE SET
               balance=excluded.balance, balance_num=excluded.balance_num, updated_height=excluded.updated_height,
               updated_at=excluded.updated_at, verified_at=excluded.verified_at, verified_src=excluded.verified_src
-            WHERE excluded.updated_height >= CASE WHEN COALESCE(holders.updated_height, 0) > 1000000000 THEN 0 ELSE COALESCE(holders.updated_height, 0) END AND excluded.verified_at >= COALESCE(holders.verified_at, 0)`,
+            WHERE excluded.updated_height >= COALESCE(holders.updated_height, 0) AND excluded.verified_at >= COALESCE(holders.verified_at, 0)`,
       params: part.flatMap((r) => ['namada', r.address, r.balance, toNam(r.balance), height, at, at, src]),
     });
   }
@@ -174,7 +175,7 @@ export function listingBalanceStmts(rows: ListedBalance[], height: number, at: n
 export function listingZeroStmts(addresses: string[], height: number, at: number, src = BALANCE_LISTING_SRC): Stmt[] {
   return chunks(addresses.filter((a) => !INTERNAL_ADDRS.includes(a)), 4).map((part) => ({
     sql: `UPDATE holders SET balance='0', balance_num=0, updated_height=?, updated_at=?, verified_at=?, verified_src=?
-          WHERE chain='namada' AND balance_num > 0 AND (CASE WHEN COALESCE(updated_height, 0) > 1000000000 THEN 0 ELSE COALESCE(updated_height, 0) END) <= ?1 AND address IN (${part.map(() => '?').join(',')})`,
+          WHERE chain='namada' AND balance_num > 0 AND COALESCE(updated_height, 0) <= ?1 AND address IN (${part.map(() => '?').join(',')})`,
     params: [height, at, at, src, ...part],
   }));
 }

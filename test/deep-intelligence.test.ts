@@ -11,14 +11,8 @@ import {
   type PoolLeg,
 } from '../worker/src/analytics';
 import { app } from '../worker/src/api';
-import {
-  DEFAULT_THRESHOLDS,
-  liquidityNormalizedThresholds,
-  detectCrossBlockArbTraders,
-  detectTwapBursts,
-  reconstructIntentChains,
-  INTERNAL_ADDRESSES,
-} from '../shared/alerts';
+import { DEFAULT_THRESHOLDS, detectCrossBlockArbTraders, INTERNAL_ADDRESSES } from '../shared/alerts';
+import { liquidityNormalizedThresholds, detectTwapBursts, reconstructIntentChains } from '../shared/alerts-lab';
 import { annotateSlippageCurve } from '../worker/src/sources/sqs';
 import { testD1, insert } from './d1-sqlite';
 import type { Flow, SlippageCurvePoint, SourceHealth } from '../shared/types';
@@ -254,6 +248,113 @@ describe('4. Sub-Threshold TWAP Burst Detection & Cross-Block Arbitrage Filterin
     });
     expect(chains[0].stagesSeen).toEqual(expect.arrayContaining(['withdraw_or_unshield', 'burner_hop', 'ibc_bridge', 'dex_sell']));
     expect(chains[0].dumpHazardScore).toBeGreaterThanOrEqual(0.95);
+  });
+});
+
+describe('Review fixes (docs/review-deep-protocol-intelligence.md)', () => {
+  const l = parseBondListing(BONDS.value);
+  it('1. no epoch length, no clock time: an unbond keeps its withdraw epoch and liquidAt is null with the reason, never a 21,600 s stand-in', async () => {
+    // at epoch 1 every fixture unbond is still in flight
+    const none = buildUnbondTermStructure(l, 8343327, 1, NOW, null);
+    expect(none.termStructure).toMatchObject({ epochSec: null, epochSecSource: null, withdrawableNowNam: 0 });
+    expect(none.termStructure.inFlightNam).toBeCloseTo(none.termStructure.totalUnbondingNam, 6);
+    for (const b of none.termStructure.buckets) expect(b.estimatedAt).toBeNull();
+    for (const list of Object.values(none.withdrawCache.byAddress)) for (const u of list) expect(u.withdrawTime).toBeNull();
+    const measured = buildUnbondTermStructure(l, 8343327, 1, NOW, 25_000, '6.9 h measured over 40 epochs');
+    expect(measured.termStructure).toMatchObject({ epochSec: 25_000, epochSecSource: '6.9 h measured over 40 epochs' });
+    for (const b of measured.termStructure.buckets) expect(b.estimatedAt).toBe(NOW + (b.withdrawEpoch - 1) * 25_000_000);
+    // already withdrawable: the time is the listing's, no epoch length needed
+    const now = buildUnbondTermStructure(l, 8343327, 2690, NOW, null);
+    for (const b of now.termStructure.buckets) expect(b).toMatchObject({ withdrawableNow: true, estimatedAt: NOW });
+
+    // the cron writes the cache without a time when the chain parameters are not stored
+    const db = testD1();
+    await runBondListing({ DB: db } as any, [], NOW, 1, {}, async () => ({ ...l, height: 8343327, provider: 'TestNode' }));
+    const cache = JSON.parse(db.raw.prepare("SELECT value FROM kv WHERE key='unbond.withdraw'").get().value);
+    const entries = Object.values(cache.byAddress as Record<string, { withdrawTime: number | null; source: string }[]>).flat();
+    expect(entries.length).toBeGreaterThan(0);
+    for (const u of entries) expect(u).toMatchObject({ withdrawTime: null, source: 'consensus' });
+    // pressure(): a listed unbond above the list floor with no time is shown without one and says why
+    const big = 'tnam1qbigunbonder';
+    cache.byAddress[big] = [{ validator: 'tnam1qvalidator', amountNam: 150_000, withdrawEpoch: 2712, withdrawTime: null, source: 'consensus' }];
+    db.raw.prepare("UPDATE kv SET value = ? WHERE key='unbond.withdraw'").run(JSON.stringify(cache));
+    insert(db, 'flows', [{ id: 'namada:U2:pos', chain: 'namada', height: 8343000, ts: NOW - 2 * D, tx_hash: 'U2', kind: 'unbond', from_addr: POS, to_addr: big, amount_num: 150_000, meta: JSON.stringify({ validator: 'tnam1qvalidator' }) }]);
+    const p = await pressure(db as any, NOW, false);
+    const hit = p.unlocks.find((u) => u.txHash === 'U2')!;
+    expect(hit).toMatchObject({ liquidAt: null, liquidAtSource: null });
+    expect(hit.liquidAtNote).toBe("Withdrawable from epoch 2,712 (the chain's bond listing); the time is not known because the epoch length could not be read.");
+    expect(p.unbondingProv.status).toBe('missing');
+  });
+
+  it('2. the term structure is stamped by its age like every other figure: live, stale past three bond-listing intervals, missing when absent', async () => {
+    const db = testD1();
+    expect((await pressure(db as any, NOW, false)).unbondTermStructureProv).toMatchObject({ status: 'missing', at: null });
+    const ts = buildUnbondTermStructure(l, 8343327, 2690, NOW - 30 * D, 21_600).termStructure;
+    insert(db, 'kv', [{ key: 'unbond.term_structure', value: JSON.stringify(ts), updated_at: NOW }]);
+    const stale = await pressure(db as any, NOW, false);
+    expect(stale.unbondTermStructureProv).toMatchObject({ status: 'stale', at: NOW - 30 * D, height: 8343327 });
+    expect(stale.unbondTermStructure?.totalUnbondingNam).toBeCloseTo(ts.totalUnbondingNam, 6);
+    db.raw.prepare("UPDATE kv SET value = ? WHERE key='unbond.term_structure'").run(JSON.stringify({ ...ts, at: NOW - H }));
+    expect((await pressure(db as any, NOW, false)).unbondTermStructureProv).toMatchObject({ status: 'live', at: NOW - H });
+    // rewound before it was written: not shown as if it had been
+    expect((await pressure(db as any, NOW - 2 * H, true)).unbondTermStructureProv.status).toBe('missing');
+  });
+
+  it('3. an Osmosis account linked to both the vault and its burner is one seller: a sale is counted once', async () => {
+    const db = testD1();
+    const vault = 'tnam1qvault_shared', burner = 'tnam1qburner_shared', osmo = 'osmo1shared';
+    insert(db, 'address_links', [
+      { osmo_addr: osmo, namada_addr: vault, first_seen: NOW - 10 * H, last_seen: NOW - 10 * H, transfers: 1, volume_num: 100_000 },
+      { osmo_addr: osmo, namada_addr: burner, first_seen: NOW - 10 * H, last_seen: NOW - 10 * H, transfers: 1, volume_num: 100_000 },
+    ]);
+    insert(db, 'flows', [
+      { id: 'g1', chain: 'namada', height: 1, ts: NOW - 12 * H, tx_hash: 'W_SHARED', kind: 'withdraw', from_addr: POS, to_addr: vault, amount_num: 300_000, meta: null },
+      { id: 'g2', chain: 'namada', height: 2, ts: NOW - 11 * H, tx_hash: 'HOP_SHARED', kind: 'transfer', from_addr: vault, to_addr: burner, amount_num: 200_000, meta: null },
+      { id: 'g3', chain: 'osmosis', height: 5, ts: NOW - 9 * H, tx_hash: 'SELL_SHARED', kind: 'sell', from_addr: osmo, to_addr: 'osmo1pool', amount_num: 100_000, meta: null },
+    ]);
+    const p = await pressure(db as any, NOW, false);
+    expect(p.unlocks.find((u) => u.txHash === 'W_SHARED')!.outcome).toEqual({ kind: 'sold', amountNam: 100_000 });
+  });
+
+  it('4. a burner\'s upstream origin comes from transfers in the 48 h before its NAM arrived, of a meaningful size: dust eight days earlier names nobody', async () => {
+    const db = testD1();
+    const burner = 'tnam1qburner_origin', osmo = 'osmo1fresh_origin', genesis = 'tnam1qgenesis_origin', origin = 'tnam1qreal_origin';
+    insert(db, 'labels', [{ address: genesis, chain: 'namada', label: 'Early backers (genesis)', category: 'backer', source: 'genesis' }]);
+    insert(db, 'address_links', [{ osmo_addr: osmo, namada_addr: burner, first_seen: NOW - H, last_seen: NOW - H, transfers: 1, volume_num: 400_000 }]);
+    insert(db, 'flows', [
+      { id: 'o1', chain: 'namada', height: 1, ts: NOW - 8 * D, tx_hash: 'DUST', kind: 'transfer', from_addr: genesis, to_addr: burner, amount_num: 0.5, meta: null },
+      { id: 'o2', chain: 'osmosis', height: 4, ts: NOW - H, tx_hash: 'IN_ORIGIN', kind: 'ibc_in', from_addr: burner, to_addr: osmo, amount_num: 400_000, meta: null },
+    ]);
+    let deck = (await pressure(db as any, NOW, false)).onDeck.find((d) => d.address === osmo)!;
+    expect(deck.linkedNamada).toBe(burner);
+    expect(deck.hopOriginNamada).toBeUndefined();
+    // a 2,000 NAM transfer the day before is in the window but under a tenth of what crossed: still nobody
+    insert(db, 'flows', [{ id: 'o3', chain: 'namada', height: 2, ts: NOW - 20 * H, tx_hash: 'SMALL', kind: 'transfer', from_addr: genesis, to_addr: burner, amount_num: 2_000, meta: null }]);
+    deck = (await pressure(db as any, NOW, false)).onDeck.find((d) => d.address === osmo)!;
+    expect(deck.hopOriginNamada).toBeUndefined();
+    // the real funding, two hours before the crossing: named
+    insert(db, 'flows', [{ id: 'o4', chain: 'namada', height: 3, ts: NOW - 3 * H, tx_hash: 'FUND', kind: 'transfer', from_addr: origin, to_addr: burner, amount_num: 400_000, meta: null }]);
+    deck = (await pressure(db as any, NOW, false)).onDeck.find((d) => d.address === osmo)!;
+    expect(deck.hopOriginNamada).toMatchObject({ address: origin, label: null });
+    // the same funding after the crossing is not an origin of it
+    db.raw.prepare("UPDATE flows SET ts = ? WHERE id = 'o4'").run(NOW - 30 * M);
+    deck = (await pressure(db as any, NOW, false)).onDeck.find((d) => d.address === osmo)!;
+    expect(deck.hopOriginNamada).toBeUndefined();
+  });
+
+  it('5. a rung without a sell quote does not widen the next slice: the sell baseline is the last quoted rung', () => {
+    const spot = 0.001;
+    const raw: SlippageCurvePoint[] = [
+      { amountNam: 1_000, usdSize: 1, buyImpactPct: 0.2, sellImpactPct: 0.2, buyEffectiveUsd: 0.001002, sellEffectiveUsd: 0.000998, sellOutUsdc: 0.998, buyInUsdc: 1.002, buyOutNam: 1_000, buyExact: true },
+      { amountNam: 5_000, usdSize: 5, buyImpactPct: 0.5, sellImpactPct: null as any, buyEffectiveUsd: 0.001005, sellEffectiveUsd: null as any, sellOutUsdc: null, buyInUsdc: 5.025, buyOutNam: 5_000, buyExact: true },
+      { amountNam: 10_000, usdSize: 10, buyImpactPct: 0.8, sellImpactPct: 0.8, buyEffectiveUsd: 0.001008, sellEffectiveUsd: 0.000992, sellOutUsdc: 9.92, buyInUsdc: 10.08, buyOutNam: 10_000, buyExact: true },
+    ];
+    const res = annotateSlippageCurve(raw, spot);
+    expect(res.curve[1].marginalSellUsd).toBeNull();
+    // the 1,000 → 10,000 slice: (9.92 − 0.998) / 9,000 = $0.000991 a NAM, 0.89% under spot (not 0% from a 5,000 NAM denominator)
+    expect(res.curve[2].marginalSellUsd).toBeCloseTo(0.000991, 6);
+    expect(res.curve[2].marginalSellImpactPct).toBeCloseTo(0.87, 1);
+    expect(res.liquidityCliffNam).toBeNull();
   });
 });
 

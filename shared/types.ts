@@ -327,6 +327,9 @@ export interface UnbondTermStructure {
   at: number;
   height: number;
   currentEpoch: number;
+  /** the measured epoch length the bucket times are computed from (epochs remaining × this), and where it came from; null when it could not be read, and then every in-flight `estimatedAt` is null */
+  epochSec?: number | null;
+  epochSecSource?: string | null;
   withdrawableNowNam: number;
   inFlightNam: number;
   totalUnbondingNam: number;
@@ -357,6 +360,8 @@ export interface UnlockEntry {
    * indexer.namada.net lists this unbond with its withdraw time, 'estimate' when it is ts + the measured wait.
    */
   liquidAtSource?: 'consensus' | 'indexer' | 'estimate' | null;
+  /** when `liquidAt` is null although the chain lists the unbond: the withdraw epoch and why there is no time */
+  liquidAtNote?: string;
   /**
    * For withdrawals: what the address did with the NAM in the following 48 h (sales: 7 days), including 2-hop
    * burner transfers. The address's later moves are shared out over its withdrawals in time order, each withdrawal
@@ -448,6 +453,8 @@ export interface Pressure {
   chainParams?: ChainParams | null;
   /** Consensus-verified epoch-by-epoch unlock term structure decoded from the ABCI bond/unbond listing. */
   unbondTermStructure?: UnbondTermStructure | null;
+  /** when the term structure was read and whether it is current (stale past three bond-listing intervals, missing when there is none) */
+  unbondTermStructureProv?: Provenance;
   /** Cohort breakdown of supply crossing to Osmosis and remaining on deck. */
   pipelineSummary?: SupplyCohortBreakdown;
   /** NAM staked (the chain's total stake), last reading of each 6-hour period over 14 days */

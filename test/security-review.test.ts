@@ -529,9 +529,13 @@ describe('Audit Round 2: high-cardinality cache-busters, stream caps, establishe
     const estAddr = 'tnam1q80ajrpqzv0vz9sl5ye22rprjt3k3q0cqy4lwywe';
     const message = loginMessage(estAddr, 'c'.repeat(32));
     const sig = '00' + hex.encode(ed25519.sign(sha256(new TextEncoder().encode(message)), sk));
-    // Without an on-chain revealed key matching pkBorsh, an established account is rejected
+    // Without an on-chain revealed key matching pkBorsh, an established account is rejected; so is one when the indexer is down (never assumed)
     vi.stubGlobal('fetch', vi.fn(async () => new Response(JSON.stringify({ publicKey: null }), { status: 200, headers: { 'content-type': 'application/json' } })));
     expect(await verifyNamada(estAddr, message, hex.encode(pkBorsh), sig)).toMatch(/does not belong/);
+    vi.stubGlobal('fetch', vi.fn(async () => Promise.reject(new Error('down'))));
+    expect(await verifyNamada(estAddr, message, hex.encode(pkBorsh), sig)).toMatch(/does not belong/);
+    // an internal address (discriminant 2) never signs in
+    expect(await verifyNamada(NAMADA.internal.pos, loginMessage(NAMADA.internal.pos, 'c'.repeat(32)), hex.encode(pkBorsh), sig)).toMatch(/does not belong/);
     // When the on-chain key matches pkBorsh, sign-in succeeds
     vi.stubGlobal('fetch', vi.fn(async () => new Response(JSON.stringify({ publicKey: hex.encode(pkBorsh) }), { status: 200, headers: { 'content-type': 'application/json' } })));
     expect(await verifyNamada(estAddr, message, hex.encode(pkBorsh), sig)).toBeNull();

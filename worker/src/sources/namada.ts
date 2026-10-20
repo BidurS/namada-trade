@@ -287,9 +287,11 @@ export async function delegationsAt(owner: string, epoch: number, opts: ReadOpts
 // - every NAM balance: /shell/prefix/#<multitoken>/#<NAM>/balance, 90,783 keys, 9.0 MB borsh (12 MB JSON), ~3 s;
 // - every bond: /vp/pos/bonds_and_unbonds/to (both parts empty), 30,271 source × validator entries, 4.0 MB, ~3 s.
 // Both parsers read the answer byte for byte into typed arrays (no string building) and refuse a truncated or
-// malformed answer whole, so nothing is ever half-applied. The listings are read on their own schedule (cron.ts
-// runListings, every LISTING_CRON): a public node can take a minute or more to stream 12 MB, which no per-minute
-// tick can wait for.
+// malformed answer whole, so nothing is ever half-applied. The per-minute cron tick reads one listing at a time
+// (the bond listing every BOND_LISTING_MS, the balance listing every BALANCE_LISTING_MS, never both in a tick):
+// the read starts with the tick and has LISTING_TIMEOUT_MS a node (35 s; measured 2026-10-20: 3.5 s at best,
+// 28 s and 45 s at worst), and a read that does not land backs off and is reported (cron.ts listingDue,
+// listingOverdue).
 
 const B64 = new Int16Array(256).fill(-1);
 for (let i = 0; i < 64; i++) B64['ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/'.charCodeAt(i)] = i;

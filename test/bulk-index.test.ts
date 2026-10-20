@@ -6,14 +6,16 @@ import { readFileSync } from 'node:fs';
 import { parseBalanceListing, parseBondListing, base64Bytes } from '../worker/src/sources/namada';
 import { NAMADA } from '../worker/src/config';
 import {
-  runBalanceListing, runBondListing, sampleStakes, bondedCoverageCheck, listingDue, listingRetryMs, balanceGate, bondGate,
-  BALANCE_LISTING_MS, BOND_LISTING_MS, LISTING_WRITE_CAP, LISTING_RETRY_MS, LISTING_RETRY_STEPS, MAX_LISTING_HEIGHT_DRIFT, SAMPLE_PER_TICK, RETIRED_HEALTH,
+  runBalanceListing, runBondListing, sampleStakes, bondedCoverageCheck, listingDue, listingRetryMs, balanceGate, bondGate, listingRpcs, listingOverdue,
+  BALANCE_LISTING_MS, BOND_LISTING_MS, LISTING_WRITE_CAP, LISTING_RETRY_MS, LISTING_RETRY_STEPS, LISTING_TIMEOUT_MS, LISTING_SUM_TOLERANCE, LISTING_OVERDUE_INTERVALS,
+  MAX_LISTING_HEIGHT_DRIFT, MAX_REASONABLE_HEIGHT, TICK_DEADLINE_MS, SAMPLE_PER_TICK, RETIRED_HEALTH,
   type BalanceListingRecord, type BondListingRecord, type StakeSampleRecord,
 } from '../worker/src/cron';
 import {
   BALANCE_LISTING_SRC, BOND_LISTING_SRC, SPAN_EXTEND_MS, SPAN_MAX_GAP_MS, NAMADA_TOP10_SQL, HOLDER_DUST_SQL, HOLDER_COUNTS_SQL, listingTimes, confirmedAt,
 } from '../worker/src/holders';
 import { app } from '../worker/src/api';
+import { FETCH_TEXT_MAX_BYTES } from '../worker/src/util';
 import { testD1, insert, runStmts, type TestD1 } from './d1-sqlite';
 import type { HoldersResponse, Overview, SourceHealth } from '../shared/types';
 
@@ -229,6 +231,7 @@ describe('the balance listing run', () => {
     expect(spansOf(FIRST)).toEqual([{ from_ts: NOW, to_ts: NOW + SPAN_EXTEND_MS, balance: BAL.expected.users_[FIRST], reads: 2 }]);
     const changed = { ...parseBalanceListing(BAL.value) };
     changed.entries = new Map(changed.entries); changed.entries.set(FIRST, '999000000');
+    changed.minted = (BigInt(changed.minted!) + 999000000n - BigInt(BAL.expected.users_[FIRST])).toString(); // the chain's minted key moves with it
     const t = NOW + SPAN_EXTEND_MS + 2 * H;
     await runBalanceListing(env(db), [], t, {}, async () => ({ ...changed, height: 8343900, provider: 'TestNode' }));
     expect(spansOf(FIRST)).toEqual([
@@ -331,10 +334,60 @@ describe('the bond listing run', () => {
     expect(bondGate({ ...parseBondListing(BONDS.value), height: 8340000 }, { headHeight: 8343400 }).ok).toBe(false);
     expect(bondGate({ ...parseBondListing(BONDS.value), height: 8350000 }, { headHeight: 8343400 }).ok).toBe(false);
     expect(bondGate({ ...parseBondListing(BONDS.value), height: 8343350 }, { headHeight: 8343400 }).ok).toBe(true);
-    // If a row in stakes or holders had a Unix timestamp accidentally stored in verified_height / updated_height, a real height heals it
-    db.raw.prepare('UPDATE stakes SET bonded_num = 1, verified_height = ? WHERE address = ?').run(NOW, stakers[0]);
-    await runBondListing(env(db), [], NOW + 2 * H, 2691, {}, bondLister(8343500));
-    expect(db.raw.prepare('SELECT verified_height FROM stakes WHERE address = ?').get(stakers[0]).verified_height).toBe(8343500);
+    // A height that cannot be one (a timestamp sent as a height) is refused at the gate, so no row ever stores one
+    expect(MAX_REASONABLE_HEIGHT).toBe(1_000_000_000);
+    const stamped = (await runBondListing(env(db), [], NOW + 2 * H, 2691, {}, bondLister(NOW)))!;
+    expect(stamped.error).toBe(`Not applied: the bond listing came with an invalid height ${NOW}`);
+    expect(db.raw.prepare('SELECT MAX(verified_height) h FROM stakes').get().h).toBe(8343327);
+  });
+
+  it('the balances must add up to the minted key to one part in a million (the identity holds to the base unit on the chain)', () => {
+    expect(LISTING_SUM_TOLERANCE).toBe(1e-6);
+    const l = parseBalanceListing(BAL.value);
+    expect(balanceGate({ ...l, height: 8343400 }).ok).toBe(true);
+    const minted = BigInt(l.minted!);
+    const off = (ppm: bigint) => balanceGate({ ...l, minted: (minted + (minted * ppm) / 1_000_000n).toString(), height: 8343400 });
+    expect(off(1n).ok).toBe(true);
+    expect(off(3n)).toMatchObject({ ok: false, reason: 'the balances in the listing add up to 502,268,169 NAM, 0.0003% off the minted total (502,269,676 NAM)' });
+  });
+
+  it('a node whose answer the gate refused is asked last next time, the other node first (the lagging-node case)', async () => {
+    const A = { provider: 'A', url: 'a' }, B = { provider: 'B', url: 'b' };
+    expect(listingRpcs([A, B], null)).toEqual([A, B]);
+    expect(listingRpcs([A, B], { provider: 'B' })).toEqual([B, A]);
+    expect(listingRpcs([A, B], { provider: 'B', refusedProvider: 'B' })).toEqual([A, B]);
+    expect(listingRpcs([A, B], { provider: 'A', refusedProvider: 'A' })).toEqual([B, A]);
+    expect(listingRpcs([A], { provider: 'A', refusedProvider: 'A' })).toEqual([A]); // the only node is still asked
+    const db = testD1();
+    const ok = (await runBalanceListing(env(db), [], NOW, {}, balLister(8343400, 'B'), LISTING_WRITE_CAP, { headHeight: 8343400 }))!;
+    expect(ok).toMatchObject({ provider: 'B', refusedProvider: null });
+    expect(listingRpcs([A, B], ok)).toEqual([B, A]);
+    // B now answers from 2,000 blocks behind (catching_up false): refused, and A is asked first next time
+    const lag = (await runBalanceListing(env(db), [], NOW + H, {}, balLister(8341400, 'B'), LISTING_WRITE_CAP, { headHeight: 8343400 }))!;
+    expect(lag).toMatchObject({ provider: 'B', refusedProvider: 'B', completeAt: NOW, failures: 1 });
+    expect(lag.error).toBe('Not applied: the balance listing is from height 8,341,400, older than the one already applied (8,343,400)');
+    // with no pass applied yet the head is what refuses it
+    expect(balanceGate({ ...parseBalanceListing(BAL.value), height: 8341400 }, { headHeight: 8343400 }).reason).toBe('the balance listing is from height 8,341,400, 2,000 blocks behind the head (8,343,400)');
+    expect(listingRpcs([A, B], lag)).toEqual([A, B]);
+    const again = (await runBalanceListing(env(db), [], NOW + 2 * H, {}, balLister(8343500, 'A'), LISTING_WRITE_CAP, { headHeight: 8343500 }))!;
+    expect(again).toMatchObject({ provider: 'A', refusedProvider: null, completeAt: NOW + 2 * H, failures: 0 });
+  });
+
+  it('a listing that has not landed for two of its intervals is said so every tick, with the last error (and the budget constants)', () => {
+    expect(LISTING_TIMEOUT_MS).toBe(35_000);
+    expect(LISTING_TIMEOUT_MS).toBeLessThan(TICK_DEADLINE_MS);
+    expect(FETCH_TEXT_MAX_BYTES).toBe(16 * 1024 * 1024);
+    expect(LISTING_OVERDUE_INTERVALS).toBe(2);
+    const health: SourceHealth[] = [];
+    listingOverdue(health, 'Namada RPC (balance listing)', 'balance', null, BALANCE_LISTING_MS, NOW);
+    listingOverdue(health, 'Namada RPC (balance listing)', 'balance', { at: NOW - H, completeAt: NOW - 90 * 60000 }, BALANCE_LISTING_MS, NOW);
+    expect(health).toEqual([]);
+    listingOverdue(health, 'Namada RPC (balance listing)', 'balance', { at: NOW - 5 * 60000, completeAt: NOW - 3 * H, failedAt: NOW - 5 * 60000, error: 'Error: 5ElementsNodes: timeout: 4.2 MB of 12.0 MB arrived in 35 s' }, BALANCE_LISTING_MS, NOW);
+    expect(health[0]).toMatchObject({ name: 'Namada RPC (balance listing)', ok: false, at: NOW });
+    expect(health[0].note).toBe('No complete balance listing for 3 h (balances as of the last one). Last read 11:55 UTC: Error: 5ElementsNodes: timeout: 4.2 MB of 12.0 MB arrived in 35 s');
+    expect(health[0].note!.length).toBeLessThanOrEqual(160);
+    listingOverdue(health, 'Namada RPC (bond listing)', 'bond', { at: NOW, completeAt: null }, BOND_LISTING_MS, NOW);
+    expect(health[1].note).toBe('No complete bond listing yet (stakes as of the last one).');
   });
 
   it('a well-formed empty answer (a borsh Vec of 0) is refused whole: nobody is zeroed, the pass stays complete, the record and the sheet say why (H2/RT-3)', async () => {

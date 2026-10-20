@@ -87,8 +87,12 @@ export class ReadCutError extends Error {
 const mbOf = (n: number) => `${(n / 1e6).toFixed(1)} MB`;
 const secOf = (ms: number) => `${(ms / 1000).toFixed(ms < 10_000 ? 1 : 0)} s`;
 
-/** The most a streamed answer may be (32 MB: well over the 12 MB balance listing, well inside the Worker's 128 MB). */
-export const FETCH_TEXT_MAX_BYTES = 32 * 1024 * 1024;
+/**
+ * The most a streamed answer may be: 16 MB, over the 12 MB balance listing. The cap is what protects the isolate:
+ * a 32 MB answer measured about 130 MB of V8 heap (the chunks, the joined bytes, the decoded string, the parsed
+ * JSON), past the Worker's 128 MB.
+ */
+export const FETCH_TEXT_MAX_BYTES = 16 * 1024 * 1024;
 
 /**
  * GET `url` and read the whole body, counting what arrives: for the multi-megabyte chain listings, whose answer a

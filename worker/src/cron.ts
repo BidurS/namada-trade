@@ -115,8 +115,16 @@ export const BOND_LISTING_MS = 40 * 60_000;
 export const LISTING_WRITE_CAP = 3000;
 /** The stake sample's reads end this long before the deadline, so the listing's writes (a SELECT of every stored row, then the diff) get their turn. */
 export const LISTING_RESERVE_MS = 20_000;
-/** One attempt per node for a listing, started with the tick; a healthy node answers in 3 to 4 s, a loaded one has taken 33 s. */
-export const LISTING_TIMEOUT_MS = 20_000;
+/**
+ * One attempt per node for a listing, started with the tick. Measured on 2026-10-20 against the live nodes: the 12 MB
+ * balance answer streamed in 3.5 s at best, 28 s from 5ElementsNodes and 45 s from Papadritta at worst, so a 20 s
+ * budget could miss every attempt and the stakes would then never update (the per-address refresh is gone). The
+ * first node asked (the one that served the last listing, unless it failed or was refused) gets this long; the
+ * second gets what is left of the tick (TICK_DEADLINE_MS), and the apply runs after the deadline on what arrived.
+ */
+export const LISTING_TIMEOUT_MS = 35_000;
+/** A listing that has not landed (no complete pass) for this many of its intervals is reported as not ok every tick, not only on the ticks that read it. */
+export const LISTING_OVERDUE_INTERVALS = 2;
 /** Stakes re-read per tick with delegations_at (2 requests each), as a sample against the bond listing's rows. */
 export const SAMPLE_PER_TICK = 24;
 export const SAMPLE_CONCURRENCY = 6;
@@ -233,6 +241,8 @@ export interface BalanceListingRecord {
   failedAt?: number | null;
   error?: string;
   failures?: number;
+  /** the node whose answer the gate last refused; asked last next time */
+  refusedProvider?: string | null;
 }
 
 /** The record of the last bond listing (kv bond.listing). */
@@ -249,6 +259,7 @@ export interface BondListingRecord {
   failedAt?: number | null;
   error?: string;
   failures?: number;
+  refusedProvider?: string | null;
 }
 
 /** The record of the stake sample (kv stake.sample): a rolling re-read of stakes against the bond listing. */
@@ -287,6 +298,18 @@ export function preferProvider(rpcs: readonly Rpc[], provider: string | null | u
   const i = provider ? rpcs.findIndex((r) => r.provider === provider) : -1;
   return i > 0 ? [rpcs[i], ...rpcs.slice(0, i), ...rpcs.slice(i + 1)] : rpcs;
 }
+/**
+ * The order a listing asks the nodes in: the node that served the last applied listing first, except that a node
+ * whose last answer the gate refused (lagging, short) goes last, so a node 1,000 blocks behind with catching_up
+ * false cannot block the listing until it catches up: the other node is asked first.
+ */
+export function listingRpcs(rpcs: readonly Rpc[], rec: { provider?: string | null; refusedProvider?: string | null } | null | undefined): readonly Rpc[] {
+  const avoid = rec?.refusedProvider ?? null;
+  const ordered = preferProvider(rpcs, rec?.provider === avoid ? null : rec?.provider);
+  if (!avoid) return ordered;
+  const rest = ordered.filter((r) => r.provider !== avoid);
+  return rest.length ? [...rest, ...ordered.filter((r) => r.provider === avoid)] : ordered;
+}
 const sameBalance = (a: string | null | undefined, b: string) => a === b || BigInt(a || '0') === BigInt(b);
 
 /** Every row of a table in address order, a page at a time (a page of 20,000 rows is about 2 MB of D1 answer). */
@@ -304,19 +327,19 @@ async function pagedRows<T extends { address: string }>(db: D1Database, select: 
 export type BalanceLister = (opts: ReadOpts) => Promise<BalanceListing & { height: number; provider: string }>;
 export type BondLister = (opts: ReadOpts) => Promise<BondListing & { height: number; provider: string }>;
 
-/** A block height past this is not a height (a Unix timestamp stored by mistake would be): such a stored value counts as 0, so a real height heals it. */
+/** A block height past this is not a height (a timestamp sent as one would be): the gate refuses the listing. */
 export const MAX_REASONABLE_HEIGHT = 1_000_000_000;
 /** How far behind the tick's head a listing's node may be (100 blocks, about ten minutes) and how far "ahead" (node skew) before its answer is refused. */
 export const MAX_LISTING_HEIGHT_DRIFT = 100;
 export const MAX_LISTING_HEIGHT_AHEAD = 100;
-/** The balance listing must add up to the minted total it carries, and that total must match the tick's supply read, within this fraction. */
+/** The balances in a listing add up to the minted key it carries exactly (checked to the base unit on 2026-10-20); one part in a million is allowed. */
+export const LISTING_SUM_TOLERANCE = 1e-6;
+/** The listing's minted key must match the tick's own supply read (a different node, a few blocks apart) within this fraction. */
 export const LISTING_SUPPLY_TOLERANCE = 0.001;
 /** The bond listing's net sum must be within this fraction of the tick's total-stake read (bonds in the pipeline run it a little over). */
 export const LISTING_STAKE_TOLERANCE = 0.02;
 /** A listing with fewer keys or sources than this fraction of the previous answer's is a short answer, not a change on the chain. */
 export const LISTING_SHRINK_FLOOR = 0.9;
-/** A stored height, or 0 when there is none or it is not a height (MAX_REASONABLE_HEIGHT). */
-const effHeight = (h: number | null | undefined) => (h && h <= MAX_REASONABLE_HEIGHT ? h : 0);
 
 /** What a tick knows that a listing is checked against before it is applied (balanceGate, bondGate). */
 export interface ListingContext {
@@ -329,7 +352,8 @@ export interface ListingContext {
 }
 
 const n0 = (n: number) => n.toLocaleString('en-US');
-const pctOff = (a: bigint, b: bigint) => Number(((a > b ? a - b : b - a) * 1_000_000n) / b) / 10_000;
+/** |a − b| / b as a fraction (nine decimals, exact enough for a tolerance of one part in a million). */
+const fracOff = (a: bigint, b: bigint) => Number(((a > b ? a - b : b - a) * 1_000_000_000n) / b) / 1e9;
 
 /**
  * The height part of the gates: a listing is applied only when its node is at the head within
@@ -338,7 +362,7 @@ const pctOff = (a: bigint, b: bigint) => Number(((a > b ? a - b : b - a) * 1_000
  */
 function heightGate(what: string, height: number, headHeight: number | null | undefined, prevHeight: number | null | undefined): string | null {
   if (!Number.isInteger(height) || height <= 0 || height > MAX_REASONABLE_HEIGHT) return `the ${what} came with an invalid height ${height}`;
-  if (prevHeight && prevHeight <= MAX_REASONABLE_HEIGHT && height < prevHeight) return `the ${what} is from height ${n0(height)}, older than the one already applied (${n0(prevHeight)})`;
+  if (prevHeight && height < prevHeight) return `the ${what} is from height ${n0(height)}, older than the one already applied (${n0(prevHeight)})`;
   if (headHeight != null && headHeight > 0) {
     if (height < headHeight - MAX_LISTING_HEIGHT_DRIFT) return `the ${what} is from height ${n0(height)}, ${n0(headHeight - height)} blocks behind the head (${n0(headHeight)})`;
     if (height > headHeight + MAX_LISTING_HEIGHT_AHEAD) return `the ${what} is from height ${n0(height)}, ahead of the head (${n0(headHeight)})`;
@@ -349,9 +373,9 @@ function heightGate(what: string, height: number, headHeight: number | null | un
 /**
  * Whether a balance listing may be applied. Its node must be at the head (heightGate), and the answer whole: every
  * balance in it (user keys and the internal accounts) must add up to the chain's minted total, which the same
- * answer carries (on 2026-10-20 they agreed to the base unit), that total must match this tick's own supply read,
- * and the answer may not have shrunk below LISTING_SHRINK_FLOOR of the previous one's keys; all within
- * LISTING_SUPPLY_TOLERANCE. An empty or short answer (a borsh Vec of 0 parses) fails here, never in the rows.
+ * answer carries (LISTING_SUM_TOLERANCE: they agree to the base unit), that total must match this tick's own
+ * supply read (LISTING_SUPPLY_TOLERANCE), and the answer may not have shrunk below LISTING_SHRINK_FLOOR of the
+ * previous one's keys. An empty or short answer (a borsh Vec of 0 parses) fails here, never in the rows.
  */
 export function balanceGate(listing: (BalanceListing & { height: number }) | null | undefined, ctx: ListingContext & { prev?: BalanceListingRecord | null } = {}): { ok: boolean; reason?: string; sumBase: bigint; mintedBase: bigint } {
   const no = (reason: string, sumBase = 0n, mintedBase = 0n) => ({ ok: false, reason, sumBase, mintedBase });
@@ -365,12 +389,11 @@ export function balanceGate(listing: (BalanceListing & { height: number }) | nul
   let sumBase = 0n;
   for (const v of listing.entries.values()) sumBase += BigInt(v);
   for (const v of listing.internal.values()) sumBase += BigInt(v);
-  const tolPct = LISTING_SUPPLY_TOLERANCE * 100;
-  const off = pctOff(sumBase, mintedBase);
-  if (off > tolPct) return no(`the balances in the listing add up to ${off.toFixed(2)}% off the minted total`, sumBase, mintedBase);
+  const off = fracOff(sumBase, mintedBase);
+  if (off > LISTING_SUM_TOLERANCE) return no(`the balances in the listing add up to ${n0(Math.round(Number(sumBase) / 1e6))} NAM, ${(off * 100).toFixed(off < 0.0001 ? 4 : 2)}% off the minted total (${n0(Math.round(Number(mintedBase) / 1e6))} NAM)`, sumBase, mintedBase);
   if (ctx.supplyBase != null && ctx.supplyBase > 0n) {
-    const offSupply = pctOff(mintedBase, ctx.supplyBase);
-    if (offSupply > tolPct) return no(`the listing's minted total (${n0(Math.round(Number(mintedBase) / 1e6))} NAM) is ${offSupply.toFixed(2)}% off this tick's supply read (${n0(Math.round(Number(ctx.supplyBase) / 1e6))} NAM)`, sumBase, mintedBase);
+    const offSupply = fracOff(mintedBase, ctx.supplyBase);
+    if (offSupply > LISTING_SUPPLY_TOLERANCE) return no(`the listing's minted total (${n0(Math.round(Number(mintedBase) / 1e6))} NAM) is ${(offSupply * 100).toFixed(2)}% off this tick's supply read (${n0(Math.round(Number(ctx.supplyBase) / 1e6))} NAM)`, sumBase, mintedBase);
   }
   if (ctx.prev?.completeAt && ctx.prev.keys > 0 && listing.keys < ctx.prev.keys * LISTING_SHRINK_FLOOR) return no(`the listing has ${n0(listing.keys)} keys, under ${LISTING_SHRINK_FLOOR * 100}% of the last one's ${n0(ctx.prev.keys)}`, sumBase, mintedBase);
   return { ok: true, sumBase, mintedBase };
@@ -423,7 +446,8 @@ export async function runBalanceListing(env: Env, health: SourceHealth[], now: n
     // Refused: the rows stay as they are and the pass stays where it was; the record and the sheet say why.
     const error = `Not applied: ${gate.reason}`;
     health.push({ name, ok: false, at: now, note: `The balance listing from ${listing.provider} was not applied: ${gate.reason}`.slice(0, 160) });
-    const refused: BalanceListingRecord = { ...(prev ?? { at: 0, completeAt: null, height: 0, provider: '', keys: 0, holders: 0, totalNam: 0, bytes: 0, written: 0, zeroed: 0, remaining: 0, ticks: 0, durationMs: 0, spansAt: null, extendedAt: null }), failedAt: now, error, failures: (prev?.failures ?? 0) + 1 };
+    // The node whose answer was refused is asked last next time (listingRpcs): a node 1,000 blocks behind with catching_up false would otherwise be asked first until it caught up.
+    const refused: BalanceListingRecord = { ...(prev ?? { at: 0, completeAt: null, height: 0, provider: '', keys: 0, holders: 0, totalNam: 0, bytes: 0, written: 0, zeroed: 0, remaining: 0, ticks: 0, durationMs: 0, spansAt: null, extendedAt: null }), failedAt: now, error, failures: (prev?.failures ?? 0) + 1, refusedProvider: listing.provider };
     await kvSet(env.DB, 'balance.listing', refused).catch(() => {});
     return refused;
   }
@@ -431,7 +455,7 @@ export async function runBalanceListing(env: Env, health: SourceHealth[], now: n
   const rec: BalanceListingRecord = {
     at: now, completeAt: prev?.completeAt ?? null, height: listing.height, provider: listing.provider,
     keys: listing.keys, holders: 0, totalNam: 0, bytes: listing.bytes,
-    written: 0, zeroed: 0, remaining: 0, ticks, durationMs: 0, spansAt: prev?.spansAt ?? null, extendedAt: prev?.extendedAt ?? null, failedAt: null, failures: 0,
+    written: 0, zeroed: 0, remaining: 0, ticks, durationMs: 0, spansAt: prev?.spansAt ?? null, extendedAt: prev?.extendedAt ?? null, failedAt: null, failures: 0, refusedProvider: null,
   };
   try {
     const stored = await pagedRows<{ address: string; balance: string; balance_num: number; updated_height: number | null; verified_src: string | null }>(
@@ -445,11 +469,11 @@ export async function runBalanceListing(env: Env, health: SourceHealth[], now: n
       if (!s) { if (balance !== '0') toWrite.push({ address, balance }); continue; }
       // The block follower wrote this row from a later block than the listing's: its post-balance is newer (the
       // write guard would refuse the listing's anyway), so the row is not counted as pending.
-      if (effHeight(s.updated_height) > listing.height) continue;
+      if ((s.updated_height ?? 0) > listing.height) continue;
       if (s.verified_src !== BALANCE_LISTING_SRC || !sameBalance(s.balance, balance)) toWrite.push({ address, balance });
     }
     rec.totalNam = Number(totalBase) / 1e6;
-    const toZero = stored.filter((s) => !listing.entries.has(s.address) && s.balance_num > 0 && !INTERNAL_ADDRS.includes(s.address) && effHeight(s.updated_height) <= listing.height).map((s) => s.address);
+    const toZero = stored.filter((s) => !listing.entries.has(s.address) && s.balance_num > 0 && !INTERNAL_ADDRS.includes(s.address) && (s.updated_height ?? 0) <= listing.height).map((s) => s.address);
     toWrite.sort((a, b) => (a.address < b.address ? -1 : a.address > b.address ? 1 : 0));
     const part = toWrite.slice(0, cap);
     // The zeroing follows the writes, under the same cap: a pass is complete when both are done.
@@ -512,7 +536,7 @@ export async function runBondListing(env: Env, health: SourceHealth[], now: numb
   if (!gate.ok) {
     const error = `Not applied: ${gate.reason}`;
     health.push({ name, ok: false, at: now, note: `The bond listing from ${listing.provider} was not applied: ${gate.reason}`.slice(0, 160) });
-    const refused: BondListingRecord = { ...(prev ?? { at: 0, completeAt: null, height: 0, epoch, provider: '', sources: 0, stakers: 0, totalNam: 0, bytes: 0, written: 0, zeroed: 0, remaining: 0, ticks: 0, durationMs: 0 }), failedAt: now, error, failures: (prev?.failures ?? 0) + 1 };
+    const refused: BondListingRecord = { ...(prev ?? { at: 0, completeAt: null, height: 0, epoch, provider: '', sources: 0, stakers: 0, totalNam: 0, bytes: 0, written: 0, zeroed: 0, remaining: 0, ticks: 0, durationMs: 0 }), failedAt: now, error, failures: (prev?.failures ?? 0) + 1, refusedProvider: listing.provider };
     await kvSet(env.DB, 'bond.listing', refused).catch(() => {});
     return refused;
   }
@@ -524,7 +548,7 @@ export async function runBondListing(env: Env, health: SourceHealth[], now: numb
     grossNam: Number(listing.grossBase) / 1e6, slashedNam: Number(listing.slashedBase) / 1e6, pipelineNam: ctx.stakeNam != null ? totalNam - ctx.stakeNam : null,
     // no 0 for a missing figure: a listing without unbonds leaves it undefined
     unbondingNam: listing.unbondingBase != null ? Number(listing.unbondingBase) / 1e6 : undefined,
-    written: 0, zeroed: 0, remaining: 0, ticks, durationMs: 0, failedAt: null, failures: 0,
+    written: 0, zeroed: 0, remaining: 0, ticks, durationMs: 0, failedAt: null, failures: 0, refusedProvider: null,
   };
   try {
     const stored = await pagedRows<{ address: string; bonded_num: number | null; estimated_num: number | null; delegations: string | null; verified_src: string | null; verified_height: number | null }>(
@@ -537,12 +561,12 @@ export async function runBondListing(env: Env, health: SourceHealth[], now: numb
       const s = storedBy.get(address);
       if (!s) { if (b.bondedBase > 0n) toWrite.push({ address, bondedNam, delegations: b.delegations }); continue; }
       // A row from a later height than the listing's (a newer listing's) is not pending: the write guard would refuse it.
-      if (effHeight(s.verified_height) > listing.height) continue;
+      if ((s.verified_height ?? 0) > listing.height) continue;
       if (s.verified_src !== BOND_LISTING_SRC || s.bonded_num !== bondedNam || s.delegations !== JSON.stringify(b.delegations)) toWrite.push({ address, bondedNam, delegations: b.delegations });
     }
     // Not named by the listing: a stake the chain no longer lists, or an estimate from the flow history for an
     // address the chain never listed a bond for (an estimate alone must not make a holder: H3, 2026-10-20).
-    const toZero = stored.filter((s) => !listing.sources.has(s.address) && ((s.bonded_num ?? 0) > 0 || (s.bonded_num == null && (s.estimated_num ?? 0) > 0)) && effHeight(s.verified_height) <= listing.height).map((s) => s.address);
+    const toZero = stored.filter((s) => !listing.sources.has(s.address) && ((s.bonded_num ?? 0) > 0 || (s.bonded_num == null && (s.estimated_num ?? 0) > 0)) && (s.verified_height ?? 0) <= listing.height).map((s) => s.address);
     toWrite.sort((a, b) => (a.address < b.address ? -1 : a.address > b.address ? 1 : 0));
     const part = toWrite.slice(0, cap);
     const zeroPart = toZero.slice(0, Math.max(0, cap - part.length));
@@ -553,9 +577,10 @@ export async function runBondListing(env: Env, health: SourceHealth[], now: numb
       rec.completeAt = now;
       // Persist consensus unbond maturity schedule and withdraw cache directly from the decoded bond listing
       try {
+        // Without the chain parameters there is no epoch length and no clock time for an unbond (the epoch alone is kept).
         const params = await cachedChainParams(env.DB);
-        const epochSec = params ? Math.max(params.minEpochSec, params.epochSec ?? params.minEpochSec) : 21600;
-        const { termStructure, withdrawCache } = buildUnbondTermStructure(listing, listing.height, epoch, now, epochSec);
+        const epochSec = params ? Math.max(params.minEpochSec, params.epochSec ?? params.minEpochSec) : null;
+        const { termStructure, withdrawCache } = buildUnbondTermStructure(listing, listing.height, epoch, now, epochSec, params ? (params.epochSecNote ?? `at least ${params.minEpochSec} s, the chain's minimum`) : null);
         await Promise.all([
           kvSet(env.DB, 'unbond.term_structure', termStructure).catch(() => {}),
           kvSet(env.DB, 'unbond.withdraw', withdrawCache).catch(() => {}),
@@ -753,7 +778,7 @@ export async function runCron(env: Env) {
     // a tick, the bond listing (the shorter interval) before the balance listing.
     const [balPrev, bondPrev] = await Promise.all([kvGetJson<BalanceListingRecord>(env.DB, 'balance.listing').catch(() => null), kvGetJson<BondListingRecord>(env.DB, 'bond.listing').catch(() => null)]);
     const which: 'bond' | 'balance' | null = late() ? null : listingDue(bondPrev, BOND_LISTING_MS, now) ? 'bond' : listingDue(balPrev, BALANCE_LISTING_MS, now) ? 'balance' : null;
-    const lread: ReadOpts = { rpcs: preferProvider(rpcs, (which === 'bond' ? bondPrev : balPrev)?.provider), signal, breaker };
+    const lread: ReadOpts = { rpcs: listingRpcs(rpcs, which === 'bond' ? bondPrev : balPrev), signal, breaker };
     const bondRead = which === 'bond' ? allBonds({ timeoutMs: LISTING_TIMEOUT_MS, retries: 0, ...lread }).then((v) => ({ v }), (e) => ({ e })) : null;
     const balRead = which === 'balance' ? allNamBalances({ timeoutMs: LISTING_TIMEOUT_MS, retries: 0, ...lread }).then((v) => ({ v }), (e) => ({ e })) : null;
     const started = <T,>(p: Promise<{ v?: T; e?: unknown }>) => async () => { const r = await p; if (r.e !== undefined || !r.v) throw r.e ?? new Error('listing: no answer'); return r.v; };
@@ -1004,6 +1029,10 @@ export async function runCron(env: Env) {
     }
     // 5d. Spendable balances: the balance listing, when it was the listing due this tick.
     if (balRead) await runBalanceListing(env, health, now, lread, started(balRead), LISTING_WRITE_CAP, { headHeight, supplyBase: totalRes?.supply ?? null });
+    // 5e. A listing that has not landed for LISTING_OVERDUE_INTERVALS of its intervals is said so every tick, on the
+    //     ticks that do not read it too (its last row would otherwise sit in the sheet with its age growing).
+    if (!bondRead) listingOverdue(health, 'Namada RPC (bond listing)', 'bond', bondPrev, BOND_LISTING_MS, now);
+    if (!balRead) listingOverdue(health, 'Namada RPC (balance listing)', 'balance', balPrev, BALANCE_LISTING_MS, now);
 
     // 6. The Osmosis holder list, read beside everything above.
     const holderList = await holderSync;
@@ -1060,6 +1089,16 @@ export async function runCron(env: Env) {
     await intel;
     await releaseTickLock(env.DB, lockId);
   }
+}
+
+/** The health row for a listing whose last complete pass is older than LISTING_OVERDUE_INTERVALS of its intervals (or that never completed), with the last error. */
+export function listingOverdue(health: SourceHealth[], name: string, what: 'bond' | 'balance', rec: { completeAt: number | null; at: number; error?: string; failedAt?: number | null } | null, everyMs: number, now: number) {
+  if (!rec) return;
+  const since = rec.completeAt ?? 0;
+  if (now - since < LISTING_OVERDUE_INTERVALS * everyMs) return;
+  const hours = since ? `for ${(Math.round(((now - since) / 3600_000) * 10) / 10).toLocaleString('en-US')} h` : 'yet';
+  const last = rec.error ? ` Last read${rec.failedAt ? ` ${new Date(rec.failedAt).toISOString().slice(11, 16)} UTC` : ''}: ${rec.error}` : '';
+  health.push({ name, ok: false, at: now, note: `No complete ${what} listing ${hours} (${what === 'bond' ? 'stakes' : 'balances'} as of the last one).${last}`.slice(0, 160) });
 }
 
 /** Probes that no longer run (replaced by the listings on 2026-10-20, the bond index by the bond listing); their last result is dropped from the map. */
