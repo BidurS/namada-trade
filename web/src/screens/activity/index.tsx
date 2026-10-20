@@ -9,7 +9,7 @@ import { useEffect, useState } from 'react';
 import { BODY } from '../../../../shared/copy';
 import type { Holder, Overview } from '../../../../shared/types';
 import type { ScreenProps } from '../../app/index';
-import { REWIND_WORDS, useClock, useNow, useOverview, useOverviewFailed, useReplay, useVisible } from '../../app/index';
+import { REWIND_WORDS, navigate, useClock, useNow, useOverview, useOverviewFailed, useReplay, useRoute, useVisible } from '../../app/index';
 import { fetchHolders } from '../../api';
 import { Fact, Num, SkeletonBlock, derive, sourcesText, type FactItem, type Stamp } from '../../ui';
 import { NBSP, fmtAge, fmtCount, fmtNamRule, fmtNamSigned, fmtPctRule } from '../../lib/format';
@@ -17,6 +17,7 @@ import Holders, { H_DEFAULT, type HolderFilters } from './Holders';
 import Transactions, { TX_DEFAULT, type TxFilters } from './Transactions';
 import { holderFiguresStamp, serverHolderProv, type HolderChain } from './holderStamp';
 import { useWide } from './parts';
+import { pageHref, parsePage } from './paging';
 
 export default function ActivityScreen({ view, route }: ScreenProps) {
   const tab: 'activity' | 'holders' = view === 'holders' ? 'holders' : 'activity';
@@ -26,6 +27,25 @@ export default function ActivityScreen({ view, route }: ScreenProps) {
   const [txf, setTxf] = useState<TxFilters>(TX_DEFAULT);
   const [hf, setHf] = useState<HolderFilters>(H_DEFAULT);
   const body = BODY[tab];
+
+  // the page lives in the URL (?page=N, nav-search-plan 2.4): a page change is a history entry (the pager's links),
+  // a page 1 or an unreadable value is dropped without one; a filter change starts again from page 1
+  const raw = useRoute().params.get('page');
+  const page = parsePage(raw) ?? 1;
+  useEffect(() => {
+    if (raw != null && (raw === '1' || parsePage(raw) == null)) navigate(pageHref(1), { replace: true, scroll: false });
+  }, [raw]);
+  const firstPage = () => {
+    if (page !== 1) navigate(pageHref(1), { replace: true, scroll: false });
+  };
+  const setTx = (f: TxFilters) => {
+    setTxf(f);
+    firstPage();
+  };
+  const setH = (f: HolderFilters) => {
+    setHf(f);
+    firstPage();
+  };
 
   return (
     <>
@@ -42,7 +62,7 @@ export default function ActivityScreen({ view, route }: ScreenProps) {
 
       <section className="band ground-ink act-band" aria-label={tab === 'holders' ? 'Holders' : 'Transactions'}>
         <div className="wrap">
-          {tab === 'holders' ? <Holders filters={hf} setFilters={setHf} wide={wide} overview={overview} /> : <Transactions filters={txf} setFilters={setTxf} wide={wide} />}
+          {tab === 'holders' ? <Holders filters={hf} setFilters={setH} wide={wide} overview={overview} page={page} /> : <Transactions filters={txf} setFilters={setTx} wide={wide} page={page} />}
           {body?.paras[1] ? <p className="act-about">{body.paras[1]}</p> : null}
         </div>
       </section>

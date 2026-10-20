@@ -123,4 +123,27 @@
   .field-search__x { flex: none; display: grid; place-items: center; width: 44px; height: 44px; margin-right: 1px; padding: 0; border: 0; border-radius: 50%; background: none; color: var(--c-ink-2); cursor: pointer; }
   .field-search__x:hover { color: var(--c-ink); background: var(--c-hover); }
   .field-search__x .ico { width: 18px; height: 18px; }
+
+  /* ---------- Pager (ui/Pager.tsx): First ‹ Page [ 3 ] of 1,288 › Last, every control a 44 px target ---------- */
+  .pager { display: grid; gap: var(--s-2); min-width: 0; min-height: 44px; }
+  .pager__row { display: flex; flex-wrap: wrap; align-items: center; gap: 4px; min-height: 44px; }
+  .pager__a { display: inline-flex; align-items: center; justify-content: center; min-width: 44px; min-height: 44px; padding: 0 6px; border-radius: var(--r-1); border-bottom: 2px solid transparent; color: var(--c-ink); font: var(--w-medium) var(--t-15) / 20px var(--font-text); text-decoration: none; white-space: nowrap; font-variant-numeric: tabular-nums; cursor: pointer; transition: background var(--d-1) var(--ease-state); }
+  .pager__a:hover:not([aria-disabled="true"]) { background: var(--c-hover); }
+  .pager__a[aria-disabled="true"] { color: var(--c-ink-2); opacity: .45; cursor: default; }
+  .pager__a[aria-current="page"] { border-bottom-color: var(--accent); }
+  .ground-accent .pager__a[aria-current="page"] { border-bottom-color: #000; }
+  .pager__step { font-size: var(--t-24); line-height: 1; }
+  .pager__run { display: none; align-items: center; gap: 4px; }
+  .pager__gap { display: inline-grid; place-items: center; min-width: 20px; color: var(--c-ink-2); }
+  .pager__pos { display: inline-flex; align-items: center; gap: 6px; padding-inline: 2px; color: var(--c-ink-2); font-size: var(--t-13); white-space: nowrap; }
+  .pager__pl { display: none; }
+  .pager__in { width: 56px; height: 44px; padding: 0 4px; border: 1.5px solid var(--c-line-strong); border-radius: var(--r-1); background: transparent; color: var(--c-ink); font: var(--w-medium) var(--t-15) / 1 var(--font-code); text-align: center; font-variant-numeric: tabular-nums; -webkit-appearance: none; appearance: none; }
+  .pager__in:focus { outline: var(--ring-w) solid var(--c-focus); outline-offset: var(--ring-o); border-color: var(--c-ink); }
+  .pager__of { font-variant-numeric: tabular-nums; }
+  .pager__of [data-num] { color: var(--c-ink); }
+  .pager__msg, .pager__why { margin: 0; font-size: var(--t-13); line-height: var(--lh-13); color: var(--c-ink-2); max-width: 48ch; }
+  .pager__msg:empty { display: none; }
+  @media (min-width: 400px) { .pager__row { gap: var(--s-2); } }
+  @media (min-width: 640px) { .pager__pl { display: inline; } }
+  @media (min-width: 1024px) { .pager__run { display: inline-flex; } }
 }

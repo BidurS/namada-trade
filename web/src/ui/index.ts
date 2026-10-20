@@ -17,6 +17,7 @@ export { Term, type TermProps } from './Term';
 export { Button, ArrowLink, IconButton, type ButtonProps } from './Button';
 export { Segmented, type SegmentedProps, type SegOption } from './Segmented';
 export { Tabs, type TabItem } from './Tabs';
+export { Pager, stepFor, type PagerProps } from './Pager';
 export { SelectChip, type SelectChipProps, type ChipOption } from './SelectChip';
 export { Field, SearchField, type FieldProps } from './Field';
 export { Switch, type SwitchProps } from './Switch';

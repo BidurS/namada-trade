@@ -39,6 +39,39 @@ test.describe('layout, every viewport', () => {
     });
   }
 
+  test('the pager: every control at least 44 px, the page field 44 px high, no sideways scroll (360, 375, 1280)', async ({ page }, info) => {
+    test.skip(!['360x780', '375x812', '1280x800'].includes(info.project.name), 'runs at 360, 375 and 1280');
+    for (const path of [`${HOL.path}?page=3`, `${ACT.path}?page=2`]) {
+      await gotoRoute(page, path);
+      await expect(page.locator(path.startsWith('/holders') ? 'main .hrow' : 'main .tx').first()).toBeVisible({ timeout: 30_000 });
+      await expect(page.locator('main .act-scope')).not.toHaveAttribute('aria-busy', 'true', { timeout: 30_000 });
+      const head = page.locator('.act-pager--head');
+      await expect(head.getByRole('textbox', { name: 'Page number' })).toHaveValue(path.endsWith('3') ? '3' : '2');
+      const boxes = await page.locator('main nav.pager').evaluateAll((navs) =>
+        navs.flatMap((n) => [...n.querySelectorAll('a, input')].filter((el) => el.getBoundingClientRect().width > 0).map((el) => {
+          const r = el.getBoundingClientRect();
+          return { name: el.getAttribute('aria-label') ?? el.textContent ?? '', w: r.width, h: r.height, right: r.right };
+        })),
+      );
+      expect(boxes.length).toBeGreaterThanOrEqual(10);
+      for (const b of boxes) {
+        expect(b.w, `${path} ${b.name} width`).toBeGreaterThanOrEqual(44);
+        expect(b.h, `${path} ${b.name} height`).toBeGreaterThanOrEqual(44);
+        expect(b.right, `${path} ${b.name} inside the viewport`).toBeLessThanOrEqual(page.viewportSize()!.width);
+      }
+      // the five required controls sit on one line below 1024 px
+      const tops = await head.locator('.pager__row > a, .pager__row > .pager__pos').evaluateAll((els) => els.map((e) => Math.round(e.getBoundingClientRect().top)));
+      expect(new Set(tops).size, `${path}: one line`).toBe(1);
+      const csv = page.locator('main a.act-csv');
+      const cb = (await csv.boundingBox())!;
+      expect(cb.height).toBeGreaterThanOrEqual(44);
+      const a = await layoutAudit(page, 'main');
+      expect(a.overflowX, `${path}: scrollWidth ${a.scrollWidth} > ${a.innerWidth}`).toBe(false);
+      expect(a.smallTargets).toEqual([]);
+      expect(a.smallText).toEqual([]);
+    }
+  });
+
   test('filters: a sheet with a count badge below 1024 px, inline from 1024 px', async ({ page }) => {
     await gotoRoute(page, ACT.path);
     await expect(page.locator('main .tx').first()).toBeVisible({ timeout: 30_000 });
@@ -326,12 +359,73 @@ test.describe('once', () => {
     }
   });
 
-  test('Load more appends the next page', async ({ page }) => {
+  test('numbered pages: › goes to page 2 (ranks 51 to 100, focus on the first row), Back returns, a typed page, Last', async ({ page }) => {
     await gotoRoute(page, HOL.path);
-    await expect(page.locator('main .hrow').first()).toBeVisible({ timeout: 30_000 });
-    const before = await page.locator('main .hrow').count();
-    await page.getByRole('button', { name: 'Load more holders' }).click();
-    await expect.poll(() => page.locator('main .hrow').count(), { timeout: 30_000 }).toBeGreaterThan(before);
+    const rows = page.locator('main .act-holders .hrow');
+    const rank = (i: number) => rows.nth(i).locator('.hrow__rk');
+    await expect(rows.first()).toBeVisible({ timeout: 30_000 });
+    await expect(page.locator('.act-count')).toContainText(/^A total of [\d,]+ holders found on Namada/);
+    await expect(rank(0)).toHaveText('1');
+    // "Load more" is gone: numbered pages, the page field and the two ends, above and under the list
+    await expect(page.getByRole('button', { name: /Load more/ })).toHaveCount(0);
+    await expect(page.locator('main nav.pager')).toHaveCount(2);
+    const head = page.locator('.act-pager--head');
+    await expect(head.getByRole('link', { name: 'First page' })).toHaveAttribute('aria-disabled', 'true');
+    await expect(head.getByRole('link', { name: 'Previous page' })).toHaveAttribute('tabindex', '-1');
+    // the links are real: the href carries ?page=
+    await expect(head.getByRole('link', { name: 'Next page' })).toHaveAttribute('href', '/holders?page=2');
+
+    await head.getByRole('link', { name: 'Next page' }).click();
+    await expect(page).toHaveURL(/\/holders\?page=2$/);
+    await expect(rank(0)).toHaveText('51', { timeout: 30_000 });
+    await expect(rows).toHaveCount(50);
+    await expect(rank(49)).toHaveText('100');
+    await expect(rows.first()).toBeFocused();
+    await expect(head.getByRole('textbox', { name: 'Page number' })).toHaveValue('2');
+
+    await page.goBack();
+    await expect(page).toHaveURL(/\/holders$/);
+    await expect(rank(0)).toHaveText('1', { timeout: 30_000 });
+
+    // a typed page: 25 and Enter
+    const field = head.getByRole('textbox', { name: 'Page number' });
+    await field.fill('25');
+    await field.press('Enter');
+    await expect(page).toHaveURL(/\/holders\?page=25$/);
+    await expect(rank(0)).toHaveText('1,201', { timeout: 30_000 });
+
+    // a page past the end goes to the last page and says so
+    const last = Number((await head.locator('.pager__of [data-num]').innerText()).replace(/\D/g, ''));
+    expect(last).toBeGreaterThan(25);
+    await field.fill(String(last + 1000));
+    await field.press('Enter');
+    await expect(page).toHaveURL(new RegExp(`/holders\\?page=${last}$`));
+    await expect(head.locator('.pager__msg')).toContainText('this is the last');
+    await page.goBack();
+    await expect(page).toHaveURL(/\/holders\?page=25$/);
+
+    // Last: the last page, its ends disabled
+    await head.getByRole('link', { name: 'Last page' }).click();
+    await expect(page).toHaveURL(new RegExp(`/holders\\?page=${last}$`));
+    await expect(rank(0)).toHaveText(((last - 1) * 50 + 1).toLocaleString('en-US'), { timeout: 30_000 });
+    await expect(head.getByRole('link', { name: 'Next page' })).toHaveAttribute('aria-disabled', 'true');
+    await expect(head.getByRole('link', { name: 'Last page' })).toHaveAttribute('aria-disabled', 'true');
+  });
+
+  test('numbered pages on Transactions: › replaces the rows and focuses the first, the count line, Back', async ({ page }) => {
+    await gotoRoute(page, ACT.path);
+    const rows = page.locator('main .txl .tx');
+    await expect(rows.first()).toBeVisible({ timeout: 30_000 });
+    await expect(page.locator('.act-count')).toContainText(/A total of [\d,]+ moves found/);
+    const foot = page.locator('.act-pager--foot');
+    await foot.getByRole('link', { name: 'Next page' }).click();
+    await expect(page).toHaveURL(/\/activity\?page=2$/);
+    await expect(page.locator('main .act-scope')).not.toHaveAttribute('aria-busy', 'true', { timeout: 30_000 });
+    await expect(rows.first()).toBeFocused();
+    expect(await rows.count()).toBeLessThanOrEqual(50);
+    await page.goBack();
+    await expect(page).toHaveURL(/\/activity$/);
+    await expect(page.locator('.act-pager--head').getByRole('textbox', { name: 'Page number' })).toHaveValue('1');
   });
 
   test('address rows open the Address sheet', async ({ page }) => {

@@ -8,17 +8,18 @@
 //
 // Data: GET /api/holders (chain, sort, search, pages). It does not take `at`: under Rewind the list
 // is current and says so ("Balances were not recorded over time; these are current, not as of …").
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState, type KeyboardEvent } from 'react';
 import type { Holder, HoldersResponse, Overview, SourceStatus } from '../../../../shared/types';
 import { fetchHolders, holdersCsvHref } from '../../api';
-import { REWIND_WORDS, useNow, useOverlays, useReplay } from '../../app/index';
-import { Button, DataList, EmptyState, HolderRow, Notice, Num, ProvDot, Segmented, SelectChip, Skeleton, SourceLine, Tag, WallClock, sourcesText, type ScopeItem, type Stamp } from '../../ui';
+import { REWIND_WORDS, navigate, useNow, useOverlays, useReplay } from '../../app/index';
+import { Button, DataList, EmptyState, HolderRow, Notice, Num, Pager, ProvDot, Segmented, SelectChip, Skeleton, SourceLine, Tag, WallClock, sourcesText, stepFor, type ScopeItem, type Stamp } from '../../ui';
 import { ageRange } from '../../lib/prov';
 import { holderCatKey as catKey, holderName, holderTag, isUserTag } from '../../lib/holder';
 import { category_plain } from '../../../../shared/labels';
 import { fmtAddr, fmtAge, fmtCount, fmtNamRule, fmtNamSigned, fmtPctRule } from '../../lib/format';
 import { ActivityBar, FilterPanel, FilterSet, SearchField } from './parts';
 import { TECH } from './words';
+import { HOLDER_CSV_MAX, PAGE_SIZE as PAGE, focusFirstRow, pageCount, pageHref } from './paging';
 
 export interface HolderFilters {
   chain: 'namada' | 'osmosis' | 'all';
@@ -30,7 +31,6 @@ export interface HolderFilters {
 export const H_DEFAULT: HolderFilters = { chain: 'namada', by: 'total', cat: 'all', search: '' };
 export const holderFilterCount = (f: HolderFilters): number => (Object.keys(H_DEFAULT) as (keyof HolderFilters)[]).filter((k) => f[k] !== H_DEFAULT[k]).length;
 
-const PAGE = 50;
 const H6 = 6 * 3_600_000;
 const H24 = 24 * 3_600_000;
 const BY_WORD: Record<HolderFilters['by'], string> = { total: 'total NAM', liquid: 'spendable NAM', bonded: 'staked NAM' };
@@ -51,52 +51,73 @@ export default function Holders({
   setFilters,
   wide,
   overview,
+  page,
 }: {
   filters: HolderFilters;
   setFilters: (f: HolderFilters) => void;
   wide: boolean;
   overview: Overview | null;
+  /** The page from ?page= (1 when absent). */
+  page: number;
 }) {
   const { at, rewound } = useReplay();
   const wall = useNow(); // balances are current: their ages are measured from the wall clock, also under Rewind
   const { openAddress } = useOverlays();
   const [sheet, setSheet] = useState(false);
 
-  // ---- server query (chain, sort, category, search) and pages
+  // ---- server query (chain, sort, category, search) and the page from the URL; a page change replaces the rows
   const by = filters.chain === 'osmosis' ? 'total' : filters.by;
   const category = filters.cat === 'all' ? '' : filters.cat;
   const key = JSON.stringify([filters.chain, by, filters.search, category]);
   const [data, setData] = useState<{ key: string; rows: Holder[]; total: number; page: number; cats: CatCounts | null } | null>(null);
   const [error, setError] = useState<string | null>(null);
-  const [more, setMore] = useState(false);
   const [retry, setRetry] = useState(0);
   useEffect(() => {
     let live = true;
     setError(null);
-    fetchHolders(filters.chain, 1, PAGE, filters.search, by, category)
-      .then((r) => live && setData({ key, rows: r.holders, total: r.total, page: 1, cats: catCountsOf(r) }))
-      .catch(() => live && setError('The holder list could not be fetched from this site’s server.'));
+    fetchHolders(filters.chain, page, PAGE, filters.search, by, category)
+      .then((r) => live && setData({ key, rows: r.holders, total: r.total, page, cats: catCountsOf(r) }))
+      .catch(() => live && setError(page > 1 ? 'This page of holders could not be fetched from this site’s server.' : 'The holder list could not be fetched from this site’s server.'));
     return () => {
       live = false;
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [key, retry]);
-  const loadMore = () => {
-    if (!data || more) return;
-    setMore(true);
-    fetchHolders(filters.chain, data.page + 1, PAGE, filters.search, by, category)
-      .then((r) =>
-        setData((d) => {
-          if (!d || d.key !== key) return d;
-          const ids = new Set(d.rows.map((x) => x.chain + x.address));
-          return { ...d, rows: [...d.rows, ...r.holders.filter((x) => !ids.has(x.chain + x.address))], total: r.total, page: d.page + 1 };
-        }),
-      )
-      .catch(() => setError('More holders could not be fetched from this site’s server.'))
-      .finally(() => setMore(false));
-  };
+  }, [key, page, retry]);
+  // the same query (any page): the count and the chips stay while another page loads
   const fresh = data?.key === key ? data : null;
   const loaded = fresh?.rows ?? [];
+  const pages = fresh ? pageCount(fresh.total) : null;
+  // a page past the end (an old link, a list that shrank): the last page, without a history entry
+  const past = !!fresh && fresh.page === page && pages != null && page > pages;
+  useEffect(() => {
+    if (past && pages != null) navigate(pageHref(pages), { replace: true, scroll: false });
+  }, [past, pages]);
+
+  // ---- a page change scrolls to the list's head and, once the rows are in, focuses the first row
+  const headRef = useRef<HTMLDivElement>(null);
+  const listRef = useRef<HTMLDivElement>(null);
+  const focusNext = useRef(false);
+  const onGo = () => {
+    focusNext.current = true;
+    headRef.current?.scrollIntoView({ block: 'start', behavior: 'instant' as ScrollBehavior });
+  };
+  useEffect(() => {
+    if (!focusNext.current || !data || data.key !== key || data.page !== page) return;
+    focusNext.current = false;
+    requestAnimationFrame(() => focusFirstRow(headRef.current, listRef.current, '.hrow'));
+  }, [data, key, page]);
+  const goPage = (n: number) => {
+    onGo();
+    navigate(pageHref(n), { scroll: false });
+  };
+  /** `[` and `]` on a list row step a page, as they do inside the pager. */
+  const onListKey = (e: KeyboardEvent) => {
+    if (e.altKey || e.ctrlKey || e.metaKey || (e.target as HTMLElement).closest('input, textarea, select')) return;
+    const to = stepFor(e.key, page, pages);
+    if (to == null) return;
+    e.preventDefault();
+    goPage(to);
+  };
 
   // ---- the "What" chips, with counts (kept while a category is chosen, so the other chips stay).
   // A server that sends HoldersResponse.categories counts every holder the chain and search select, so a chip's
@@ -109,7 +130,8 @@ export default function Holders({
     if (!fresh) return;
     // the server's counts leave the category out, so any answer for this chain and search carries them
     if (fresh.cats) setCatRows({ base: baseKey, rows: [], server: fresh.cats });
-    else if (filters.cat === 'all') setCatRows({ base: baseKey, rows: loaded, server: null });
+    // an older server: the chips count the biggest holders, page 1 of the list without a category
+    else if (filters.cat === 'all' && fresh.page === 1) setCatRows({ base: baseKey, rows: loaded, server: null });
   }, [fresh, filters.cat, baseKey, loaded]);
   const cats = useMemo(() => {
     const mine = catRows?.base === baseKey ? catRows : null;
@@ -122,7 +144,7 @@ export default function Holders({
       allN = mine.server.total;
       for (const c of mine.server.counts) if (c.n > 0) m.set(c.category, { label: word(c.category), n: c.n });
     } else {
-      const src = mine ? mine.rows : filters.cat === 'all' ? loaded : [];
+      const src = mine ? mine.rows : filters.cat === 'all' && fresh?.page === 1 ? loaded : [];
       allN = src.length;
       for (const h of src) {
         const k = catKey(h);
@@ -134,7 +156,7 @@ export default function Holders({
     const list = [...m.entries()].sort((a, b) => (a[0] === 'none' ? 1 : b[0] === 'none' ? -1 : b[1].n - a[1].n));
     if (filters.cat !== 'all' && !m.has(filters.cat)) list.push([filters.cat, { label: word(filters.cat), n: 0 }]);
     return { list, allN, whole };
-  }, [catRows, baseKey, loaded, filters.cat]);
+  }, [catRows, baseKey, loaded, filters.cat, fresh?.page]);
   /** The chip legend: plain "What" when the counts cover every holder, else what they count. */
   const catLegend = cats.whole || !cats.allN ? 'What' : `What, counted among the ${fmtCount(cats.allN)} biggest loaded`;
   const serverFiltered = filters.cat === 'all' || loaded.every((h) => catKey(h) === filters.cat);
@@ -222,9 +244,17 @@ export default function Holders({
     </>
   );
 
-  const busy = !!data && data.key !== key;
+  const busy = !!data && (data.key !== key || data.page !== page || past);
   const top = rows.length ? Math.max(...loaded.map((h) => h.total)) : 0;
   const full = filters.chain !== 'osmosis';
+  const empty = !!fresh && !busy && rows.length === 0;
+
+  const pager = (where: 'head' | 'foot') =>
+    fresh && pages != null ? (
+      <Pager label={where === 'head' ? 'Holder pages' : 'Holder pages, under the list'} page={page} pages={pages} hrefFor={pageHref} onGo={onGo} run={where === 'foot'} className={`act-pager act-pager--${where}`} />
+    ) : (
+      <div className="pager act-pager act-pager--ph" aria-hidden="true" />
+    );
 
   return (
     <>
@@ -246,30 +276,47 @@ export default function Holders({
             ) : null}
           </div>
         ) : null}
-        <p className="act-count" aria-live="polite">
-          {!fresh ? (
-            <span className="skel__b act-count__sk" aria-hidden="true" />
-          ) : serverFiltered ? (
-            <>
-              <Num v={loaded.length} fmt={fmtCount} /> of <Num v={fresh.total} fmt={fmtCount} /> holders {CHAIN_WORD[filters.chain]}
-              {filters.cat !== 'all' ? <> in “{cats.list.find(([k]) => k === filters.cat)?.[1].label ?? filters.cat}”</> : null}
-              {filters.search ? <> matching “{filters.search}”</> : null}, biggest first by {BY_WORD[by]}.
-            </>
-          ) : (
-            <>
-              <Num v={shown} fmt={fmtCount} /> of the <Num v={loaded.length} fmt={fmtCount} /> biggest holders loaded match; <Num v={fresh.total} fmt={fmtCount} /> holders {CHAIN_WORD[filters.chain]} in all.
-            </>
-          )}
-        </p>
+        <div className="act-head" ref={headRef}>
+          <p className="act-count" aria-live="polite">
+            {!fresh ? (
+              <span className="skel__b act-count__sk" aria-hidden="true" />
+            ) : serverFiltered ? (
+              <>
+                A total of <Num v={fresh.total} fmt={fmtCount} /> {fresh.total === 1 ? 'holder' : 'holders'} found {CHAIN_WORD[filters.chain]}
+                {filters.cat !== 'all' ? <> in “{cats.list.find(([k]) => k === filters.cat)?.[1].label ?? filters.cat}”</> : null}
+                {filters.search ? <> matching “{filters.search}”</> : null}, biggest first by {BY_WORD[by]}.
+              </>
+            ) : (
+              <>
+                <Num v={shown} fmt={fmtCount} /> of the <Num v={loaded.length} fmt={fmtCount} /> holders on this page match; a total of <Num v={fresh.total} fmt={fmtCount} /> holders found {CHAIN_WORD[filters.chain]}.
+              </>
+            )}
+          </p>
+          <div className="act-head__end">
+            {fresh && fresh.total > 0 ? (
+              <a className="link act-csv" href={holdersCsvHref({ chain: filters.chain, by, category, search: filters.search })} download>
+                <span>Download page data</span>
+                {/* the export holds the biggest HOLDER_CSV_MAX of these holders (worker/src/api.ts /api/export/holders) */}
+                <span className="act-csv__n">{fresh.total > HOLDER_CSV_MAX ? `CSV, biggest ${fmtCount(HOLDER_CSV_MAX)}` : 'CSV, all of them'}</span>
+              </a>
+            ) : null}
+            {pager('head')}
+          </div>
+        </div>
 
+        {error && fresh ? (
+          <Notice tone="warning" title="This page did not load" action={<Button size="sm" onClick={() => setRetry((n) => n + 1)}>Try again</Button>}>
+            {error}
+          </Notice>
+        ) : null}
         {error && !fresh ? (
           <Notice tone="warning" title="The holders did not load" action={<Button size="sm" onClick={() => setRetry((n) => n + 1)}>Try again</Button>}>
             {error}
           </Notice>
         ) : !data ? (
           <Skeleton rows={8} heights={[64]} label="holders" className="act-skel" />
-        ) : fresh && rows.length === 0 ? null : (
-          <div className={busy ? 'is-busy' : undefined}>
+        ) : empty ? null : (
+          <div className={busy ? 'is-busy' : undefined} ref={listRef} onKeyDown={onListKey}>
             <DataList
               kind="holders"
               full={full}
@@ -285,7 +332,7 @@ export default function Holders({
           </div>
         )}
 
-        {fresh && rows.length === 0 ? (
+        {empty ? (
           filters.chain === 'osmosis' && !filters.search && filters.cat === 'all' ? (
             <EmptyState title="The Osmosis list was not captured.">
               {overview && overview.dex.holders != null && overview.dex.holders > 0 ? (
@@ -299,33 +346,17 @@ export default function Holders({
               )}
             </EmptyState>
           ) : filters.cat !== 'all' && !serverFiltered ? (
-            <EmptyState title="No holder among those loaded matches.">The filter looks only at the {fmtCount(loaded.length)} biggest holders loaded so far.</EmptyState>
+            <EmptyState title="No holder on this page matches.">The filter looks only at the {fmtCount(loaded.length)} holders on this page.</EmptyState>
           ) : (
             <EmptyState title={filters.search ? `No holder matches “${filters.search}”.` : 'No holder rows came back.'}>The search looks at addresses and names.</EmptyState>
           )
         ) : null}
 
+        {data && !empty ? <div className="act-foot">{pager('foot')}</div> : null}
+
         {scope.length ? <SourceLine items={scope} label="Where the holder figures come from" text={scopeText} /> : <p className="src act-src-ph" aria-hidden="true" />}
       </div>
       </WallClock>
-
-      {fresh && loaded.length > 0 ? (
-        <div className="act-more">
-          {loaded.length < fresh.total ? (
-            <Button variant="secondary" busy={more} onClick={loadMore}>
-              Load more holders
-            </Button>
-          ) : null}
-          {/* these repeat the count line, whose source is the list's SourceLine above */}
-          <p className="cap" data-prov-ref="act-h-scope">
-            <Num v={loaded.length} fmt={fmtCount} /> of <Num v={fresh.total} fmt={fmtCount} /> loaded.
-            {error && fresh ? ` ${error}` : ''}
-          </p>
-          <a className="link act-csv" href={holdersCsvHref({ chain: filters.chain, by, category, search: filters.search })} download>
-            <span>Export these holders as CSV</span>
-          </a>
-        </div>
-      ) : null}
     </>
   );
 }

@@ -2,8 +2,8 @@
    Activity (S5): /activity (Transactions) and /holders (Holders).
    Ported from docs/design/final/site.css "HOLDERS (Activity, Holders tab)"
    (.hhero → .act-hero, .hl-band → .act-band, .hl__count → .act-count,
-   .hl__sentence → .act-sentence, .filters → .act-filters, .more--load →
-   .act-more) plus the Transactions feed (system.md 9.5), which has no
+   .hl__sentence → .act-sentence, .filters → .act-filters; "Load more" is
+   replaced by numbered pages, .act-head / .act-foot) plus the Transactions feed (system.md 9.5), which has no
    reference page: rows below a 880 px container, a seven-column table above.
    Tokens only; --c-* ground tokens so the blocks work on yellow, black, paper.
    Hit areas: 44 px through ::after where a control is drawn smaller.
@@ -62,8 +62,29 @@
     .act-txwide { margin-inline: calc(-1 * max(0px, (min(100vw, var(--max-wide)) - var(--max)) / 2)); }
   }
 
-  .act-more { display: grid; gap: var(--s-3); justify-items: start; margin-top: var(--s-6); }
+  /* ---------- the list head (count line; Download page data and the pager) and the pager under the list ----------
+     nav-search-plan 2.3 / 2.6: one row from 640 px (wrapping when it must); on phones the count, then the pager,
+     then "Download page data" as a full-width 44 px link. Both pagers hold their 44 px while a page loads. */
+  .act-head { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: var(--s-3) var(--s-5); margin: var(--s-4) 0 var(--s-3); }
+  .act-head .act-count { flex: 1 1 280px; min-width: 0; margin: 0; }
+  .act-head__end { display: flex; flex-wrap: wrap; align-items: center; gap: var(--s-2) var(--s-4); min-width: 0; flex: 1 1 100%; }
+  .act-head__end .act-pager { order: 1; }
+  .act-head__end .act-csv { order: 2; }
+  .act-csv { gap: 6px; text-decoration: none; }
+  .act-csv > span:first-child { text-decoration: underline; text-decoration-thickness: 2px; text-underline-offset: 5px; white-space: nowrap; }
+  .act-csv__n { font: var(--w-medium) var(--t-12) / 16px var(--font-code); color: var(--c-ink-2); text-decoration: none; white-space: nowrap; }
   .act-csv .ico { width: 16px; height: 16px; }
+  .act-foot { display: flex; margin: var(--s-4) 0 var(--s-2); min-width: 0; }
+  .act-pager--ph { min-width: 1px; }
+  @media (max-width: 639px) {
+    .act-head__end .act-csv { width: 100%; justify-content: center; padding: 0 var(--s-3); border: 1.5px solid var(--c-line-strong); border-radius: var(--r-pill); font-size: var(--t-13); }
+  }
+  @media (min-width: 640px) {
+    .act-head__end { flex: 0 1 auto; justify-content: flex-end; }
+    .act-head__end .act-pager { order: 2; }
+    .act-head__end .act-csv { order: 1; }
+    .act-foot { justify-content: flex-end; }
+  }
   .act-about { margin-top: var(--s-6); padding-top: var(--s-5); border-top: 1px solid var(--c-line); font-size: var(--t-13); line-height: var(--lh-13); color: var(--c-ink-2); max-width: 64ch; }
 
   /* ---------- holders: the kit's DataList rows, plus the name button and the inline change ---------- */
@@ -91,5 +112,6 @@
     .act-filters .act-cats { flex: 0 1 auto; }
     .act-filters .act-clear { align-self: flex-end; }
     .act-count { margin-top: var(--s-6); }
+    .act-head { margin-top: var(--s-6); }
   }
 }

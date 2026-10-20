@@ -9,15 +9,16 @@
 // bot trades left out, each bridge crossing once, address or record search, pages). Under Rewind the
 // shell's fetch wrapper adds `at` (rows at or before that time) and nothing is streamed. While live,
 // moves that arrive through the stream are merged on top and animate in; nothing else animates.
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState, type KeyboardEvent } from 'react';
 import type { Flow } from '../../../../shared/types';
 import { fetchFlows, flowsCsvHref, type FlowsQuery } from '../../api';
-import { osmosisStreaming, streamStamp, useClock, useOverlays, useOverview, useReplay } from '../../app/index';
-import { Button, EmptyState, Notice, Num, ProvScope, Segmented, SelectChip, Skeleton, SourceLine, TxList, type ScopeItem, type Stamp } from '../../ui';
+import { navigate, osmosisStreaming, streamStamp, useClock, useOverlays, useOverview, useReplay } from '../../app/index';
+import { Button, EmptyState, Notice, Num, Pager, ProvScope, Segmented, SelectChip, Skeleton, SourceLine, TxList, stepFor, type ScopeItem, type Stamp } from '../../ui';
 import { kindInfo, type TagKind } from '../../lib/kinds';
 import { applyFlowRules, isBot } from '../../lib/flows';
 import { fmtAge, fmtCount, fmtUtcLong } from '../../lib/format';
 import { ActivityBar, FilterPanel, FilterSet, SearchField } from './parts';
+import { FLOW_CSV_MAX as CSV_MAX, PAGE_SIZE as PAGE, focusFirstRow, pageCount, pageHref } from './paging';
 
 // ---------------------------------------------------------------- filters
 export interface TxFilters {
@@ -36,9 +37,6 @@ export interface TxFilters {
 export const TX_DEFAULT: TxFilters = { chain: 'all', kind: 'all', minNam: '0', bots: 'show', pairs: 'one', search: '' };
 export const txFilterCount = (f: TxFilters): number => (Object.keys(TX_DEFAULT) as (keyof TxFilters)[]).filter((k) => f[k] !== TX_DEFAULT[k]).length;
 
-const PAGE = 50;
-/** The flow export's row cap (worker/src/api.ts /api/export/flows; web/src/api.ts flowsCsvHref sends it). */
-const CSV_MAX = 5000;
 const kw = (k: TagKind) => kindInfo(k).word;
 /** Kind chips: the two server groups, then each kind in the order a trader reads them. */
 const KIND_OPTIONS: { value: string; label: string }[] = [
@@ -82,10 +80,13 @@ export default function Transactions({
   filters,
   setFilters,
   wide,
+  page,
 }: {
   filters: TxFilters;
   setFilters: (f: TxFilters) => void;
   wide: boolean;
+  /** The page from ?page= (1 when absent). */
+  page: number;
 }) {
   const { at, rewound } = useReplay();
   const now = useClock();
@@ -93,48 +94,32 @@ export default function Transactions({
   const { openAddress } = useOverlays();
   const [sheet, setSheet] = useState(false);
 
-  // ---- page 1 for these filters, then "Load more" appends
+  // ---- the page from the URL for these filters; a page change replaces the rows
   const key = JSON.stringify([filters, at]);
   // exact: `total` is the count of these filters (false: an older server ignored a rule, and `total` is only an
-  // upper bound); more: the server holds rows after the last page fetched
+  // upper bound); more: the server holds rows after this page
   const [data, setData] = useState<{ key: string; flows: Flow[]; total: number; page: number; exact: boolean; more: boolean } | null>(null);
   const [error, setError] = useState<string | null>(null);
-  const [more, setMore] = useState(false);
   const [retry, setRetry] = useState(0);
   const q: FlowsQuery = { asOf: at, chain: filters.chain, kind: filters.kind, search: filters.search, ...rulesOf(filters) };
-  const query = (page: number) => fetchFlows({ ...q, page, limit: PAGE });
   useEffect(() => {
     let live = true;
     setError(null);
-    query(1)
-      .then((r) => live && setData({ key, flows: r.flows, total: r.total, page: 1, exact: r.exact, more: r.more }))
-      .catch(() => live && setError('The list of moves could not be fetched from this site’s server.'));
+    fetchFlows({ ...q, page, limit: PAGE })
+      .then((r) => live && setData({ key, flows: r.flows, total: r.total, page, exact: r.exact, more: r.more }))
+      .catch(() => live && setError(page > 1 ? 'This page of moves could not be fetched from this site’s server.' : 'The list of moves could not be fetched from this site’s server.'));
     return () => {
       live = false;
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [key, retry]);
-
-  const loadMore = () => {
-    if (!data || more) return;
-    setMore(true);
-    query(data.page + 1)
-      .then((r) => {
-        setData((d) => {
-          if (!d || d.key !== key) return d;
-          const ids = new Set(d.flows.map((x) => x.id));
-          return { ...d, flows: [...d.flows, ...r.flows.filter((x) => !ids.has(x.id))], total: r.total, page: d.page + 1, exact: d.exact && r.exact, more: r.more };
-        });
-      })
-      .catch(() => setError('More moves could not be fetched from this site’s server.'))
-      .finally(() => setMore(false));
-  };
+  }, [key, page, retry]);
 
   // ---- streamed moves on top (live only, never the load-time seed)
+  // the same filters (any page): the count stays while another page loads
   const fresh = data?.key === key ? data : null;
   const rows = useMemo(() => {
     if (!fresh) return [];
-    if (rewound) return fresh.flows;
+    if (rewound || fresh.page !== 1) return fresh.flows;
     const have = new Set(fresh.flows.map((x) => x.id));
     const newest = fresh.flows[0]?.ts ?? 0;
     const add = liveFlows.filter((x) => streamedIds.has(x.id) && !have.has(x.id) && x.ts >= newest && matches(x, filters));
@@ -145,6 +130,35 @@ export default function Transactions({
   // not exact: the count of these filters is not known, only the rows listed
   const total = fresh ? (exact ? fresh.total + Math.max(0, added) : rows.length) : null;
   const streaming = osmosisStreaming(stream, now);
+  // the number of pages only when the count is exact; otherwise "of —" and the next page while the server has more
+  const pages = fresh && exact && total != null ? pageCount(total) : null;
+  const past = !!fresh && fresh.page === page && pages != null && page > pages;
+  useEffect(() => {
+    if (past && pages != null) navigate(pageHref(pages), { replace: true, scroll: false });
+  }, [past, pages]);
+
+  // ---- a page change scrolls to the list's head and, once the rows are in, focuses the first row
+  const headRef = useRef<HTMLDivElement>(null);
+  const listRef = useRef<HTMLDivElement>(null);
+  const focusNext = useRef(false);
+  const onGo = () => {
+    focusNext.current = true;
+    headRef.current?.scrollIntoView({ block: 'start', behavior: 'instant' as ScrollBehavior });
+  };
+  useEffect(() => {
+    if (!focusNext.current || !data || data.key !== key || data.page !== page) return;
+    focusNext.current = false;
+    requestAnimationFrame(() => focusFirstRow(headRef.current, listRef.current, '.tx'));
+  }, [data, key, page]);
+  /** `[` and `]` on a list row step a page, as they do inside the pager. */
+  const onListKey = (e: KeyboardEvent) => {
+    if (e.altKey || e.ctrlKey || e.metaKey || (e.target as HTMLElement).closest('input, textarea, select')) return;
+    const to = stepFor(e.key, page, pages, fresh?.more);
+    if (to == null) return;
+    e.preventDefault();
+    onGo();
+    navigate(pageHref(to), { scroll: false });
+  };
 
   // ---- the list's provenance scope: the flow index per chain, the stream while live
   const scope: ScopeItem[] = [];
@@ -189,7 +203,24 @@ export default function Transactions({
     </>
   );
 
-  const busy = !!data && data.key !== key;
+  const busy = !!data && (data.key !== key || data.page !== page || past);
+  const empty = !!fresh && !busy && rows.length === 0;
+  const pager = (where: 'head' | 'foot') =>
+    fresh ? (
+      <Pager
+        label={where === 'head' ? 'Pages of moves' : 'Pages of moves, under the list'}
+        page={page}
+        pages={pages}
+        hrefFor={pageHref}
+        onGo={onGo}
+        hasNext={fresh.more}
+        run={where === 'foot'}
+        className={`act-pager act-pager--${where}`}
+        unknown={where === 'foot' ? 'The number of pages is not known: this site’s server did not count the moves these filters select, so only the next page is offered.' : undefined}
+      />
+    ) : (
+      <div className="pager act-pager act-pager--ph" aria-hidden="true" />
+    );
 
   return (
     <>
@@ -199,24 +230,36 @@ export default function Transactions({
       </FilterPanel>
 
       <ProvScope className="act-scope" id="act-tx-scope" aria-busy={busy || !data || undefined}>
-        <p className="act-count" aria-live="polite">
-          {total == null ? (
-            <span className="skel__b act-count__sk" aria-hidden="true" />
-          ) : (
-            <>
-              {exact ? null : 'At least '}
-              <Num v={total} fmt={fmtCount} /> {total === 1 ? 'move' : 'moves'}
-              {count ? (total === 1 ? ' matches the filters' : ' match the filters') : ' recorded'}
-              {rewound && at ? <>, at or before {fmtUtcLong(at)}</> : null}, newest first.
-              {!rewound ? (
-                <span className="act-live" data-status={!stream.connected ? 'none' : streaming === false ? 'old' : 'fresh'}>
-                  <i className="dot" data-status={!stream.connected ? 'none' : streaming === false ? 'old' : 'fresh'} aria-hidden="true" />
-                  {!stream.connected ? 'Not streaming right now' : streaming === false ? 'Osmosis moves are not streaming right now; Namada moves are' : 'New moves appear as they are recorded'}
-                </span>
-              ) : null}
-            </>
-          )}
-        </p>
+        <div className="act-head" ref={headRef}>
+          <p className="act-count" aria-live="polite">
+            {total == null ? (
+              <span className="skel__b act-count__sk" aria-hidden="true" />
+            ) : (
+              <>
+                A total of {exact ? null : 'at least '}
+                <Num v={total} fmt={fmtCount} /> {total === 1 ? 'move' : 'moves'} found
+                {count ? (total === 1 ? ' that matches the filters' : ' that match the filters') : null}
+                {rewound && at ? <>, at or before {fmtUtcLong(at)}</> : null}, newest first.
+                {!rewound ? (
+                  <span className="act-live" data-status={!stream.connected ? 'none' : streaming === false ? 'old' : 'fresh'}>
+                    <i className="dot" data-status={!stream.connected ? 'none' : streaming === false ? 'old' : 'fresh'} aria-hidden="true" />
+                    {!stream.connected ? 'Not streaming right now' : streaming === false ? 'Osmosis moves are not streaming right now; Namada moves are' : page > 1 ? 'New moves are added to the first page as they are recorded' : 'New moves appear as they are recorded'}
+                  </span>
+                ) : null}
+              </>
+            )}
+          </p>
+          <div className="act-head__end">
+            {fresh && (total ?? 0) > 0 ? (
+              <a className="link act-csv" href={flowsCsvHref(q)} download>
+                <span>Download page data</span>
+                {/* the export holds at most the newest CSV_MAX moves (worker/src/api.ts /api/export/flows) */}
+                <span className="act-csv__n">{!exact || (total != null && total > CSV_MAX) ? `CSV, newest ${fmtCount(CSV_MAX)}` : 'CSV, all of them'}</span>
+              </a>
+            ) : null}
+            {pager('head')}
+          </div>
+        </div>
         {covAt != null ? (
           <p className="scope__old act-lag">
             <i className="dot" data-status="old" aria-hidden="true" />
@@ -224,54 +267,34 @@ export default function Transactions({
           </p>
         ) : null}
 
+        {error && fresh ? (
+          <Notice tone="warning" title="This page did not load" action={<Button size="sm" onClick={() => setRetry((n) => n + 1)}>Try again</Button>}>
+            {error}
+          </Notice>
+        ) : null}
         {error && !fresh ? (
           <Notice tone="warning" title="The moves did not load" action={<Button size="sm" onClick={() => setRetry((n) => n + 1)}>Try again</Button>}>
             {error}
           </Notice>
-        ) : !fresh && !data ? (
+        ) : !data ? (
           <Skeleton rows={8} heights={[72]} label="moves" className="act-skel" />
-        ) : (
-          <div className="act-txwide">
-            <TxList rows={busy ? data!.flows : rows} now={now} streamedIds={rewound ? undefined : streamedIds} onAddr={openAddress} busy={busy} />
+        ) : empty ? null : (
+          <div className="act-txwide" ref={listRef} onKeyDown={onListKey}>
+            <TxList rows={busy ? data.flows : rows} now={now} streamedIds={rewound || page > 1 ? undefined : streamedIds} onAddr={openAddress} busy={busy} />
           </div>
         )}
 
-        {fresh && rows.length === 0 ? (
+        {empty ? (
           <EmptyState title="No recorded move matches these filters.">
             {rewound && at ? <>The list holds moves at or before {fmtUtcLong(at)}. </> : null}
             The chain, kind, size and search chosen above leave nothing to show.
           </EmptyState>
         ) : null}
 
+        {data && !empty ? <div className="act-foot">{pager('foot')}</div> : null}
+
         {scope.length ? <SourceLine items={scope} label="Where the moves come from" /> : <p className="src act-src-ph" aria-hidden="true" />}
       </ProvScope>
-
-      {fresh && rows.length > 0 ? (
-        <div className="act-more">
-          {fresh.more ? (
-            <Button variant="secondary" busy={more} onClick={loadMore}>
-              Load more moves
-            </Button>
-          ) : null}
-          {/* these repeat the count line, whose source is the list's SourceLine above */}
-          <p className="cap" data-prov-ref="act-tx-scope">
-            {exact ? (
-              <>
-                <Num v={rows.length} fmt={fmtCount} /> of <Num v={total} fmt={fmtCount} /> shown.
-              </>
-            ) : (
-              <>
-                <Num v={rows.length} fmt={fmtCount} /> shown; more may be recorded.
-              </>
-            )}
-            {error && fresh ? ` ${error}` : ''}
-          </p>
-          <a className="link act-csv" href={flowsCsvHref(q)} download>
-            {/* the export holds at most the newest CSV_MAX moves (worker/src/api.ts /api/export/flows) */}
-            <span>{exact && total != null && total > CSV_MAX ? `Export the newest ${fmtCount(CSV_MAX)} of ${fmtCount(total)} moves these filters select as CSV` : exact ? 'Export the moves these filters select as CSV' : `Export the moves these filters select as CSV (the newest ${fmtCount(CSV_MAX)} at most)`}</span>
-          </a>
-        </div>
-      ) : null}
     </>
   );
 }
