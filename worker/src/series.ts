@@ -21,8 +21,8 @@ import {
   ROLLUP_KEYS, ROLLUP_HOUR_SQL, SWAP_HOUR_SQL, OSMOSIS_HOLDERS_SQL, POOL_HOURLY_SQL,
   DAY_FLOWS_SQL, REFUNDS_SQL, DELETE_EDGES_DAY_SQL, EDGE_SQL, ACTIVITY_SQL, LAST_IN_RANGE_SQL,
   HOLDER_COHORTS_NAMADA_SQL, HOLDER_COHORTS_OSMOSIS_SQL, COHORT_LABELLED_SQL,
-  HOLDER_COHORT_ROW_SQL, COHORT_ROW_SQL, STAKERS_SQL, LISTING_ROW_SQL,
-  UNBOND_QUEUE_DELETE_SQL, UNBOND_QUEUE_ROW_SQL, VALIDATOR_ROW_SQL,
+  HOLDER_COHORT_ROW_SQL, COHORT_ROW_SQL, STAKERS_SQL, LISTING_ROW_SQL, VALIDATOR_ROW_SQL,
+  UNBOND_QUEUE_STORED_SQL, UNBOND_QUEUE_ROWS, unbondQueueUpsertSql, unbondQueueDeleteSql, PREV_BALANCE_LISTING_SQL, LAST_POOL_PRICE_SQL,
 } from './series-sql';
 
 const H = 3600000, D = 86400000;
@@ -30,6 +30,11 @@ const INDEXER = 'https://indexer.namada.net/api/v1';
 
 /** The hourly and daily jobs look at kv (one read each) only in the first minutes of an hour; then they run once. */
 export const JOB_WINDOW_MS = 15 * 60_000;
+/** The last minutes of the window: a job runs on a listing tick too, and what it could not read is let go for the hour. */
+export const JOB_CLOSING_MS = 2 * 60_000;
+/** The Osmosis data API summary is not ok when its own update time is older than this (its health row says so). */
+export const OSMOSIS_SUMMARY_STALE_MS = 2 * H;
+const closingAt = (now: number) => now % H >= JOB_WINDOW_MS - JOB_CLOSING_MS;
 /** Closed hours the hourly job catches up on after missed windows (rollups and swap hours are recomputable from rows). */
 export const HOURLY_CATCH_UP = 6;
 /** The daily snapshot waits until both chain listings completed within this long (the stored rows are as of them). */
@@ -52,7 +57,7 @@ export const SERIES_META = {
   listings: { source: 'cron.ts runBalanceListing / runBondListing', start: 'deploy day of migration 0007' },
   'metrics:*.1h': { source: 'hourly rollup of the minute readings', start: 'the minute series: price.usd and supply 15 Oct 2026, dex.liquidity_usd 17 Oct 2026, supply.total_stake 18 Oct 2026 (backfill from minute rows)' },
   'metrics:price.swap_1h.*, dex.swaps_1h.*': { source: 'executed Osmosis swaps (flow index)', start: '12 Aug 2026 (backfill from flows)' },
-  'metrics:price.pool_1h*': { source: OSMOSIS_DATA_SOURCE + ' pair chart, pool 3005 (pool spot price, not executions)', start: '20 Jun 2025 19:00 UTC with the one-off range=all import, else deploy day' },
+  'metrics:price.pool_1h*': { source: OSMOSIS_DATA_SOURCE + ' pair chart, pool 3005 (pool spot price, not executions; closed hours only, each hour the API answers for since the last stored one)', start: '20 Jun 2025 19:00 UTC with the one-off range=all import, else deploy day' },
   'metrics:dex.volume_*_usd_osmosis': { source: OSMOSIS_DATA_SOURCE + ' pair summary (priced leg only)', start: 'deploy day (the summary is live only)' },
   'metrics:holders.*': { source: 'Namada node balance listing at height H (and the bond listing for stakers) · Keplr Osmosis bank list', start: 'first complete listing after deploy; new and emptied holders from the second' },
   'metrics:stake.*': { source: 'Namada node bond listing; shares against the chain total stake (/vp/pos/total_stake)', start: 'first complete bond listing after deploy' },
@@ -141,15 +146,27 @@ export interface HourlyCtx {
   pools: PoolInfo[];
   poolsAt: number | null;
   health: SourceHealth[];
-  /** a chain listing is being read this tick: the Osmosis downloads wait for a quieter tick in the window */
+  /** a chain listing is being read this tick: the job waits for a quieter tick in the window */
   listingTick: boolean;
   signal?: AbortSignal;
+  /** true once the tick is past its deadline (cron.ts late): no outside request is started then */
+  late?: () => boolean;
   /** for tests */
   summary?: (signal?: AbortSignal) => Promise<PairSummary>;
   chart?: (signal?: AbortSignal) => Promise<PairChartPoint[] | null>;
 }
 
-export interface HourlyResult { hour: number; rolled: number[]; written: number; summaryAt: number | null; chartPoints: number | null }
+export interface HourlyResult {
+  hour: number; rolled: number[]; written: number; summaryAt: number | null; chartPoints: number | null;
+  /** whether the Osmosis part is finished for the hour (both reads answered, or the window closed) */
+  osmosisDone: boolean;
+}
+
+/**
+ * kv jobs.hourly_osmosis: the Osmosis data API reads of one hour. `summary` / `chart` are true once that read is
+ * finished for the hour: it answered, or the window closed without an answer (then that hour's figure is a gap).
+ */
+export interface OsmosisHourJob { hour: number; summary?: boolean; chart?: boolean }
 
 /** The closed hours to roll up: from the hour after the last run's (at most HOURLY_CATCH_UP back) to the one just closed. */
 export function hoursToRoll(lastRunHour: number | null, hour: number): number[] {
@@ -182,72 +199,142 @@ export function poolHourlyStmts(hour: number, pools: PoolInfo[], poolsAt: number
   }));
 }
 
-/** The pool price points of the closed and the current hour (screener-plan 5.3: price.pool_1h, .open, .high, .low, .flat). */
-export function poolPriceStmts(points: PairChartPoint[], hour: number): Stmt[] {
+/**
+ * The pool price of every closed hour in the chart answer after `after`, the newest stored one (screener-plan 5.3:
+ * price.pool_1h, .open, .high, .low, .flat). The current hour is never written: its point is partial (an hour that
+ * has just begun reads open = high = low = close and would be stored as a flat hour). After a missed window the
+ * 7-day answer fills every closed hour since the last stored one, with the API's own values.
+ */
+export function poolPriceStmts(points: PairChartPoint[], hour: number, after: number | null = null): Stmt[] {
   const out: Stmt[] = [];
   for (const p of points) {
-    if (p.t < hour - H || p.t > hour) continue;
+    if (p.t >= hour || (after != null && p.t <= after)) continue;
     out.push(stmt.metric(p.t, 'price.pool_1h', p.usd.close), stmt.metric(p.t, 'price.pool_1h.open', p.usd.open), stmt.metric(p.t, 'price.pool_1h.high', p.usd.high),
       stmt.metric(p.t, 'price.pool_1h.low', p.usd.low), stmt.metric(p.t, 'price.pool_1h.flat', p.flat ? 1 : 0));
   }
   return out;
 }
 
+/** The Osmosis summary's health: not ok when it lists no NAM pair or its own update time is over OSMOSIS_SUMMARY_STALE_MS old. */
+export function summaryHealth(sum: PairSummary, now: number): { ok: boolean; note: string } {
+  const at = sum.at != null ? `updated ${new Date(sum.at).toISOString().slice(11, 16)} UTC` : 'no update time';
+  if (!sum.pairs.length) return { ok: false, note: `The summary lists no NAM pair (${at}); no volumes were written.` };
+  if (sum.at == null) return { ok: false, note: `${sum.pairs.length} NAM pairs, but the answer has no update time; no volumes were written.` };
+  const age = now - sum.at;
+  if (age > OSMOSIS_SUMMARY_STALE_MS) return { ok: false, note: `${sum.pairs.length} NAM pairs, ${at}: ${(age / H).toFixed(1)} h old, so the volumes are stored with that time.` };
+  return { ok: true, note: `${sum.pairs.length} NAM pairs, ${at}` };
+}
+
 /**
- * Once an hour, in the first JOB_WINDOW_MS (kv jobs.hourly: the hour it last ran): the rollups and the full
- * trade-hour keys of the closed hour(s), pool_hourly for this hour, the Osmosis data API's pair summary and the
- * reference pool's pair chart (5.4: +2 requests an hour, on a tick that reads no chain listing unless the window is
- * about to close), and holders.osmosis. A failed outside read writes nothing for that source and says so in health.
+ * Once an hour, in the first JOB_WINDOW_MS, on a tick that reads no chain listing (unless the window is closing), in
+ * two parts that never wait on each other:
+ * - the database part (kv jobs.hourly: the hour it last finished): the rollups and the full trade-hour keys of the
+ *   closed hour(s), holders.osmosis; recomputable from stored rows, so it catches up on missed hours;
+ * - the Osmosis part (kv jobs.hourly_osmosis, OsmosisHourJob): the Osmosis data API's pair summary and the reference
+ *   pool's pair chart (5.4: +2 requests an hour, side by side, never started once the tick is late), then pool_hourly
+ *   for this hour and every closed pool-price hour since the last stored one. A read that fails is asked again on
+ *   the next tick of the window; only when the window is closing is the hour let go without it (that figure is a
+ *   gap, and the health row says so). pool_hourly is written once the summary is read, or at the close without it.
+ * A failed write of one part leaves the other written and its own marker unset (it runs again next tick).
  */
 export async function hourly(env: Env, now: number, ctx: HourlyCtx): Promise<HourlyResult | null> {
   if (now % H >= JOB_WINDOW_MS) return null;
   const hour = Math.floor(now / H) * H;
-  const jobs = await kvJson<number>(env.DB, ['jobs.hourly']);
-  const last = jobs['jobs.hourly'];
-  if (last != null && last >= hour) return null;
-  if (ctx.listingTick && now % H < JOB_WINDOW_MS - 2 * 60_000) return null;
+  const closing = closingAt(now);
+  if (ctx.listingTick && !closing) return null;
+  const jobs = await kvJson<any>(env.DB, ['jobs.hourly', 'jobs.hourly_osmosis']);
+  const last = typeof jobs['jobs.hourly'] === 'number' ? (jobs['jobs.hourly'] as number) : null;
+  const oj: OsmosisHourJob = jobs['jobs.hourly_osmosis']?.hour === hour ? { ...jobs['jobs.hourly_osmosis'] } : { hour };
+  const dbDone = last != null && last >= hour;
+  const osmoDone = !!(oj.summary && oj.chart);
+  if (dbDone && osmoDone) return null;
+  const res: HourlyResult = { hour, rolled: [], written: 0, summaryAt: null, chartPoints: null, osmosisDone: osmoDone };
+  const fail = (what: string, e: unknown) => ctx.health.push({ name: 'Series (hourly)', ok: false, at: now, note: `${what}: ${String(e).slice(0, 120)}` });
 
-  const stmts: Stmt[] = [];
-  const rolled = hoursToRoll(last, hour);
-  for (const h of rolled) {
-    const rows = (await env.DB.prepare(ROLLUP_HOUR_SQL).bind(...ROLLUP_KEYS, h, h + H).all<any>()).results || [];
-    stmts.push(...rollupStmts(rows, h));
-    const swaps = (await env.DB.prepare(SWAP_HOUR_SQL).bind(h, h + H).all<SwapRow>()).results || [];
-    stmts.push(...swapHourStmts(swaps, h));
+  // The Osmosis reads start first, so they run while the database part works (and beside daily()'s request).
+  const late = ctx.late?.() ?? false;
+  const wantSummary = !osmoDone && !oj.summary && !late, wantChart = !osmoDone && !oj.chart && !late;
+  const settle = <T,>(p: Promise<T>) => p.then((v) => ({ v }), (e) => ({ e }));
+  const summaryP = wantSummary ? settle((ctx.summary ?? fetchPairSummary)(ctx.signal)) : null;
+  const chartP = wantChart ? settle((ctx.chart ?? ((s?: AbortSignal) => fetchPairChart(OSMOSIS.refPoolId, '7d', s)))(ctx.signal)) : null;
+
+  // 1. The database part.
+  if (!dbDone) {
+    try {
+      const stmts: Stmt[] = [];
+      const rolled = hoursToRoll(last, hour);
+      for (const h of rolled) {
+        const rows = (await env.DB.prepare(ROLLUP_HOUR_SQL).bind(...ROLLUP_KEYS, h, h + H).all<any>()).results || [];
+        stmts.push(...rollupStmts(rows, h));
+        const swaps = (await env.DB.prepare(SWAP_HOUR_SQL).bind(h, h + H).all<SwapRow>()).results || [];
+        stmts.push(...swapHourStmts(swaps, h));
+      }
+      const oh = await env.DB.prepare(OSMOSIS_HOLDERS_SQL).first<{ n: number; at: number | null }>();
+      if (oh?.at != null && now - oh.at < H) stmts.push(stmt.metric(oh.at, 'holders.osmosis', oh.n));
+      // The marker goes in the last batch: a failure before it leaves the hour to the next tick (every write is idempotent).
+      stmts.push(kvStmt('jobs.hourly', hour, now));
+      res.written += await runBatch(env.DB, stmts);
+      res.rolled = rolled;
+    } catch (e) {
+      fail('The rollups were not written this tick', e);
+    }
   }
 
-  const [summary, chart] = await Promise.all([
-    (ctx.summary ?? fetchPairSummary)(ctx.signal).then((v) => ({ v }), (e) => ({ e })),
-    (ctx.chart ?? ((s?: AbortSignal) => fetchPairChart(OSMOSIS.refPoolId, '7d', s)))(ctx.signal).then((v) => ({ v }), (e) => ({ e })),
-  ]);
-  let sum: PairSummary | null = null;
-  if ('v' in summary && summary.v.at != null) {
-    sum = summary.v;
-    if (sum.volume24hUsd != null) stmts.push(stmt.metric(sum.at!, 'dex.volume_24h_usd_osmosis', sum.volume24hUsd));
-    if (sum.volume7dUsd != null) stmts.push(stmt.metric(sum.at!, 'dex.volume_7d_usd_osmosis', sum.volume7dUsd));
-    ctx.health.push({ name: `${OSMOSIS_DATA_SOURCE} (summary)`, ok: true, at: now, note: `${sum.pairs.length} NAM pairs, updated ${new Date(sum.at!).toISOString().slice(11, 16)} UTC` });
-  } else {
-    const why = 'e' in summary ? String(summary.e).slice(0, 120) : 'the answer had no update time';
-    ctx.health.push({ name: `${OSMOSIS_DATA_SOURCE} (summary)`, ok: false, at: now, note: `Not read this hour (${why}); the last stored volumes stand, with their own time.` });
+  // 2. The Osmosis part.
+  if (!osmoDone) {
+    if (late && !summaryP && !chartP) ctx.health.push({ name: `${OSMOSIS_DATA_SOURCE} (summary)`, ok: false, at: now, note: 'Not read this tick: the tick ran out of time; asked again on the next tick of the window.' });
+    const [summary, chart] = await Promise.all([summaryP, chartP]);
+    const stmts: Stmt[] = [];
+    let sum: PairSummary | null = null;
+    if (summary) {
+      if ('v' in summary && summary.v.at != null) {
+        sum = summary.v;
+        if (sum.volume24hUsd != null) stmts.push(stmt.metric(sum.at!, 'dex.volume_24h_usd_osmosis', sum.volume24hUsd));
+        if (sum.volume7dUsd != null) stmts.push(stmt.metric(sum.at!, 'dex.volume_7d_usd_osmosis', sum.volume7dUsd));
+        ctx.health.push({ name: `${OSMOSIS_DATA_SOURCE} (summary)`, at: now, ...summaryHealth(sum, now) });
+        oj.summary = true;
+        res.summaryAt = sum.at;
+      } else {
+        const why = 'e' in summary ? String(summary.e).slice(0, 120) : 'the answer had no update time';
+        ctx.health.push({ name: `${OSMOSIS_DATA_SOURCE} (summary)`, ok: false, at: now, note: closing
+          ? `Not read this hour (${why}); the window closed, so this hour has no Osmosis volumes. The last stored volumes stand, with their own time.`
+          : `Not read (${why}); asked again on the next tick of the window. The last stored volumes stand, with their own time.` });
+      }
+    }
+    // pool_hourly once the summary is read, or at the close without it (the router's columns only).
+    if (sum || (!oj.summary && closing)) stmts.push(...poolHourlyStmts(hour, ctx.pools, ctx.pools.length ? ctx.poolsAt : null, sum));
+    if (chart) {
+      if ('v' in chart) {
+        let stored = true;
+        if (chart.v) {
+          try {
+            const lastStored = (await env.DB.prepare(LAST_POOL_PRICE_SQL).first<{ t: number | null }>())?.t ?? null;
+            stmts.push(...poolPriceStmts(chart.v, hour, lastStored));
+          } catch (e) { stored = false; fail('The last stored pool price could not be read (the chart is asked again next tick)', e); }
+          res.chartPoints = chart.v.length;
+        }
+        ctx.health.push({ name: `${OSMOSIS_DATA_SOURCE} (pairs)`, ok: !!chart.v, at: now, note: chart.v ? `pool ${OSMOSIS.refPoolId}: ${chart.v.length} hourly points` : `pool ${OSMOSIS.refPoolId}: no series` });
+        if (stored) oj.chart = true;
+      } else {
+        ctx.health.push({ name: `${OSMOSIS_DATA_SOURCE} (pairs)`, ok: false, at: now, note: closing
+          ? `Not read this hour (${String(chart.e).slice(0, 120)}); the window closed. The last stored pool prices stand; the 7-day answer fills the closed hours next time.`
+          : `Not read (${String(chart.e).slice(0, 120)}); asked again on the next tick of the window. The last stored pool prices stand.` });
+      }
+    }
+    if (closing) { oj.summary = true; oj.chart = true; }
+    try {
+      stmts.push(kvStmt('jobs.hourly_osmosis', oj, now));
+      res.written += await runBatch(env.DB, stmts);
+      res.osmosisDone = !!(oj.summary && oj.chart);
+    } catch (e) {
+      fail('The Osmosis figures were not written this tick', e);
+    }
   }
-  let chartPoints: number | null = null;
-  if ('v' in chart) {
-    if (chart.v) { stmts.push(...poolPriceStmts(chart.v, hour)); chartPoints = chart.v.length; }
-    ctx.health.push({ name: `${OSMOSIS_DATA_SOURCE} (pairs)`, ok: !!chart.v, at: now, note: chart.v ? `pool ${OSMOSIS.refPoolId}: ${chart.v.length} hourly points` : `pool ${OSMOSIS.refPoolId}: no series` });
-  } else {
-    ctx.health.push({ name: `${OSMOSIS_DATA_SOURCE} (pairs)`, ok: false, at: now, note: `Not read this hour (${String(chart.e).slice(0, 120)}); the last stored pool prices stand.` });
-  }
-  stmts.push(...poolHourlyStmts(hour, ctx.pools, ctx.pools.length ? ctx.poolsAt : null, sum));
-
-  const oh = await env.DB.prepare(OSMOSIS_HOLDERS_SQL).first<{ n: number; at: number | null }>();
-  if (oh?.at != null && now - oh.at < H) stmts.push(stmt.metric(oh.at, 'holders.osmosis', oh.n));
-
-  stmts.push(kvStmt('jobs.hourly', hour, now));
-  const written = await runBatch(env.DB, stmts);
-  return { hour, rolled, written, summaryAt: sum?.at ?? null, chartPoints };
+  return res;
 }
 
 // ---------------------------------------------------------------- daily: the flow index
+
 
 export interface DayFlowRow {
   id: string; chain: string; ts: number; kind: string; from_addr: string | null; to_addr: string | null;
@@ -281,6 +368,12 @@ export interface DayAggregates {
  * One UTC day of flows as edges, activity and the daily keys. `refunds`: Osmosis bridge refunds from the day's
  * start to three days after its end. Left out everywhere: other coins (meta.tokenSymbol), bridge sends that timed
  * out and their refunds. Bot round trips are kept as kind 'bot' in the edges and left out of activity and volume.
+ *
+ * Each chain's rows are that chain's own records, and a bridge move is recorded on both (the sending chain's
+ * `ibc_out`, the receiving chain's `ibc_in`): flow_edges_daily and activity_daily therefore hold the same NAM once per
+ * chain, and nothing (the API, a chart, a total) may add the two chains' rows together. The daily bridge keys are
+ * read from the Osmosis records only. Namada's activity `nam` leaves out kind 'pos_balance' (the staking account's
+ * own transfers, 332 million NAM out and back on 2026-10-20): they stay as their own edge, never as activity volume.
  */
 export function dayAggregates(rows: DayFlowRow[], refunds: DayFlowRow[]): DayAggregates {
   const meta = (r: DayFlowRow) => metaOf(r.meta);
@@ -314,7 +407,7 @@ export function dayAggregates(rows: DayFlowRow[], refunds: DayFlowRow[]): DayAgg
     const maker = (r: DayFlowRow) => { const t = meta(r).trader; return typeof t === 'string' && t ? t : r.kind === 'buy' ? r.to_addr : r.from_addr; };
     activity.push({
       chain, flows: rs.length, senders: senders.size, receivers: receivers.size, active: new Set([...senders, ...receivers]).size,
-      nam: rs.reduce((a, r) => a + r.amount_num, 0), trades: trades.length, traders: new Set(trades.map(maker).filter(Boolean)).size,
+      nam: rs.filter((r) => !(chain === 'namada' && r.kind === 'pos_balance')).reduce((a, r) => a + r.amount_num, 0), trades: trades.length, traders: new Set(trades.map(maker).filter(Boolean)).size,
     });
     metrics[`active.${chain}_daily`] = new Set([...senders, ...receivers]).size;
     if (chain === 'osmosis') {
@@ -393,78 +486,127 @@ export function parseValidatorList(json: unknown, at: number): ValidatorNames {
   return { at, validators };
 }
 
-export interface DailyCtx { health: SourceHealth[]; signal?: AbortSignal; validators?: (signal?: AbortSignal) => Promise<unknown> }
-export interface DailyResult { day: string; ran: string[]; waiting: string[]; written: number }
+export interface DailyCtx {
+  health: SourceHealth[]; signal?: AbortSignal;
+  /** a chain listing is being read this tick: the job waits for a quieter tick in the window (unless it is closing) */
+  listingTick?: boolean;
+  /** true once the tick is past its deadline (cron.ts late): no part is started then */
+  late?: () => boolean;
+  /** for tests */
+  validators?: (signal?: AbortSignal) => Promise<unknown>;
+}
+export interface DailyResult { day: string; ran: string[]; waiting: string[]; failed: string[]; written: number }
+
+/** The validator list request: 10 s, one attempt, started beside the Osmosis reads (cron.ts runs hourly() and daily() together). */
+export const VALIDATOR_LIST_TIMEOUT_MS = 10_000;
 
 /**
- * Once a day (kv jobs.daily), each part when it can run, in the first JOB_WINDOW_MS of an hour:
+ * Once a day (kv jobs.daily), in the first JOB_WINDOW_MS of an hour, on a tick that reads no chain listing (unless
+ * the window is closing). Each part has its own try block, its own batch and its own done flag, written with that
+ * batch: a part that fails (a D1 error, a day that cannot be read) is tried again on the next tick and never costs
+ * the others their rows, and a part that is done is never run again that day (the snapshot is 0.9 s and about half
+ * a million rows read).
  * - the snapshots of the UTC day (holder_cohorts_daily, cohort_daily), when both chain listings completed within
  *   SNAPSHOT_MAX_AGE_MS (Namada) or the Osmosis holder list is that fresh (Osmosis); `as_of` is the older listing;
- *   a day whose listings never become fresh stays a gap;
+ *   a day whose listings never become fresh stays a gap (and the holder-size snapshot of a day can never be rebuilt,
+ *   which is why it is written alone and first);
  * - from DAY_FLOWS_FROM_HOUR, the flow index of the two days before (flow_edges_daily, activity_daily, the daily
  *   keys; the day before yesterday again for rows that arrived late) and supply.masp_shielded.daily of yesterday;
- * - the validator list (names, commission, state) into kv validators.names for validator_daily.
+ * - the validator list (names, commission, state) into kv validators.names for validator_daily: the request starts
+ *   before the database parts and runs beside them, at most once an hour while it fails.
  */
 export async function daily(env: Env, now: number, ctx: DailyCtx): Promise<DailyResult | null> {
   if (now % H >= JOB_WINDOW_MS) return null;
+  if (ctx.listingTick && !closingAt(now)) return null;
+  const late = () => ctx.late?.() ?? false;
   const day = isoDay(now);
   const kv = await kvJson<any>(env.DB, ['jobs.daily', 'balance.listing', 'bond.listing']);
-  const job: DailyJob = kv['jobs.daily']?.day === day ? kv['jobs.daily'] : { day };
+  const job: DailyJob = kv['jobs.daily']?.day === day ? { ...kv['jobs.daily'] } : { day };
   if (job.snapNamada && job.snapOsmosis && job.flows && job.names) return null;
-  const res: DailyResult = { day, ran: [], waiting: [], written: 0 };
-  const stmts: Stmt[] = [];
+  const res: DailyResult = { day, ran: [], waiting: [], failed: [], written: 0 };
+  const hourNow = Math.floor(now / H) * H;
 
-  if (!job.snapNamada) {
+  // The validator list: asked first, so the request runs while the database parts work.
+  const askNames = !job.names && job.namesTried !== hourNow && !late();
+  const t0 = Date.now();
+  const namesP = askNames
+    ? (ctx.validators ?? ((s?: AbortSignal) => fetchJson<unknown>(`${INDEXER}/pos/validator/all`, { timeoutMs: VALIDATOR_LIST_TIMEOUT_MS, retries: 0, signal: s })))(ctx.signal)
+        .then((v) => ({ v: parseValidatorList(v, now) }), (e) => ({ e }))
+    : null;
+
+  /** One part: its rows and its flag in one batch. `build` returns null while the part waits. */
+  const part = async (name: string, flag: 'snapNamada' | 'snapOsmosis' | 'flows', build: () => Promise<Stmt[] | null>) => {
+    if (job[flag]) return;
+    if (late()) { res.waiting.push(`${name}: the tick ran out of time`); return; }
+    try {
+      const stmts = await build();
+      if (!stmts) return;
+      const next: DailyJob = { ...job, [flag]: true };
+      res.written += await runBatch(env.DB, [...stmts, kvStmt('jobs.daily', next, now)]);
+      job[flag] = true; res.ran.push(name);
+    } catch (e) {
+      res.failed.push(`${name}: ${String(e).slice(0, 100)}`);
+    }
+  };
+
+  await part('snapshot namada', 'snapNamada', async () => {
     const b = Number(kv['balance.listing']?.completeAt) || 0, s = Number(kv['bond.listing']?.completeAt) || 0;
     const asOf = Math.min(b, s);
-    if (b > 0 && s > 0 && now - asOf < SNAPSHOT_MAX_AGE_MS) {
-      const [cohorts, labelled] = await Promise.all([env.DB.prepare(HOLDER_COHORTS_NAMADA_SQL).all<CohortRow>(), env.DB.prepare(COHORT_LABELLED_SQL).all<CohortRow>()]);
-      const lab = labelled.results || [];
-      stmts.push(...holderCohortStmts(day, 'namada', cohorts.results || [], asOf), ...cohortStmts(day, [...lab, noneCohort(cohorts.results || [], lab)], asOf));
-      job.snapNamada = true; res.ran.push('snapshot namada');
-    } else res.waiting.push(`snapshot namada: ${!b || !s ? 'no complete listing yet' : `the older listing is ${((now - asOf) / H).toFixed(1)} h old`}`);
-  }
-  if (!job.snapOsmosis) {
-    const oh = await env.DB.prepare(OSMOSIS_HOLDERS_SQL).first<{ n: number; at: number | null }>();
-    if (oh?.at != null && now - oh.at < SNAPSHOT_MAX_AGE_MS) {
-      const rows = (await env.DB.prepare(HOLDER_COHORTS_OSMOSIS_SQL).all<CohortRow>()).results || [];
-      stmts.push(...holderCohortStmts(day, 'osmosis', rows, oh.at));
-      job.snapOsmosis = true; res.ran.push('snapshot osmosis');
-    } else res.waiting.push('snapshot osmosis: the holder list is older than 6 h');
-  }
-  if (!job.flows) {
-    if (new Date(now).getUTCHours() >= DAY_FLOWS_FROM_HOUR) {
-      const today = dayStart(now);
-      for (const d of [today - D, today - 2 * D]) stmts.push(...dayStmts(isoDay(d), await readDay(env.DB, isoDay(d))));
-      const masp = await env.DB.prepare(LAST_IN_RANGE_SQL).bind('supply.masp_shielded', today - D, today).first<{ ts: number; value: number }>();
-      if (masp) stmts.push(stmt.metric(today - D, 'supply.masp_shielded.daily', masp.value));
-      job.flows = true; res.ran.push('flow index');
-    } else res.waiting.push(`flow index: from ${DAY_FLOWS_FROM_HOUR}:00 UTC`);
-  }
-  const hourNow = Math.floor(now / H) * H;
-  if (!job.names && job.namesTried !== hourNow) {
-    job.namesTried = hourNow;
-    const t0 = Date.now();
-    try {
-      const list = parseValidatorList(await (ctx.validators ?? ((s?: AbortSignal) => fetchJson<unknown>(`${INDEXER}/pos/validator/all`, { timeoutMs: 10_000, retries: 0, signal: s })))(ctx.signal), now);
-      stmts.push(kvStmt('validators.names', list, now));
-      job.names = true; res.ran.push('validator names');
-      ctx.health.push({ name: 'Namada indexer (validator list)', ok: true, at: now, latencyMs: Date.now() - t0, note: `${list.validators.length} validators` });
-    } catch (e) {
-      ctx.health.push({ name: 'Namada indexer (validator list)', ok: false, at: now, latencyMs: Date.now() - t0, note: `Not read: ${String(e).slice(0, 120)}; names stay as last read.` });
+    if (!(b > 0 && s > 0 && now - asOf < SNAPSHOT_MAX_AGE_MS)) {
+      res.waiting.push(`snapshot namada: ${!b || !s ? 'no complete listing yet' : `the older listing is ${((now - asOf) / H).toFixed(1)} h old`}`);
+      return null;
     }
-  }
-  // The marker is written when something ran or was tried (a tick that only waited writes nothing).
-  if (stmts.length || JSON.stringify(job) !== JSON.stringify(kv['jobs.daily'])) stmts.push(kvStmt('jobs.daily', job, now));
-  res.written = stmts.length ? await runBatch(env.DB, stmts) : 0;
-  if (res.waiting.length) ctx.health.push({ name: 'Series (daily snapshot)', ok: !!(job.snapNamada && job.snapOsmosis), at: now, note: `Waiting: ${res.waiting.join('; ')}`.slice(0, 160) });
-  else ctx.health.push({ name: 'Series (daily snapshot)', ok: true, at: now, note: `Written for ${day}: ${res.ran.join(', ')}` });
+    const [cohorts, labelled] = await Promise.all([env.DB.prepare(HOLDER_COHORTS_NAMADA_SQL).all<CohortRow>(), env.DB.prepare(COHORT_LABELLED_SQL).all<CohortRow>()]);
+    const lab = labelled.results || [];
+    return [...holderCohortStmts(day, 'namada', cohorts.results || [], asOf), ...cohortStmts(day, [...lab, noneCohort(cohorts.results || [], lab)], asOf)];
+  });
+  await part('snapshot osmosis', 'snapOsmosis', async () => {
+    const oh = await env.DB.prepare(OSMOSIS_HOLDERS_SQL).first<{ n: number; at: number | null }>();
+    if (!(oh?.at != null && now - oh.at < SNAPSHOT_MAX_AGE_MS)) { res.waiting.push('snapshot osmosis: the holder list is older than 6 h'); return null; }
+    const rows = (await env.DB.prepare(HOLDER_COHORTS_OSMOSIS_SQL).all<CohortRow>()).results || [];
+    return holderCohortStmts(day, 'osmosis', rows, oh.at);
+  });
+  await part('flow index', 'flows', async () => {
+    if (new Date(now).getUTCHours() < DAY_FLOWS_FROM_HOUR) { res.waiting.push(`flow index: from ${DAY_FLOWS_FROM_HOUR}:00 UTC`); return null; }
+    const today = dayStart(now);
+    const stmts: Stmt[] = [];
+    for (const d of [today - D, today - 2 * D]) stmts.push(...dayStmts(isoDay(d), await readDay(env.DB, isoDay(d))));
+    const masp = await env.DB.prepare(LAST_IN_RANGE_SQL).bind('supply.masp_shielded', today - D, today).first<{ ts: number; value: number }>();
+    if (masp) stmts.push(stmt.metric(today - D, 'supply.masp_shielded.daily', masp.value));
+    return stmts;
+  });
+
+  if (namesP) {
+    const r = await namesP;
+    const next: DailyJob = { ...job, namesTried: hourNow };
+    const stmts: Stmt[] = [];
+    if ('v' in r) {
+      next.names = true;
+      stmts.push(kvStmt('validators.names', r.v, now));
+      ctx.health.push({ name: 'Namada indexer (validator list)', ok: true, at: now, latencyMs: Date.now() - t0, note: `${r.v.validators.length} validators` });
+    } else {
+      ctx.health.push({ name: 'Namada indexer (validator list)', ok: false, at: now, latencyMs: Date.now() - t0, note: `Not read: ${String(r.e).slice(0, 120)}; names stay as last read, asked again next hour.` });
+    }
+    // Written on failure too: the hour it was tried, so a failing list is asked once an hour, not every tick.
+    try {
+      res.written += await runBatch(env.DB, [...stmts, kvStmt('jobs.daily', next, now)]);
+      Object.assign(job, next);
+      if (next.names) res.ran.push('validator names');
+    } catch (e) {
+      res.failed.push(`validator names: ${String(e).slice(0, 100)}`);
+    }
+  } else if (!job.names && job.namesTried !== hourNow) res.waiting.push('validator names: the tick ran out of time');
+
+  const note = [res.ran.length ? `Written for ${day}: ${res.ran.join(', ')}` : '', res.failed.length ? `Failed (tried again next tick): ${res.failed.join('; ')}` : '', res.waiting.length ? `Waiting: ${res.waiting.join('; ')}` : '']
+    .filter(Boolean).join('. ');
+  ctx.health.push({ name: 'Series (daily snapshot)', ok: !res.failed.length && !!(job.snapNamada && job.snapOsmosis), at: now, note: (note || `Nothing to do for ${day}`).slice(0, 160) });
   return res;
 }
 
+
 // ---------------------------------------------------------------- the balance listing's keys
 
-export interface StoredHolder { address: string; balance_num: number; updated_at?: number | null; first_seen?: number | null }
+export interface StoredHolder { address: string; balance_num: number; updated_at?: number | null; first_seen?: number | null; updated_height?: number | null }
 
 export interface HolderListingStats {
   /** holders as the holder list counts them: spendable at the listing ∪ stakers, protocol accounts left out */
@@ -482,11 +624,14 @@ export interface HolderListingStats {
 /**
  * Counts from a complete balance listing (screener-plan 3.6). `entries`: the listing (address → base units, zeros
  * listed); `stored`: the Namada holder rows as read at the start of this tick; `stakers`: address → staked NAM;
- * `prevCompleteAt`: the previous complete listing. A row first seen after the previous listing counts as added;
- * one that held NAM then or moved since (updated after it) and the listing finds empty counts as emptied, unless it
- * was itself first seen since (it came and went between two listings).
+ * `prevCompleteAt`: the previous complete listing this worker recorded (the listings table: rows created before
+ * migration 0007 have no first_seen, so an older listing time would undercount); `height`: this listing's height. A
+ * row first seen after the previous listing counts as added; one that held NAM then or moved since (updated after
+ * it) and the listing finds empty counts as emptied, unless it was itself first seen since (it came and went between
+ * two listings) or a block above the listing's height has given it NAM again (the block follower's newer
+ * post-balance: it holds NAM now).
  */
-export function holderListingStats(entries: Map<string, string>, stored: StoredHolder[], stakers: Map<string, number>, prevCompleteAt: number | null): HolderListingStats {
+export function holderListingStats(entries: Map<string, string>, stored: StoredHolder[], stakers: Map<string, number>, prevCompleteAt: number | null, height: number | null = null): HolderListingStats {
   const spend = new Map<string, number>();
   let userNam = 0;
   for (const [a, v] of entries) if (v !== '0' && !PROTOCOL.has(a)) { const n = Number(BigInt(v)) / 1e6; spend.set(a, n); userNam += n; }
@@ -501,6 +646,7 @@ export function holderListingStats(entries: Map<string, string>, stored: StoredH
     for (const s of stored) {
       if (PROTOCOL.has(s.address) || spend.has(s.address)) continue;
       if (s.first_seen != null && s.first_seen > prevCompleteAt) continue;
+      if (height != null && (s.updated_height ?? 0) > height && s.balance_num > 0) continue;
       if (s.balance_num > 0 || (s.updated_at ?? 0) > prevCompleteAt) emptied++;
     }
   }
@@ -515,10 +661,16 @@ export function holderListingStmts(at: number, st: HolderListingStats, rec: { he
   return out;
 }
 
-/** cron.ts runBalanceListing, when a pass completes: the stakers read, the counts, one batch. */
-export async function balanceListingSeries(db: D1Database, at: number, entries: Map<string, string>, stored: StoredHolder[], prevCompleteAt: number | null, rec: { height: number; provider: string }): Promise<HolderListingStats> {
-  const rows = (await db.prepare(STAKERS_SQL).all<{ address: string; st: number }>()).results || [];
-  const st = holderListingStats(entries, stored, new Map(rows.map((r) => [r.address, r.st])), prevCompleteAt);
+/**
+ * cron.ts runBalanceListing, when a pass completes: the stakers read, the previous listing this worker recorded
+ * (none before the first: the new / emptied counts start with the second listing), the counts, one batch.
+ */
+export async function balanceListingSeries(db: D1Database, at: number, entries: Map<string, string>, stored: StoredHolder[], rec: { height: number; provider: string }): Promise<HolderListingStats> {
+  const [rows, prev] = await Promise.all([
+    db.prepare(STAKERS_SQL).all<{ address: string; st: number }>(),
+    db.prepare(PREV_BALANCE_LISTING_SQL).bind(at).first<{ at: number | null }>(),
+  ]);
+  const st = holderListingStats(entries, stored, new Map((rows.results || []).map((r) => [r.address, r.st])), prev?.at ?? null, rec.height);
   await runBatch(db, holderListingStmts(at, st, rec));
   return st;
 }
@@ -596,8 +748,28 @@ export function stakeListingStmts(at: number, st: StakeStructure, q: UnbondQueue
   return out;
 }
 
-export function unbondQueueStmts(q: UnbondQueue, at: number, height: number): Stmt[] {
-  return [{ sql: UNBOND_QUEUE_DELETE_SQL, params: [] }, ...q.rows.map((r) => ({ sql: UNBOND_QUEUE_ROW_SQL, params: [r.epoch, r.nam, r.n, at, height] }))];
+export interface StoredUnbondEpoch { withdraw_epoch: number; nam: number; n: number }
+
+/**
+ * The writes that turn the stored unbond queue into `q`: epochs whose NAM or entry count differ (or are new) are
+ * upserted UNBOND_QUEUE_ROWS a statement with this listing's time and height (an unchanged epoch keeps the listing
+ * that wrote it), and stored epochs the listing no longer has (withdrawn) are deleted. Nothing when they agree.
+ */
+export function unbondQueueDiffStmts(q: UnbondQueue, stored: StoredUnbondEpoch[], at: number, height: number): { stmts: Stmt[]; upserted: number; deleted: number } {
+  const have = new Map(stored.map((r) => [Number(r.withdraw_epoch), r]));
+  const want = new Set(q.rows.map((r) => r.epoch));
+  const changed = q.rows.filter((r) => { const s = have.get(r.epoch); return !s || s.nam !== r.nam || Number(s.n) !== r.n; });
+  const gone = [...have.keys()].filter((e) => !want.has(e)).sort((a, b) => a - b);
+  const stmts: Stmt[] = [];
+  for (let i = 0; i < changed.length; i += UNBOND_QUEUE_ROWS) {
+    const part = changed.slice(i, i + UNBOND_QUEUE_ROWS);
+    stmts.push({ sql: unbondQueueUpsertSql(part.length), params: part.flatMap((r) => [r.epoch, r.nam, r.n, at, height]) });
+  }
+  for (let i = 0; i < gone.length; i += 90) {
+    const part = gone.slice(i, i + 90);
+    stmts.push({ sql: unbondQueueDeleteSql(part.length), params: part });
+  }
+  return { stmts, upserted: changed.length, deleted: gone.length };
 }
 
 export function validatorDailyStmts(day: string, st: StakeStructure, names: ValidatorNames | null, at: number, height: number): Stmt[] {
@@ -610,16 +782,31 @@ export function validatorDailyStmts(day: string, st: StakeStructure, names: Vali
 
 /**
  * cron.ts runBondListing, when a pass completes: the stake keys every listing, the unbond queue when it changed
- * (kv unbond.queue.hash), validator_daily on the first complete listing of the UTC day (kv jobs.validator_daily),
- * the listings row. One kv read, one batch.
+ * (kv unbond.queue.hash; only the epochs that differ from the stored rows, in their own batch with the new hash, so
+ * the queue is never seen half-written and a failed write leaves the old hash: the next listing writes the
+ * difference again), validator_daily on the first complete listing of the UTC day (kv jobs.validator_daily), the
+ * listings row.
  */
-export async function bondListingSeries(db: D1Database, at: number, listing: Pick<BondListing, 'sources'> & { height: number; provider: string }, epoch: number, stakeNam: number | null): Promise<{ queueChanged: boolean; validatorsWritten: number; structure: StakeStructure; queue: UnbondQueue }> {
+export async function bondListingSeries(db: D1Database, at: number, listing: Pick<BondListing, 'sources'> & { height: number; provider: string }, epoch: number, stakeNam: number | null): Promise<{ queueChanged: boolean; queueWritten: boolean; queueUpserted: number; queueDeleted: number; validatorsWritten: number; structure: StakeStructure; queue: UnbondQueue }> {
   const kv = await kvJson<any>(db, ['unbond.queue.hash', 'jobs.validator_daily', 'validators.names']);
   const q = unbondQueue(listing, epoch);
   const st = stakeStructure(listing, stakeNam);
   const stmts: Stmt[] = [...stakeListingStmts(at, st, q), { sql: LISTING_ROW_SQL, params: [at, 'bond', listing.height, listing.provider] }];
   const queueChanged = kv['unbond.queue.hash']?.hash !== q.hash;
-  if (queueChanged) stmts.push(...unbondQueueStmts(q, at, listing.height), kvStmt('unbond.queue.hash', { hash: q.hash, at, height: listing.height, epoch }, at));
+  let queueUpserted = 0, queueDeleted = 0, queueWritten = false;
+  if (queueChanged) {
+    try {
+      const stored = (await db.prepare(UNBOND_QUEUE_STORED_SQL).all<StoredUnbondEpoch>()).results || [];
+      const d = unbondQueueDiffStmts(q, stored, at, listing.height);
+      // One batch when it fits (any real change: a few epochs; the first write of 642 epochs is 33 statements); the
+      // hash is the last statement either way.
+      await runBatch(db, [...d.stmts, kvStmt('unbond.queue.hash', { hash: q.hash, at, height: listing.height, epoch }, at)]);
+      queueUpserted = d.upserted; queueDeleted = d.deleted; queueWritten = true;
+    } catch (e) {
+      // The stored queue stays as it was (the batch is atomic) and so does its hash: the next listing writes the difference.
+      console.error('unbond queue', e);
+    }
+  }
   const day = isoDay(at);
   let validatorsWritten = 0;
   if (kv['jobs.validator_daily'] !== day) {
@@ -628,6 +815,8 @@ export async function bondListingSeries(db: D1Database, at: number, listing: Pic
     stmts.push(...v, kvStmt('jobs.validator_daily', day, at));
   }
   await runBatch(db, stmts);
-  return { queueChanged, validatorsWritten, structure: st, queue: q };
+  return { queueChanged, queueWritten, queueUpserted, queueDeleted, validatorsWritten, structure: st, queue: q };
+
 }
+
 

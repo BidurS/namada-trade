@@ -50,7 +50,9 @@ CREATE TABLE IF NOT EXISTS cohort_daily (
 -- 'pool', 'pos', 'masp', 'ibc', 'module', 'user' when unlabelled, 'osmosis' / 'namada' for an address on the other
 -- chain, 'unknown' when the row names none). Older twins and other coins are left out, so are bridge sends that
 -- timed out and their refunds; bot round trips are kept under kind 'bot' so what was left out can be said. `usd`:
--- the sum of each flow's value at execution, NULL when any flow of the edge has none.
+-- the sum of each flow's value at execution, NULL when any flow of the edge has none. Each chain's rows are that
+-- chain's own records, and a bridge move is recorded on both chains (the sender's ibc_out, the receiver's ibc_in):
+-- the same NAM is in both chains' rows, so the two chains are never added together (here and in activity_daily).
 CREATE TABLE IF NOT EXISTS flow_edges_daily (
   day TEXT NOT NULL, chain TEXT NOT NULL, kind TEXT NOT NULL, from_cat TEXT NOT NULL, to_cat TEXT NOT NULL,
   n INTEGER NOT NULL, nam REAL NOT NULL, usd REAL,
@@ -58,7 +60,8 @@ CREATE TABLE IF NOT EXISTS flow_edges_daily (
 CREATE INDEX IF NOT EXISTS flow_edges_day ON flow_edges_daily (day);
 
 -- Activity per chain per day from the flow index (series.daily, as flow_edges_daily): `flows` NAM flows (bots,
--- timed-out sends and refunds left out), `senders` / `receivers` / `active` distinct addresses of that chain in them
+-- timed-out sends and refunds left out), `nam` their NAM (on Namada without kind 'pos_balance', the staking
+-- account's own transfers), `senders` / `receivers` / `active` distinct addresses of that chain in them
 -- (protocol and pool accounts left out), `trades` / `traders` Osmosis buys and sells and their distinct makers (bots
 -- left out). `chain_txs`: every transaction on the chain that day, NULL until a writer reads the block metas.
 CREATE TABLE IF NOT EXISTS activity_daily (
@@ -77,10 +80,12 @@ CREATE TABLE IF NOT EXISTS validator_daily (
   as_of INTEGER NOT NULL, height INTEGER NOT NULL, names_at INTEGER,
   PRIMARY KEY (validator, day));
 
--- Every unbond on the chain by withdraw epoch, from the bond listing (series.unbondQueueStmts): NAM net of slashing
--- and the number of unbond entries. Rewritten whole when the queue changes (kv unbond.queue.hash); `listed_at` and
--- `height` are the listing that wrote it (kv bond.listing completeAt says the latest listing that confirmed it).
+-- Every unbond on the chain by withdraw epoch, from the bond listing (series.unbondQueueDiffStmts): NAM net of
+-- slashing and the number of unbond entries. When the queue changes (kv unbond.queue.hash) only the epochs that
+-- differ are written and the epochs no longer listed deleted, in one batch with the hash; `listed_at` and `height`
+-- are the listing that last wrote that epoch (kv bond.listing completeAt says the latest listing that confirmed it).
 -- Epochs at or before the listing's epoch are withdrawable and not yet withdrawn.
+
 CREATE TABLE IF NOT EXISTS unbond_queue (
   withdraw_epoch INTEGER PRIMARY KEY, nam REAL NOT NULL, n INTEGER NOT NULL, listed_at INTEGER NOT NULL, height INTEGER NOT NULL);
 

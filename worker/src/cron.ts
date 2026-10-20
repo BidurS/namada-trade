@@ -17,7 +17,7 @@ import { INDEXER_IBC_STATUS, innerTxOfRow, reconcileStuckPackets, stuckTotalNam,
 import type { LiveUnbondStatus, LiveScanStatus } from './live-hub';
 import type { AlertsSkipped } from './sources/discord';
 import {
-  INTERNAL_ADDRS, BALANCE_LISTING_SRC, BOND_LISTING_SRC, SPAN_EXTEND_MS,
+  INTERNAL_ADDRS, BALANCE_LISTING_SRC, BOND_LISTING_SRC, SPAN_EXTEND_MS, listingTimes, readHolderFigures, refreshHolderFigures, figuresDue,
   osmosisDroppedStmt, spanStmts, listingBalanceStmts, listingZeroStmts, listingSpanStmts, pruneSpansStmt, type ListedBalance,
 } from './holders';
 import * as series from './series';
@@ -145,6 +145,20 @@ export const SINGLE_POOL_USDC_SWAP = `chain='osmosis' AND counter_denom='USDC' A
        AND amount_num >= 50 AND counter_amount > 0 AND pool_id IS NOT NULL AND pool_id NOT LIKE '%,%'`;
 /** How old the last hour with such a trade may be for the price check to compare against it. */
 export const PRICE_CHECK_WINDOW_MS = 6 * 3600000;
+
+/**
+ * The hourly stake estimate of every address from its bond and unbond flows (the figure shown only before any bond
+ * listing has gone through, holders.ts stakeNum). A row is written only when its estimate changed: rewriting all
+ * ~1,167 estimate rows every hour was about 56,000 rows written a day for nothing (`IS NOT` also counts a NULL
+ * estimate becoming a number as a change).
+ */
+export const STAKE_ESTIMATES_SQL = `INSERT INTO stakes (address, estimated_num, updated_at)
+  SELECT addr, SUM(amt), ? FROM (
+    SELECT from_addr addr, amount_num amt FROM flows WHERE chain='namada' AND kind='bond' AND from_addr IS NOT NULL
+    UNION ALL SELECT to_addr, -amount_num FROM flows WHERE chain='namada' AND kind='unbond' AND to_addr IS NOT NULL
+  ) GROUP BY addr
+  ON CONFLICT(address) DO UPDATE SET estimated_num=excluded.estimated_num, updated_at=excluded.updated_at
+  WHERE stakes.estimated_num IS NOT excluded.estimated_num`;
 
 /**
  * The price check: the quoted price against the median price of the last hour with a trusted trade.
@@ -518,10 +532,9 @@ export async function runBalanceListing(env: Env, health: SourceHealth[], now: n
     if (part.length) rec.written = await runBatch(env.DB, listingBalanceStmts(part, listing.height, now));
     if (zeroPart.length) rec.zeroed = await runBatch(env.DB, listingZeroStmts(zeroPart, listing.height, now));
     if (rec.remaining === 0) {
-      const prevCompleteAt = rec.completeAt;
       rec.completeAt = now;
       // The holder keys of a complete listing (series.ts: holders.namada, .new_1h, .gone_1h, .under1, .user_nam) and its listings row.
-      await series.balanceListingSeries(env.DB, now, listing.entries, stored, prevCompleteAt, listing).catch((e) => console.error('holder listing series', e));
+      await series.balanceListingSeries(env.DB, now, listing.entries, stored, listing).catch((e) => console.error('holder listing series', e));
       // Spans: a separate batch, so a missing table (migration not applied) never undoes the balances.
       const extend = rec.extendedAt == null || now - rec.extendedAt >= SPAN_EXTEND_MS;
       try {
@@ -704,6 +717,40 @@ export async function sampleStakes(env: Env, health: SourceHealth[], now: number
   return rec;
 }
 
+/** Figures of the stakes table the coverage check carries (kept in kv stakes.figures); `at`: when they were read from the table. */
+export interface StakesFigures {
+  at: number;
+  cov: { v: number | null; n: number; stakers: number | null } | null;
+  mis: { n: number; total: number | null; top_addr: string | null; top_nam: number | null } | null;
+}
+/** The coverage check's stakes figures are reused from kv for at most this long while nothing writes stakes. */
+export const STAKES_FIGURES_MAX_AGE_MS = 60 * 60_000;
+
+/**
+ * The two whole-table reads of stakes behind the coverage check (65,203 and 131,573 rows read on 2026-10-20, every
+ * tick). Only the bond listing and the hourly estimate write stakes, so `changed` false (neither wrote this tick)
+ * reuses the figures stored in kv stakes.figures while they are under STAKES_FIGURES_MAX_AGE_MS old (one row read);
+ * recomputed figures are stored for the next tick.
+ */
+export async function stakesFigures(db: D1Database, now: number, changed: boolean): Promise<StakesFigures> {
+  if (!changed) {
+    const f = await kvGetJson<StakesFigures>(db, 'stakes.figures').catch(() => null);
+    if (f && Number.isFinite(f.at) && now - f.at < STAKES_FIGURES_MAX_AGE_MS && 'cov' in f && 'mis' in f) return f;
+  }
+  const [cov, mis] = await Promise.all([
+    db.prepare(`SELECT SUM(bonded_num) v, COUNT(bonded_num) n, SUM(CASE WHEN bonded_num > 0 THEN 1 ELSE 0 END) stakers FROM stakes WHERE verified_src = ?`)
+      .bind(BOND_LISTING_SRC).first<{ v: number | null; n: number; stakers: number | null }>().catch(() => null),
+    db.prepare(`SELECT COUNT(*) n, SUM(ABS(estimated_num - bonded_num)) total,
+          (SELECT address FROM stakes WHERE bonded_num IS NOT NULL AND estimated_num IS NOT NULL ORDER BY ABS(estimated_num - bonded_num) DESC LIMIT 1) top_addr,
+          MAX(ABS(estimated_num - bonded_num)) top_nam
+        FROM stakes WHERE bonded_num IS NOT NULL AND estimated_num IS NOT NULL AND ABS(estimated_num - bonded_num) > 1`)
+      .first<{ n: number; total: number | null; top_addr: string | null; top_nam: number | null }>().catch(() => null),
+  ]);
+  const out: StakesFigures = { at: now, cov, mis };
+  if (cov && mis) await kvSet(db, 'stakes.figures', out).catch(() => {});
+  return out;
+}
+
 /**
  * The bonded-coverage check: the bond listing's sum, net of slashing, against the chain's total stake. The listing
  * runs slightly above the total stake (bonds in the pipeline are listed before they count), so it passes within
@@ -711,15 +758,10 @@ export async function sampleStakes(env: Env, health: SourceHealth[], now: number
  * pendingAddresses, knownAddresses, pipelineNam, slashedNam), the listing's and the chain's totals, the sample's
  * disagreements, and (owner decision 7) where the chain figure and the flow-history estimate differ.
  */
-export async function bondedCoverageCheck(db: D1Database, now: number, stakeNam: number, posNam: number | null, bond: BondListingRecord | null, sample: StakeSampleRecord | null): Promise<Stmt> {
+export async function bondedCoverageCheck(db: D1Database, now: number, stakeNam: number, posNam: number | null, bond: BondListingRecord | null, sample: StakeSampleRecord | null, stakesChanged = true): Promise<Stmt> {
   const title = "Bonded stake: the chain's bond listing (every bond net of slashing, pipeline included) vs its total stake";
-  const cov = await db.prepare(`SELECT SUM(bonded_num) v, COUNT(bonded_num) n, SUM(CASE WHEN bonded_num > 0 THEN 1 ELSE 0 END) stakers FROM stakes WHERE verified_src = ?`)
-    .bind(BOND_LISTING_SRC).first<{ v: number | null; n: number; stakers: number | null }>().catch(() => null);
-  const mis = await db.prepare(`SELECT COUNT(*) n, SUM(ABS(estimated_num - bonded_num)) total,
-        (SELECT address FROM stakes WHERE bonded_num IS NOT NULL AND estimated_num IS NOT NULL ORDER BY ABS(estimated_num - bonded_num) DESC LIMIT 1) top_addr,
-        MAX(ABS(estimated_num - bonded_num)) top_nam
-      FROM stakes WHERE bonded_num IS NOT NULL AND estimated_num IS NOT NULL AND ABS(estimated_num - bonded_num) > 1`)
-    .first<{ n: number; total: number | null; top_addr: string | null; top_nam: number | null }>().catch(() => null);
+  const sf = await stakesFigures(db, now, stakesChanged);
+  const { cov, mis } = sf;
   const sampled = sample ? { at: sample.at, checked: sample.checked, agreed: sample.agreed, failed: sample.failed, passes: sample.passes, examples: sample.disagreements.slice(0, 5) } : null;
   const common = {
     verifiedAddresses: cov?.n ?? 0, storedSumNam: cov?.v ?? null, totalStakeNam: stakeNam, posBalanceNam: posNam,
@@ -879,9 +921,15 @@ export async function runCron(env: Env) {
 
     await runBatch(env.DB, [...internalStmts, ...metricStmts]);
 
-    // 3b. The series (worker/src/series.ts): once an hour and once a day, each in the first minutes of the hour.
-    await series.hourly(env, now, { pools: poolRes.pools, poolsAt: poolRes.at, health, listingTick: which !== null, signal }).catch((e) => { console.error('series hourly', e); health.push({ name: 'Series (hourly)', ok: false, at: now, note: String(e).slice(0, 160) }); });
-    await series.daily(env, now, { health, signal }).catch((e) => { console.error('series daily', e); health.push({ name: 'Series (daily snapshot)', ok: false, at: now, note: String(e).slice(0, 160) }); });
+    // 3b. The series (worker/src/series.ts): once an hour and once a day, each in the first minutes of the hour, on a
+    //     tick that reads no chain listing unless the window is closing. The two run side by side, so their outside
+    //     requests (the Osmosis data API's two reads, the validator list) overlap instead of adding up, and neither
+    //     starts one once the tick is late.
+    const seriesCtx = { health, signal, late, listingTick: which !== null };
+    await Promise.all([
+      series.hourly(env, now, { ...seriesCtx, pools: poolRes.pools, poolsAt: poolRes.at }).catch((e) => { console.error('series hourly', e); health.push({ name: 'Series (hourly)', ok: false, at: now, note: String(e).slice(0, 160) }); }),
+      series.daily(env, now, seriesCtx).catch((e) => { console.error('series daily', e); health.push({ name: 'Series (daily snapshot)', ok: false, at: now, note: String(e).slice(0, 160) }); }),
+    ]);
 
     // 4. Integrity checks. Each compares two independent sources.
     const checkStmts = [];
@@ -1043,13 +1091,10 @@ export async function runCron(env: Env) {
     //    is the chain's figure, the estimate only matters before a listing has gone through; screener-plan 5.5 b).
     //    Who stakes comes from the chain's bond listing (5a): an address the listing does not name has no bonds, so
     //    holders no longer need a stakes row of their own.
+    let estimatesRan = false;
     if (now % 3600000 < 60000 || !(await env.DB.prepare('SELECT 1 FROM stakes LIMIT 1').first().catch(() => null))) {
-      await env.DB.prepare(`INSERT INTO stakes (address, estimated_num, updated_at)
-        SELECT addr, SUM(amt), ? FROM (
-          SELECT from_addr addr, amount_num amt FROM flows WHERE chain='namada' AND kind='bond' AND from_addr IS NOT NULL
-          UNION ALL SELECT to_addr, -amount_num FROM flows WHERE chain='namada' AND kind='unbond' AND to_addr IS NOT NULL
-        ) GROUP BY addr
-        ON CONFLICT(address) DO UPDATE SET estimated_num=excluded.estimated_num, updated_at=excluded.updated_at`).bind(now).run().catch((e) => console.error('stake estimates', e));
+      const r = await env.DB.prepare(STAKE_ESTIMATES_SQL).bind(now).run().catch((e) => { console.error('stake estimates', e); return null; });
+      estimatesRan = Number(r?.meta?.changes ?? 0) > 0;
     }
 
     // 5a. The chain listings, never both in one tick (each is a multi-megabyte answer): the bond listing when due
@@ -1071,10 +1116,12 @@ export async function runCron(env: Env) {
       const phase = phaseSignal(signal, deadlineAt - LISTING_RESERVE_MS);
       try { sampleRec = await sampleStakes(env, health, now, epoch, { ...nread, signal: phase.signal }); } finally { phase.done(); }
     } else health.push({ name: 'Namada RPC (stake sample)', ok: false, at: now, note: epoch ? 'Not run this tick: the tick ran out of time on slower reads.' : 'Not run this tick: the epoch could not be read from the chain.' });
-    // 5c. The coverage check, every tick: the listing's sum (at most a few intervals old) against this tick's total stake.
+    // 5c. The coverage check, every tick: the listing's sum (at most a few intervals old) against this tick's total
+    //     stake. Its whole-table reads of stakes run only when this tick wrote stakes (stakesFigures).
     if (stakeNam != null) {
       const sample = sampleRec ?? (await kvGetJson<StakeSampleRecord>(env.DB, 'stake.sample').catch(() => null));
-      await runBatch(env.DB, [await bondedCoverageCheck(env.DB, now, stakeNam, posNam, bondRec, sample)]).catch(() => {});
+      const stakesChanged = estimatesRan || (!!bondRead && bondRec?.at === now && (bondRec.written + bondRec.zeroed) > 0);
+      await runBatch(env.DB, [await bondedCoverageCheck(env.DB, now, stakeNam, posNam, bondRec, sample, stakesChanged)]).catch(() => {});
     }
     // 5d. Spendable balances: the balance listing, when it was the listing due this tick.
     if (balRead) await runBalanceListing(env, health, now, lread, started(balRead), LISTING_WRITE_CAP, { headHeight, supplyBase: totalRes?.supply ?? null });
@@ -1099,7 +1146,23 @@ export async function runCron(env: Env) {
       if (now % 3600000 < 60000) await runBatch(env.DB, spanStmts('osmosis', now)).catch((e) => console.error('osmosis balance spans', e));
     }
 
+    // 6b. The holder figures (holders.ts, kv holders.figures): after a complete chain listing, after the Osmosis
+    //     holder list was written, or when they are old; the overview, the holder list and the pages read them.
+    //     State-based: a tick that runs out of time leaves them due for the next one.
+    if (!late()) {
+      try {
+        const prevFig = await readHolderFigures(env.DB);
+        const due = figuresDue(prevFig, await listingTimes(env.DB), now, !!(holderList && holders && holders.length > 0));
+        if (due.namada || due.osmosis) await refreshHolderFigures(env.DB, now, due, prevFig);
+      } catch (e) {
+        // Not refreshed: the readers use the stored figures while they are under HOLDER_FIGURES_SERVE_MS old, then count for themselves.
+        console.error('holder figures', e);
+      }
+
+    }
+
     // Balance readings older than any window still asked for (hourly).
+
     if (now % 3600000 < 60000) await runBatch(env.DB, [pruneSpansStmt(now)]).catch((e) => console.error('prune balance spans', e));
 
     // Chain parameters (unbonding period, staking rate, measured epoch length): cached 6 h, refreshed here so

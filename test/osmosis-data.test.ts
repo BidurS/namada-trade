@@ -4,7 +4,7 @@
 // points from 13 Oct 19:00 to 20 Oct 19:00 UTC). The expected figures were summed independently in Python.
 import { describe, it, expect, vi, afterEach } from 'vitest';
 import { readFileSync } from 'node:fs';
-import { parsePairSummary, parsePairChart, fetchPairSummary, fetchPairChart, pairChartUrl, OSMOSIS_DATA_TIMEOUT_MS } from '../worker/src/sources/osmosis-data';
+import { parsePairSummary, parsePairChart, fetchPairSummary, fetchPairChart, pairChartUrl, OSMOSIS_DATA_TIMEOUT_MS, OSMOSIS_DATA_MAX_BYTES } from '../worker/src/sources/osmosis-data';
 import { NAM, OSMOSIS } from '../worker/src/config';
 
 const fx = (n: string) => JSON.parse(readFileSync(new URL(`./fixtures/${n}`, import.meta.url), 'utf8'));
@@ -72,4 +72,18 @@ describe('the requests', () => {
     vi.stubGlobal('fetch', async () => new Response('busy', { status: 503 }));
     await expect(fetchPairSummary()).rejects.toThrow();
   });
+
+  it('an answer over 8 MB is cut off and counts as a failed read, announced or streamed', async () => {
+    expect(OSMOSIS_DATA_MAX_BYTES).toBe(8 * 1024 * 1024);
+    const big = 'x'.repeat(OSMOSIS_DATA_MAX_BYTES + 1);
+    vi.stubGlobal('fetch', async () => new Response(big, { status: 200, headers: { 'content-length': String(big.length) } }));
+    await expect(fetchPairSummary()).rejects.toThrow(/too large/);
+    // no length announced: the stream is counted and stopped past the cap
+    vi.stubGlobal('fetch', async () => new Response(new ReadableStream({ start(c) { for (let i = 0; i < 9; i++) c.enqueue(new Uint8Array(1024 * 1024)); c.close(); } }), { status: 200 }));
+    await expect(fetchPairSummary()).rejects.toThrow(/too large/);
+    // under the cap: read as before (today's summary is 2.3 MB)
+    vi.stubGlobal('fetch', async () => new Response(JSON.stringify(fx('osmosis-pair-summary.json')), { status: 200 }));
+    expect((await fetchPairSummary()).pairs).toHaveLength(27);
+  });
 });
+

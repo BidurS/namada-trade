@@ -113,7 +113,180 @@ export const NAMADA_TOP10_SQL = `SELECT SUM(t) s, MIN(rd) at FROM (SELECT t,
   LEFT JOIN holders h ON h.chain='namada' AND h.address = x.address LEFT JOIN stakes s ON s.address = x.address
   WHERE ${notInternal('x.address')} ORDER BY t DESC LIMIT 10))`;
 
+/**
+ * The holder list's rows (GET /api/holders and its export): the union joined back to the spendable row, the stake
+ * row and the label, one row per holder (every join is on a primary key). A stake is the chain's figure, or the flow
+ * estimate only while no bond listing has gone through (stakeNum). Module accounts are not holders.
+ */
+export const HOLDERS_BASE = `
+    SELECT x.chain, x.address, COALESCE(h.balance_num, 0) balance_num, h.address IS NOT NULL has_row, h.updated_at, h.verified_at, h.verified_src liquid_src,
+           s.bonded_num, s.estimated_num, s.verified_at bonded_verified_at, s.verified_src bonded_src,
+           COALESCE(h.balance_num, 0) + ${stakeNum('s.')} total_num, l.label, l.category,
+           l.source label_source, l.author label_author
+    FROM (${HOLDERS_UNION}) x
+    LEFT JOIN holders h ON h.chain = x.chain AND h.address = x.address
+    LEFT JOIN stakes s ON x.chain = 'namada' AND s.address = x.address
+    LEFT JOIN labels l ON l.address = x.address`;
+
+// ---------------------------------------------------------------- the holder figures, kept in kv (D1 read cost)
+//
+// The holder counts, the dust count, the two top-10 sums and the first rows of each chain's list by total change
+// only when holder or stake rows are written: by a chain listing (hourly and every 40 minutes), the block follower
+// between them, the Osmosis holder list every 10 minutes. Computed per request they were most of the database's
+// reads (2026-10-20, `wrangler d1 insights`, 3 hours: the Namada top 10 521,198 rows a call, the dust count 432,019,
+// HOLDER_COUNTS_SQL 308,460, the list's COUNT(*) 437,426 and its first page 502,251, together about 13 billion rows
+// a day). The cron computes them once after each complete listing (and at least hourly) into kv holders.figures
+// (refreshHolderFigures); the overview, the server-rendered page and the holder list read that one row and fall back
+// to the queries themselves when it is missing or older than HOLDER_FIGURES_SERVE_MS. The figures say their own age:
+// `at` per chain is when they were computed, and the provenance stamps stay those of the readings behind them.
+
+/** kv key of the stored holder figures. */
+export const HOLDER_FIGURES_KV = 'holders.figures';
+/** Rows of each chain's list (by total) kept with the figures: pages within them are served without the union sort. */
+export const HOLDER_TOP_ROWS = 100;
+/** The Namada part is recomputed when a chain listing completed after it, or when it is this old (the block follower's writes). */
+export const NAMADA_FIGURES_REFRESH_MS = 60 * 60_000;
+/** The Osmosis part (about 12,000 rows read) is recomputed when the holder list was written, or when it is this old. */
+export const OSMOSIS_FIGURES_REFRESH_MS = 15 * 60_000;
+/** A reader uses a part no older than this; past it (a stalled cron) it runs the queries itself. */
+export const HOLDER_FIGURES_SERVE_MS = 2 * H;
+
+/** One row of HOLDERS_BASE as D1 returns it. */
+export interface HolderBaseRow {
+  chain: string; address: string; balance_num: number; has_row: number; updated_at: number | null; verified_at: number | null; liquid_src: string | null;
+  bonded_num: number | null; estimated_num: number | null; bonded_verified_at: number | null; bonded_src: string | null; total_num: number;
+  label: string | null; category: string | null; label_source: string | null; label_author: string | null;
+}
+
+export interface ChainFigures {
+  /** when this part was computed */
+  at: number;
+  /** holders as the list counts them (HOLDER_COUNTS_SQL's figure) */
+  holders: number;
+  /** the newest write of the chain's holder rows (HOLDER_COUNTS_SQL's namada_at / osmosis_at) */
+  rowsAt: number | null;
+  /** NAMADA_TOP10_SQL / OSMOSIS_TOP10_SQL */
+  top10: { s: number | null; at: number | null } | null;
+  /** the first HOLDER_TOP_ROWS rows of the list for this chain, by total (ORDER BY total_num DESC, address) */
+  top: HolderBaseRow[];
+}
+export interface HolderFigures {
+  namada: (ChainFigures & { under1: number; listed: ListingTimes }) | null;
+  osmosis: ChainFigures | null;
+}
+
+/**
+ * The Namada list in one pass: its first rows by total and, over every row, the count (= HOLDER_COUNTS_SQL's namada)
+ * and the rows under 1 NAM (= HOLDER_DUST_SQL, the same union, joins and stake rule). 631,904 rows read on production
+ * (2026-10-20) against 1,242,730 for the three queries it stands for. ?1 the number of rows.
+ */
+export const NAMADA_FIGURES_SQL = `SELECT * FROM (SELECT b.*, COUNT(*) OVER () n_all, SUM(CASE WHEN b.total_num < 1 THEN 1 ELSE 0 END) OVER () n_dust
+    FROM (${HOLDERS_BASE} WHERE x.chain = 'namada') b) ORDER BY total_num DESC, address LIMIT ?`;
+export const NAMADA_ROWS_AT_SQL = `SELECT MAX(updated_at) at FROM holders WHERE chain = 'namada'`;
+/** Osmosis: the count and newest write (HOLDER_COUNTS_SQL restricted to the chain, 5,333 rows read) and the first rows (6,611). */
+export const OSMOSIS_COUNT_SQL = `SELECT COUNT(*) n, (SELECT MAX(updated_at) FROM holders WHERE chain = 'osmosis') at FROM (${HOLDERS_UNION}) WHERE chain = 'osmosis'`;
+export const OSMOSIS_TOP_ROWS_SQL = `${HOLDERS_BASE} WHERE x.chain = 'osmosis' ORDER BY total_num DESC, x.address LIMIT ?`;
+
+const stripWindow = (r: any): HolderBaseRow => { const { n_all, n_dust, ...row } = r; return row as HolderBaseRow; };
+
+/** Compute the parts asked for and store them with the part that was not (one kv row). */
+export async function refreshHolderFigures(db: D1Database, now: number, parts: { namada: boolean; osmosis: boolean }, prev: HolderFigures | null = null): Promise<HolderFigures> {
+  const out: HolderFigures = { namada: prev?.namada ?? null, osmosis: prev?.osmosis ?? null };
+  if (parts.namada) {
+    const listed = await listingTimes(db);
+    const [rows, top10, rowsAt] = await Promise.all([
+      db.prepare(NAMADA_FIGURES_SQL).bind(HOLDER_TOP_ROWS).all<any>(),
+      db.prepare(NAMADA_TOP10_SQL).bind(listed.balance ?? 0, listed.bond ?? 0).first<{ s: number | null; at: number | null }>(),
+      db.prepare(NAMADA_ROWS_AT_SQL).first<{ at: number | null }>(),
+    ]);
+    const list = rows.results || [];
+    out.namada = {
+      at: now, listed, holders: Number(list[0]?.n_all ?? 0), under1: Number(list[0]?.n_dust ?? 0), rowsAt: rowsAt?.at ?? null,
+      top10: top10 ? { s: top10.s ?? null, at: top10.at ?? null } : null, top: list.map(stripWindow),
+    };
+  }
+  if (parts.osmosis) {
+    const [count, top10, rows] = await Promise.all([
+      db.prepare(OSMOSIS_COUNT_SQL).first<{ n: number; at: number | null }>(),
+      db.prepare(OSMOSIS_TOP10_SQL).first<{ s: number | null; at: number | null }>(),
+      db.prepare(OSMOSIS_TOP_ROWS_SQL).bind(HOLDER_TOP_ROWS).all<HolderBaseRow>(),
+    ]);
+    out.osmosis = { at: now, holders: Number(count?.n ?? 0), rowsAt: count?.at ?? null, top10: top10 ? { s: top10.s ?? null, at: top10.at ?? null } : null, top: rows.results || [] };
+  }
+  await db.prepare('INSERT OR REPLACE INTO kv (key, value, updated_at) VALUES (?, ?, ?)').bind(HOLDER_FIGURES_KV, JSON.stringify(out), now).run();
+  return out;
+}
+
+/** The stored figures (one kv row), or null. */
+export async function readHolderFigures(db: D1Database): Promise<HolderFigures | null> {
+  const r = await db.prepare('SELECT value FROM kv WHERE key = ?').bind(HOLDER_FIGURES_KV).first<{ value: string }>().catch(() => null);
+  if (!r?.value) return null;
+  try { return JSON.parse(r.value) as HolderFigures; } catch { return null; }
+}
+
+/** The parts a reader may use now: each no older than HOLDER_FIGURES_SERVE_MS, else null. */
+export function usableFigures(f: HolderFigures | null, now: number): HolderFigures {
+  const ok = <T extends { at: number } | null>(p: T | undefined): T | null => (p && Number.isFinite(p.at) && now - p.at < HOLDER_FIGURES_SERVE_MS ? p : null);
+  return { namada: ok(f?.namada), osmosis: ok(f?.osmosis) };
+}
+
+/**
+ * Which parts the cron should recompute this tick: Namada when there is none, when a chain listing completed after
+ * it, or when it is NAMADA_FIGURES_REFRESH_MS old; Osmosis when there is none, when the holder list was written
+ * this tick, when it is OSMOSIS_FIGURES_REFRESH_MS old, or with the Namada part (one moment for both).
+ */
+export function figuresDue(f: HolderFigures | null, listed: ListingTimes, now: number, osmosisWritten: boolean): { namada: boolean; osmosis: boolean } {
+  const n = f?.namada, o = f?.osmosis;
+  const listedAfter = Math.max(listed.balance ?? 0, listed.bond ?? 0) > (n?.at ?? 0);
+  const namada = !n || listedAfter || now - n.at >= NAMADA_FIGURES_REFRESH_MS;
+  return { namada, osmosis: namada || !o || osmosisWritten || now - o.at >= OSMOSIS_FIGURES_REFRESH_MS };
+}
+
+/** The list's count for a chain filter from usable figures, or null (a part missing: the caller counts itself). */
+export function figuresCount(f: HolderFigures, chain: 'all' | 'namada' | 'osmosis'): number | null {
+  if (chain === 'namada') return f.namada ? f.namada.holders : null;
+  if (chain === 'osmosis') return f.osmosis ? f.osmosis.holders : null;
+  return f.namada && f.osmosis ? f.namada.holders + f.osmosis.holders : null;
+}
+
+/**
+ * Rows `offset` to `offset + limit` of the list by total from usable figures, or null when they are not all inside
+ * the kept rows. `all` merges the two chains' first rows in the list's own order (total descending, then address,
+ * compared as SQLite's binary collation does): the first N of all are within the first N of each chain.
+ */
+export function figuresTopRows(f: HolderFigures, chain: 'all' | 'namada' | 'osmosis', offset: number, limit: number): HolderBaseRow[] | null {
+  if (offset + limit > HOLDER_TOP_ROWS) return null;
+  const parts = chain === 'namada' ? [f.namada] : chain === 'osmosis' ? [f.osmosis] : [f.namada, f.osmosis];
+  if (parts.some((p) => !p)) return null;
+  const all = parts.flatMap((p) => p!.top);
+  // A chain with fewer kept rows than the limit has no more rows at all (the query took every row it had).
+  if (chain === 'all') all.sort((a, b) => b.total_num - a.total_num || (a.address < b.address ? -1 : a.address > b.address ? 1 : 0));
+  return all.slice(offset, offset + limit);
+}
+
+/** The figures the overview and the server-rendered page show, from usable stored figures or, without them, the queries. */
+export async function holderFigureValues(db: D1Database, now: number, listed: ListingTimes): Promise<{
+  counts: { namada: number | null; osmosis: number | null; namada_at: number | null; osmosis_at: number | null } | null;
+  top10Osmosis: { s: number | null; at: number | null } | null; top10Namada: { s: number | null; at: number | null } | null; dust: { n: number } | null; storedAt: number | null;
+}> {
+  const f = usableFigures(await readHolderFigures(db), now);
+  if (f.namada && f.osmosis) {
+    return {
+      counts: { namada: f.namada.holders, osmosis: f.osmosis.holders, namada_at: f.namada.rowsAt, osmosis_at: f.osmosis.rowsAt },
+      top10Osmosis: f.osmosis.top10, top10Namada: f.namada.top10, dust: { n: f.namada.under1 }, storedAt: Math.min(f.namada.at, f.osmosis.at),
+    };
+  }
+  const [counts, top10Osmosis, top10Namada, dust] = await Promise.all([
+    db.prepare(HOLDER_COUNTS_SQL).first<{ namada: number | null; osmosis: number | null; namada_at: number | null; osmosis_at: number | null }>().catch(() => null),
+    db.prepare(OSMOSIS_TOP10_SQL).first<{ s: number | null; at: number | null }>().catch(() => null),
+    db.prepare(NAMADA_TOP10_SQL).bind(listed.balance ?? 0, listed.bond ?? 0).first<{ s: number | null; at: number | null }>().catch(() => null),
+    db.prepare(HOLDER_DUST_SQL).first<{ n: number }>().catch(() => null),
+  ]);
+  return { counts, top10Osmosis, top10Namada, dust, storedAt: null };
+}
+
 // ---------------------------------------------------------------- the listings' confirmation times
+
 
 /** When each chain listing last went through completely (kv balance.listing / bond.listing `completeAt`); null before the first. */
 export interface ListingTimes { balance: number | null; bond: number | null }
@@ -206,14 +379,16 @@ export function spanStmts(chain: string, at: number, addresses?: string[]): Stmt
   if (addresses && addresses.length > D1_MAX_PARAMS - 10) throw new Error('spanStmts: too many addresses for one statement');
   const only = (col: string) => (addresses?.length ? ` AND ${col} IN (${addresses.map(() => '?').join(',')})` : '');
   const list = addresses?.length ? addresses : [];
+  // Over a whole chain the spans to extend are those that ended within the gap rule: a range on balance_spans_to
+  // (SPANS_BY_END), not a pass over every span kept for 31 days. A short address list uses the primary key instead.
   return [
     {
-      sql: `UPDATE balance_spans SET to_ts = ?, reads = reads + 1
-            WHERE chain = ?${only('balance_spans.address')} AND to_ts < ? AND ? - to_ts <= ?
+      sql: `UPDATE balance_spans${addresses?.length ? '' : ` ${SPANS_BY_END}`} SET to_ts = ?, reads = reads + 1
+            WHERE chain = ?${only('balance_spans.address')} AND to_ts >= ? AND to_ts < ?
               AND from_ts = (SELECT MAX(s2.from_ts) FROM balance_spans s2 WHERE s2.chain = balance_spans.chain AND s2.address = balance_spans.address)
               AND EXISTS (SELECT 1 FROM holders h WHERE h.chain = balance_spans.chain AND h.address = balance_spans.address
                           AND h.verified_at = ? AND h.balance = balance_spans.balance)`,
-      params: [at, chain, ...list, at, at, SPAN_MAX_GAP_MS, at],
+      params: [at, chain, ...list, at - SPAN_MAX_GAP_MS, at, at],
     },
     {
       sql: `INSERT OR IGNORE INTO balance_spans (chain, address, from_ts, to_ts, balance, balance_num, reads)
@@ -232,6 +407,14 @@ export function spanStmts(chain: string, at: number, addresses?: string[]): Stmt
  */
 export const SPAN_EXTEND_MS = 5 * H;
 
+/**
+ * The span UPDATEs walk balance_spans_to (migration 0003) over the spans that ended within SPAN_MAX_GAP_MS
+ * (`to_ts >= ? AND to_ts < ?`). Written as `? - to_ts <= ?` the bound could not use the index, and each statement read
+ * every span kept (219,277 rows and 0.75 s on 2026-10-20, growing with SPAN_KEEP_MS); without statistics SQLite's
+ * planner would still pick the primary key on `chain`, hence the hint.
+ */
+export const SPANS_BY_END = 'INDEXED BY balance_spans_to';
+
 /** The rows the balance listing at `height` confirmed: written by a listing and not by a later block. */
 const CONFIRMED = (h: string) => `${h}.chain = 'namada' AND ${h}.verified_src = '${BALANCE_LISTING_SRC}' AND COALESCE(${h}.updated_height, 0) <= ?`;
 const LATEST = `from_ts = (SELECT MAX(s2.from_ts) FROM balance_spans s2 WHERE s2.chain = balance_spans.chain AND s2.address = balance_spans.address)`;
@@ -248,20 +431,21 @@ export function listingSpanStmts(at: number, height: number, prevAt: number | nu
   const out: Stmt[] = [];
   if (prevAt != null && prevAt < at) {
     out.push({
-      sql: `UPDATE balance_spans SET to_ts = ?, reads = reads + 1
-            WHERE chain = 'namada' AND to_ts < ? AND ? - to_ts <= ? AND ${LATEST}
+      sql: `UPDATE balance_spans ${SPANS_BY_END} SET to_ts = ?, reads = reads + 1
+            WHERE chain = 'namada' AND to_ts >= ? AND to_ts < ? AND ${LATEST}
               AND EXISTS (SELECT 1 FROM holders h WHERE ${CONFIRMED('h')} AND h.address = balance_spans.address AND h.balance != balance_spans.balance)`,
-      params: [prevAt, prevAt, prevAt, SPAN_MAX_GAP_MS, height],
+      params: [prevAt, prevAt - SPAN_MAX_GAP_MS, prevAt, height],
     });
   }
   if (extend) {
     out.push({
-      sql: `UPDATE balance_spans SET to_ts = ?, reads = reads + 1
-            WHERE chain = 'namada' AND to_ts < ? AND ? - to_ts <= ? AND ${LATEST}
+      sql: `UPDATE balance_spans ${SPANS_BY_END} SET to_ts = ?, reads = reads + 1
+            WHERE chain = 'namada' AND to_ts >= ? AND to_ts < ? AND ${LATEST}
               AND EXISTS (SELECT 1 FROM holders h WHERE ${CONFIRMED('h')} AND h.address = balance_spans.address AND h.balance = balance_spans.balance)`,
-      params: [at, at, at, SPAN_MAX_GAP_MS, height],
+      params: [at, at - SPAN_MAX_GAP_MS, at, height],
     });
   }
+
   out.push({
     sql: `INSERT OR IGNORE INTO balance_spans (chain, address, from_ts, to_ts, balance, balance_num, reads)
           SELECT 'namada', h.address, ?, ?, h.balance, h.balance_num, 1 FROM holders h

@@ -29,7 +29,7 @@ import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { d1 as d1once } from './lib.ts';
 import { inlineSql, stmt, type Stmt } from '../worker/src/db.ts';
-import { swapHourStmts, dayAggregates, dayStmts, isoDay, type SwapRow, type DayFlowRow } from '../worker/src/series.ts';
+import { swapHourStmts, dayAggregates, dayStmts, isoDay, poolPriceStmts, type SwapRow, type DayFlowRow } from '../worker/src/series.ts';
 import { DAY_FLOWS_SQL, ROLLUP_KEYS } from '../worker/src/series-sql.ts';
 import { parsePairChart, pairChartUrl, OSMOSIS_DATA } from '../worker/src/sources/osmosis-data.ts';
 import { NAM } from '../worker/src/config.ts';
@@ -141,11 +141,11 @@ async function get(url: string): Promise<unknown> {
 }
 
 {
-  const points = parsePairChart(await get(pairChartUrl('3005', 'all'))) ?? [];
-  const lines = points.flatMap((p) => [
-    stmt.metric(p.t, 'price.pool_1h', p.usd.close), stmt.metric(p.t, 'price.pool_1h.open', p.usd.open), stmt.metric(p.t, 'price.pool_1h.high', p.usd.high),
-    stmt.metric(p.t, 'price.pool_1h.low', p.usd.low), stmt.metric(p.t, 'price.pool_1h.flat', p.flat ? 1 : 0),
-  ]).map((s) => inlineSql(s).replace(/^INSERT OR REPLACE/, 'INSERT OR IGNORE'));
+  // Closed hours only, as the cron (series.poolPriceStmts): the hour the script runs in is partial, and once stored
+  // as the newest point the cron, which writes the hours after the newest stored one, would never correct it.
+  const points = (parsePairChart(await get(pairChartUrl('3005', 'all'))) ?? []).filter((p) => p.t < Math.floor(Date.now() / 3600000) * 3600000);
+  const lines = poolPriceStmts(points, Math.floor(Date.now() / 3600000) * 3600000).map((s) => inlineSql(s).replace(/^INSERT OR REPLACE/, 'INSERT OR IGNORE'));
+
   write('05_pool_price.sql', `The Osmosis data API pair chart of pool 3005 (range=all): ${points.length} hourly points from ${points[0] ? new Date(points[0].t).toISOString().slice(0, 16) : '—'} UTC, ${points.filter((p) => p.flat).length} of them flat. Pool spot price in dollars per NAM, not executions.`, lines);
 }
 

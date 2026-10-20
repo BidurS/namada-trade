@@ -8,12 +8,15 @@ import { NAMADA } from '../worker/src/config';
 import {
   runBalanceListing, runBondListing, sampleStakes, bondedCoverageCheck, listingDue, listingRetryMs, balanceGate, bondGate, listingRpcs, listingOverdue,
   BALANCE_LISTING_MS, BOND_LISTING_MS, LISTING_WRITE_CAP, LISTING_RETRY_MS, LISTING_RETRY_STEPS, LISTING_TIMEOUT_MS, LISTING_SUM_TOLERANCE, LISTING_OVERDUE_INTERVALS,
-  MAX_LISTING_HEIGHT_DRIFT, MAX_REASONABLE_HEIGHT, TICK_DEADLINE_MS, SAMPLE_PER_TICK, RETIRED_HEALTH,
+  MAX_LISTING_HEIGHT_DRIFT, MAX_REASONABLE_HEIGHT, TICK_DEADLINE_MS, SAMPLE_PER_TICK, RETIRED_HEALTH, STAKES_FIGURES_MAX_AGE_MS,
+
   type BalanceListingRecord, type BondListingRecord, type StakeSampleRecord,
 } from '../worker/src/cron';
 import {
   BALANCE_LISTING_SRC, BOND_LISTING_SRC, SPAN_EXTEND_MS, SPAN_MAX_GAP_MS, NAMADA_TOP10_SQL, HOLDER_DUST_SQL, HOLDER_COUNTS_SQL, listingTimes, confirmedAt,
+  refreshHolderFigures, figuresDue, figuresTopRows, figuresCount, usableFigures, HOLDER_TOP_ROWS, HOLDER_FIGURES_SERVE_MS, OSMOSIS_FIGURES_REFRESH_MS, NAMADA_FIGURES_REFRESH_MS,
 } from '../worker/src/holders';
+import { indexState } from '../worker/src/analytics';
 import { app } from '../worker/src/api';
 import { FETCH_TEXT_MAX_BYTES } from '../worker/src/util';
 import { testD1, insert, runStmts, type TestD1 } from './d1-sqlite';
@@ -26,6 +29,8 @@ const H = 3600000, D = 86400000;
 const NOW = Date.UTC(2026, 9, 20, 12, 0);
 const ADDR = /^tnam1[02-9ac-hj-np-z]{40}$/;
 const POS = NAMADA.internal.pos;
+const OSMO_POOL = `osmo1${'9'.repeat(38)}`;
+
 afterEach(() => vi.unstubAllGlobals());
 
 // ---------------------------------------------------------------- the parsers
@@ -620,5 +625,145 @@ describe('the API and the listings', () => {
   });
   it('the probes the listings replaced are dropped from the stored health', () => {
     expect(RETIRED_HEALTH).toEqual(['Namada RPC (balance refresh)', 'Namada RPC (stake verification)', 'Namada RPC (staker discovery)', 'Namada RPC (bond index)']);
+  });
+});
+
+// ---------------------------------------------------------------- D1 read cost (2026-10-21): the stored holder figures and the index hints
+
+describe('the stored holder figures (kv holders.figures)', () => {
+  const OSMO = (i: number) => `osmo1${String(i).padStart(38, '0')}`;
+  const build = async () => {
+    const db = testD1();
+    await runBalanceListing(env(db), [], NOW - 30 * 60000, {}, balLister());
+    await runBondListing(env(db), [], NOW - 20 * 60000, 2690, {}, bondLister());
+    for (let i = 0; i < 40; i++) insert(db, 'holders', [{ chain: 'osmosis', address: OSMO(i), balance: '1', balance_num: (i % 7) * 1000 + i, updated_at: NOW - 5 * 60000, verified_at: NOW - 5 * 60000, verified_src: 'keplr_rest' }]);
+    insert(db, 'holders', [{ chain: 'osmosis', address: OSMO(999), balance: '1', balance_num: 9e6, updated_at: NOW - 5 * 60000, verified_at: NOW - 5 * 60000, verified_src: 'keplr_rest' }]);
+    insert(db, 'labels', [{ address: OSMO(999), chain: 'osmosis', label: 'Osmosis Pool #1', category: 'pool', source: 'auto', updated_at: 1 }]);
+    insert(db, 'metrics', [{ ts: NOW - 60000, key: 'supply.total', value: 1147657323 }]);
+    return db;
+  };
+  /** The stand-in with every prepared statement recorded. */
+  const watched = (db: TestD1) => { const sql: string[] = []; return { sql, db: { ...db, prepare: (s: string) => { sql.push(s); return db.prepare(s); }, batch: db.batch } as any }; };
+  const URLS = ['/api/holders?chain=namada&limit=100', '/api/holders?chain=all&limit=50', '/api/holders?chain=all&limit=25&page=2', '/api/holders?chain=osmosis&limit=10',
+    '/api/holders?chain=namada&page=3&limit=50', '/api/holders?chain=all&by=liquid&limit=25', '/api/holders?chain=namada&category=none&limit=25'];
+
+  it('equal the queries they stand for, and every holder answer and overview figure is the same with them as without', async () => {
+    const db = await build();
+    vi.useFakeTimers({ now: NOW, toFake: ['Date'] });
+    vi.stubGlobal('fetch', vi.fn(async () => new Response('{}', { status: 500 })));
+    try {
+      const get = async (d: any, u: string) => (await app.request(u, {}, { DB: d } as any)).json() as Promise<any>;
+      const before = await Promise.all(URLS.map((u) => get(db, u)));
+      const ovBefore = (await get(db, '/api/overview')) as Overview;
+      const f = await refreshHolderFigures(db as any, NOW, { namada: true, osmosis: true });
+      const counts = db.raw.prepare(HOLDER_COUNTS_SQL).get();
+      expect(f.namada).toMatchObject({ holders: counts.namada, under1: db.raw.prepare(HOLDER_DUST_SQL).get().n, rowsAt: counts.namada_at });
+      expect(f.osmosis).toMatchObject({ holders: counts.osmosis, rowsAt: counts.osmosis_at });
+      expect(f.osmosis!.holders).toBe(39); // the pool and the empty row are not holders
+
+      expect(f.namada!.top.length).toBe(Math.min(HOLDER_TOP_ROWS, counts.namada));
+      const w = watched(db);
+      const after = await Promise.all(URLS.map((u) => get(w.db, u)));
+      expect(after).toEqual(before);
+      const ovAfter = (await get(w.db, '/api/overview')) as Overview;
+      expect([ovAfter.namada.holders, ovAfter.namada.holdersUnder1Nam, ovAfter.dex.holders, ovAfter.concentration]).toEqual([ovBefore.namada.holders, ovBefore.namada.holdersUnder1Nam, ovBefore.dex.holders, ovBefore.concentration]);
+      // the union ran only for the requests the figures cannot serve: a page past the kept rows, another order, a category
+      const unions = w.sql.filter((s) => s.includes('UNION SELECT'));
+      expect(unions.length).toBe(4); // page 3: rows only (the count is stored); by=liquid: rows only; the category: rows and count; the overview: none
+
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('serve a tag written since at once, and are not used once they are older than 2 hours', async () => {
+    const db = await build();
+    vi.useFakeTimers({ now: NOW, toFake: ['Date'] });
+    try {
+      const f = await refreshHolderFigures(db as any, NOW, { namada: true, osmosis: true });
+      const top = f.namada!.top[0].address;
+      insert(db, 'labels', [{ address: top, chain: 'namada', label: 'my whale', category: 'watch', source: 'user', updated_at: NOW, author: 'tnam1qauthor' }]);
+      const r = (await (await app.request('/api/holders?chain=namada&limit=10', {}, { DB: db } as any)).json()) as HoldersResponse;
+      expect(r.holders[0]).toMatchObject({ address: top, label: 'my whale', label_source: 'user' });
+      vi.setSystemTime(NOW + HOLDER_FIGURES_SERVE_MS);
+      const w = watched(db);
+      await app.request('/api/holders?chain=namada&limit=10', {}, { DB: w.db } as any);
+      expect(w.sql.filter((s) => s.includes('UNION SELECT'))).toHaveLength(2);
+      expect(usableFigures(f, NOW + HOLDER_FIGURES_SERVE_MS)).toEqual({ namada: null, osmosis: null });
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('are due after a complete listing, when the Osmosis list was written, and when old; the merge of two chains keeps the list\'s order', () => {
+    const at = NOW;
+    const f = { namada: { at, holders: 1, under1: 0, rowsAt: null, top10: null, top: [], listed: { balance: at - 1, bond: at - 1 } }, osmosis: { at, holders: 1, rowsAt: null, top10: null, top: [] } };
+    expect(figuresDue(null, { balance: null, bond: null }, at, false)).toEqual({ namada: true, osmosis: true });
+    expect(figuresDue(f, { balance: at - 1, bond: at - 1 }, at + 60000, false)).toEqual({ namada: false, osmosis: false });
+    expect(figuresDue(f, { balance: at + 30000, bond: at - 1 }, at + 60000, false)).toEqual({ namada: true, osmosis: true });
+    expect(figuresDue(f, { balance: at - 1, bond: at - 1 }, at + 60000, true)).toEqual({ namada: false, osmosis: true });
+    expect(figuresDue(f, { balance: at - 1, bond: at - 1 }, at + OSMOSIS_FIGURES_REFRESH_MS, false)).toEqual({ namada: false, osmosis: true });
+    expect(figuresDue(f, { balance: at - 1, bond: at - 1 }, at + NAMADA_FIGURES_REFRESH_MS, false)).toEqual({ namada: true, osmosis: true });
+    const row = (chain: string, address: string, total_num: number) => ({ chain, address, total_num }) as any;
+    const g = { namada: { ...f.namada, top: [row('namada', 'tnam1b', 9), row('namada', 'tnam1a', 5)] }, osmosis: { ...f.osmosis, top: [row('osmosis', 'osmo1z', 9), row('osmosis', 'osmo1y', 7)] } };
+    expect(figuresTopRows(g, 'all', 0, 3)!.map((r) => r.address)).toEqual(['osmo1z', 'tnam1b', 'osmo1y']); // 'o' < 't' on a tie, as SQLite compares
+    expect(figuresTopRows(g, 'all', 90, 11)).toBeNull();
+    expect(figuresCount(g, 'all')).toBe(2);
+    expect(figuresCount({ ...g, osmosis: null }, 'all')).toBeNull();
+  });
+});
+
+describe('the flow reads of the busy routes walk a range, never a whole chain', () => {
+  it('overview, pressure and the alerts: no statement walks every row of a chain on flows_chain_height, and indexState finds the newest move per chain', async () => {
+    const db = testD1();
+    const T0 = NOW - 10 * D;
+    const flows: Record<string, unknown>[] = [];
+    for (let i = 0; i < 400; i++) {
+      const chain = i % 3 ? 'osmosis' : 'namada';
+      const kind = chain === 'osmosis' ? (i % 2 ? 'buy' : 'sell') : ['bond', 'withdraw', 'unbond', 'transfer'][i % 4];
+      flows.push({ id: `f${i}`, chain, height: i, ts: T0 + i * 30 * 60000, tx_hash: `T${i}`, kind, from_addr: chain === 'osmosis' ? OSMO_POOL : `tnam1q${i % 9}`, to_addr: chain === 'osmosis' ? 'osmo1b' : POS, amount_num: 1000 * (i % 50), meta: '{"source":"t"}' });
+    }
+    insert(db, 'flows', flows);
+    const sql: string[] = [];
+    const w = { ...db, prepare: (s: string) => { sql.push(s); return db.prepare(s); }, batch: db.batch } as any;
+    vi.useFakeTimers({ now: NOW, toFake: ['Date'] });
+    vi.stubGlobal('fetch', vi.fn(async () => new Response('{}', { status: 500 })));
+    try {
+      for (const u of ['/api/overview', '/api/pressure', '/api/alerts/recent', `/api/overview?at=${NOW - 5 * D}`]) expect((await app.request(u, {}, { DB: w } as any)).status).toBe(200);
+      const st = await indexState(db as any, NOW - 5 * D + 1);
+      const newest = (chain: string) => Math.max(...flows.filter((f) => f.chain === chain && (f.ts as number) <= NOW - 5 * D + 1).map((f) => f.ts as number));
+      expect(st.lastMove).toEqual({ osmosis: newest('osmosis'), namada: newest('namada') });
+    } finally {
+      vi.useRealTimers();
+    }
+    const plans = [...new Set(sql)].filter((s) => /\bflows\b/.test(s)).map((s) => {
+      const n = (s.match(/\?\d*/g) ?? []).length;
+      return { s: s.replace(/\s+/g, ' ').slice(0, 160), plan: db.raw.prepare(`EXPLAIN QUERY PLAN ${s}`).all(...Array.from({ length: n }, () => 1)).map((r: any) => r.detail).join(' | ') };
+    });
+    expect(plans.length).toBeGreaterThan(5);
+    // The heads read (MAX(height) per chain at or before the time) is left as it is: 769 rows a call on production
+    // on 2026-10-20 (it walks the chain's heights from the top), not the chain.
+    const wholeChain = plans.filter((p) => /USING (COVERING )?INDEX flows_chain_height \(chain=\?\)/.test(p.plan) && !p.s.startsWith('SELECT (SELECT MAX(height) FROM flows'));
+
+    expect(wholeChain).toEqual([]);
+  });
+});
+
+describe('the coverage check reads the stakes table only when it may have changed', () => {
+  it('reuses the stored figures on a tick that wrote no stakes, recomputes them when one did or they are an hour old', async () => {
+    const db = testD1();
+    const bond = (await runBondListing(env(db), [], NOW, 2690, {}, bondLister()))!;
+    const sql: string[] = [];
+    const w = { ...db, prepare: (s: string) => { sql.push(s); return db.prepare(s); }, batch: db.batch } as any;
+    const scans = () => sql.filter((s) => /FROM stakes/.test(s)).length;
+    const first = await bondedCoverageCheck(w, NOW, bond.totalNam, null, bond, null, true);
+    expect(scans()).toBe(2);
+    const quiet = await bondedCoverageCheck(w, NOW + 60000, bond.totalNam, null, bond, null, false);
+    expect(scans()).toBe(2);
+    expect(JSON.parse(quiet.params[3] as string)).toEqual(JSON.parse(first.params[3] as string));
+    await bondedCoverageCheck(w, NOW + 2 * 60000, bond.totalNam, null, bond, null, true);
+    expect(scans()).toBe(4);
+    await bondedCoverageCheck(w, NOW + 2 * 60000 + STAKES_FIGURES_MAX_AGE_MS, bond.totalNam, null, bond, null, false);
+    expect(scans()).toBe(6);
   });
 });

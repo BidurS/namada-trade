@@ -45,11 +45,17 @@ export function rowToFlow(r: any): Flow {
   };
 }
 
-export const FLOW_SELECT = `
+/**
+ * The flow rows with both sides' labels. `hint` (an `INDEXED BY` clause) goes on `flows f`: without table statistics
+ * SQLite's planner takes the equality index flows_chain_height for any `chain = ?` and walks every row of that chain
+ * (52,463 Namada rows on 2026-10-20) where a time or kind range would read a few hundred.
+ */
+export const flowSelect = (hint = '') => `
   SELECT f.id, f.chain, f.height, f.ts, f.tx_hash, f.kind, f.from_addr, f.to_addr, f.amount_num, f.counter_denom,
          f.counter_amount, f.pool_id, f.price_usd, f.value_usd, f.meta, l1.label AS from_label, l2.label AS to_label,
          l1.source AS from_label_source, l2.source AS to_label_source, l1.author AS from_label_author, l2.author AS to_label_author
-  FROM flows f LEFT JOIN labels l1 ON f.from_addr = l1.address LEFT JOIN labels l2 ON f.to_addr = l2.address`;
+  FROM flows f${hint ? ` ${hint}` : ''} LEFT JOIN labels l1 ON f.from_addr = l1.address LEFT JOIN labels l2 ON f.to_addr = l2.address`;
+export const FLOW_SELECT = flowSelect();
 
 /** Provenance for a value read from a timestamp: live within `maxAgeMs`, else stale. */
 export function provAt(source: string, at: number | null, now: number, maxAgeMs: number, extra: Partial<Provenance> = {}): Provenance {
@@ -114,9 +120,16 @@ export const OSMOSIS_LIVE_STALE_MS = 3 * 60000;
 /** An Osmosis index whose stream is down and whose last catch-up search is older than this is old. */
 export const OSMOSIS_SWEEP_STALE_MS = 15 * 60000;
 
+/**
+ * The newest move of each chain at or before `asOf` walks flows_ts down from `asOf` and stops at the first row of
+ * that chain (3 rows read on 2026-10-20); `MAX(ts) … WHERE chain = ?` walked every row of the chain on
+ * flows_chain_height (55,228 rows, on every overview, pressure and page render).
+ */
+const LAST_MOVE_SQL = (chain: 'osmosis' | 'namada') => `(SELECT ts FROM flows INDEXED BY flows_ts WHERE ts <= ? AND chain = '${chain}' ORDER BY ts DESC LIMIT 1)`;
+
 export async function indexState(db: D1Database, asOf: number): Promise<IndexState> {
   const r = await db
-    .prepare(`SELECT (SELECT MAX(ts) FROM flows WHERE chain='osmosis' AND ts <= ?) AS o, (SELECT MAX(ts) FROM flows WHERE chain='namada' AND ts <= ?) AS n,
+    .prepare(`SELECT ${LAST_MOVE_SQL('osmosis')} AS o, ${LAST_MOVE_SQL('namada')} AS n,
                      (SELECT value FROM kv WHERE key='namada.cursor') AS nc, (SELECT updated_at FROM kv WHERE key='namada.cursor') AS nca,
                      (SELECT value FROM kv WHERE key='osmosis.live') AS ol, (SELECT updated_at FROM kv WHERE key='osmosis.live') AS ola,
                      (SELECT value FROM kv WHERE key='osmosis.cursor') AS oc,
@@ -484,7 +497,8 @@ export async function pressure(db: D1Database, asOf: number, replay: boolean, wi
     db.prepare(`SELECT from_addr AS addr, ts, amount_num FROM flows WHERE chain='osmosis' AND kind='sell' AND ts >= ? AND ts < ?
                 AND (meta IS NULL OR meta NOT LIKE '%"arb":true%')`).bind(from - 30 * D, asOf).all<any>(),
     osmosisSendsOut(db, from, asOf),
-    db.prepare(`${FLOW_SELECT} WHERE f.chain='namada' AND f.kind IN ('withdraw','bond','unbond') AND f.amount_num >= ? AND f.ts >= ? AND f.ts < ? AND ${NOT_LEGACY_TWIN}
+    // The three kinds' ranges on flows_kind (332 rows read on 2026-10-20 against 52,627 on flows_chain_height).
+    db.prepare(`${flowSelect('INDEXED BY flows_kind')} WHERE f.chain='namada' AND f.kind IN ('withdraw','bond','unbond') AND f.amount_num >= ? AND f.ts >= ? AND f.ts < ? AND ${NOT_LEGACY_TWIN}
                 ORDER BY f.ts DESC LIMIT 60`).bind(UNLOCKS_MIN_NAM, asOf - Math.max(UNLOCKS_WINDOW_DAYS, windowDays) * D, asOf).all<any>(),
     // The chain's own total stake (not the staking account's balance, which also holds NAM on its way out).
     metricSeries(db, 'supply.total_stake', asOf - trendSpanDays * D, asOf, trendBucketMs),
@@ -638,7 +652,8 @@ export async function pressure(db: D1Database, asOf: number, replay: boolean, wi
     const minW = Math.min(...withdraws.map((w) => w.ts));
     const maxFollow = Math.min(asOf, Math.max(...withdraws.map((w) => w.ts)) + 48 * H);
     const [after, hopTransfers, osmoLinks] = await Promise.all([
-      db.prepare(`SELECT from_addr, to_addr, kind, ts, amount_num FROM flows WHERE chain='namada' AND kind IN ('bond','ibc_out','shield') AND from_addr IN (${addrs.map(() => '?').join(',')}) AND ts >= ? AND ts < ?`)
+      // Each address's range on flows_from (a few dozen rows; 52,463 on flows_chain_height on 2026-10-20).
+      db.prepare(`SELECT from_addr, to_addr, kind, ts, amount_num FROM flows INDEXED BY flows_from WHERE chain='namada' AND kind IN ('bond','ibc_out','shield') AND from_addr IN (${addrs.map(() => '?').join(',')}) AND ts >= ? AND ts < ?`)
         .bind(...addrs, minW, maxFollow).all<any>().catch(() => ({ results: [] as any[] })),
       db.prepare(`SELECT f.from_addr, f.to_addr, f.ts, f.amount_num FROM flows f WHERE f.chain='namada' AND f.kind='transfer' AND f.from_addr IN (${addrs.map(() => '?').join(',')}) AND f.to_addr IS NOT NULL AND f.ts >= ? AND f.ts < ? AND ${NOT_LEGACY_TWIN}`)
         .bind(...addrs, minW, maxFollow).all<any>().catch(() => ({ results: [] as any[] })),
@@ -658,7 +673,7 @@ export async function pressure(db: D1Database, asOf: number, replay: boolean, wi
     const burners = [...new Set((hopTransfers.results || []).map((r: any) => r.to_addr as string).filter((a) => a && !isInternal(a) && !addrs.includes(a)))].slice(0, 40);
     if (burners.length) {
       const [burnerAfter, burnerLinks] = await Promise.all([
-        db.prepare(`SELECT from_addr, kind, ts, amount_num FROM flows WHERE chain='namada' AND kind IN ('bond','ibc_out','shield') AND from_addr IN (${burners.map(() => '?').join(',')}) AND ts >= ? AND ts < ?`)
+        db.prepare(`SELECT from_addr, kind, ts, amount_num FROM flows INDEXED BY flows_from WHERE chain='namada' AND kind IN ('bond','ibc_out','shield') AND from_addr IN (${burners.map(() => '?').join(',')}) AND ts >= ? AND ts < ?`)
           .bind(...burners, minW, maxFollow).all<any>().catch(() => ({ results: [] as any[] })),
         db.prepare(`SELECT osmo_addr, namada_addr FROM address_links WHERE namada_addr IN (${burners.map(() => '?').join(',')})`).bind(...burners).all<any>().catch(() => ({ results: [] as any[] })),
       ]);
@@ -1119,9 +1134,12 @@ export async function lastAlertBefore(db: D1Database, to: number, th: AlertThres
     OR (f.chain='osmosis' AND f.kind IN ('buy','sell') AND f.amount_num >= ?)
     OR (f.chain='namada' AND f.kind='unshield' AND f.amount_num >= ?)
     OR (f.chain='namada' AND f.kind='bond' AND f.amount_num >= ?))`;
+  // Newest first on flows_ts, stopping at the page's last row (4,501 rows read for the first page on 2026-10-20); the
+  // planner's own choice, one range per kind on flows_kind merged and sorted whole, read 40,134 for every page.
   for (let p = 0; p < pages; p++) {
     const rows = await db
-      .prepare(`${FLOW_SELECT} WHERE f.ts < ? AND ${cond} AND ${NOT_LEGACY_TWIN} ORDER BY f.ts DESC, f.height DESC LIMIT ? OFFSET ?`)
+      .prepare(`${flowSelect('INDEXED BY flows_ts')} WHERE f.ts < ? AND ${cond} AND ${NOT_LEGACY_TWIN} ORDER BY f.ts DESC, f.height DESC LIMIT ? OFFSET ?`)
+
       .bind(to, th.ibcInventory, th.unlock, th.bigSwap, th.unshield, th.bond, pageSize, p * pageSize)
       .all<any>();
     const list = rows.results || [];

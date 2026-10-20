@@ -13,13 +13,25 @@
 // prices NAM itself); the chart is the pool's spot price, not executions, and has no volume; an hour with no trade
 // reads open = high = low = close (`flat`). Nothing here is ever turned into a 0: a missing or malformed number is null.
 import { NAM, OSMOSIS } from '../config';
-import { fetchJson } from '../util';
+import { fetchText } from '../util';
 
 export const OSMOSIS_DATA = 'https://data.app.osmosis.zone';
 /** Source word for provenance (plain word in the UI: "Osmosis app data"). */
 export const OSMOSIS_DATA_SOURCE = 'Osmosis data API';
 /** 5.4: 10 s per request, one attempt (a failure keeps the last stored values; the health row says so). */
 export const OSMOSIS_DATA_TIMEOUT_MS = 10_000;
+/**
+ * The most an answer may be: the summary of every Osmosis pair was 2.3 MB on 2026-10-20 and grows with the pairs
+ * listed. An answer announced or streamed past this is cut off and counts as a failed read (a Worker isolate has
+ * 128 MB, and the parsed summary costs several times its bytes).
+ */
+export const OSMOSIS_DATA_MAX_BYTES = 8 * 1024 * 1024;
+
+/** One GET of the data API, capped at OSMOSIS_DATA_MAX_BYTES, parsed as JSON. */
+async function getJson(url: string, signal?: AbortSignal): Promise<unknown> {
+  const r = await fetchText(url, { timeoutMs: OSMOSIS_DATA_TIMEOUT_MS, maxBytes: OSMOSIS_DATA_MAX_BYTES, signal });
+  return JSON.parse(r.text);
+}
 
 const num = (v: unknown): number | null => {
   const n = typeof v === 'string' ? Number(v) : v;
@@ -105,10 +117,11 @@ export const pairChartUrl = (poolId: string, range: '7d' | '1mo' | '1y' | 'all')
   `${OSMOSIS_DATA}/pairs/v1/historical/${poolId}/chart?asset_in=${encodeURIComponent(NAM.osmoDenom)}&asset_out=${encodeURIComponent(OSMOSIS.usdcDenom)}&range=${range}&asset_type=denom`;
 
 export async function fetchPairSummary(signal?: AbortSignal): Promise<PairSummary> {
-  return parsePairSummary(await fetchJson<unknown>(pairSummaryUrl(), { timeoutMs: OSMOSIS_DATA_TIMEOUT_MS, retries: 0, signal }));
+  return parsePairSummary(await getJson(pairSummaryUrl(), signal));
 }
 
 /** The reference pool's hourly pool price over the last 7 days (169 points). */
 export async function fetchPairChart(poolId: string = OSMOSIS.refPoolId, range: '7d' | '1mo' | '1y' | 'all' = '7d', signal?: AbortSignal): Promise<PairChartPoint[] | null> {
-  return parsePairChart(await fetchJson<unknown>(pairChartUrl(poolId, range), { timeoutMs: OSMOSIS_DATA_TIMEOUT_MS, retries: 0, signal }));
+  return parsePairChart(await getJson(pairChartUrl(poolId, range), signal));
+
 }

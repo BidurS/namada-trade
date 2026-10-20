@@ -15,7 +15,10 @@ import { stmt, kvGet, kvSet, kvGetJson } from './db';
 import { toNam, chainOf } from './util';
 import { OSMOSIS, INTERNAL_LABELS } from './config';
 import { flowsWhere, flowsFilterFromQuery, FLOWS_ORDER } from './flows-query';
-import { HOLDERS_UNION, HOLDER_COUNTS_SQL, HOLDER_DUST_SQL, NAMADA_TOP10_SQL, OSMOSIS_TOP10_SQL, LIQUID_STALE_MS, BALANCE_LISTING_SRC, BOND_LISTING_SRC, holderStatus, liquidChanges, chunks, listingTimes, confirmedAt, stakeNum, type ListingTimes } from './holders';
+import {
+  HOLDERS_BASE, LIQUID_STALE_MS, BALANCE_LISTING_SRC, BOND_LISTING_SRC, holderStatus, liquidChanges, chunks, listingTimes, confirmedAt, stakeNum,
+  holderFigureValues, readHolderFigures, usableFigures, figuresCount, figuresTopRows, type ListingTimes, type HolderBaseRow,
+} from './holders';
 import { label_plain, category_plain, labelSearchTerms, labelAuthorShort, tagByline } from './labels';
 import { counterpartiesOf } from '../../shared/flow-rules';
 import {
@@ -127,29 +130,31 @@ app.get('/api/overview', async (c) => {
   const MASP = INTERNAL_ADDRESSES.masp;
   // When the chain listings last confirmed every Namada balance and bond: the holder figures are as of then.
   const listed = await listingTimes(db);
-  const [osmoStats, netIbc, namadaStats, heights, refPriceRow, cov, holderCounts, top10Osmo, top10Nam, dust] = await Promise.all([
+  const [osmoStats, netIbc, namadaStats, heights, refPriceRow, cov, holderFig] = await Promise.all([
     db.prepare(`SELECT COUNT(*) total_flows,
           SUM(CASE WHEN kind='buy' THEN 1 ELSE 0 END) buys, SUM(CASE WHEN kind='sell' THEN 1 ELSE 0 END) sells,
           SUM(CASE WHEN kind='buy' THEN amount_num ELSE 0 END) buy_nam, SUM(CASE WHEN kind='sell' THEN amount_num ELSE 0 END) sell_nam
-         FROM flows WHERE chain='osmosis' AND ts >= ? AND ts < ? AND (meta IS NULL OR meta NOT LIKE '%"arb":true%')`).bind(dayAgo, asOf).first<any>().catch(() => null),
+         FROM flows INDEXED BY flows_ts WHERE chain='osmosis' AND ts >= ? AND ts < ? AND (meta IS NULL OR meta NOT LIKE '%"arb":true%')`).bind(dayAgo, asOf).first<any>().catch(() => null),
+
     // Bridged in minus bridged out, sends that timed out and were refunded left out (their NAM never left Osmosis).
     osmosisNetIbc(db, dayAgo, asOf).catch(() => null),
     // Into / out of the shielded pool: shielding, and bridge crossings straight into or out of it; NAM only, each transfer once.
+    // The day's range on flows_ts (86 rows read on 2026-10-20): the planner otherwise walks every Namada flow on
+    // flows_chain_height (52,463 rows).
     db.prepare(`SELECT COUNT(*) total_flows,
           SUM(CASE WHEN kind='bond' THEN amount_num ELSE 0 END) bonded, SUM(CASE WHEN kind='withdraw' THEN amount_num ELSE 0 END) withdrawn,
           SUM(CASE WHEN kind IN ('shield','ibc_in') AND to_addr = ? AND ${NAM_AMOUNT} THEN amount_num ELSE 0 END) shielded,
           SUM(CASE WHEN kind IN ('unshield','ibc_out') AND from_addr = ? AND ${NAM_AMOUNT} THEN amount_num ELSE 0 END) unshielded
-         FROM flows f WHERE chain='namada' AND ts >= ? AND ts < ? AND ${NOT_TWIN}`).bind(MASP, MASP, dayAgo, asOf).first<any>().catch(() => null),
+         FROM flows f INDEXED BY flows_ts WHERE chain='namada' AND ts >= ? AND ts < ? AND ${NOT_TWIN}`).bind(MASP, MASP, dayAgo, asOf).first<any>().catch(() => null),
     db.prepare(`SELECT (SELECT MAX(height) FROM flows WHERE chain='osmosis' AND ts <= ?) osmo_h, (SELECT MAX(height) FROM flows WHERE chain='namada' AND ts <= ?) nam_h,
                        (SELECT value FROM kv WHERE key='namada.cursor') nam_cursor`).bind(asOf, asOf).first<any>().catch(() => null),
     db.prepare(`SELECT value FROM metrics WHERE key='price.usd' AND ts >= ? AND ts <= ? ORDER BY ts ASC LIMIT 1`).bind(dayAgo, asOf).first<{ value: number }>().catch(() => null),
     coverageOf(db, asOf, replay),
-    // Same definition as the holder list: spendable or staked, protocol and pool accounts excluded.
-    db.prepare(HOLDER_COUNTS_SQL).first<{ namada: number | null; osmosis: number | null; namada_at: number | null; osmosis_at: number | null }>(),
-    db.prepare(OSMOSIS_TOP10_SQL).first<{ s: number; at: number | null }>(),
-    db.prepare(NAMADA_TOP10_SQL).bind(listed.balance ?? 0, listed.bond ?? 0).first<{ s: number; at: number | null }>(),
-    db.prepare(HOLDER_DUST_SQL).first<{ n: number }>().catch(() => null),
+    // Same definition as the holder list: spendable or staked, protocol and pool accounts excluded. Stored by the
+    // cron after each complete listing (holders.ts holderFigureValues, one kv row); the queries only without it.
+    holderFigureValues(db, now, listed),
   ]);
+  const { counts: holderCounts, top10Osmosis: top10Osmo, top10Namada: top10Nam, dust } = holderFig;
 
   // Price: live SQS when available; otherwise the last stored value, honestly marked stale.
   let priceUsd: Sourced<number>;
@@ -298,35 +303,42 @@ app.get('/api/alerts/recent', async (c) => {
 // Namada rows are the union of liquid holders and bonded stakers; Osmosis rows have no stake. A stake is the
 // chain's figure, or the flow estimate only while no bond listing has gone through (holders.ts stakeNum).
 // Module accounts (PoS, PGF, MASP, IBC escrow, governance, the Osmosis transfer module) are not holders.
-const HOLDERS_BASE = `
-    SELECT x.chain, x.address, COALESCE(h.balance_num, 0) balance_num, h.address IS NOT NULL has_row, h.updated_at, h.verified_at, h.verified_src liquid_src,
-           s.bonded_num, s.estimated_num, s.verified_at bonded_verified_at, s.verified_src bonded_src,
-           COALESCE(h.balance_num, 0) + ${stakeNum('s.')} total_num, l.label, l.category,
-           l.source label_source, l.author label_author
-    FROM (${HOLDERS_UNION}) x
-    LEFT JOIN holders h ON h.chain = x.chain AND h.address = x.address
-    LEFT JOIN stakes s ON x.chain = 'namada' AND s.address = x.address
-    LEFT JOIN labels l ON l.address = x.address`;
+// The rows: holders.ts HOLDERS_BASE.
 
 /**
  * WHERE and ORDER BY for the holder list. `category`: a raw category (genesis, foundation, backer…), or `none`
  * for rows without a label; anything else that is not a plain word is ignored. `by`: total, liquid or bonded.
+ * `filtered`: a search or a category narrows the list (else its count is the chain's holder count).
  */
 function holdersWhere(chain: string, search: string, category: string, by: 'total' | 'liquid' | 'bonded') {
   const conds: string[] = [];
   const params: unknown[] = [];
+  let filtered = false;
   if (chain !== 'all') { conds.push('x.chain = ?'); params.push(chain); }
   if (search) {
     const terms = labelSearchTerms(search);
     conds.push(`(x.address LIKE ? OR ${terms.map(() => 'l.label LIKE ?').join(' OR ')})`);
     params.push(`%${search}%`, ...terms.map((t) => `%${t}%`));
+    filtered = true;
   }
   const cat = category.trim().toLowerCase();
-  if (cat === 'none') conds.push('l.label IS NULL');
-  else if (/^[a-z_]{1,24}$/.test(cat)) { conds.push('LOWER(l.category) = ?'); params.push(cat); }
+  if (cat === 'none') { conds.push('l.label IS NULL'); filtered = true; }
+  else if (/^[a-z_]{1,24}$/.test(cat)) { conds.push('LOWER(l.category) = ?'); params.push(cat); filtered = true; }
   const where = conds.length ? `WHERE ${conds.join(' AND ')}` : '';
   const order = by === 'liquid' ? 'balance_num DESC' : by === 'bonded' ? `${stakeNum('s.')} DESC` : 'total_num DESC';
-  return { where, params, order };
+  return { where, params, order, filtered };
+}
+
+/**
+ * The labels of rows taken from the stored figures, read now (a tag written since they were computed shows at once):
+ * one primary-key lookup per row, never more than the page.
+ */
+async function withCurrentLabels(db: D1Database, rows: HolderBaseRow[]): Promise<HolderBaseRow[]> {
+  if (!rows.length) return rows;
+  const parts = await Promise.all(chunks(rows.map((r) => r.address), 0).map((part) =>
+    db.prepare(`SELECT address, label, category, source, author FROM labels WHERE address IN (${part.map(() => '?').join(',')})`).bind(...part).all<any>()));
+  const by = new Map(parts.flatMap((p) => p.results || []).map((l: any) => [l.address, l]));
+  return rows.map((r) => { const l = by.get(r.address); return { ...r, label: l?.label ?? null, category: l?.category ?? null, label_source: l?.source ?? null, label_author: l?.author ?? null }; });
 }
 const holdersBy = (v: string | undefined) => (['total', 'liquid', 'bonded'].includes(v || '') ? v : 'total') as 'total' | 'liquid' | 'bonded';
 /** `?chain=` is one of these or the request is refused (the value also names the export file). */
@@ -370,16 +382,23 @@ app.get('/api/holders', async (c) => {
   const offset = (page - 1) * limit;
 
   const base = HOLDERS_BASE;
-  const { where, params, order } = holdersWhere(chain, search, c.req.query('category') || '', by);
+  const { where, params, order, filtered } = holdersWhere(chain, search, c.req.query('category') || '', by);
 
   const now = Date.now();
+  // Without a search or a category the count is the chain's holder count, and the first HOLDER_TOP_ROWS rows by
+  // total are kept with it (holders.ts, kv holders.figures, written by the cron after each complete listing): Home's
+  // top 10 and the list's first pages cost one kv row instead of the union sort (about 940,000 rows read for the
+  // page and its count on 2026-10-20). Anything else, or figures older than HOLDER_FIGURES_SERVE_MS, is queried.
+  const fig = filtered ? null : usableFigures(await readHolderFigures(db), now);
+  const storedTotal = fig ? figuresCount(fig, chain) : null;
+  const storedRows = fig && by === 'total' ? figuresTopRows(fig, chain, offset, limit) : null;
   const [totalRes, rows, supplyRow, listed] = await Promise.all([
-    db.prepare(`SELECT COUNT(*) total FROM (${base} ${where})`).bind(...params).first<{ total: number }>(),
-    db.prepare(`${base} ${where} ORDER BY ${order}, x.address LIMIT ? OFFSET ?`).bind(...params, limit, offset).all<any>(),
+    storedTotal != null ? { total: storedTotal } : db.prepare(`SELECT COUNT(*) total FROM (${base} ${where})`).bind(...params).first<{ total: number }>(),
+    storedRows ? withCurrentLabels(db, storedRows).then((results) => ({ results })) : db.prepare(`${base} ${where} ORDER BY ${order}, x.address LIMIT ? OFFSET ?`).bind(...params, limit, offset).all<any>(),
     metricAt(db, 'supply.total', now),
     listingTimes(db),
   ]);
-  const rawHolders = rows.results || [];
+  const rawHolders: any[] = rows.results || [];
 
   const linksMap = new Map<string, string[]>();
   const changes = new Map<string, { d24: number | null; d7: number | null }>();
@@ -806,10 +825,13 @@ app.get('/api/export/holders', async (c) => {
   if (format !== 'csv' && format !== 'json') return c.json({ error: 'format must be csv or json' }, 400);
   const by = holdersBy(c.req.query('by'));
   const limit = Math.min(HOLDER_EXPORT_MAX, Math.max(100, parseInt(c.req.query('limit') || String(HOLDER_EXPORT_MAX), 10) || HOLDER_EXPORT_MAX));
-  const { where, params, order } = holdersWhere(chain, (c.req.query('search') || '').trim(), c.req.query('category') || '', by);
+  const { where, params, order, filtered } = holdersWhere(chain, (c.req.query('search') || '').trim(), c.req.query('category') || '', by);
+  const fig = filtered ? null : usableFigures(await readHolderFigures(db), Date.now());
+  const storedTotal = fig ? figuresCount(fig, chain) : null;
   const [rows, totalRes, supplyRow, listed] = await Promise.all([
     db.prepare(`${HOLDERS_BASE} ${where} ORDER BY ${order}, x.address LIMIT ?`).bind(...params, limit).all<any>(),
-    db.prepare(`SELECT COUNT(*) total FROM (${HOLDERS_BASE} ${where})`).bind(...params).first<{ total: number }>(),
+    storedTotal != null ? { total: storedTotal } : db.prepare(`SELECT COUNT(*) total FROM (${HOLDERS_BASE} ${where})`).bind(...params).first<{ total: number }>(),
+
     metricAt(db, 'supply.total', Date.now()),
     listingTimes(db),
   ]);

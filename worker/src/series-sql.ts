@@ -60,6 +60,13 @@ export const REFUNDS_SQL = `SELECT id, ts, from_addr, to_addr, amount_num, meta 
 
 /** A day's edges are replaced whole (an edge that no longer exists must not stay): 1 read pass over at most ~40 rows. */
 export const DELETE_EDGES_DAY_SQL = `DELETE FROM flow_edges_daily WHERE day = ?`;
+/**
+ * One edge of one chain's records. A bridge move is recorded on both chains (sent on one, received on the other), so
+ * the same NAM is an `ibc_out` edge on one chain and an `ibc_in` edge on the other: the rows of the two chains must
+ * never be added together (a reader sums one chain, or names both separately; the daily bridge keys use the Osmosis
+ * records only, series.dayAggregates).
+ */
+
 export const EDGE_SQL = `INSERT OR REPLACE INTO flow_edges_daily (day, chain, kind, from_cat, to_cat, n, nam, usd) VALUES (?,?,?,?,?,?,?,?)`;
 export const ACTIVITY_SQL = `INSERT OR REPLACE INTO activity_daily (day, chain, flows, senders, receivers, active, nam, trades, traders, chain_txs) VALUES (?,?,?,?,?,?,?,?,?,NULL)`;
 
@@ -114,9 +121,23 @@ export const COHORT_ROW_SQL = `INSERT OR REPLACE INTO cohort_daily (day, categor
 /** Stakers as the holder list counts them (the bond listing's figure; the estimate only before any listing). About 19,500 rows, once per complete balance listing. */
 export const STAKERS_SQL = `SELECT address, ${stakeNum('')} st FROM stakes WHERE ${stakeNum('')} > 0`;
 export const LISTING_ROW_SQL = `INSERT OR REPLACE INTO listings (at, kind, height, provider) VALUES (?,?,?,?)`;
-/** The unbond queue is rewritten whole when it changes (at most ~60 rows, ~1,000 rows written a day typical). */
-export const UNBOND_QUEUE_DELETE_SQL = `DELETE FROM unbond_queue`;
-export const UNBOND_QUEUE_ROW_SQL = `INSERT INTO unbond_queue (withdraw_epoch, nam, n, listed_at, height) VALUES (?,?,?,?,?)`;
+/**
+ * The unbond queue is written per withdraw epoch when a listing changes it (series.unbondQueueDiffStmts): the stored
+ * rows are read (642 epochs on production on 2026-10-20, so a whole rewrite was 1,286 rows written in about 650
+ * statements), and only epochs whose NAM or entry count changed are upserted, UNBOND_QUEUE_ROWS a statement (5
+ * parameters a row: D1 binds at most 100), and epochs the listing no longer has are deleted. A listing usually
+ * changes a handful of epochs: one or two statements, in one atomic batch with the queue's hash.
+ */
+export const UNBOND_QUEUE_STORED_SQL = `SELECT withdraw_epoch, nam, n FROM unbond_queue`;
+export const UNBOND_QUEUE_ROWS = 20;
+export const unbondQueueUpsertSql = (rows: number) =>
+  `INSERT OR REPLACE INTO unbond_queue (withdraw_epoch, nam, n, listed_at, height) VALUES ${Array.from({ length: rows }, () => '(?,?,?,?,?)').join(',')}`;
+export const unbondQueueDeleteSql = (epochs: number) => `DELETE FROM unbond_queue WHERE withdraw_epoch IN (${Array.from({ length: epochs }, () => '?').join(',')})`;
+/** The previous complete balance listing this worker recorded (the listings table, migration 0007): the new / emptied counts compare against it only. */
+export const PREV_BALANCE_LISTING_SQL = `SELECT MAX(at) at FROM listings WHERE kind = 'balance' AND at < ?`;
+/** The newest stored pool price hour (metrics primary key): the hourly job writes every closed hour after it. */
+export const LAST_POOL_PRICE_SQL = `SELECT MAX(ts) t FROM metrics WHERE key = 'price.pool_1h'`;
+
 /** Per validator, once a day (about 250 rows, 500 written). */
 export const VALIDATOR_ROW_SQL = `INSERT OR REPLACE INTO validator_daily (day, validator, stake, delegators, commission, state, name, as_of, height, names_at) VALUES (?,?,?,?,?,?,?,?,?,?)`;
 

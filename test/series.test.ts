@@ -8,13 +8,16 @@ import { NAMADA } from '../worker/src/config';
 import { parseBondListing, parseBalanceListing } from '../worker/src/sources/namada';
 import { parsePairSummary, parsePairChart } from '../worker/src/sources/osmosis-data';
 import { buildUnbondTermStructure } from '../worker/src/analytics';
-import { BOND_LISTING_SRC, BALANCE_LISTING_SRC, listingBalanceStmts } from '../worker/src/holders';
+import { BOND_LISTING_SRC, BALANCE_LISTING_SRC, listingBalanceStmts, listingSpanStmts, spanStmts } from '../worker/src/holders';
 import { stmt } from '../worker/src/db';
-import { runBalanceListing } from '../worker/src/cron';
+import { runBalanceListing, STAKE_ESTIMATES_SQL } from '../worker/src/cron';
+
 import {
   hourly, daily, swapHourStmts, medianOf, hoursToRoll, rollupStmts, poolHourlyStmts, poolPriceStmts, dayAggregates, sideCategory,
-  holderListingStats, unbondQueue, stakeStructure, bondListingSeries, parseValidatorList, isoDay, JOB_WINDOW_MS, type SwapRow, type DayFlowRow,
+  holderListingStats, unbondQueue, stakeStructure, bondListingSeries, parseValidatorList, isoDay, JOB_WINDOW_MS, summaryHealth, unbondQueueDiffStmts,
+  type SwapRow, type DayFlowRow,
 } from '../worker/src/series';
+
 import { SERIES_READS, ROLLUP_HOUR_SQL, ROLLUP_KEYS, DAY_FLOWS_SQL, SWAP_HOUR_SQL, BUCKETS } from '../worker/src/series-sql';
 import type { PoolInfo, SourceHealth } from '../shared/types';
 
@@ -229,10 +232,11 @@ describe('dayAggregates / the daily flow index', () => {
     expect(a.edges.reduce((s, x) => s + x.n, 0)).toBe(DAY_FLOWS.length - 2); // the other coin and the refunded send
   });
 
-  it('activity: addresses of the row\'s chain only, protocol and pool accounts and bots left out', () => {
+  it('activity: addresses of the row\'s chain only, protocol and pool accounts and bots left out; the staking account\'s own transfers are not volume', () => {
     const a = dayAggregates(rowsWithLabels, refunds);
     const by = Object.fromEntries(a.activity.map((x) => [x.chain, x]));
-    expect(by.namada).toEqual({ chain: 'namada', flows: 8, senders: 3, receivers: 3, active: 5, nam: 1000 + 5000 + 2000 + 2 * 331_386_682 + 300 + 200 + 700, trades: 0, traders: 0 });
+    // n4 and n5 (pos_balance, 331 million NAM out and back) are flows of the day but not activity NAM
+    expect(by.namada).toEqual({ chain: 'namada', flows: 8, senders: 3, receivers: 3, active: 5, nam: 1000 + 5000 + 2000 + 300 + 200 + 700, trades: 0, traders: 0 });
     expect(by.osmosis).toEqual({ chain: 'osmosis', flows: 5, senders: 2, receivers: 2, active: 4, nam: 700 + 2000 + 500 + 400, trades: 3, traders: 2 });
     expect(a.metrics).toEqual({
       'active.namada_daily': 5, 'active.osmosis_daily': 4, 'masp.in_daily': 300, 'masp.out_daily': 200.5,
@@ -390,16 +394,24 @@ describe('pool_hourly and the pool price', () => {
     expect(none[0].params.slice(7)).toEqual([null, null, null, null]);
   });
 
-  it('the pool price of the closed and the current hour, in dollars per NAM, flat hours flagged', () => {
-    const last = CHART[CHART.length - 1].t;
-    const st = poolPriceStmts(CHART, last);
+  it('the pool price of closed hours only, in dollars per NAM, flat hours flagged; every closed hour after the last stored one', () => {
+    const last = CHART[CHART.length - 1].t; // 19:00, the hour the chart was read in (19:17): partial
+    // nothing stored: the 168 closed hours of the 7-day answer, never the current hour
+    const all7d = poolPriceStmts(CHART, last);
+    expect(all7d).toHaveLength(168 * 5);
+    expect(all7d.some((s) => s.params[0] === last)).toBe(false);
+    // the last stored hour 16:00: 17:00 and 18:00 only
+    const st = poolPriceStmts(CHART, last, last - 3 * H);
     expect(st).toHaveLength(10);
+    expect([...new Set(st.map((s) => s.params[0]))]).toEqual([last - 2 * H, last - H]);
     const at = (t: number, k: string) => st.find((s) => s.params[0] === t && s.params[1] === k)!.params[2];
-    const p = CHART[CHART.length - 1];
-    expect(at(last, 'price.pool_1h')).toBe(1 / p.raw.close);
-    expect(at(last, 'price.pool_1h.high')).toBe(1 / p.raw.low);
-    expect(at(last, 'price.pool_1h.flat')).toBe(p.flat ? 1 : 0);
-    expect(st.every((s) => s.params[0] === last || s.params[0] === last - H)).toBe(true);
+    const p = CHART[CHART.length - 2];
+    expect(at(last - H, 'price.pool_1h')).toBe(1 / p.raw.close);
+    expect(at(last - H, 'price.pool_1h.high')).toBe(1 / p.raw.low);
+    expect(at(last - H, 'price.pool_1h.flat')).toBe(p.flat ? 1 : 0);
+    // the partial hour that has just begun reads open = high = low = close: it is not stored as a flat hour
+    const partial = { ...CHART[CHART.length - 1], raw: { open: 900, high: 900, low: 900, close: 900 }, usd: { open: 1 / 900, high: 1 / 900, low: 1 / 900, close: 1 / 900 }, flat: true };
+    expect(poolPriceStmts([...CHART.slice(0, -1), partial], last, last - H)).toEqual([]);
   });
 });
 
@@ -422,10 +434,14 @@ describe('hourly()', () => {
     expect(metric(db, 'price.usd.1h')).toEqual([{ ts: hour - H, value: 3 }]);
     expect(metric(db, 'price.swap_1h')).toEqual([{ ts: hour - H, value: 0.0011 }]);
     expect(metric(db, 'dex.volume_24h_usd_osmosis')).toEqual([{ ts: 1792523803000, value: SUMMARY.volume24hUsd }]);
-    expect(metric(db, 'price.pool_1h').map((x) => x.ts)).toEqual([hour - H, hour]);
+    // nothing stored before: every closed hour of the 7-day answer, the newest the hour just closed, never the current one
+    const pool = metric(db, 'price.pool_1h').map((x) => x.ts);
+    expect(pool).toHaveLength(168);
+    expect(pool[pool.length - 1]).toBe(hour - H);
     expect(metric(db, 'holders.osmosis')).toEqual([{ ts: hour - 5 * 60000, value: 1 }]);
     expect(all(db, 'SELECT COUNT(*) n FROM pool_hourly WHERE hour = ?', hour)[0].n).toBe(28);
     expect(c.health.map((x) => [x.name, x.ok])).toEqual([['Osmosis data API (summary)', true], ['Osmosis data API (pairs)', true]]);
+    expect(r.osmosisDone).toBe(true);
     expect(await hourly(env(db), hour + 4 * 60000, ctx())).toBeNull();
     expect(await hourly(env(db), hour + JOB_WINDOW_MS + 1, ctx())).toBeNull();
   });
@@ -443,14 +459,74 @@ describe('hourly()', () => {
     const db = seeded();
     insert(db, 'metrics', [{ ts: 1, key: 'dex.volume_24h_usd_osmosis', value: 42 }]);
     const c = ctx({ summary: async () => { throw new Error('timeout'); }, chart: async () => null });
-    await hourly(env(db), hour + 3 * 60000, c);
+    const r = (await hourly(env(db), hour + 3 * 60000, c))!;
     expect(metric(db, 'dex.volume_24h_usd_osmosis')).toEqual([{ ts: 1, value: 42 }]);
     expect(metric(db, 'price.pool_1h')).toEqual([]);
-    expect(c.health.find((x) => x.name === 'Osmosis data API (summary)')).toMatchObject({ ok: false, note: expect.stringMatching(/^Not read this hour \(Error: timeout\)/) });
+    expect(c.health.find((x) => x.name === 'Osmosis data API (summary)')).toMatchObject({ ok: false, note: expect.stringMatching(/^Not read \(Error: timeout\); asked again on the next tick of the window/) });
     expect(c.health.find((x) => x.name === 'Osmosis data API (pairs)')).toMatchObject({ ok: false, note: 'pool 3005: no series' });
-    expect(all(db, 'SELECT osmosis_at FROM pool_hourly').every((r) => r.osmosis_at === null)).toBe(true);
+    // the hour is not let go: pool_hourly waits for the summary, the database part is written
+    expect(r.osmosisDone).toBe(false);
+    expect(all(db, 'SELECT * FROM pool_hourly')).toEqual([]);
     expect(metric(db, 'price.usd.1h')).toHaveLength(1);
   });
+
+  it('a failed outside read is asked again on the next tick (only that read); at the window\'s close the hour is let go, pool_hourly with the router\'s columns', async () => {
+    const db = seeded();
+    let summaries = 0, charts = 0;
+    const failing = ctx({ summary: async () => { summaries++; throw new Error('timeout'); }, chart: async () => { charts++; return CHART; } });
+    expect((await hourly(env(db), hour + 3 * 60000, failing))!.osmosisDone).toBe(false);
+    expect([summaries, charts]).toEqual([1, 1]);
+    // next tick: the summary answers; the chart, already read, is not asked again; pool_hourly now carries the summary
+    const ok = ctx({ summary: async () => { summaries++; return SUMMARY; }, chart: async () => { charts++; return CHART; } });
+    const r = (await hourly(env(db), hour + 4 * 60000, ok))!;
+    expect([summaries, charts]).toEqual([2, 1]);
+    expect(r).toMatchObject({ osmosisDone: true, rolled: [], summaryAt: 1792523803000 });
+    expect(all(db, 'SELECT COUNT(*) n FROM pool_hourly WHERE osmosis_at IS NOT NULL')[0].n).toBe(27);
+    expect(await hourly(env(db), hour + 5 * 60000, ok)).toBeNull();
+    // another hour whose summary never answers: tried each tick, let go at the close with the router's columns only
+    const db2 = seeded();
+    const never = ctx({ summary: async () => { throw new Error('timeout'); } });
+    expect((await hourly(env(db2), hour + 3 * 60000, never))!.osmosisDone).toBe(false);
+    const close = (await hourly(env(db2), hour + JOB_WINDOW_MS - 60000, never))!;
+    expect(close.osmosisDone).toBe(true);
+    expect(all(db2, 'SELECT pool_id, osmosis_at FROM pool_hourly ORDER BY pool_id')).toEqual([{ pool_id: '3005', osmosis_at: null }, { pool_id: '3008', osmosis_at: null }]);
+    expect(never.health.filter((x) => x.name === 'Osmosis data API (summary)').pop()!.note).toMatch(/the window closed/);
+    expect(await hourly(env(db2), hour + JOB_WINDOW_MS - 30000, never)).toBeNull();
+  });
+
+  it('the database part and the Osmosis part never cost each other their rows; a late tick starts no request', async () => {
+    const db = seeded();
+    // the rollup read fails: the Osmosis part is still written, and the database part runs again next tick
+    const broken = { ...db, prepare: (sql: string) => { if (sql === ROLLUP_HOUR_SQL) throw new Error('D1_ERROR: overloaded'); return db.prepare(sql); }, batch: db.batch } as any;
+    const c = ctx();
+    const r = (await hourly(env(broken), hour + 3 * 60000, c))!;
+    expect(r.osmosisDone).toBe(true);
+    expect(metric(db, 'price.usd.1h')).toEqual([]);
+    expect(all(db, 'SELECT COUNT(*) n FROM pool_hourly')[0].n).toBe(28);
+    expect(c.health.find((x) => x.name === 'Series (hourly)')!.note).toMatch(/^The rollups were not written this tick: Error: D1_ERROR/);
+    const again = (await hourly(env(db), hour + 4 * 60000, ctx()))!;
+    expect(again.rolled).toEqual([hour - H]);
+    expect(metric(db, 'price.usd.1h')).toEqual([{ ts: hour - H, value: 3 }]);
+    // the next hour reads the pool price of the hour just closed only (the last stored one is hour - H)
+    const next = hour + H;
+    const chart2 = [...CHART, { ...CHART[CHART.length - 1], t: next }];
+    await hourly(env(db), next + 3 * 60000, ctx({ chart: async () => chart2 }));
+    expect(metric(db, 'price.pool_1h').slice(-2).map((x) => x.ts)).toEqual([hour - H, hour]);
+    // late: nothing is asked
+    const db3 = seeded();
+    let asked = 0;
+    const late = ctx({ late: () => true, summary: async () => { asked++; return SUMMARY; }, chart: async () => { asked++; return CHART; } });
+    expect((await hourly(env(db3), hour + 3 * 60000, late))!.osmosisDone).toBe(false);
+    expect(asked).toBe(0);
+  });
+
+  it('the summary\'s health: not ok with no NAM pair or an update over 2 hours old', () => {
+    const at = SUMMARY.at!;
+    expect(summaryHealth(SUMMARY, at + 30 * 60000)).toMatchObject({ ok: true });
+    expect(summaryHealth(SUMMARY, at + 2 * H + 1)).toMatchObject({ ok: false, note: expect.stringMatching(/2\.0 h old/) });
+    expect(summaryHealth({ ...SUMMARY, pairs: [] }, at)).toMatchObject({ ok: false, note: expect.stringMatching(/no NAM pair/) });
+  });
+
 });
 
 // ---------------------------------------------------------------- the listing hooks
@@ -578,5 +654,174 @@ describe('query plans', () => {
       expect(p).toMatch(/SEARCH f(lows)? USING INDEX/);
       expect(p).not.toMatch(/SCAN f(lows)?\b(?! USING)/);
     }
+  });
+});
+
+// ---------------------------------------------------------------- production review fixes (2026-10-21)
+
+/** The stand-in with a prepare() that throws for SQL matching `bad` (a D1 error on that statement only). */
+const failingOn = (db: TestD1, bad: (sql: string) => boolean) => ({ ...db, prepare: (sql: string) => { if (bad(sql)) throw new Error('D1_ERROR: storage operation exceeded timeout'); return db.prepare(sql); }, batch: db.batch }) as any;
+
+describe('daily(): each part on its own', () => {
+  it('a part that fails costs the others nothing: the snapshot is written and never recomputed, the failed part runs again next tick', async () => {
+    const s = seed();
+    let names = 0;
+    const validators = async () => { names++; return VALIDATORS; };
+    const health: SourceHealth[] = [];
+    const r = (await daily(env(failingOn(s.db, (sql) => sql === DAY_FLOWS_SQL)), NOW, { health, validators }))!;
+    expect(r.ran).toEqual(['snapshot namada', 'snapshot osmosis', 'validator names']);
+    expect(r.failed).toEqual([expect.stringMatching(/^flow index: Error: D1_ERROR/)]);
+    expect(all(s.db, "SELECT COUNT(*) n FROM holder_cohorts_daily WHERE chain = 'namada'")[0].n).toBeGreaterThan(0);
+    expect(all(s.db, 'SELECT * FROM activity_daily')).toEqual([]);
+    expect(health.find((h) => h.name === 'Series (daily snapshot)')).toMatchObject({ ok: false, note: expect.stringMatching(/Failed \(tried again next tick\): flow index/) });
+    // next tick: only the flow index; the size pass and the validator list are not asked again
+    const snapSql: string[] = [];
+    const watching = { ...s.db, prepare: (sql: string) => { snapSql.push(sql); return s.db.prepare(sql); }, batch: s.db.batch } as any;
+    const r2 = (await daily(env(watching), NOW + 60000, { health: [], validators }))!;
+    expect(r2.ran).toEqual(['flow index']);
+    expect(snapSql.some((q) => /holder_cohorts|GROUP BY bucket/.test(q))).toBe(false);
+    expect(names).toBe(1);
+    expect(all(s.db, 'SELECT COUNT(*) n FROM activity_daily')[0].n).toBe(4);
+    expect(await daily(env(s.db), NOW + 2 * 60000, { health: [], validators })).toBeNull();
+  });
+
+  it('a failing validator list is asked once an hour, not every tick, and the other parts are written meanwhile', async () => {
+    const s = seed();
+    let asked = 0;
+    const down = async () => { asked++; throw new Error('timeout'); };
+    await daily(env(s.db), NOW, { health: [], validators: down });
+    await daily(env(s.db), NOW + 60000, { health: [], validators: down });
+    expect(asked).toBe(1);
+    expect(JSON.parse(all(s.db, "SELECT value FROM kv WHERE key = 'jobs.daily'")[0].value)).toMatchObject({ snapNamada: true, snapOsmosis: true, flows: true, namesTried: Math.floor(NOW / H) * H });
+    await daily(env(s.db), NOW + H, { health: [], validators: down });
+    expect(asked).toBe(2);
+  });
+
+  it('waits for a tick without a chain listing (reading nothing) unless the window is closing; a late tick starts nothing', async () => {
+    const s = seed();
+    const q0 = s.db.queries;
+    expect(await daily(env(s.db), NOW, { health: [], listingTick: true, validators: async () => VALIDATORS })).toBeNull();
+    expect(s.db.queries).toBe(q0);
+    let asked = 0;
+    const r = (await daily(env(s.db), NOW, { health: [], late: () => true, validators: async () => { asked++; return VALIDATORS; } }))!;
+    expect(asked).toBe(0);
+    expect(r.ran).toEqual([]);
+    const closing = Date.UTC(2026, 9, 21, 1, 14);
+    expect((await daily(env(s.db), closing, { health: [], listingTick: true, validators: async () => VALIDATORS }))!.ran).toHaveLength(4);
+  });
+});
+
+describe('the unbond queue: per epoch, only what changed', () => {
+  const BONDS = fx('bonds_listing.json');
+  const listing = { ...parseBondListing(BONDS.value), height: 8343327, provider: 'TestNode' };
+  const EPOCH = 2685;
+
+  it('upserts changed and new epochs 20 rows a statement and deletes the gone ones; nothing when they agree', () => {
+    const q = { rows: [{ epoch: 1, nam: 5, n: 1 }, { epoch: 2, nam: 7, n: 2 }, { epoch: 4, nam: 1, n: 1 }], hash: 'x', withdrawableNam: 0, unbondingNam: 13 };
+    const stored = [{ withdraw_epoch: 1, nam: 5, n: 1 }, { withdraw_epoch: 2, nam: 6, n: 2 }, { withdraw_epoch: 3, nam: 9, n: 4 }];
+    const d = unbondQueueDiffStmts(q, stored, 100, 50);
+    expect(d).toMatchObject({ upserted: 2, deleted: 1 });
+    expect(d.stmts.map((s) => s.params)).toEqual([[2, 7, 2, 100, 50, 4, 1, 1, 100, 50], [3]]);
+    expect(unbondQueueDiffStmts(q, q.rows.map((r) => ({ withdraw_epoch: r.epoch, nam: r.nam, n: r.n })), 100, 50).stmts).toEqual([]);
+    // the production size: 642 epochs from an empty table are 33 statements, none over 100 parameters
+    const big = { ...q, rows: Array.from({ length: 642 }, (_, i) => ({ epoch: i, nam: i, n: 1 })) };
+    const b = unbondQueueDiffStmts(big, [], 1, 1);
+    expect(b.stmts).toHaveLength(33);
+    expect(Math.max(...b.stmts.map((s) => s.params.length))).toBe(100);
+  });
+
+  it('bondListingSeries writes only the epochs that differ, in one batch with the hash; a failed write keeps the old queue and hash and the stake keys still land', async () => {
+    const db = testD1();
+    const first = await bondListingSeries(db as any, NOW, listing, EPOCH, 267_175_777);
+    expect(first).toMatchObject({ queueChanged: true, queueWritten: true, queueDeleted: 0 });
+    const n = first.queue.rows.length;
+    // the chain moves on: one epoch withdrawn (gone), one grows; the stored rows of the others keep their listing
+    const [gone, grown] = first.queue.rows;
+    const moved = { ...listing, sources: new Map([...listing.sources].map(([a, src]) => [a, { ...src, unbonds: (src.unbonds ?? []).filter((u) => u.withdrawEpoch !== gone.epoch) }])) };
+    const someSource = [...moved.sources.values()].find((x) => (x.unbonds ?? []).some((u) => u.withdrawEpoch === grown.epoch))!;
+    someSource.unbonds = [...someSource.unbonds!, { ...someSource.unbonds!.find((u) => u.withdrawEpoch === grown.epoch)!, amountBase: 1_000_000n }];
+    const batches: number[] = [];
+    const counting = { ...db, prepare: db.prepare, batch: async (st: any[]) => { batches.push(st.length); return db.batch(st); } } as any;
+    const second = await bondListingSeries(counting, NOW + 40 * 60000, moved, EPOCH, 267_175_777);
+    expect(second).toMatchObject({ queueChanged: true, queueWritten: true, queueUpserted: 1, queueDeleted: 1 });
+    const rows = all(db, 'SELECT * FROM unbond_queue ORDER BY withdraw_epoch');
+    expect(rows).toHaveLength(n - 1);
+    expect(rows.filter((r) => r.listed_at === NOW + 40 * 60000).map((r) => r.withdraw_epoch)).toEqual([grown.epoch]);
+    expect(rows.find((r) => r.withdraw_epoch === grown.epoch)!.nam).toBeCloseTo(grown.nam + 1, 6);
+    expect(batches[0]).toBe(3); // the upsert, the delete and the hash: one atomic batch
+    // a write that fails: the queue and its hash stay as they were (the batch rolled back), the stake keys are written
+    const third = { ...moved, sources: new Map([...moved.sources].map(([a, src]) => [a, { ...src, unbonds: [] }])) };
+    const hash = all(db, "SELECT value FROM kv WHERE key = 'unbond.queue.hash'")[0].value;
+    // D1 rolls a failed batch back whole: the stand-in's batch does the same (a statement that fails inside it)
+    const broken = { ...db, prepare: db.prepare, batch: async (st: any[]) => (st.some((x) => /unbond_queue/.test(x.sql)) ? db.batch([...st, db.prepare('INSERT INTO no_such_table VALUES (1)')]) : db.batch(st)) } as any;
+    const r3 = await bondListingSeries(broken, NOW + 80 * 60000, third, EPOCH, 267_175_777);
+    expect(r3.queueWritten).toBe(false);
+    expect(all(db, "SELECT value FROM kv WHERE key = 'unbond.queue.hash'")[0].value).toBe(hash);
+    expect(all(db, 'SELECT * FROM unbond_queue ORDER BY withdraw_epoch')).toEqual(rows);
+
+    expect(metric(db, 'stake.validators').map((x) => x.ts)).toEqual([NOW, NOW + 40 * 60000, NOW + 80 * 60000]);
+  });
+});
+
+describe('the balance listing\'s new and emptied counts after the deploy', () => {
+  it('the previous listing is the one this worker recorded: none before the first (the old worker\'s kv record does not count)', async () => {
+    const BAL = fx('balance_listing.json');
+    const db = testD1();
+    // the old worker's record of a complete listing an hour ago, and an address it created since without first_seen
+    insert(db, 'kv', [{ key: 'balance.listing', value: JSON.stringify({ at: NOW - H, completeAt: NOW - H, height: 8343000, provider: 'Old', keys: 1, holders: 1, totalNam: 1, bytes: 1, written: 0, zeroed: 0, remaining: 0, ticks: 1, durationMs: 1, spansAt: null, extendedAt: null }), updated_at: NOW - H }]);
+    const lister = (height: number) => async () => ({ ...parseBalanceListing(BAL.value), height, provider: 'TestNode' });
+    await runBalanceListing(env(db), [], NOW, {}, lister(8343304));
+    expect(metric(db, 'holders.namada.new_1h')).toEqual([]);
+    expect(metric(db, 'holders.namada.gone_1h')).toEqual([]);
+    await runBalanceListing(env(db), [], NOW + H, {}, lister(8343400));
+    expect(metric(db, 'holders.namada.new_1h')).toEqual([{ ts: NOW + H, value: 0 }]);
+  });
+
+  it('an address the listing finds empty but a later block has given NAM again is not emptied', () => {
+    const PREV = NOW - H;
+    const entries = new Map([['a1', '0'], ['a2', '0']]);
+    const stored = [
+      { address: 'a1', balance_num: 4, first_seen: null, updated_at: PREV + 60000, updated_height: 120 },  // a block above the listing (100) gave it 4 NAM
+      { address: 'a2', balance_num: 4, first_seen: null, updated_at: PREV - D, updated_height: 90 },     // held 4 at the last listing: emptied
+    ];
+    expect(holderListingStats(entries, stored, new Map(), PREV, 100)).toMatchObject({ emptied: 1 });
+    expect(holderListingStats(entries, stored, new Map(), PREV)).toMatchObject({ emptied: 2 });
+  });
+});
+
+describe('the hourly stake estimate writes only what changed', () => {
+  it('a second run with the same flows changes no row; a new bond changes one', async () => {
+    const db = testD1();
+    insert(db, 'flows', [
+      { id: 'b1', chain: 'namada', height: 1, ts: 1, tx_hash: 'B1', kind: 'bond', from_addr: tnam(1), to_addr: POS, amount_num: 100 },
+      { id: 'b2', chain: 'namada', height: 1, ts: 1, tx_hash: 'B2', kind: 'bond', from_addr: tnam(2), to_addr: POS, amount_num: 50 },
+      { id: 'u1', chain: 'namada', height: 2, ts: 2, tx_hash: 'U1', kind: 'unbond', from_addr: POS, to_addr: tnam(1), amount_num: 30 },
+    ]);
+    const run = async (at: number) => (await db.prepare(STAKE_ESTIMATES_SQL).bind(at).run()).meta.changes;
+    expect(await run(10)).toBe(2);
+    expect(await run(20)).toBe(0);
+    expect(all(db, 'SELECT address, estimated_num, updated_at FROM stakes ORDER BY address')).toEqual([
+      { address: tnam(1), estimated_num: 70, updated_at: 10 }, { address: tnam(2), estimated_num: 50, updated_at: 10 },
+    ]);
+    insert(db, 'flows', [{ id: 'b3', chain: 'namada', height: 3, ts: 3, tx_hash: 'B3', kind: 'bond', from_addr: tnam(2), to_addr: POS, amount_num: 5 }]);
+    expect(await run(30)).toBe(1);
+    // a row the bond listing wrote with no estimate yet gets one (NULL IS NOT 55)
+    db.raw.prepare('UPDATE stakes SET estimated_num = NULL WHERE address = ?').run(tnam(2));
+    expect(await run(40)).toBe(1);
+  });
+});
+
+describe('balance spans: the gap rule on the to_ts index', () => {
+  const plan = (db: TestD1, sql: string, n: number) => all(db, `EXPLAIN QUERY PLAN ${sql}`, ...Array.from({ length: n }, () => 1)).map((r) => r.detail).join(' | ');
+  it('every whole-chain span UPDATE is a range on balance_spans_to, never a scan of every span kept', () => {
+    const db = testD1();
+    const stmts = [...listingSpanStmts(NOW, 100, NOW - H, true).filter((s) => s.sql.startsWith('UPDATE')), spanStmts('osmosis', NOW)[0]];
+    expect(stmts).toHaveLength(3);
+    for (const s of stmts) {
+      expect(s.sql).toMatch(/UPDATE balance_spans INDEXED BY balance_spans_to SET/);
+      expect(plan(db, s.sql, s.params.length)).toMatch(/SEARCH balance_spans USING INDEX balance_spans_to \(to_ts>\? AND to_ts<\?\)/);
+    }
+    // a short address list keeps the primary key
+    expect(plan(db, spanStmts('osmosis', NOW, ['osmo1a'])[0].sql, 6)).toMatch(/USING (INDEX sqlite_autoindex_balance_spans_1|PRIMARY KEY)/);
   });
 });
