@@ -3,7 +3,8 @@
 // Yellow band: the dateline, the H1, the page's first plain paragraph (shared/copy.ts), the
 // hero figure "Ready to sell" (NAM that crossed to Osmosis in the window and has not been sold
 // or sent back) with its ProvChip and its dollar value derived from the price, the window
-// (1, 7 or 30 days), and a fact strip with one SourceLine. Black body: Ready to sell on Osmosis,
+// (1, 7, 30 or 90 days, or a year; a server that answers for a shorter window than the one picked
+// is said in a sentence under the window), and a fact strip with one SourceLine. Black body: Ready to sell on Osmosis,
 // Who is moving the price, Unstaking and restaking with the staked-NAM chart, Votes in progress
 // (only when there are any), then the page's second plain paragraph.
 //
@@ -59,7 +60,8 @@ export default function SupplyScreen({ route }: ScreenProps) {
   const mine = session ? [session.address, ...(session.linked ? [session.linked] : [])] : [];
   const isMine = isMineIn(mine);
   const asOf = at ?? data?.asOf ?? o?.generatedAt ?? null;
-  const w = data?.windowDays ?? days;
+  // the window the server answered for; a response that does not state it is said so, never taken as the one picked
+  const w: number = data ? data.windowDays : days;
   const wWords = lastWindow(w);
   const lead = BODY.supply.paras;
 
@@ -93,7 +95,7 @@ export default function SupplyScreen({ route }: ScreenProps) {
             NAM that crossed to Osmosis in {wWords}, minus what has been sold or sent back
             {totals ? (
               <>
-                : <Num v={totals.bridgedIn} prov={cov} fmt={fmtNamRule} showAge={false} /> NAM bridged in by the {data.onDeck.length === 1 ? 'one receiver' : `${data.onDeck.length} receivers`} listed below,{' '}
+                : <Num v={totals.bridgedIn} prov={cov} fmt={fmtNamRule} showAge={false} /> NAM crossed in to the {data.onDeck.length === 1 ? 'one receiver' : `${data.onDeck.length} receivers`} listed below,{' '}
                 <Num v={totals.sold} prov={cov} fmt={fmtNamRule} showAge={false} /> sold and <Num v={totals.sentBack} prov={cov} fmt={fmtNamRule} showAge={false} /> sent back.
               </>
             ) : (
@@ -138,15 +140,22 @@ export default function SupplyScreen({ route }: ScreenProps) {
   const allW = all && states ? waitingAll(all, states) : null;
   const allStamp: Stamp | null = (() => {
     if (!data || !namCov || !allW) return null;
-    const d = derive(waitStamp ? [namCov, waitStamp] : [namCov], 'unstaking requests of any size made within the unstaking wait');
+    const d = derive(waitStamp ? [namCov, waitStamp] : [namCov], 'unstaking requests of every size made within the unstaking wait');
     const span = data.unbondingDays != null ? `the last ${data.unbondingDays.toFixed(2)} days` : 'the unstaking wait';
     const note = [
-      `Counts every unstaking request still in its wait, of any size: ${fmtCount(allW.n)} ${allW.n === 1 ? 'request' : 'requests'} made in ${span}.`,
+      `Counts every unstaking request still in its wait, of every size: ${fmtCount(allW.n)} ${allW.n === 1 ? 'request' : 'requests'} made in ${span}.`,
       'The wait is counted from the request time, so a request near the start of that span can already be withdrawable, up to one epoch early; a request listed under Unstaking and restaking counts by its own end of wait.',
       d.note,
     ].filter(Boolean).join(' ');
     return { ...d, note };
   })();
+  // When the chain's own list of every unstaking request was read, the strip's "still unstaking" is that list's
+  // figure, the same one the day chart below adds up; the indexer's count of every request stays the fallback.
+  const term = data?.unbondTermStructure ?? null;
+  const termStamp: Stamp | null = term && data?.unbondTermStructureProv
+    ? { ...data.unbondTermStructureProv, plain: 'Namada node', note: [`The chain's own list of every unstaking request still in its wait, of every size, read from a Namada node.`, data.unbondTermStructureProv.note].filter(Boolean).join(' ') }
+    : null;
+  const fromChain = term != null && termStamp != null && termStamp.status !== 'missing' && Number.isFinite(term.inFlightNam);
   const ulFact = (v: number | undefined, p: Stamp | null) =>
     data && p ? <Num v={v ?? null} prov={p} fmt={fmtNamRule} unit="NAM" showAge={false} showReason={false} /> : err ? <Num v={null} prov={FAILED} /> : <SkeletonBlock height={28} width={110} />;
   // the size of the requests a staking figure counts, on its own line under the label
@@ -155,19 +164,19 @@ export default function SupplyScreen({ route }: ScreenProps) {
   // ---------------- the fact strip: Osmosis in the first row, staking in the second (3 columns; 2 on phones) ----------------
   // A server that sends onDeckTotals counts ibcIn7d / ibcOut7d over everyone (market-wide); an older one summed
   // the listed receivers only, so the words say which.
-  const lastW = w === 1 ? 'last day' : `last ${w}${NBSP}days`;
+  const lastW = !Number.isFinite(w) ? 'the window the server used (not stated)' : w === 1 ? 'last day' : `last ${w}${NBSP}days`;
   const refunded = data?.ibcRefunded7d ?? 0;
   const outStamp: Stamp | null = cov && refunded > 0 ? { ...cov, note: [`${fmtNamRule(refunded)} NAM in sends to Namada that timed out and were refunded is not counted.`, cov.note].filter(Boolean).join(' ') } : cov;
   const facts: FactItem[] = [
     {
       n: data ? <Num v={data.ibcIn7d} prov={cov} fmt={fmtNamRule} unit="NAM" showAge={false} /> : err ? <Num v={null} prov={FAILED} /> : <SkeletonBlock height={28} width={110} />,
-      label: totals ? <>bridged to Osmosis by anyone, {lastW}</> : <>bridged to Osmosis, {lastW}</>,
-      scope: data ? { label: totals ? `Bridged to Osmosis by anyone, ${wWords}` : `Bridged to Osmosis, ${wWords}`, p: cov } : undefined,
+      label: totals ? <>crossed to Osmosis, anyone, {lastW}</> : <>crossed to Osmosis, {lastW}</>,
+      scope: data ? { label: totals ? `Crossed to Osmosis, anyone, ${wWords}` : `Crossed to Osmosis, ${wWords}`, p: cov } : undefined,
     },
     {
       n: data ? <Num v={data.ibcOut7d} prov={outStamp} fmt={fmtNamRule} unit="NAM" showAge={false} /> : err ? <Num v={null} prov={FAILED} /> : <SkeletonBlock height={28} width={110} />,
-      label: totals ? <>bridged back out by anyone, {lastW}</> : <>bridged back out, {lastW}</>,
-      scope: data ? { label: totals ? `Bridged back out of Osmosis by anyone, ${wWords}` : `Bridged back out of Osmosis, ${wWords}`, p: outStamp } : undefined,
+      label: totals ? <>crossed back to Namada, anyone, {lastW}</> : <>crossed back to Namada, {lastW}</>,
+      scope: data ? { label: totals ? `Crossed back from Osmosis to Namada, anyone, ${wWords}` : `Crossed back from Osmosis to Namada, ${wWords}`, p: outStamp } : undefined,
     },
     {
       n: o ? <Num v={o.dex.buyNam24h - o.dex.sellNam24h} prov={o.dex.coverage} fmt={fmtNamSigned} unit="NAM" showAge={false} /> : <SkeletonBlock height={28} width={110} />,
@@ -182,21 +191,23 @@ export default function SupplyScreen({ route }: ScreenProps) {
           <a className="sp-factlink" href={`#${UNLOCKS_ID}`} onClick={() => setUlFilter('out')}>
             unstaked, wait over, not withdrawn
           </a>
-          {sizeLine(minWords)}
+          {sizeLine(`counting ${minWords}`)}
         </>
       ),
       scope: readyStamp ? { label: `Unstaked NAM whose wait is over and that was not withdrawn, ${minWords}`, p: readyStamp } : undefined,
     },
     {
-      n: allW ? ulFact(allW.nam, allStamp) : ulFact(sums?.waiting.nam, waitingStamp),
+      n: fromChain ? ulFact(term!.inFlightNam, termStamp) : allW ? ulFact(allW.nam, allStamp) : ulFact(sums?.waiting.nam, waitingStamp),
       label: (
         <>
-          {data?.unbondingDays != null ? <>still unstaking, spendable within {data.unbondingDays.toFixed(2)}{NBSP}days</> : 'still unstaking'}
-          {sizeLine(allW ? 'requests of any size' : minWords)}
+          {data?.unbondingDays != null ? <>still unstaking, spendable within about <Num v={data.unbondingDays} prov={waitStamp} fmt={fmtCount} unit="days" showAge={false} /></> : 'still unstaking'}
+          {sizeLine(fromChain ? "counting requests of every size, from the chain's own list" : allW ? 'counting requests of every size' : `counting ${minWords}`)}
         </>
       ),
-      scope: allW
-        ? allStamp ? { label: 'Unstaked NAM still in its wait, requests of any size', p: allStamp } : undefined
+      scope: fromChain
+        ? { label: "Unstaked NAM still in its wait, requests of every size, from the chain's own list", p: termStamp }
+        : allW
+        ? allStamp ? { label: 'Unstaked NAM still in its wait, requests of every size', p: allStamp } : undefined
         : waitingStamp ? { label: `Unstaked NAM still in its wait, ${minWords}`, p: waitingStamp } : undefined,
     },
     {
@@ -228,6 +239,11 @@ export default function SupplyScreen({ route }: ScreenProps) {
                 hero
               )}
               <Segmented label="Window" className="sp-hero__win" value={String(days) as `${WindowDays}`} options={WINDOWS} onChange={(v) => setDays(Number(v) as WindowDays)} />
+              {data && !busy && Number.isFinite(data.windowDays) && data.windowDays !== days ? (
+                <p className="cap sp-hero__note">
+                  You picked {lastWindow(days)}, but the server answered for {lastWindow(data.windowDays)}: every figure on this page covers {lastWindow(data.windowDays)}.
+                </p>
+              ) : null}
             </div>
           </div>
           <div className={`ipg-facts sp-facts${factsReady ? '' : ' ipg-facts--wait'}`}>

@@ -182,7 +182,7 @@ test.describe('once', () => {
     await expect(chart).toContainText('The server answered with an error.');
     await expect(chart.locator('[aria-busy="true"]')).toHaveCount(0);
     await expect(chart).not.toContainText('No trades in this window');
-    await expect(chart).not.toContainText('No executed trade in this window');
+    await expect(chart).not.toContainText('No trade in this window');
     // Try again, with the history answering now: the chart comes back
     down = false;
     await chart.getByRole('button', { name: 'Try again' }).click();
@@ -214,8 +214,9 @@ test.describe('once', () => {
     await mockQuotes(page, 'table');
     await gotoRoute(page, '/trade');
     const safe = page.locator('.tk-safe');
-    await expect(safe).toContainText(/1% or less, buying or selling, is under\s1,000\sNAM; 3% or less, under\s1,000\sNAM\./, { timeout: 30_000 });
-    await expect(safe).toContainText(/The smallest size quoted, 1,000\sNAM, already moves the price 3\.14%\./);
+    // both limits under the smallest size: one sentence, never "under 1,000 NAM" twice
+    await expect(safe).toContainText(/Even the smallest size quoted, 1,000\sNAM, moves the price 3\.14%, the worse of buying or selling, so no listed order moves it 1% or less, or 3% or less\./, { timeout: 30_000 });
+    await expect(safe).not.toContainText('under');
     await expect(safe).not.toContainText('318');
     await expect(safe).not.toContainText('954');
     await expect(safe).not.toContainText('read off the size table');
@@ -295,5 +296,195 @@ test.describe('desktop widths', () => {
     expect(width[1024]).toBeGreaterThanOrEqual(360);
     expect(width[1100]).toBeGreaterThanOrEqual(width[1024]);
     for (const w of [1600, 1920, 2560]) expect(Math.abs(width[w] - width[1280]), `ticket ${width[w]} px at ${w} vs ${width[1280]} px at 1280`).toBeLessThanOrEqual(2);
+  });
+});
+
+// ---------------------------------------------------------------------------------------------------
+// The second chart (what was bought and sold), the "All" cap and the size table's jump sentence. The
+// record is answered synthetically (production does not serve /api/orderflow until the deploy that adds
+// it, and then its figures change by the hour), so each state is exercised whatever the server does.
+// ---------------------------------------------------------------------------------------------------
+const H = 3_600_000;
+const DAY = 24 * H;
+const HISTORY_ALL_DAYS = 1200;
+
+/** A record of what was bought and sold over `hours`, in the worker's bucket sizes. */
+function flowAnswer(hours: number, asOf = Date.now()) {
+  const bucketMs = hours <= 48 ? H : hours <= 24 * 14 ? 2 * H : hours <= 24 * 45 ? 6 * H : DAY;
+  const n = Math.min(120, Math.floor((hours * H) / bucketMs));
+  const start = Math.floor((asOf - n * bucketMs) / bucketMs) * bucketMs;
+  let cvd = 0;
+  const buckets = [];
+  for (let i = 0; i < n; i++) {
+    const buyNam = 800 + ((i * 137) % 2500);
+    const sellNam = 600 + ((i * 251) % 3100);
+    cvd += buyNam - sellNam;
+    buckets.push({ ts: start + i * bucketMs, buyNam, sellNam, netDeltaNam: buyNam - sellNam, cvdNam: cvd, vwapUsd: 0.0011, trades: 3 });
+  }
+  const totalBuy = buckets.reduce((a, b) => a + b.buyNam, 0);
+  const totalSell = buckets.reduce((a, b) => a + b.sellNam, 0);
+  return { asOf, hours, bucketMs, buckets, netCvdNam: cvd, grossVolumeNam: totalBuy + totalSell, buySharePct: (totalBuy / (totalBuy + totalSell)) * 100, priceChangePct: 1.2, absorptionRegime: 'balanced', prov: { source: 'D1 flow index', at: asOf - 20_000, status: 'live' } };
+}
+const hoursOf = (url: string) => Number(new URL(url).searchParams.get('hours') || 720);
+const SHOW = 'Show what was bought and sold';
+const HIDE = 'Hide what was bought and sold';
+
+test.describe('what was bought and sold, the cap and the jump', () => {
+  test.beforeEach(({}, info) => test.skip(onlyIn(info.project.name), 'viewport-independent: runs in 375x812'));
+
+  test('closed by default and nothing fetched for it; a server without the record says so as missing, never as a fault', async ({ page }) => {
+    // production before the deploy that adds the endpoint answers 404: pinned here so the case holds after it too
+    await page.route(/\/api\/orderflow/, (r) => r.fulfill({ status: 404, body: 'not found' }));
+    const reqs = trackRequests(page);
+    const errors: string[] = [];
+    page.on('pageerror', (e) => errors.push(String(e)));
+    await gotoRoute(page, '/trade');
+    const chart = page.locator('.tk-chart');
+    await expect(chart.locator('#h-chart')).toBeVisible({ timeout: 30_000 });
+    // no toggle row above the price chart, and no request for the record while it is closed
+    await expect(chart.locator('.tk-chart__mode')).toHaveCount(0);
+    await expect(chart.locator('.tk-flow')).toHaveCount(0);
+    expect(apiUrls(reqs, new URL(page.url()).origin).filter((u) => u.pathname === '/api/orderflow')).toEqual([]);
+    await chart.getByRole('button', { name: SHOW }).click();
+    const flow = chart.locator('.tk-flow');
+    await expect(flow.locator('#h-flow')).toHaveText('What was bought and sold');
+    // missing with its reason: the em dash, the plain sentence, a stamp reading "no data"; no warning, no Try again
+    await expect(flow.locator('[data-num]')).toHaveText('—');
+    await expect(flow).toContainText('This server does not keep an hour-by-hour record of what was bought and sold yet');
+    await expect(flow.locator('[data-prov]')).toContainText('no data');
+    await expect(flow.locator('.notice')).toHaveCount(0);
+    await expect(flow.getByRole('button', { name: 'Try again' })).toHaveCount(0);
+    await expect(flow).not.toContainText('did not load');
+    await expect(flow).not.toContainText('error');
+    expect(apiUrls(reqs, new URL(page.url()).origin).filter((u) => u.pathname === '/api/orderflow')).toHaveLength(1);
+    // the words on the screen's own controls carry no jargon
+    for (const sel of ['.tk-more', '.tk-chartmiss']) for (const word of ['Orderflow', 'CVD', 'orderflow']) await expect(chart.locator(sel)).not.toContainText(word);
+    await chart.getByRole('button', { name: HIDE }).click();
+    await expect(chart.locator('.tk-flow')).toHaveCount(0);
+    expect(errors.filter((e) => /orderflow/.test(e))).toEqual([]);
+  });
+
+  test('with the record served: the chart, its own range, a SourceLine, and requests only while it is shown', async ({ page }) => {
+    await page.clock.install();
+    await page.route(/\/api\/orderflow/, (r) => r.fulfill({ json: flowAnswer(hoursOf(r.request().url())) }));
+    const reqs = trackRequests(page);
+    await gotoRoute(page, '/trade');
+    const chart = page.locator('.tk-chart');
+    await expect(chart.locator('#h-chart')).toBeVisible({ timeout: 30_000 });
+    await chart.getByRole('button', { name: SHOW }).click();
+    const flow = chart.locator('.tk-flow');
+    await expect(flow.locator('#h-flow')).toBeVisible();
+    await expect(flow.locator('.chartsec .srcb')).toBeVisible();
+    await expect(flow.locator('.chartsec .srcb')).toHaveAttribute('data-status', 'fresh');
+    const flowReqs = () => apiUrls(reqs, new URL(page.url()).origin).filter((u) => u.pathname === '/api/orderflow');
+    expect(flowReqs().map(hoursOf)).toEqual([720]);
+    // its own range: the price chart stays on 30d while the record goes to 90d
+    await flow.getByRole('radio', { name: '90d' }).click();
+    await expect.poll(() => flowReqs().map(hoursOf)).toEqual([720, 2160]);
+    await expect(chart.locator('.chartsec').first().getByRole('radio', { name: '30d' })).toBeChecked();
+    // refreshed every 2 min while shown, not once hidden
+    await page.clock.runFor(125_000);
+    await expect.poll(() => flowReqs().length).toBe(3);
+    await chart.getByRole('button', { name: HIDE }).click();
+    await page.clock.runFor(250_000);
+    expect(flowReqs().length).toBe(3);
+    // the audit holds with the second chart open
+    await chart.getByRole('button', { name: SHOW }).click();
+    await expect(flow.locator('#h-flow')).toBeVisible();
+    const a = await layoutAudit(page, '.tk-chart');
+    expect(a.overflowX).toBe(false);
+    expect(a.smallText).toEqual([]);
+    expect(a.smallTargets).toEqual([]);
+  });
+
+  test('a failed fetch of the record says so with Try again; a failed refresh keeps the chart, marked old', async ({ page }) => {
+    await page.clock.install();
+    let mode: 'down' | 'up' = 'down';
+    await page.route(/\/api\/orderflow/, (r) => (mode === 'down' ? r.fulfill({ status: 503, body: 'unavailable' }) : r.fulfill({ json: flowAnswer(hoursOf(r.request().url())) })));
+    await gotoRoute(page, '/trade');
+    const chart = page.locator('.tk-chart');
+    await expect(chart.locator('#h-chart')).toBeVisible({ timeout: 30_000 });
+    await chart.getByRole('button', { name: SHOW }).click();
+    const flow = chart.locator('.tk-flow');
+    await expect(flow.locator('#h-flow')).toHaveText('The record of what was bought and sold did not load');
+    await expect(flow).toContainText('The server answered with an error.');
+    await expect(flow.locator('[aria-busy="true"]')).toHaveCount(0);
+    mode = 'up';
+    await flow.getByRole('button', { name: 'Try again' }).click();
+    await expect(flow.locator('.chartsec')).toBeVisible();
+    const heading = await flow.locator('#h-flow').innerText();
+    mode = 'down';
+    await page.clock.runFor(125_000);
+    await expect(flow.locator('.scope__old')).toContainText('The latest refresh of the record of what was bought and sold did not answer, so this is the record fetched at');
+    await expect(flow.locator('.chartsec')).toBeVisible();
+    await expect(flow.locator('#h-flow')).toHaveText(heading);
+    await expect(flow.locator('.chartsec .srcb')).toHaveAttribute('data-status', /old|none/);
+  });
+
+  test('"All" is a cap: the price chart says so only when the history runs into it', async ({ page }) => {
+    const now = Date.now();
+    await page.route(/\/api\/metrics\/history/, (r) => {
+      const u = new URL(r.request().url());
+      const hours = Number(u.searchParams.get('hours'));
+      const from = now - hours * H;
+      const step = hours > 400 * 24 ? DAY : 6 * H;
+      const history = [];
+      for (let t = from + step / 2; t <= now; t += step) history.push({ ts: t, value: 0.001 + ((t / step) % 9) * 0.00001 });
+      return r.fulfill({ json: { history, bucketMs: step } });
+    });
+    await gotoRoute(page, '/trade');
+    const chart = page.locator('.tk-chart .chartsec').first();
+    await expect(chart.locator('#h-chart')).toBeVisible({ timeout: 30_000 });
+    await expect(page.locator('.tk-chart .tk-cap')).toHaveCount(0);
+    await chart.getByRole('radio', { name: 'All' }).click();
+    const cap = page.locator('.tk-chart .tk-cap');
+    await expect(cap).toBeVisible({ timeout: 30_000 });
+    await expect(cap).toContainText(`“All” reaches back ${HISTORY_ALL_DAYS.toLocaleString('en-US')} days`);
+    await expect(cap).toContainText('older than that are not drawn');
+    // a record that begins later than the cap shows all of itself: no cap sentence
+    await chart.getByRole('radio', { name: '90d' }).click();
+    await expect(cap).toHaveCount(0);
+  });
+
+  test('the size table marks where selling costs much more per NAM: one sentence from the rows, never the server\'s prose', async ({ page }) => {
+    const now = Date.now();
+    const marg = [0.48, 1.79, 4.3, 9.3, 14.1, 23];
+    const curve = {
+      ...SNAP.curve,
+      liquidityCliffNam: 5000,
+      cliffNote: 'Concentrated Liquidity cliff above 5,000 NAM: marginal sell slippage jumps 2.4x (1.79% → 4.30%) on the 5,000–10,000 NAM slice.',
+      curve: SNAP.curve.curve.map((p: { amountNam: number }, i: number) => ({ ...p, marginalSellImpactPct: marg[i] })),
+      prov: { ...SNAP.curve.prov, at: now - 2000 },
+    };
+    await page.route(/\/api\/quote\/curve/, (r) => r.fulfill({ json: curve }));
+    await page.route(/\/api\/quote\?/, (r) => r.fulfill({ json: { quote: null, error: DOWN, code: 'unavailable' } }));
+    await gotoRoute(page, '/trade');
+    const jump = page.locator('.tk-jump');
+    await expect(jump).toContainText(/Above 5,000\sNAM, each extra NAM sold gets a much lower price: selling the slice from 5,000 to 10,000\sNAM on its own moves the price 4\.30%, against 1\.79% for the slice from 1,000 to 5,000\sNAM just below it\./, { timeout: 30_000 });
+    await expect(page.locator('.ladder')).not.toContainText('Concentrated Liquidity');
+    await expect(page.locator('.ladder')).not.toContainText('slippage');
+    // every figure in the sentence is a stamped number inside the block's scope, which lists it
+    expect(await jump.locator('[data-num]').count()).toBeGreaterThanOrEqual(6);
+    await expect(page.locator('.ladder .srcb')).toHaveAttribute('data-scope', /Where selling starts to cost much more per NAM/);
+  });
+
+  test('a marked size whose slice moves cannot be worked out says the mark and the reason, never "—, against —"', async ({ page }) => {
+    const now = Date.now();
+    const curve = { ...SNAP.curve, liquidityCliffNam: 5000, spotUsd: null, prov: { ...SNAP.curve.prov, at: now - 2000 } };
+    await page.route(/\/api\/quote\/curve/, (r) => r.fulfill({ json: curve }));
+    await page.route(/\/api\/quote\?/, (r) => r.fulfill({ json: { quote: null, error: DOWN, code: 'unavailable' } }));
+    await gotoRoute(page, '/trade');
+    const jump = page.locator('.tk-jump');
+    await expect(jump).toContainText(/Above 5,000\sNAM the server marks a size where selling starts to cost much more per NAM; — the price move of each slice is not known/, { timeout: 30_000 });
+    await expect(jump).not.toContainText('against');
+    await expect(page.locator('.ladder .srcb')).toHaveAttribute('data-scope', /Where selling starts to cost much more per NAM/);
+  });
+
+  test('without a marked size (the snapshot, an older server) there is no jump sentence and nothing crashes', async ({ page }) => {
+    await mockQuotes(page, 'table');
+    await gotoRoute(page, '/trade');
+    await expect(page.locator('.lrow')).toHaveCount(6, { timeout: 30_000 });
+    await expect(page.locator('.tk-jump')).toHaveCount(0);
+    await expect(page.locator('.ladder .srcb')).not.toHaveAttribute('data-scope', /cost much more/);
   });
 });

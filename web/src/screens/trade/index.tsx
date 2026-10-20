@@ -4,18 +4,25 @@
 // Desktop (1024 px up): a split ground. Left 5/12 the sticky yellow ticket (own scroll when taller
 // than the window); right 7/12 black: chart, then the size block. Pools full width below.
 //
+// The chart block is the price chart. Under it one button opens a second chart, what was bought and
+// sold over the window (NAM bought and NAM sold per bucket, with the running difference); that record is
+// fetched only while it is shown (N9), has its own range, and on a server that does not serve it yet it
+// reads as missing with the reason, never as a fault. Each chart's "All" is a cap (shared/history.ts) and
+// says so when the history runs into it.
+//
 // One shared state for the order size: the amount box, the presets, the curve's slider and the
 // ladder rows all set it. With the live quote answering any amount is quoted live; with it down
 // only the size table's listed sizes (and straight-line estimates, labelled) are shown.
 // Under Rewind no live quote, size table or pool request is made (N3, W12).
 import { useMemo, useState } from 'react';
 import type { ScreenProps } from '../../app/index';
-import { REWIND_WORDS, useClock, useOverview, useReplay } from '../../app/index';
-import { Button, Notice, OrderflowChart, PriceChart, ProvScope, Segmented, SkeletonBlock, type ChartRange } from '../../ui/index';
+import { REWIND_WORDS, useClock, useOverview, useOverviewFailed, useReplay } from '../../app/index';
+import { Button, Notice, Num, OrderflowChart, PriceChart, ProvScope, SkeletonBlock, type ChartRange } from '../../ui/index';
 import type { Stamp } from '../../ui/index';
-import { fmtNamRule, fmtPctSigned, fmtUtcClock } from '../../lib/format';
+import { fmtCount, fmtNamRule, fmtPctSigned, fmtUtcClock } from '../../lib/format';
 import { ageOutStamps } from '../../lib/prov';
 import { PRICE_MOVES } from '../../generated/events';
+import { HISTORY_ALL_DAYS, historyCapReached } from '../../../../shared/history';
 import type { Reading, Side, TicketMode } from './model';
 import { DEFAULT_SIZE, PRESET_SIZES, depthOf, fromQuote, fromTable, markerEvents, parseAmount, quoteKey, serviceAnswered, tablePoints } from './model';
 import { useOrderflowHistory, usePools, usePriceHistory, useQuote, useSizeTable } from './data';
@@ -28,8 +35,36 @@ const TRADE = routeById('trade')!;
 
 const EVENTS = markerEvents(PRICE_MOVES, (p) => fmtPctSigned(p, 1));
 
+/** What the second chart is, in the words the button, the heading and the stamp use. */
+const FLOW_WHAT = 'What was bought and sold';
+/** The stamp of the record of what was bought and sold when the server does not serve it. */
+const FLOW_UNSERVED: Stamp = {
+  source: 'D1 flow index',
+  plain: 'Flow index',
+  at: null,
+  status: 'missing',
+  note: 'This server does not keep an hour-by-hour record of what was bought and sold yet, so there is no chart to draw.',
+};
+
+const skeleton = (label: string) => (
+  <div className="tk-chartskel" aria-busy="true" aria-label={label}>
+    <SkeletonBlock height={56} width="70%" />
+    <SkeletonBlock height={20} width="50%" />
+    <SkeletonBlock height={28} width={220} />
+    <SkeletonBlock height={208} className="tk-chartskel__plot" />
+  </div>
+);
+
+/** The sentence a chart prints when its "All" ran into the cap: the oldest readings are not drawn. */
+const CapNote = ({ what }: { what: string }) => (
+  <p className="cap tk-cap">
+    “All” reaches back {fmtCount(HISTORY_ALL_DAYS)} days, the most this site asks for at once, so {what} older than that are not drawn.
+  </p>
+);
+
 export default function TradeScreen({ route }: ScreenProps) {
   const { overview, liveFlows } = useOverview();
+  const overviewFailed = useOverviewFailed();
   const { at, rewound } = useReplay();
   const clock = useClock();
   const live = !rewound;
@@ -57,11 +92,12 @@ export default function TradeScreen({ route }: ScreenProps) {
 
   // ---- data (live-only requests are off under Rewind)
   const [range, setRange] = useState<ChartRange>('30d');
-  const [chartView, setChartView] = useState<'price' | 'orderflow'>('price');
+  const [flowRange, setFlowRange] = useState<ChartRange>('30d');
+  const [showFlow, setShowFlow] = useState(false);
   const table = useSizeTable(live);
   const pools = usePools(live);
   const history = usePriceHistory(at, range);
-  const orderflow = useOrderflowHistory(at, range);
+  const flow = useOrderflowHistory(at, flowRange, showFlow);
   const { result } = useQuote(live, side, amount, immediate);
 
   const pts = tablePoints(table.data);
@@ -94,6 +130,19 @@ export default function TradeScreen({ route }: ScreenProps) {
     const p = { executed: overview?.price.swap1h.prov ?? null, quoted: overview ? { ...overview.price.usd.prov, plain: 'Osmosis quote' } : null };
     return kept ? ageOutStamps(p, `The latest refresh of the price history did not answer, so the chart is the history fetched at ${fmtUtcClock(history.fetchedAt)}.`) : p;
   }, [overview, kept, history.fetchedAt]);
+  // "All" ran into the cap: the series starts where the request did, not where the record does
+  const priceCapped = range === 'all' && history.data != null && historyCapReached(Math.min(history.data.executed[0]?.t ?? Infinity, history.data.quoted[0]?.t ?? Infinity), at ?? history.fetchedAt ?? clock);
+
+  // the same for the record of what was bought and sold
+  const flowKept = flow.data != null && flow.failedAt != null;
+  const flowOldSentence = `The latest refresh of the record of what was bought and sold did not answer, so this is the record fetched at ${fmtUtcClock(flow.fetchedAt)}.`;
+  const flowProv = useMemo<Stamp | null>(() => {
+    // a record without its stamp falls back to the chart's own "its age is not known" stamp, never "time unknown · fresh"
+    if (!flow.data?.prov) return null;
+    const p: Stamp = { ...flow.data.prov, plain: 'Flow index' };
+    return flowKept ? ageOutStamps(p, flowOldSentence) : p;
+  }, [flow.data, flowKept, flowOldSentence]);
+  const flowCapped = flowRange === 'all' && flow.data != null && historyCapReached(flow.data.buckets[0]?.ts, at ?? flow.data.asOf);
 
   const depth = depthOf(pools.data, overview);
   const sizes = mode === 'table' || asking ? pts.map((p) => p.amountNam) : PRESET_SIZES;
@@ -123,44 +172,8 @@ export default function TradeScreen({ route }: ScreenProps) {
         </div>
         <div className="split__b ground-ink">
           <div className="tk-chart">
-            <div className="tk-chart__mode">
-              <Segmented
-                label="Chart view"
-                value={chartView}
-                onChange={setChartView}
-                options={[
-                  { value: 'price', label: 'Executed price' },
-                  { value: 'orderflow', label: 'Orderflow & CVD' },
-                ]}
-              />
-            </div>
-            {chartView === 'orderflow' ? (
-              orderflow.data ? (
-                <OrderflowChart
-                  headingId="h-chart"
-                  data={orderflow.data}
-                  liveFlows={liveFlows}
-                  range={range}
-                  onRange={setRange}
-                  end={at ?? clock}
-                  cursorAt={at}
-                />
-              ) : orderflow.error ? (
-                <section className="tk-chartfail" aria-labelledby="h-chart">
-                  <h2 id="h-chart" className="h2">The orderflow history did not load</h2>
-                  <Notice tone="warning" title={orderflow.error} action={<Button size="sm" onClick={orderflow.retry}>Try again</Button>}>
-                    The orderflow chart is not shown until it answers. The quote and the size table do not depend on it.
-                  </Notice>
-                </section>
-              ) : (
-                <div className="tk-chartskel" aria-busy="true" aria-label="Fetching the orderflow history">
-                  <SkeletonBlock height={56} width="70%" />
-                  <SkeletonBlock height={20} width="50%" />
-                  <SkeletonBlock height={28} width={220} />
-                  <SkeletonBlock height={208} className="tk-chartskel__plot" />
-                </div>
-              )
-            ) : history.data ? (
+            {/* the chart's stamps come with the overview: it waits for them (or for the overview to fail) so no figure shows unsourced */}
+            {history.data && (overview || overviewFailed) ? (
               <ProvScope old={kept} oldSentence={kept ? <>The latest refresh of the price history did not answer, so this is the history fetched at {fmtUtcClock(history.fetchedAt)}, and it is shown dimmed.</> : null}>
                 <PriceChart
                   headingId="h-chart"
@@ -171,7 +184,9 @@ export default function TradeScreen({ route }: ScreenProps) {
                   end={at ?? clock}
                   cursorAt={at}
                   prov={chartProv}
+                  bucketMs={history.data.executedBucketMs}
                 />
+                {priceCapped ? <CapNote what="trades" /> : null}
               </ProvScope>
             ) : history.error ? (
               // a failed load is said as such, never as "no trades in this window"
@@ -182,13 +197,52 @@ export default function TradeScreen({ route }: ScreenProps) {
                 </Notice>
               </section>
             ) : (
-              <div className="tk-chartskel" aria-busy="true" aria-label="Fetching the price history">
-                <SkeletonBlock height={56} width="70%" />
-                <SkeletonBlock height={20} width="50%" />
-                <SkeletonBlock height={28} width={220} />
-                <SkeletonBlock height={208} className="tk-chartskel__plot" />
-              </div>
+              skeleton('Fetching the price history')
             )}
+
+            {/* The second chart, opened on request: nothing is fetched for it until then. */}
+            <div className="tk-more">
+              <Button size="sm" aria-expanded={showFlow} onClick={() => setShowFlow((v) => !v)}>
+                {showFlow ? 'Hide what was bought and sold' : 'Show what was bought and sold'}
+              </Button>
+            </div>
+            {showFlow ? (
+              <div className="tk-flow">
+                {flow.data ? (
+                  <ProvScope old={flowKept} oldSentence={flowKept ? <>{flowOldSentence} It is shown dimmed.</> : null}>
+                    <OrderflowChart
+                      headingId="h-flow"
+                      data={flow.data}
+                      liveFlows={liveFlows}
+                      range={flowRange}
+                      onRange={setFlowRange}
+                      end={at ?? clock}
+                      cursorAt={at}
+                      prov={flowProv}
+                    />
+                    {flowCapped ? <CapNote what="moves" /> : null}
+                  </ProvScope>
+                ) : flow.unserved ? (
+                  // the server has no such record (production before the deploy that adds it): missing, with the reason, not a fault
+                  <section className="tk-chartmiss" aria-labelledby="h-flow">
+                    <h2 id="h-flow" className="h2">{FLOW_WHAT}</h2>
+                    <p className="tk-miss">
+                      <Num v={null} prov={FLOW_UNSERVED} stamp="dot" label={FLOW_WHAT} as="b" />
+                    </p>
+                    <p className="cap">The price chart, the quote and the size table do not depend on it.</p>
+                  </section>
+                ) : flow.error ? (
+                  <section className="tk-chartfail" aria-labelledby="h-flow">
+                    <h2 id="h-flow" className="h2">The record of what was bought and sold did not load</h2>
+                    <Notice tone="warning" title={flow.error} action={<Button size="sm" onClick={flow.retry}>Try again</Button>}>
+                      The chart is not shown until it answers. The price chart, the quote and the size table do not depend on it.
+                    </Notice>
+                  </section>
+                ) : (
+                  skeleton('Fetching the record of what was bought and sold')
+                )}
+              </div>
+            ) : null}
           </div>
           <SizeBlock rewound={rewound} table={table} amount={amount} side={side} onPick={pick} />
         </div>

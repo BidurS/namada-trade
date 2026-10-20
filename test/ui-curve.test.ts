@@ -143,7 +143,7 @@ describe('chart helpers', () => {
   it('the takeaway title', () => {
     expect(takeaway(0.000589, 0.001012, '18 Sep')).toBe('Executed price up 72% since 18 Sep');
     expect(takeaway(0.0010212, 0.001012, '16 Oct')).toBe('Executed price down 0.9% since 16 Oct');
-    expect(takeaway(1, 1, '1 Oct')).toBe('Executed price flat since 1 Oct');
+    expect(takeaway(1, 1, '1 Oct')).toBe('Executed price changed less than 0.05% since 1 Oct');
     expect(takeaway(null, 1, 'x')).toBeNull();
   });
   it('counts hours with data', () => {

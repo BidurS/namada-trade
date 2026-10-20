@@ -24,25 +24,36 @@
   .sp-hero__skel { display: grid; gap: 6px; }
   .sp-hero__skel .hero-n__top { min-height: 24px; }
   .sp-hero__win { width: 100%; max-width: 32rem; }
+  /* five windows on a 320 to 412 px phone: each label on one line ("30 days" is 50 px at 13 px) */
+  @media (max-width: 479px) { .sp-hero__win .seg__opt > span { padding: 0 2px; white-space: nowrap; } }
 
-  /* ---------- Cross-chain supply-to-dump cohort pipeline (Chart 3) ---------- */
-  .sp-pipe { display: grid; gap: var(--s-3); margin: var(--s-3) 0 var(--s-4); padding: var(--s-4); border: 1px solid var(--c-line); background: var(--c-bg); }
+  .sp-hero__note { color: var(--c-ink-2); max-width: 40ch; }
+
+  /* ---------- Ready to sell: where the NAM came from, and what happened to it (two bars over the same
+     NAM, every figure written out under its bar; a part too small to see is drawn as nothing) ---------- */
+  .sp-pipe { display: grid; gap: var(--s-4); margin: var(--s-3) 0 var(--s-4); padding: var(--s-4); border: 1px solid var(--c-line); background: var(--c-bg); min-width: 0; }
   .sp-pipe__head { display: grid; gap: var(--s-1); }
-  .sp-pipe__bars { display: grid; gap: var(--s-2); }
-  .sp-pipe__row { display: grid; gap: 6px; }
-  .sp-pipe__lbl { font: var(--w-medium) var(--t-12) / 16px var(--font-code); color: var(--c-ink-2); }
-  .sp-pipe__track { display: flex; height: 14px; width: 100%; gap: 2px; background: var(--c-line); overflow: hidden; }
-  .sp-pipe__seg { display: block; height: 100%; min-width: 3px; }
-  .sp-pipe__seg--genesis { background: var(--c-mark); }
-  .sp-pipe__seg--turnstile { background: var(--shielded); }
-  .sp-pipe__seg--burner { background: var(--sell); }
-  .sp-pipe__seg--transparent { background: var(--c-ink-2); }
-  .sp-pipe__seg--sold { background: var(--sell); }
-  .sp-pipe__seg--rem { background: var(--c-ink); }
-  .sp-pipe__seg--back { background: var(--buy); }
-  .sp-pipe__legend { display: flex; flex-wrap: wrap; gap: var(--s-2) var(--s-4); font-size: var(--t-12); line-height: 18px; color: var(--c-ink-2); }
-  .sp-pipe__item { display: inline-flex; align-items: center; gap: 6px; }
-  .sp-pipe__sw { display: inline-block; width: 10px; height: 10px; }
+  .sp-pipe__none { color: var(--c-ink-2); margin: var(--s-3) 0; }
+  .sp-pipe__row { display: grid; gap: var(--s-2); min-width: 0; }
+  .sp-pipe__lbl { margin: 0; font-size: var(--t-13); line-height: 20px; font-weight: var(--w-medium); color: var(--c-ink); }
+  .sp-pipe__track { display: flex; height: 14px; width: 100%; gap: 0; background: var(--c-line); overflow: hidden; }
+  .sp-pipe__seg { display: block; height: 100%; flex: none; }
+  .sp-pipe__seg + .sp-pipe__seg { box-shadow: inset 1px 0 0 var(--c-bg); }
+  .sp-pipe__f--genesis { background: var(--c-mark); }
+  .sp-pipe__f--shielded { background: var(--shielded); }
+  .sp-pipe__f--middle { background: var(--c-ink); }
+  .sp-pipe__f--other { background: var(--c-ink-2); }
+  .sp-pipe__f--sold { background: var(--sell); }
+  .sp-pipe__f--left { background: var(--c-ink); }
+  .sp-pipe__f--back { background: var(--c-line-strong); }
+  /* one part per line: swatch, name, then NAM and share on the right; a glossary term keeps its 44 px area (20 + 12 + 12) */
+  .sp-pipe__legend { display: grid; margin: 0; padding: 0; list-style: none; }
+  .sp-pipe__item { display: grid; grid-template-columns: 10px minmax(0, 1fr) auto; align-items: baseline; column-gap: var(--s-2); padding: 12px 0; border-top: 1px solid var(--c-line); font-size: var(--t-13); line-height: 20px; color: var(--c-ink-2); }
+  .sp-pipe__sw { display: inline-block; width: 10px; height: 10px; align-self: center; }
+  .sp-pipe__name { min-width: 0; }
+  .sp-pipe__v { display: grid; justify-items: end; text-align: right; color: var(--c-ink); white-space: nowrap; }
+  .sp-pipe__pct { font: var(--w-regular) var(--t-12) / 16px var(--font-code); color: var(--c-ink-2); }
+  .rts__via { display: block; flex-basis: 100%; }
 
   /* ---------- the band's six figures: Osmosis in the first row, staking in the second (3 columns);
      2 x 3 on phones. Hairlines between columns, a hairline above every row after the first. ---------- */
@@ -158,28 +169,32 @@
     .ulr__then { padding-top: 0; }
     .ulr__detail--bond { display: inline; }
   }
+  /* a short glossary word in 13 px text ("epoch"): the shared 44 px rule rounds to 43.9 there, so 46 */
+  .ul-sec .term::after, .sp-pipe .term::after { inset-inline: min(-4px, calc((100% - 46px) / 2)); }
   .ul-chart { margin-top: var(--s-4); padding-top: var(--s-5); border-top: 1px solid var(--c-line); max-width: 48rem; }
   .ul-chart .chartsec__h { font-size: var(--t-18); line-height: var(--lh-18); max-width: none; }
   .ul-chart__mode { margin-bottom: var(--s-4); max-width: 28rem; }
 
-  /* ---------- 56-Epoch Forward Unlock Term Structure / Maturity Wall (Chart 2) ---------- */
-  .ul-wall { display: grid; gap: var(--s-3); }
-  .ul-wall__readout { display: flex; flex-wrap: wrap; justify-content: space-between; gap: var(--s-1) var(--s-3); padding: var(--s-2) 0; border-top: 1px solid var(--c-line); border-bottom: 1px solid var(--c-line); font-size: var(--t-12); line-height: 18px; color: var(--c-ink-2); }
-  .ul-wall__when { font-family: var(--font-code); color: var(--c-ink); font-weight: var(--w-medium); }
-  .ul-wall__plot { position: relative; height: 196px; padding-top: var(--s-3); border-bottom: 1px solid var(--c-ink-2); }
-  .ul-wall__cap { position: absolute; left: 0; right: 0; border-top: 1px dashed var(--c-mark); pointer-events: none; z-index: 2; }
-  .ul-wall__cap-lbl { position: absolute; right: 0; top: -18px; font: var(--w-medium) 11px / 14px var(--font-code); color: var(--c-mark); background: var(--c-bg); padding-inline: 4px; }
-  .ul-wall__bars { display: grid; grid-template-columns: repeat(15, minmax(0, 1fr)); gap: 4px; height: 100%; align-items: end; }
-  .ul-wall__col { display: grid; grid-template-rows: 1fr auto; gap: 6px; height: 100%; padding: 0; border: 0; background: transparent; color: inherit; cursor: pointer; text-align: center; }
-  .ul-wall__col:focus-visible { outline: var(--ring-w) solid var(--c-focus); outline-offset: 2px; }
-  .ul-wall__bar-wrap { display: flex; align-items: flex-end; justify-content: center; height: 100%; width: 100%; }
-  .ul-wall__bar { display: flex; flex-direction: column; justify-content: flex-end; width: 100%; max-width: 28px; min-height: 3px; background: var(--c-line); overflow: hidden; }
-  .ul-wall__bar--zero { height: 2px; opacity: 0.4; }
-  .ul-wall__col.is-active .ul-wall__bar { box-shadow: 0 0 0 1px var(--c-ink); }
-  .ul-wall__seg { display: block; width: 100%; }
-  .ul-wall__seg--high, .ul-wall__sw--high { background: var(--c-mark); }
-  .ul-wall__seg--low, .ul-wall__sw--low { background: var(--c-ink-2); }
-  .ul-wall__x { font: var(--w-medium) 11px / 14px var(--font-code); color: var(--c-ink-2); }
+  /* ---------- Unstaking that ends each day: a measured SVG with no controls in it (ticks 11 px), then
+     one row per day with NAM, so every figure reads without hover ---------- */
+  .ul-days .chartsec__title { display: grid; gap: var(--s-2); }
+  .ul-days__now { color: var(--c-ink); max-width: 64ch; }
+  .ul-days__key { margin: 0; }
+  .ul-days__key .key__i { display: flex; align-items: baseline; gap: 0; }
+  .ul-days__key .key__sw { flex: none; align-self: center; }
+  .ul-days__box { position: relative; height: 176px; }
+  @media (min-width: 640px) { .ul-days__box { height: 232px; } }
+  .ul-days__box > svg { position: absolute; inset: 0; display: block; overflow: visible; }
+  .ul-days__f--sold { fill: var(--c-mark); background: var(--c-mark); }
+  .ul-days__f--kept { fill: var(--c-ink-2); background: var(--c-ink-2); }
+  .ul-days__f--none { fill: var(--c-line-strong); background: var(--c-line-strong); }
+  .ul-days__list { display: grid; margin: 0; padding: 0; list-style: none; }
+  .ul-days__row { display: grid; grid-template-columns: minmax(0, 1fr) auto; grid-template-areas: "when amt" "how how"; column-gap: var(--s-3); row-gap: 2px; padding: 10px 0; border-top: 1px solid var(--c-line); }
+  .ul-days__when { grid-area: when; display: flex; flex-wrap: wrap; align-items: baseline; gap: 0 var(--s-2); font: var(--w-medium) var(--t-13) / 20px var(--font-code); color: var(--c-ink); }
+  .ul-days__by { font: var(--w-regular) var(--t-12) / 18px var(--font-code); color: var(--c-ink-2); }
+  .ul-days__amt { grid-area: amt; text-align: right; font-size: var(--t-15); line-height: 20px; font-weight: var(--w-medium); white-space: nowrap; }
+  .ul-days__how { grid-area: how; display: flex; flex-wrap: wrap; gap: 0 var(--s-3); font-size: var(--t-13); line-height: 20px; color: var(--c-ink-2); }
+  .ul-days__sw { display: inline-block; width: 8px; height: 8px; margin-right: 6px; vertical-align: 1px; }
 
   /* ---------- Votes in progress ---------- */
   .votes { display: grid; }

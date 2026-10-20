@@ -17,7 +17,7 @@ export function Movers({ data, isMine }: { data: Pressure; isMine: (a: string | 
   const cov = data.coverageByChain?.osmosis ?? data.coverage;
   const [rows, more] = useShowAll(data.movers, FIRST);
   const old = isOld(cov);
-  const w = data.windowDays === 1 ? '24 h' : `${data.windowDays} days`;
+  const w = !Number.isFinite(data.windowDays) ? 'the window' : data.windowDays === 1 ? '24 h' : `${data.windowDays} days`;
 
   return (
     <ProvScope as="section" className="ipg-sec ipg-col--5" aria-labelledby="mv-h" data-decision="D4">

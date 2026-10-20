@@ -1,9 +1,11 @@
 // Trade screen data (S2). The live-only requests (/api/quote, /api/quote/curve, /api/pools) are
-// never made while rewound (N3, W12); the price history goes through the shell's fetch wrapper,
-// which adds ?at= under Rewind. Polls run only while the tab is visible.
+// never made while rewound (N3, W12); the price history and the record of what was bought and sold go
+// through the API's fetch wrapper, which adds ?at= under Rewind. Polls run only while the tab is visible,
+// and the record of what was bought and sold is fetched only while the screen shows it (N9).
 import { useCallback, useEffect, useRef, useState } from 'react';
 import type { OrderflowResponse, PoolInfo, Provenance, QuoteCurveResponse } from '../../../../shared/types';
-import { fetchMetricHistory, fetchOrderflow, fetchPools, fetchQuote, fetchQuoteCurve } from '../../api';
+import { historyFetchHours } from '../../../../shared/history';
+import { fetchMetricSeries, fetchOrderflow, fetchPools, fetchQuote, fetchQuoteCurve } from '../../api';
 import { useVisible } from '../../app/index';
 import type { ChartRange } from '../../ui/index';
 import type { QuoteCode, QuoteResult, Side } from './model';
@@ -83,134 +85,136 @@ export const useSizeTable = (live: boolean) =>
 export const usePools = (live: boolean) =>
   useLiveResource<{ pools: PoolInfo[]; prov: Provenance }>(live, fetchPools, 120_000, 'The pool list could not be fetched.', POOLS_KEEP);
 
+// ---------------------------------------------------------------- stored series over time
+
 export interface History {
   executed: { t: number; v: number }[];
   quoted: { t: number; v: number }[];
+  /** the server's spacing of the executed points (null when it does not say) */
+  executedBucketMs: number | null;
 }
 
-export interface HistoryLoad extends Load<History> {
+/**
+ * A stored series fetched for a window, as of `at` under Rewind. A failed request is an error, never an empty
+ * series: with nothing shown yet it says so (and the screen offers Try again); after a good answer a failed
+ * refresh keeps that series, with `failedAt` set, so the screen marks it old and says since when. A server
+ * that does not serve the record at all (it answers 404, as production does before a deploy that adds the
+ * endpoint) is `unserved`: that is a missing figure with its reason, not a fault, and Try again is pointless.
+ */
+export interface HistoryLoad<T> extends Load<T> {
   /** When the series shown was fetched (unix ms). */
   fetchedAt: number | null;
   /** The last refresh failed: when. The series shown (if any) is the earlier one, kept, and is old. */
   failedAt: number | null;
+  /** The server has no such record (HTTP 404): `error` holds the plain words. */
+  unserved: boolean;
   /** Ask again now (the "Try again" button). */
   retry: () => void;
 }
 
-/** Why the price history is not shown, in plain words (never a URL or a status line). */
+/** Why a series is not shown, in plain words (never a URL or a status line). */
 export const historyFailWords = (e: unknown): string =>
-  e instanceof Error && /HTTP \d+/.test(e.message) ? 'The server answered with an error.' : 'The server did not answer.';
+  isUnserved(e) ? 'This server does not serve it yet.' : e instanceof Error && /HTTP \d+/.test(e.message) ? 'The server answered with an error.' : 'The server did not answer.';
 
-const rangeFetchHours = (range: ChartRange): number =>
-  range === 'all' ? 24 * 1200 : range === '1y' ? 24 * 365 : range === '90d' ? 24 * 90 : 24 * 30;
+/** The server answered 404: it does not have this endpoint (an older deploy), as opposed to failing. */
+const isUnserved = (e: unknown): boolean => e instanceof Error && /^HTTP 404\b/.test(e.message);
 
-interface HistoryState {
+interface HistoryState<T> {
   for: string;
-  data: History | null;
+  data: T | null;
   error: string | null;
+  unserved: boolean;
   fetchedAt: number | null;
   failedAt: number | null;
 }
 
 /**
- * Executed-swap price (hourly/6h/24h medians) and recorded quoted price across short or multi-month/year windows,
- * as of `at` under Rewind. Switching between 24h, 7d, and 30d reuses the 30-day fetch; 90d, 1y, and All fetch deeper history.
+ * One stored series keyed by `key` (the moment and the window): fetched when the key changes and every `everyMs`
+ * while visible (null: never refreshed, a rewound window never changes); not at all while `enabled` is false.
+ * The answer remembers which key it is for, so a new ?at= or window never shows the previous one.
  */
-export function usePriceHistory(at: number | null, range: ChartRange = '30d'): HistoryLoad {
+function useHistory<T>(key: string, fn: () => Promise<T>, enabled: boolean, everyMs: number | null): HistoryLoad<T> {
   const visible = useVisible();
-  const hours = rangeFetchHours(range);
-  const key = `${at ?? 'live'}:${hours}`;
-  const [state, setState] = useState<HistoryState>({ for: key, data: null, error: null, fetchedAt: null, failedAt: null });
+  const fnRef = useRef(fn);
+  fnRef.current = fn;
+  const [state, setState] = useState<HistoryState<T>>({ for: key, data: null, error: null, unserved: false, fetchedAt: null, failedAt: null });
   const [tick, setTick] = useState(0);
   const hasData = state.for === key && state.data != null;
   useEffect(() => {
+    if (!enabled) return;
     if (!visible && hasData) return;
     let alive = true;
     const run = () =>
-      Promise.all([fetchMetricHistory('price.swap_1h', hours, at), fetchMetricHistory('price.usd', hours, at)]).then(
-        ([e, q]) => {
+      fnRef.current().then(
+        (data) => {
           if (!alive) return;
-          setState({ for: key, data: { executed: e.map((r) => ({ t: r.ts, v: r.value })), quoted: q.map((r) => ({ t: r.ts, v: r.value })) }, error: null, fetchedAt: Date.now(), failedAt: null });
+          setState({ for: key, data, error: null, unserved: false, fetchedAt: Date.now(), failedAt: null });
         },
         (err: unknown) => {
           if (!alive) return;
           const error = historyFailWords(err);
-          setState((s) => (s.for === key && s.data ? { ...s, error, failedAt: Date.now() } : { for: key, data: null, error, fetchedAt: null, failedAt: Date.now() }));
+          const unserved = isUnserved(err);
+          // a refresh keeps the series it had for this key (marked old by the screen); a first load has nothing to keep
+          setState((s) => (s.for === key && s.data ? { ...s, error, unserved, failedAt: Date.now() } : { for: key, data: null, error, unserved, fetchedAt: null, failedAt: Date.now() }));
         },
       );
     run();
-    const id = at ? 0 : window.setInterval(run, 300_000);
+    const id = everyMs ? window.setInterval(run, everyMs) : 0;
     return () => {
       alive = false;
       if (id) window.clearInterval(id);
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [key, visible, tick]);
+  }, [key, enabled, visible, tick, everyMs]);
   const retry = useCallback(() => {
-    setState((s) => (s.for === key && !s.data ? { ...s, error: null } : s));
+    // back to the waiting state while the new request is out (an earlier series, if any, stays shown)
+    setState((s) => (s.for === key && !s.data ? { ...s, error: null, unserved: false } : s));
     setTick((n) => n + 1);
   }, [key]);
   const mine = state.for === key;
   const data = mine ? state.data : null;
   const error = mine ? state.error : null;
-  return { data, error, loading: data == null && error == null, fetchedAt: mine ? state.fetchedAt : null, failedAt: mine && error ? state.failedAt : null, retry };
-}
-
-export interface OrderflowLoad extends Load<OrderflowResponse> {
-  fetchedAt: number | null;
-  failedAt: number | null;
-  retry: () => void;
-}
-
-interface OrderflowState {
-  for: string;
-  data: OrderflowResponse | null;
-  error: string | null;
-  fetchedAt: number | null;
-  failedAt: number | null;
+  return {
+    data,
+    error,
+    loading: enabled && data == null && error == null,
+    fetchedAt: mine ? state.fetchedAt : null,
+    failedAt: mine && error ? state.failedAt : null,
+    unserved: mine && error != null && state.unserved,
+    retry,
+  };
 }
 
 /**
- * Signed orderflow & Cumulative Volume Delta (CVD) buckets across short or multi-month/year windows.
+ * The executed-swap price (hourly medians, or longer buckets over long windows) and the recorded quoted price,
+ * as of `at` under Rewind. Switching between 24h, 7d and 30d reuses the 30-day fetch; 90d, 1y and All fetch
+ * deeper history (shared/history.ts). The executed price is an hourly median: a 5 min refresh is plenty.
  */
-export function useOrderflowHistory(at: number | null, range: ChartRange = '30d'): OrderflowLoad {
-  const visible = useVisible();
-  const hours = rangeFetchHours(range);
+export function usePriceHistory(at: number | null, range: ChartRange = '30d'): HistoryLoad<History> {
+  const hours = historyFetchHours(range);
   const key = `${at ?? 'live'}:${hours}`;
-  const [state, setState] = useState<OrderflowState>({ for: key, data: null, error: null, fetchedAt: null, failedAt: null });
-  const [tick, setTick] = useState(0);
-  const hasData = state.for === key && state.data != null;
-  useEffect(() => {
-    if (!visible && hasData) return;
-    let alive = true;
-    const run = () =>
-      fetchOrderflow(hours, at).then(
-        (d) => {
-          if (!alive) return;
-          setState({ for: key, data: d, error: null, fetchedAt: Date.now(), failedAt: null });
-        },
-        (err: unknown) => {
-          if (!alive) return;
-          const error = historyFailWords(err);
-          setState((s) => (s.for === key && s.data ? { ...s, error, failedAt: Date.now() } : { for: key, data: null, error, fetchedAt: null, failedAt: Date.now() }));
-        },
-      );
-    run();
-    const id = at ? 0 : window.setInterval(run, 120_000);
-    return () => {
-      alive = false;
-      if (id) window.clearInterval(id);
-    };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [key, visible, tick]);
-  const retry = useCallback(() => {
-    setState((s) => (s.for === key && !s.data ? { ...s, error: null } : s));
-    setTick((n) => n + 1);
-  }, [key]);
-  const mine = state.for === key;
-  const data = mine ? state.data : null;
-  const error = mine ? state.error : null;
-  return { data, error, loading: data == null && error == null, fetchedAt: mine ? state.fetchedAt : null, failedAt: mine && error ? state.failedAt : null, retry };
+  return useHistory<History>(
+    key,
+    () =>
+      Promise.all([fetchMetricSeries('price.swap_1h', hours, at), fetchMetricSeries('price.usd', hours, at)]).then(([e, q]) => ({
+        executed: e.history.map((r) => ({ t: r.ts, v: r.value })),
+        quoted: q.history.map((r) => ({ t: r.ts, v: r.value })),
+        executedBucketMs: e.bucketMs,
+      })),
+    true,
+    at ? null : 300_000,
+  );
+}
+
+/**
+ * What was bought and sold on Osmosis over the window, in buckets (NAM bought and NAM sold per hour, or per
+ * longer bucket over long windows, with the running difference), as of `at` under Rewind. Fetched only while
+ * `enabled` (the screen shows it), and refreshed every 2 min while it is.
+ */
+export function useOrderflowHistory(at: number | null, range: ChartRange = '30d', enabled = true): HistoryLoad<OrderflowResponse> {
+  const hours = historyFetchHours(range);
+  const key = `${at ?? 'live'}:${hours}`;
+  return useHistory<OrderflowResponse>(key, () => fetchOrderflow(hours, at), enabled, at ? null : 120_000);
 }
 
 const DOWN_WORDS = 'The Osmosis quote service is not answering.';

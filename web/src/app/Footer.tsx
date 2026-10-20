@@ -55,7 +55,7 @@ export function Footer() {
         <div className="foot__legal">
           <p>
             {SITE.provenance} Data: {SITE.dataSources}
-            {flowsAt ? `; flow records current as of ${fmtAgo(flowsAt, now)}.` : '.'}
+            {flowsAt ? `; this site's own record of moves current as of ${fmtAgo(flowsAt, now)}.` : '.'}
           </p>
           <p>{SITE.disclaimer}</p>
         </div>

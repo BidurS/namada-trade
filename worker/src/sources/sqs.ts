@@ -1,6 +1,7 @@
 import { OSMOSIS, NAM } from '../config';
 import { fetchJson, toNam, HttpError, sleep } from '../util';
 import type { PoolInfo, PriceQuote, Provenance, QuoteCurveResponse, SafeClipInfo, SlippageCurvePoint } from '../../../shared/types';
+import { SIZE_SLICE_JUMP_FROM_ZERO_PCT, SIZE_SLICE_JUMP_MIN_PCT, SIZE_SLICE_JUMP_RATIO } from '../../../shared/size-table';
 
 const SOURCE = 'Osmosis SQS';
 
@@ -259,7 +260,8 @@ export function safeClip(curve: SlippageCurvePoint[], targetPct: number): SafeCl
 
 /**
  * Annotate a slippage ladder with marginal slice pricing (ΔUSDC / ΔNAM between adjacent tiers) and detect
- * Concentrated Liquidity tick-boundary cliffs where marginal slippage jumps >2.5x or liquidity is exhausted.
+ * Concentrated Liquidity tick-boundary cliffs where marginal slippage jumps by the rule in shared/size-table.ts.
+ * `cliffNote` is operator text for API readers; the site never prints it (it composes its own sentence from fields).
  */
 export function annotateSlippageCurve(
   curve: SlippageCurvePoint[],
@@ -305,8 +307,9 @@ export function annotateSlippageCurve(
       liquidityCliffNam == null &&
       idx > 0 &&
       marginalSellImpactPct != null &&
-      marginalSellImpactPct >= 1.5 &&
-      (prevMarginalImpact > 0 ? marginalSellImpactPct / prevMarginalImpact >= 2.5 : marginalSellImpactPct >= 5.0)
+      // the rule the UI states in its stamp sheet (shared/size-table.ts), one place for both
+      marginalSellImpactPct >= SIZE_SLICE_JUMP_MIN_PCT &&
+      (prevMarginalImpact > 0 ? marginalSellImpactPct / prevMarginalImpact >= SIZE_SLICE_JUMP_RATIO : marginalSellImpactPct >= SIZE_SLICE_JUMP_FROM_ZERO_PCT)
     ) {
       liquidityCliffNam = prevNam;
       const ratio = prevMarginalImpact > 0 ? (marginalSellImpactPct / prevMarginalImpact).toFixed(1) : '∞';

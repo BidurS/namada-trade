@@ -67,7 +67,8 @@ export function Num({ v, prov, fmt = defaultFmt, unit, showAge, showReason = tru
     return (
       <span className={`num ${className}`}>
         <El data-num="" data-status="none">—</El>
-        {showReason ? <span className="num__x num__x--why">{reason}</span> : null}
+        {/* a real space after the dash, so the reason never reads "—This" when copied or read aloud */}
+        {showReason ? <> <span className="num__x num__x--why">{reason}</span></> : null}
         {ctl ? <> {ctl}</> : null}
       </span>
     );

@@ -109,3 +109,28 @@
     .tk-chartskel { min-height: 675px; }
   }
 }
+
+/* ==========================================================================
+   Trade, the chart block's second chart and the size block's jump sentence.
+   ========================================================================== */
+@layer components {
+  /* the one button under the price chart; the second chart opens under it */
+  .tk-more { margin-top: var(--s-5); }
+  .tk-flow { margin-top: var(--s-5); padding-top: var(--s-5); border-top: 1px solid var(--c-line); min-width: 0; }
+  /* the record is not served by this server: the figure reads "—" with its reason, then one sentence */
+  .tk-chartmiss { display: grid; gap: var(--s-3); align-content: start; max-width: 640px; }
+  .tk-miss { font-size: var(--t-15); line-height: var(--lh-15); }
+  .tk-miss .num__x--why { display: inline; margin-left: var(--s-2); }
+  /* "All" ran into the cap: said under the chart, in the chart's own scope */
+  .tk-cap { margin-top: var(--s-2); max-width: 60ch; }
+  /* where selling starts to cost much more per NAM: one sentence under the curve, its figures in the block's scope */
+  .tk-jump { max-width: 60ch; }
+  .tk-jump b { font-weight: var(--w-medium); color: var(--c-ink); }
+  /* The kit's compact range pills are max-content wide: six of them (24h to All) and the curve's two long
+     options ran past the gutter on phones. Here they take the column's width instead, each option still a
+     44 px hit (32 px pill plus 6 px above and below). */
+  @media (max-width: 639px) {
+    .tk-chart .seg--range, .tk-size .seg--range { width: 100%; max-width: none; }
+    .tk-chart .seg--range .seg__opt > span, .tk-size .seg--range .seg__opt > span { padding: 0 6px; }
+  }
+}

@@ -417,7 +417,7 @@ export interface SupplyCohortBreakdown {
     burnerHopNam: number;
     transparentNam: number;
   };
-  /** High-risk remaining inventory (dumpHazardScore >= 0.6) in NAM */
+  /** Remaining NAM with addresses whose dumpHazardScore is at least SELLS_MOST_CUT (shared/supply-thresholds.ts) */
   highHazardRemainingNam: number;
 }
 

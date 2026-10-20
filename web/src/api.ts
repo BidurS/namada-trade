@@ -201,7 +201,12 @@ export interface MetricPoint {
   n?: number;
 }
 export async function fetchMetricHistory(key: string, hours: number, asOf: number | null = null): Promise<MetricPoint[]> {
-  return (await get<{ history: MetricPoint[]; bucketMs?: number }>(`/api/metrics/history${at(asOf, new URLSearchParams({ key, hours: String(hours) }))}`)).history ?? [];
+  return (await fetchMetricSeries(key, hours, asOf)).history;
+}
+/** The same history with the server's point spacing (bucketMs; null when the server does not send it). */
+export async function fetchMetricSeries(key: string, hours: number, asOf: number | null = null): Promise<{ history: MetricPoint[]; bucketMs: number | null }> {
+  const r = await get<{ history: MetricPoint[]; bucketMs?: number }>(`/api/metrics/history${at(asOf, new URLSearchParams({ key, hours: String(hours) }))}`);
+  return { history: r.history ?? [], bucketMs: typeof r.bucketMs === 'number' && r.bucketMs > 0 ? r.bucketMs : null };
 }
 
 export async function saveLabel(address: string, label: string, category = 'watch', note = ''): Promise<{ ok: boolean; error?: string }> {

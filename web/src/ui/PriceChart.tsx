@@ -6,10 +6,16 @@
 // nearest executed point into a fixed readout above the plot, a visible Low/High/Last/Quoted
 // strip, sparse data said in words, one SourceLine naming each series with its own age, and a
 // visually hidden text fallback (first, lowest, highest, last). Two points draw as dots.
-import { useMemo, useState } from 'react';
+//
+// Each executed point is the median price of one hour's swaps. Up to the 30-day range the
+// server sends every such hour, so the chart can count the hours without a trade; on 90d, 1y
+// and All it thins the series (chartConst.ts HOURLY_HISTORY_DAYS), so the chart says how many
+// points it joins and that a gap is not an hour without a trade, never a count it cannot know.
+import React, { useMemo, useState } from 'react';
 import type { Stamp } from '../lib/prov';
 import { fmtAgo, fmtDayClock, fmtDayMonth, fmtUsdRule, fmtUtcClock } from '../lib/format';
 import { hoursWithData, lin, nearestIndex, niceTicks, pathOf, stackLabels, takeaway, tickLabel } from './chartMath';
+import { DAY_MS, FEW_POINTS, HOUR_MS, HOURLY_HISTORY_DAYS, SPARSE_SHARE, spanWords } from './chartConst';
 import { useSize } from './useSize';
 import { Segmented } from './Segmented';
 import { SourceLine } from './SourceLine';
@@ -44,8 +50,13 @@ export interface PriceChartProps {
   level?: 2 | 3;
   /** `shielded`: one series in --shielded, the unit and stats say NAM (Shielded screen). */
   variant?: 'price' | 'shielded';
-  /** Unit sentence after the title ("USDC per NAM, hourly median of executed swaps"). */
-  unit?: string;
+  /** Unit sentence after the title (default: the unit, what a point is, and the count). */
+  unit?: React.ReactNode;
+  /**
+   * The server's point spacing when the screen knows it (the history answer's bucketMs). Without it the
+   * chart takes a range up to HOURLY_HISTORY_DAYS as hourly and a longer one as thinned.
+   */
+  bucketMs?: number | null;
   className?: string;
 }
 
@@ -57,6 +68,7 @@ export const RANGE_MS: Record<ChartRange, number | null> = {
   '1y': 365 * 86_400_000,
   'all': null,
 };
+/** Six pills; under 640 px charts.css tightens their padding so they fit a 343 px column. */
 export const RANGES: { value: ChartRange; label: string }[] = [
   { value: '24h', label: '24h' },
   { value: '7d', label: '7d' },
@@ -70,7 +82,7 @@ const monthYear = (t: number) => `${MON[new Date(t).getUTCMonth()]} ${new Date(t
 
 const CHAR = 6.6; // JetBrains Mono at 11 px: 0.6 em advance
 
-export function PriceChart({ series, events = [], range, onRange, end, cursorAt, prov, title, headingId, level = 2, variant = 'price', unit, className = '' }: PriceChartProps) {
+export function PriceChart({ series, events = [], range, onRange, end, cursorAt, prov, title, headingId, level = 2, variant = 'price', unit, bucketMs, className = '' }: PriceChartProps) {
   const now = useUiNow();
   const [boxRef, { w, h }] = useSize<HTMLDivElement>();
   const [pick, setPick] = useState<number | null>(null);
@@ -120,14 +132,29 @@ export function PriceChart({ series, events = [], range, onRange, end, cursorAt,
   const low = E.length ? E.reduce((a, b) => (b.v < a.v ? b : a)) : null;
   const high = E.length ? E.reduce((a, b) => (b.v > a.v ? b : a)) : null;
   const lastQ = Q[Q.length - 1] ?? null;
-  const heading = title ?? takeaway(first?.v, last?.v, fmtDayMonth(first?.t), isPrice ? 'Executed price' : 'Shielded NAM') ?? (E.length ? (isPrice ? 'Executed price' : 'Shielded NAM') : isPrice ? 'No trades in this window' : 'No readings in this window');
-  const hours = Math.max(1, Math.round(actualSpan / 3_600_000));
+  const heading = title ?? takeaway(first?.v, last?.v, fmtDayMonth(first?.t), isPrice ? 'Price paid in trades' : 'Shielded NAM') ?? (E.length ? (isPrice ? 'Price paid in trades' : 'Shielded NAM') : isPrice ? 'No trades in this window' : 'No readings in this window');
+  const hours = Math.max(1, Math.round(actualSpan / HOUR_MS));
   const withTrades = hoursWithData(E.map((p) => p.t));
+  // every hour with a trade is a point only while the server sends the series hour by hour
+  const hourly = bucketMs != null ? bucketMs <= HOUR_MS : spanMs != null && spanMs <= HOURLY_HISTORY_DAYS * DAY_MS;
   const H = level === 3 ? 'h3' : 'h2';
-  const unitLine = unit ?? (isPrice ? `USDC per NAM, ${actualSpan > 31 * 86_400_000 ? 'bucketed' : 'hourly median of'} executed swaps, ${E.length} points.` : `NAM in the shielded set, ${E.length} readings.`);
+  const unitLine = unit ?? (isPrice ? (
+    <>USDC paid per NAM in real trades: each point is the middle price of one hour’s trades, <span data-num="">{E.length}</span> {E.length === 1 ? 'point' : 'points'}.</>
+  ) : (
+    <>NAM in the shielded set, <span data-num="">{E.length}</span> {E.length === 1 ? 'reading' : 'readings'}.</>
+  ));
+  const fewQuoted = Q.length && Q.length < FEW_POINTS ? <>, and the quoted line has only <span data-num="">{Q.length}</span> {Q.length === 1 ? 'point' : 'points'} so far</> : null;
 
+  // A drawn series always has its SourceLine: when its stamp has not come (it arrives with the overview),
+  // the line says the stamp is missing rather than leaving the figures unsourced (N1).
+  const executedStamp: Stamp | null = prov?.executed ?? (E.length ? {
+    source: isPrice ? 'executed NAM/USDC swaps (hourly median)' : 'namada-rpc',
+    at: null,
+    status: 'missing',
+    note: 'The time stamp of this series comes with the site overview, which has not arrived, so its age is not known.',
+  } : null);
   const scope = [
-    ...(prov?.executed ? [{ label: isPrice ? 'Executed price (swaps)' : 'Shielded NAM', p: prov.executed }] : []),
+    ...(executedStamp ? [{ label: isPrice ? 'Executed price (swaps)' : 'Shielded NAM', p: executedStamp }] : []),
     ...(prov?.quoted && isPrice ? [{ label: 'Quoted price', p: prov.quoted }] : []),
   ];
 
@@ -157,12 +184,12 @@ export function PriceChart({ series, events = [], range, onRange, end, cursorAt,
       <p className="readout" aria-live="polite">
         {shown ? (
           <>
-            <span className="readout__k">{sel ? (isPrice ? 'Executed' : 'Reading') : isPrice ? 'Last executed' : 'Last reading'}</span>{' '}
+            <span className="readout__k">{sel ? (isPrice ? 'Trade price' : 'Reading') : isPrice ? 'Last trade' : 'Last reading'}</span>{' '}
             <b data-num="" className="readout__v">{isPrice ? <Price v={shown.v} /> : fmtV(shown.v)}</b>{' '}
             <span className="readout__t">{fmtDayClock(shown.t)}</span>
           </>
         ) : (
-          <span className="readout__k">{isPrice ? 'No executed trade in this window.' : 'No reading in this window.'}</span>
+          <span className="readout__k">{isPrice ? 'No trade in this window.' : 'No reading in this window.'}</span>
         )}
       </p>
 
@@ -242,28 +269,39 @@ export function PriceChart({ series, events = [], range, onRange, end, cursorAt,
       </div>
 
       <ul className="key">
-        <li><i className="key__ln" />{isPrice ? 'Executed price' : 'Shielded NAM'}</li>
-        {isPrice && Q.length ? <li><i className="key__ln key__ln--dash" />Quoted price, recorded since <span data-num="">{fmtDayMonth(quoted[0]?.t)}</span></li> : null}
-        {evIn.length ? <li><i className="key__ln key__ln--evt" />Dashed verticals: the {evIn.length === 1 ? 'biggest price move' : `${evIn.length} biggest price moves`}</li> : null}
+        <li><i className="key__ln" />{isPrice ? 'Price paid in trades' : 'Shielded NAM'}</li>
+        {isPrice && Q.length ? <li><i className="key__ln key__ln--dash" />Price the pools quote, recorded since <span data-num="">{fmtDayMonth(quoted[0]?.t)}</span></li> : null}
+        {/* each marker is a move between two hours that had trades (generated/events.ts), not always one hour apart */}
+        {evIn.length ? <li><i className="key__ln key__ln--evt" />Dashed lines: the {evIn.length === 1 ? 'biggest move' : `${evIn.length} biggest moves`} from one hour with trades to the next</li> : null}
       </ul>
 
       <dl className="cstats">
         <div><dt>Low</dt><dd data-num="">{low ? <>{fmtV(low.v)}<small>{fmtDayMonth(low.t)}</small></> : '—'}</dd></div>
         <div><dt>High</dt><dd data-num="">{high ? <>{fmtV(high.v)}<small>{fmtDayMonth(high.t)}</small></> : '—'}</dd></div>
         <div><dt>{isPrice ? 'Last trade price' : 'Last reading'}</dt><dd data-num="">{last ? <>{fmtV(last.v)}<small>{fmtAgo(last.t, now)}</small></> : '—'}</dd></div>
-        {isPrice ? <div><dt>Quoted now</dt><dd data-num="">{lastQ ? <>{fmtV(lastQ.v)}<small>{fmtAgo(lastQ.t, now)}</small></> : '—'}</dd></div> : null}
+        {isPrice ? <div><dt>Pools quote now</dt><dd data-num="">{lastQ ? <>{fmtV(lastQ.v)}<small>{fmtAgo(lastQ.t, now)}</small></> : '—'}</dd></div> : null}
       </dl>
 
       {isPrice && E.length ? (
         <p className="cap">
-          {withTrades < hours * 0.5
-            ? <>Trades are sparse: only <span data-num="">{withTrades}</span> of the last <span data-num="">{hours}</span> hours had one, so the line joins hourly medians{Q.length && Q.length < 10 ? <> and the quoted line has only <span data-num="">{Q.length}</span> {Q.length === 1 ? 'point' : 'points'} so far</> : null}.</>
-            : <><span data-num="">{withTrades}</span> of the last <span data-num="">{hours}</span> hours had a trade.</>}
+          {lastQ ? 'A quote is what the pools offer now; a trade price is what someone actually paid. ' : null}
+          {hourly ? (
+            withTrades < hours * SPARSE_SHARE ? (
+              <>Trades are sparse: only <span data-num="">{withTrades}</span> of the <span data-num="">{hours}</span> hours since {fmtDayMonth(tStart)} had one, so the line joins the hours that did{fewQuoted}.</>
+            ) : (
+              <><span data-num="">{withTrades}</span> of the <span data-num="">{hours}</span> hours since {fmtDayMonth(tStart)} had a trade{fewQuoted}.</>
+            )
+          ) : (
+            <>At this range the server keeps {bucketMs != null && bucketMs > HOUR_MS ? `at most one point per ${spanWords(bucketMs)}` : 'fewer points'}: the line joins the <span data-num="">{E.length}</span> since {fmtDayMonth(first?.t)}, and a gap is not an hour without a trade{fewQuoted}.</>
+          )}
           {E.length <= 2 ? ' With this few points the dots are shown without a line.' : ''}
+          {/* an old stamp says why, in the chart's own words */}
+          {prov?.executed?.status === 'stale' && prov.executed.at != null ? <> The trade line reads old: its last hour with a trade began {fmtAgo(prov.executed.at, now)}.</> : null}
         </p>
       ) : null}
 
-      {scope.length ? <SourceLine items={scope} label={isPrice ? 'Where the chart comes from' : 'Where the readings come from'} /> : null}
+      {/* the stamps arrive with the overview: until then the line's height is held, so nothing shifts when they land */}
+      {scope.length ? <SourceLine items={scope} label={isPrice ? 'Where the chart comes from' : 'Where the readings come from'} /> : <p className="src src--wait" aria-hidden="true" />}
 
       {first && low && high && last ? (
         <p className="sr-only">

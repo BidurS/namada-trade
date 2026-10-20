@@ -60,7 +60,7 @@
      The extras are 12 px mono (the provenance floor), never underlined, never hover-only. */
   .num { display: inline; }
   .num__x { margin-left: 6px; font: var(--w-regular) var(--t-12) / 16px var(--font-code); letter-spacing: 0; color: var(--c-ink-2); text-decoration: none; white-space: normal; vertical-align: middle; }
-  .num__x--why { white-space: normal; }
+  .num__x--why { margin-left: 0; white-space: normal; }   /* the space before it is a real one (Num) */
   .is-old .num__x--age { display: none; }   /* an old scope says the age once, in its sentence */
 
   /* ProvScope: a panel whose SourceLine covers its figures (system.md 12, N1). */

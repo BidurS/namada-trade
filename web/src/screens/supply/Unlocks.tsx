@@ -1,14 +1,26 @@
 // Unstaking and restaking (decision D3): large staking moves of the last 30 days with what each
 // one led to, as a plain outcome tag ("Sellable in 3.2 days", "Wait over since 4 Oct", "Withdrawn
 // 5 Oct", "Restaked, not a sale", "Moved to Osmosis", "Sold on Osmosis", "Shielded", "Still
-// spendable"), then the staked-NAM chart. Unstaked NAM that can be withdrawn now, or soon, is listed
-// first (unbonds.ts); the Supply band links here with the Unstaking filter on.
+// spendable"). Unstaked NAM that can be withdrawn now, or soon, is listed first (unbonds.ts); the
+// Supply band links here with the Unstaking filter on.
+//
+// Under the list, a chart with two views (a Segmented): "Next N days" (UnstakeDays: NAM whose
+// unstaking wait ends on each coming day, from the chain's own list of every request when the server
+// read it, split by what each listed address did with what it unlocked before) and "Staked NAM over
+// time" (SeriesChart). The day chart is a measured SVG with no controls in it; one row per day under
+// it carries every figure in words, so nothing needs hover and no tap target is narrower than 44 px.
+// It has its own ProvScope and SourceLine. Nothing is folded: NAM whose wait ends after the last day
+// shown, or whose day is not known, is said in a sentence; NAM whose wait is already over is a
+// sentence above the chart, not a bar.
 import { useEffect, useMemo, useState } from 'react';
 import type { Overview, Pressure, UnlockEntry } from '../../../../shared/types';
+import { SELLS_MOST_CUT, SELLS_MOST_PCT } from '../../../../shared/supply-thresholds';
+import { DAY_MS, HISTORY_ALL_DAYS, historyCapReached } from '../../../../shared/history';
 import { fetchMetricHistory } from '../../api';
 import { unbondingStamp, type Stamp } from '../../lib/prov';
-import { AddrName, Num, ProvScope, RecordLink, Segmented, SourceLine, Tag, Term, YouTag, namShort, useShowAll, useUiNow, type SeriesRange } from '../../ui';
-import { NBSP, fmtAge, fmtAddr, fmtDayClock, fmtDayMonth, fmtNamRule, fmtNamSigned, fmtUtcLong } from '../../lib/format';
+import { AddrName, Button, Notice, Num, ProvScope, RecordLink, Segmented, SkeletonBlock, SourceLine, Tag, Term, YouTag, derive, namTick, niceTicks, useShowAll, useSize, useUiNow, type ScopeItem, type SeriesRange } from '../../ui';
+import { lin } from '../../ui/chartMath';
+import { NBSP, fmtAddr, fmtAge, fmtCount, fmtDayClock, fmtDayMonth, fmtNamRule, fmtNamSigned, fmtPctRule, fmtUtcLong } from '../../lib/format';
 import { isOld, oldRowsSentence } from './parts';
 import { spendableFirst, type UnbondState } from './unbonds';
 import { SeriesChart } from '../../ui';
@@ -20,18 +32,23 @@ export const windowWords = (p: Pressure) => `the last ${p.unlocksWindowDays ?? 3
 export type UnlockFilter = 'all' | 'out' | 'in';
 /** The id the Supply band links to (with the Unstaking filter on). */
 export const UNLOCKS_ID = 'unstaking';
-const DAY = 86_400_000;
+
+/** A wait in days for running text: whole days ("about 14 days"); the exact figure is in the source sheet. */
+const fmtDays = (n: number) => fmtCount(n);
 
 /**
  * The plain outcome of one staking move, as a tag plus an optional detail sentence. `shared`: how many
  * restaked withdrawals of this address in the list carry the same restake total (it is one figure for them all).
  */
-function outcomeOf(u: UnlockEntry, asOf: number, st: UnbondState | undefined, shared: number, waitWords: string): { tag: string; strong: boolean; detail?: React.ReactNode } | null {
+function outcomeOf(u: UnlockEntry, asOf: number, st: UnbondState | undefined, shared: number, waitWords: React.ReactNode): { tag: string; strong: boolean; detail?: React.ReactNode } | null {
   if (u.kind === 'bond') return null;
   if (u.kind === 'unbond') {
     if (!st || st.kind === 'unknown') return { tag: 'Wait not known', strong: false };
-    // where the end of the wait comes from: the indexer's own withdraw time, or the request time + the measured wait
-    const src = u.liquidAtSource === 'consensus' ? ' (withdraw epoch from the chain, the time from the measured epoch length)' : u.liquidAtSource === 'indexer' ? ' (withdraw time from the Namada indexer)' : u.liquidAtSource === 'estimate' ? ` (estimate: ${waitWords})` : '';
+    // where the end of the wait comes from: the chain's own list, the indexer's withdraw time, or the request time + the measured wait
+    const src = u.liquidAtSource === 'consensus'
+      ? <> (the chain&rsquo;s own list gives the <Term id="epoch">epoch</Term> it ends in; the time comes from the measured epoch length)</>
+      : u.liquidAtSource === 'indexer' ? <> (the end of the wait from the Namada indexer)</>
+      : u.liquidAtSource === 'estimate' ? <> (estimate: the request time + {waitWords})</> : null;
     if (st.kind === 'waiting') return { tag: `Sellable in ${fmtAge(st.liquidAt - asOf)}`, strong: true, detail: <>The wait ends {fmtDayClock(st.liquidAt)}{src}.</> };
     if (st.kind === 'withdrawn') return { tag: `Withdrawn ${fmtDayMonth(st.withdrawnAt)}`, strong: false, detail: <>The wait ended {fmtDayMonth(st.liquidAt)}{src}; the withdrawal is listed here too.</> };
     return { tag: `Wait over since ${fmtDayMonth(st.liquidAt)}`, strong: true, detail: <>The wait ended {fmtDayMonth(st.liquidAt)}{src}. No withdrawal of it is recorded: it can be withdrawn and moved at any time.</> };
@@ -46,34 +63,128 @@ function outcomeOf(u: UnlockEntry, asOf: number, st: UnbondState | undefined, sh
   switch (o.kind) {
     // the server knows only that the same address staked again within 48 h, not with which validator
     case 'rebonded': return { tag: 'Restaked, not a sale', strong: false, detail: <>The same address staked {amt}{ofIt} again within 48 hours{shared > 1 ? <>, one total for its {shared} unlocks listed here</> : null}.</> };
-    case 'bridged_out': return { tag: 'Moved to Osmosis', strong: true, detail: <>Then bridged {amt}{ofIt} to Osmosis.</> };
+    case 'bridged_out': return { tag: 'Moved to Osmosis', strong: true, detail: <>Then moved {amt}{ofIt} to Osmosis.</> };
     case 'sold': return { tag: 'Sold on Osmosis', strong: true, detail: <>Then sold {amt}{ofIt} on Osmosis.</> };
     case 'shielded': return { tag: 'Shielded', strong: false, detail: <>Then moved {amt}{ofIt} into the shielded set.</> };
-    case 'liquid': return { tag: 'Still spendable', strong: true, detail: <>Not staked, bridged or sold in the 48 h after unlocking.</> };
+    case 'liquid': return { tag: 'Still spendable', strong: true, detail: <>Not staked, moved or sold in the 48 h after unlocking.</> };
     default: return null;
   }
 }
 
 const KIND_SIGN: Record<UnlockEntry['kind'], 1 | -1> = { bond: 1, unbond: -1, withdraw: -1 };
 
+// The staked-NAM chart's ranges. "All" asks for the most days a history request reaches (shared/history.ts),
+// and the chart says so when the answer runs into that cap.
 type StakeRange = '14d' | '30d' | '90d' | '1y' | 'all';
-const STAKE_RANGES: { id: StakeRange; label: string; hours: number; ms: number | null }[] = [
-  { id: '14d', label: '14d', hours: 24 * 14, ms: 14 * DAY },
-  { id: '30d', label: '30d', hours: 24 * 30, ms: 30 * DAY },
-  { id: '90d', label: '90d', hours: 24 * 90, ms: 90 * DAY },
-  { id: '1y', label: '1y', hours: 24 * 365, ms: 365 * DAY },
-  { id: 'all', label: 'All', hours: 24 * 1200, ms: null },
+const RANGE_DAYS: Record<Exclude<StakeRange, 'all'>, number> = { '14d': 14, '30d': 30, '90d': 90, '1y': 365 };
+const STAKE_RANGES: { id: StakeRange; label: string; days: number; ms: number | null }[] = [
+  ...(Object.entries(RANGE_DAYS) as [Exclude<StakeRange, 'all'>, number][]).map(([id, days]) => ({ id, label: id, days, ms: days * DAY_MS })),
+  { id: 'all', label: 'All', days: HISTORY_ALL_DAYS, ms: null },
 ];
 const STAKE_SERIES_RANGES: SeriesRange[] = STAKE_RANGES.map((r) => ({ value: r.id, label: r.label, ms: r.ms }));
+const SHORTEST_MS = RANGE_DAYS['14d'] * DAY_MS;
 
-interface UnlockWallBucket {
-  dayOffset: number;
-  windowStartTs: number;
-  windowEndTs: number;
-  totalNam: number;
-  highHazardNam: number;
-  lowHazardNam: number;
-  requestCount: number;
+// ---------------------------------------------------------------- the coming days
+
+/** What a listed address did with what it unlocked before, in the list's window. */
+type Group = 'sold' | 'kept' | 'none';
+
+interface WallDay {
+  /** 1 = within a day from now, 2 = one to two days from now, … */
+  day: number;
+  /** the end of the day's span (now + day × 24 h) */
+  end: number;
+  total: number;
+  /** listed requests of addresses that sold or moved to Osmosis at least SELLS_MOST_CUT of what they unlocked before */
+  sold: number;
+  /** listed requests of addresses that restaked or kept the rest */
+  kept: number;
+  /** listed requests of addresses with no earlier unlock in the list, and NAM the chain lists beyond the listed requests */
+  none: number;
+  /** unstaking requests */
+  n: number;
+}
+
+interface Wall {
+  days: WallDay[];
+  /** how many days the chart runs: the unstaking wait rounded up, or the last day with a request when the wait is not known */
+  horizon: number;
+  /** NAM whose wait ends after the horizon */
+  later: number;
+  /** NAM in its wait whose day is not known (the chain lists it, the epoch length was not read) */
+  noDay: number;
+  total: number;
+  /** the day totals come from the chain's own list of every request */
+  fromChain: boolean;
+  /** NAM whose wait is over and that has not been withdrawn, from the chain's own list; null when it was not read */
+  nowNam: number | null;
+}
+
+function wallOf(data: Pressure, states: Map<UnlockEntry, UnbondState>): Wall {
+  const asOf = data.asOf;
+  // what each address did with what it unlocked in the list's window (each withdrawal's own follow-up)
+  const unlocked = new Map<string, number>();
+  const soldOut = new Map<string, number>();
+  for (const u of data.unlocks) {
+    if (u.kind !== 'withdraw' || !u.outcome) continue;
+    unlocked.set(u.address, (unlocked.get(u.address) ?? 0) + u.amountNam);
+    if (u.outcome.kind === 'sold' || u.outcome.kind === 'bridged_out') soldOut.set(u.address, (soldOut.get(u.address) ?? 0) + Math.min(u.outcome.amountNam, u.amountNam));
+  }
+  const groupOf = (a: string): Group => {
+    const un = unlocked.get(a);
+    if (!un) return 'none';
+    return (soldOut.get(a) ?? 0) / un >= SELLS_MOST_CUT ? 'sold' : 'kept';
+  };
+  const dayOf = (t: number) => Math.max(1, Math.ceil((t - asOf) / DAY_MS));
+
+  const listed = new Map<number, Record<Group, number> & { n: number }>();
+  for (const u of data.unlocks) {
+    if (u.kind !== 'unbond') continue;
+    const st = states.get(u);
+    if (st?.kind !== 'waiting') continue;
+    const d = dayOf(st.liquidAt);
+    const b = listed.get(d) ?? { sold: 0, kept: 0, none: 0, n: 0 };
+    b[groupOf(u.address)] += u.amountNam;
+    b.n += 1;
+    listed.set(d, b);
+  }
+  const term = data.unbondTermStructure ?? null;
+  const chain = new Map<number, { nam: number; n: number }>();
+  let noDay = 0;
+  if (term) {
+    for (const b of term.buckets) {
+      if (b.withdrawableNow) continue;
+      if (b.estimatedAt == null) {
+        noDay += b.amountNam;
+        continue;
+      }
+      const d = dayOf(b.estimatedAt);
+      const c = chain.get(d) ?? { nam: 0, n: 0 };
+      c.nam += b.amountNam;
+      c.n += b.count;
+      chain.set(d, c);
+    }
+  }
+  const lastDay = Math.max(0, ...listed.keys(), ...chain.keys());
+  // the wait in whole days, rounded as the page prints it ("about 14 days"): a request made in the last minutes
+  // whose wait runs a fraction past that is counted under "more ends its wait after that", never a near-empty extra day
+  const horizon = data.unbondingDays != null ? Math.max(1, Math.round(data.unbondingDays)) : lastDay;
+  const days: WallDay[] = [];
+  let later = 0;
+  for (let d = 1; d <= Math.max(horizon, lastDay); d++) {
+    const l = listed.get(d) ?? { sold: 0, kept: 0, none: 0, n: 0 };
+    const c = chain.get(d);
+    const lsum = l.sold + l.kept + l.none;
+    // the chain lists every request; the listed ones are the large ones with an address. When the two place a
+    // request on different days (an estimate errs late by at most one epoch), the larger figure of the day stands.
+    const total = c ? Math.max(c.nam, lsum) : lsum;
+    if (d > horizon) {
+      later += total;
+      continue;
+    }
+    days.push({ day: d, end: asOf + d * DAY_MS, total, sold: l.sold, kept: l.kept, none: l.none + (total - lsum), n: c ? Math.max(c.n, l.n) : l.n });
+  }
+  return { days, horizon, later, noDay, total: days.reduce((a, b) => a + b.total, 0), fromChain: !!term, nowNam: term ? term.withdrawableNowNam : null };
 }
 
 export function Unlocks({
@@ -113,35 +224,48 @@ export function Unlocks({
   // The unstaking wait comes from the chain's own settings, read through the Namada indexer.
   const waitStamp = unbondingStamp(data);
   const UNLOCK_WINDOW_WORDS = windowWords(data);
-  const waitWords = data.unbondingEpochs != null && data.epochHours != null
-    ? `${data.unbondingEpochs} epochs of about ${data.epochHours.toFixed(1)}${NBSP}h`
-    : data.unbondingDays != null ? `the request time + ${data.unbondingDays.toFixed(2)}${NBSP}days` : 'the request time + the unstaking wait';
+  const waitWords: React.ReactNode = data.unbondingEpochs != null && data.epochHours != null
+    ? <><Num v={data.unbondingEpochs} fmt={fmtCount} /> <Term id="epoch">epochs</Term> of about <Num v={data.epochHours} fmt={(n) => n.toFixed(1)} unit="h" /></>
+    : data.unbondingDays != null ? <><Num v={data.unbondingDays} fmt={fmtDays} unit="days" /></> : 'the unstaking wait';
 
   // staked NAM over the selected window (14d from Pressure.bondedTrend, or 30d/90d/1y/All from /api/metrics/history)
-  const [chartTab, setChartTab] = useState<'wall' | 'stake'>('wall');
+  const [chartTab, setChartTab] = useState<'days' | 'stake'>('days');
   const [stakeRange, setStakeRange] = useState<StakeRange>('14d');
-  const [longTrend, setLongTrend] = useState<{ ts: number; value: number }[] | null>(null);
+  // The longer ranges' answer, kept with the range it answers: a series is only ever drawn under its own range,
+  // never the 14-day trend (or the previous range's answer) standing in under the one picked.
+  const [long, setLong] = useState<{ range: StakeRange; rows: { ts: number; value: number }[] | null; error: string | null } | null>(null);
+  const [retry, setRetry] = useState(0);
   useEffect(() => {
     if (stakeRange === '14d') {
-      setLongTrend(null);
+      setLong(null);
       return;
     }
     let alive = true;
-    const hrs = STAKE_RANGES.find((r) => r.id === stakeRange)?.hours ?? 24 * 30;
-    fetchMetricHistory('supply.total_stake', hrs, data.asOf).then(
+    setLong({ range: stakeRange, rows: null, error: null });
+    const days = STAKE_RANGES.find((r) => r.id === stakeRange)?.days ?? RANGE_DAYS['30d'];
+    fetchMetricHistory('supply.total_stake', days * 24, data.asOf).then(
       (rows) => {
-        if (alive && rows.length) setLongTrend(rows);
+        if (alive) setLong({ range: stakeRange, rows, error: rows.length ? null : 'The server sent no staked-NAM readings for that range.' });
       },
-      () => {},
+      () => {
+        if (alive) setLong({ range: stakeRange, rows: null, error: 'The server did not answer for that range.' });
+      },
     );
     return () => {
       alive = false;
     };
-  }, [stakeRange, data.asOf]);
+  }, [stakeRange, data.asOf, retry]);
 
-  const trend = stakeRange !== '14d' && longTrend && longTrend.length ? longTrend : data.bondedTrend;
+  const longOwn = stakeRange !== '14d' && long?.range === stakeRange ? long : null;
+  const longWait = stakeRange !== '14d' && (!longOwn || (longOwn.rows == null && longOwn.error == null));
+  const longError = longOwn?.error ?? null;
+  const trend = stakeRange === '14d' ? data.bondedTrend : longOwn?.rows && !longOwn.error ? longOwn.rows : [];
   const tFirst = trend[0]?.ts ?? null;
-  const shortHistory = stakeRange === '14d' && tFirst != null && tFirst - (data.asOf - 14 * DAY) > DAY;
+  // The record began inside the shortest range: no longer range can show more, so no range is offered and the
+  // chart starts at the first reading.
+  const recFirst = data.bondedTrend[0]?.ts ?? null;
+  const shortRecord = recFirst != null && recFirst - (data.asOf - SHORTEST_MS) > DAY_MS;
+  const capHit = stakeRange === 'all' && historyCapReached(tFirst, data.asOf);
   // fresh while the last reading came on the series' own schedule (within two of its usual gaps)
   const gaps = trend.slice(1).map((p, i) => p.ts - trend[i].ts).sort((a, b) => a - b);
   const usualGap = gaps.length ? gaps[Math.floor(gaps.length / 2)] : null;
@@ -155,59 +279,10 @@ export function Unlocks({
         note: onSchedule ? 'The chain\'s total stake as recorded by this site from a Namada node.' : 'The last reading is older than two of the usual gaps between readings.',
       }
     : null;
-  // Build 15-day forward maturity wall buckets (0 = withdrawable now, 1..14 = upcoming days across the 56-epoch wait)
-  const timeline = useMemo<UnlockWallBucket[]>(() => {
-    const buckets: UnlockWallBucket[] = Array.from({ length: 15 }, (_, d) => ({
-      dayOffset: d,
-      windowStartTs: d === 0 ? data.asOf - 14 * DAY : data.asOf + (d - 1) * DAY,
-      windowEndTs: d === 0 ? data.asOf : data.asOf + d * DAY,
-      totalNam: 0,
-      highHazardNam: 0,
-      lowHazardNam: 0,
-      requestCount: 0,
-    }));
-    // Identify addresses with historical dump/bridge outcomes or high onDeck dumpHazardScore
-    const highHazardAddrs = new Set<string>();
-    for (const u of data.unlocks) {
-      if (u.kind === 'withdraw' && (u.outcome?.kind === 'sold' || u.outcome?.kind === 'bridged_out')) {
-        highHazardAddrs.add(u.address);
-      }
-    }
-    for (const od of data.onDeck) {
-      if ((od.dumpHazardScore ?? 0) >= 0.5) {
-        if (od.linkedNamada) highHazardAddrs.add(od.linkedNamada);
-        if (od.hopOriginNamada?.address) highHazardAddrs.add(od.hopOriginNamada.address);
-      }
-    }
-    for (const u of data.unlocks) {
-      if (u.kind !== 'unbond') continue;
-      const st = states.get(u);
-      if (!st || st.kind === 'withdrawn' || st.kind === 'unknown') continue;
-      const d = st.kind === 'ready' ? 0 : Math.max(1, Math.min(14, Math.ceil((st.liquidAt - data.asOf) / DAY)));
-      const b = buckets[d];
-      b.totalNam += u.amountNam;
-      if (highHazardAddrs.has(u.address)) b.highHazardNam += u.amountNam;
-      else b.lowHazardNam += u.amountNam;
-      b.requestCount += 1;
-    }
-    // Also incorporate consensus ABCI unbond term structure buckets if present and higher than indexed large unbonds
-    if (data.unbondTermStructure?.buckets?.length) {
-      for (const cb of data.unbondTermStructure.buckets) {
-        // a bucket still in flight whose time is not known (no epoch length was read) has no day to go in
-        if (!cb.withdrawableNow && cb.estimatedAt == null) continue;
-        const d = cb.withdrawableNow ? 0 : Math.max(1, Math.min(14, Math.ceil((cb.estimatedAt! - data.asOf) / DAY)));
-        const b = buckets[d];
-        if (cb.amountNam > b.totalNam) {
-          const diff = cb.amountNam - b.totalNam;
-          b.totalNam += diff;
-          b.lowHazardNam += diff;
-          b.requestCount = Math.max(b.requestCount, cb.count);
-        }
-      }
-    }
-    return buckets;
-  }, [data.unlocks, data.onDeck, data.unbondTermStructure, data.asOf, states]);
-  const hasWall = timeline.some((b) => b.totalNam > 0);
+
+  const wall = useMemo(() => wallOf(data, states), [data, states]);
+  const hasWall = wall.total > 0 || (wall.nowNam ?? 0) > 0;
+  const hasTrend = data.bondedTrend.length > 0;
 
   const scope = [
     { label: 'Staking, unstaking and unlocking moves', p: cov },
@@ -221,7 +296,7 @@ export function Unlocks({
         <p className="lead ipg-lead">
           {data.unlocksMinNam ? <>The staking moves of {fmtNamRule(data.unlocksMinNam)}{NBSP}NAM or more in {UNLOCK_WINDOW_WORDS}.</> : <>The largest staking moves of {UNLOCK_WINDOW_WORDS}.</>}{' '}
           <Term id="unstaking">Unstaking</Term> takes about{' '}
-          <Num v={data.unbondingDays} prov={waitStamp} fmt={(n) => n.toFixed(2)} unit="days" showReason={false} />: staked NAM becomes spendable that long after the request. A restake is NAM staked again after unlocking; it is not a sale.
+          <Num v={data.unbondingDays} prov={waitStamp} fmt={fmtDays} unit="days" showReason={false} />: staked NAM becomes spendable that long after the request. A restake is NAM staked again after unlocking; it is not a sale.
         </p>
       </div>
 
@@ -269,30 +344,35 @@ export function Unlocks({
       )}
       <SourceLine items={scope} label="Where the staking figures come from" />
 
-      {hasWall || trend.length ? (
+      {hasWall || hasTrend ? (
         <div className="ul-chart">
-          {hasWall && trend.length ? (
+          {hasWall && hasTrend ? (
             <div className="ul-chart__mode">
               <Segmented
                 label="Staking chart view"
                 value={chartTab}
                 onChange={setChartTab}
                 options={[
-                  { value: 'wall', label: 'Upcoming unlock wall (14d)' },
-                  { value: 'stake', label: 'Staked NAM history' },
+                  { value: 'days', label: <span>Next <Num v={wall.horizon} fmt={fmtCount} /> days</span> },
+                  { value: 'stake', label: 'Staked NAM over time' },
                 ]}
               />
             </div>
           ) : null}
-          {chartTab === 'wall' && hasWall ? (
-            <UnlockMaturityWallChart
-              buckets={timeline}
-              asOf={data.asOf}
-              unbondingDays={data.unbondingDays}
-              unbondingEpochs={data.unbondingEpochs}
-              liquidityUsd={o?.dex.liquidityUsd ?? null}
-              priceUsd={o?.price.usd.value ?? null}
-            />
+          {chartTab === 'days' && hasWall ? (
+            <UnstakeDays wall={wall} data={data} cov={cov} waitStamp={waitStamp} />
+          ) : stakeRange !== '14d' && (longWait || longError) ? (
+            <section className="chartsec ul-stake-miss" aria-labelledby="ul-chart-h" aria-busy={longWait || undefined}>
+              <h3 id="ul-chart-h" className="chartsec__h">Staked NAM over time</h3>
+              <Segmented label="Range" variant="range" value={stakeRange} options={STAKE_SERIES_RANGES.map((r) => ({ value: r.value, label: r.label }))} onChange={(v) => setStakeRange(v as StakeRange)} />
+              {longWait ? (
+                <SkeletonBlock height={208} />
+              ) : (
+                <Notice tone="warning" title={`— ${longError}`} action={<Button size="sm" onClick={() => setRetry((n) => n + 1)}>Try again</Button>}>
+                  No readings are drawn for this range until it answers; the shortest range still shows the readings this site recorded.
+                </Notice>
+              )}
+            </section>
           ) : trend.length ? (
             <SeriesChart
               points={trend.map((p) => ({ t: p.ts, v: p.value }))}
@@ -301,13 +381,12 @@ export function Unlocks({
               what="Staked NAM"
               level={3}
               headingId="ul-chart-h"
-              ranges={STAKE_SERIES_RANGES}
-              range={stakeRange}
-              onRange={(v) => setStakeRange(v as StakeRange)}
+              {...(shortRecord ? {} : { ranges: STAKE_SERIES_RANGES, range: stakeRange, onRange: (v: string) => setStakeRange(v as StakeRange) })}
               unit={
                 <>
                   NAM staked with validators (the chain&rsquo;s total stake), {trend.length} readings recorded by this site{tFirst != null ? <> since {fmtUtcLong(tFirst)}</> : null}.
-                  {shortHistory ? ' Earlier readings were not recorded, and a node keeps too little history to read them back.' : ''}
+                  {shortRecord ? <> This site started recording it then, so the chart shows only those <Num v={(data.asOf - (recFirst as number)) / DAY_MS} fmt={(n) => n.toFixed(1)} unit="days" />; a node keeps too little history to read earlier readings back.</> : null}
+                  {capHit ? <> &ldquo;All&rdquo; reaches back <Num v={HISTORY_ALL_DAYS} fmt={fmtCount} unit="days" />, the most one request asks for; older readings may exist.</> : null}
                 </>
               }
               prov={trendStamp}
@@ -320,121 +399,142 @@ export function Unlocks({
   );
 }
 
-function UnlockMaturityWallChart({
-  buckets,
-  asOf,
-  unbondingDays,
-  unbondingEpochs,
-  liquidityUsd,
-  priceUsd,
-}: {
-  buckets: UnlockWallBucket[];
-  asOf: number;
-  unbondingDays?: number | null;
-  unbondingEpochs?: number | null;
-  liquidityUsd: number | null;
-  priceUsd: number | null;
-}) {
-  const [hoverIdx, setHoverIdx] = useState<number | null>(null);
-  const maxNam = Math.max(1, ...buckets.map((b) => b.totalNam));
-  // Approximate 2% pool slippage absorption capacity in NAM (roughly ~1% of pool USD depth converted to NAM)
-  const poolCapNam = liquidityUsd && priceUsd && priceUsd > 0 ? (liquidityUsd * 0.015) / priceUsd : null;
-  const ceilingMax = poolCapNam != null && poolCapNam < maxNam * 1.4 ? Math.max(maxNam, poolCapNam * 1.1) : maxNam * 1.1;
-  const totalUpcoming = buckets.reduce((s, b) => s + b.totalNam, 0);
-  const totalHighHazard = buckets.reduce((s, b) => s + b.highHazardNam, 0);
-  const active = hoverIdx != null ? buckets[hoverIdx] : buckets.find((b) => b.totalNam > 0) ?? buckets[0];
+// ---------------------------------------------------------------- the day chart
+
+const CHAR = 6.6; // JetBrains Mono at 11 px
+const GROUPS: { g: Group; cls: string }[] = [
+  { g: 'sold', cls: 'ul-days__f--sold' },
+  { g: 'kept', cls: 'ul-days__f--kept' },
+  { g: 'none', cls: 'ul-days__f--none' },
+];
+
+function UnstakeDays({ wall, data, cov, waitStamp }: { wall: Wall; data: Pressure; cov: Stamp; waitStamp: Stamp | null }) {
+  const [boxRef, { w, h }] = useSize<HTMLDivElement>();
+  const days = wall.days;
+  const termStamp: Stamp | null = data.unbondTermStructureProv ? { ...data.unbondTermStructureProv, plain: 'Namada node' } : null;
+  const splitStamp = derive(waitStamp ? [cov, waitStamp] : [cov], `what each listed address did with what it unlocked before, cut at ${fmtPctRule(SELLS_MOST_PCT, 0)}`);
+  const scope: ScopeItem[] = [
+    ...(wall.fromChain && termStamp ? [{ label: 'NAM whose wait ends each day: the chain’s own list of every unstaking request', p: termStamp }] : []),
+    { label: wall.fromChain ? 'Which addresses: the large unstaking requests and what each address did with earlier unlocks' : 'NAM whose wait ends each day: the large unstaking requests, and what each address did with earlier unlocks', p: splitStamp },
+    { label: 'Unstaking wait (the days the chart runs)', p: waitStamp },
+  ];
+  const minWords = data.unlocksMinNam ? <>of <Num v={data.unlocksMinNam} fmt={fmtNamRule} unit="NAM" /> or more</> : <>listed above</>;
+
+  // ---------------- scales (a measured SVG: ticks are exactly 11 px at every width)
+  const max = Math.max(0, ...days.map((d) => d.total));
+  const yT = niceTicks(0, max > 0 ? max : 1, { zero: true, maxTicks: 5 });
+  const yLabels = yT.ticks.map((t) => namTick(t, yT.step));
+  const L = Math.ceil(Math.max(...yLabels.map((s) => s.length)) * CHAR) + 12;
+  const R = 6;
+  const T = 10;
+  const B = 24;
+  const n = Math.max(1, days.length);
+  const band = Math.max(0, (w - L - R) / n);
+  const barW = band * 0.7;
+  const Y = lin(yT.lo, yT.hi, Math.max(T + 1, h - B), T);
+  const xLabel = (d: number) => `+${d}d`;
+  const labelW = Math.max(...days.map((d) => xLabel(d.day).length), 1) * CHAR + 8;
+  const every = band > 0 ? Math.max(1, Math.ceil(labelW / band)) : n;
+  const withNam = days.filter((d) => d.total > 0);
+  const empty = days.length - withNam.length;
+  const parts = (d: WallDay) => [
+    d.sold > 0 ? <span key="s"><i className="ul-days__sw ul-days__f--sold" aria-hidden="true" /><Num v={d.sold} fmt={fmtNamRule} /> from addresses that sold or moved most before</span> : null,
+    d.kept > 0 ? <span key="k"><i className="ul-days__sw ul-days__f--kept" aria-hidden="true" /><Num v={d.kept} fmt={fmtNamRule} /> from addresses that restaked or kept most</span> : null,
+    d.none > 0 ? <span key="n"><i className="ul-days__sw ul-days__f--none" aria-hidden="true" /><Num v={d.none} fmt={fmtNamRule} /> with no earlier unlock on record</span> : null,
+  ].filter(Boolean);
+  const summary = withNam.length
+    ? `NAM whose unstaking wait ends each day: ${withNam.map((d) => `${xLabel(d.day)} ${fmtNamRule(d.total)} NAM`).join(', ')}; no NAM on the other days.`
+    : 'No unstaking wait ends in the coming days.';
 
   return (
-    <section className="chart chart--ink ul-wall" aria-labelledby="ul-wall-h">
-      <div className="chart__head">
-        <div>
-          <h3 id="ul-wall-h" className="h3">56-epoch forward unlock term structure (Maturity wall)</h3>
-          <p className="chart__u">
-            <strong data-num="">{fmtNamRule(totalUpcoming)} NAM</strong> unlocking across {unbondingEpochs ?? 56} epochs (~{(unbondingDays ?? 14).toFixed(1)} days), split by wallet historical dump hazard (
-            <strong data-num="">{fmtNamRule(totalHighHazard)} NAM</strong> from high-hazard sellers vs. sticky restakers).
-          </p>
-        </div>
+    <ProvScope as="section" className="chartsec ul-days" aria-labelledby="ul-days-h">
+      <div className="chartsec__title">
+        <h3 id="ul-days-h" className="chartsec__h">
+          {days.length ? <>NAM whose unstaking wait ends each day for the next <Num v={wall.horizon} fmt={fmtCount} /> days</> : 'No unstaking wait ends in the coming days'}
+        </h3>
+        <p className="cap">
+          The <Term id="unstaking-days">unstaking that ends each day</Term>: <Num v={wall.total} fmt={fmtNamRule} unit="NAM" /> in all,{' '}
+          {wall.fromChain ? (
+            <>
+              from the chain&rsquo;s own list of every unstaking request, <Term id="read-from-chain">read from the chain itself</Term>. The colours say what each address did with what it <Term id="unlocked">unlocked</Term> in {windowWords(data)}; only the requests {minWords} have an address here.
+            </>
+          ) : (
+            <>counting only the unstaking requests {minWords}: the chain&rsquo;s own list of every request was not read. The colours say what each address did with what it <Term id="unlocked">unlocked</Term> in {windowWords(data)}.</>
+          )}
+          {data.unbondingDays == null ? <> The unstaking wait was not read, so the chart runs to the last day with a request.</> : null}
+        </p>
       </div>
 
-      {active ? (
-        <div className="ul-wall__readout" aria-live="polite">
-          <span className="ul-wall__when">
-            {active.dayOffset === 0 ? 'Now (Wait over, ready to withdraw)' : `+${active.dayOffset}d (${fmtDayMonth(active.windowStartTs)} – ${fmtDayMonth(active.windowEndTs)})`}
-          </span>
-          <span className="ul-wall__stats">
-            Total: <strong data-num="">{fmtNamRule(active.totalNam)} NAM</strong> · High dump hazard (≥50%):{' '}
-            <strong data-num="">{fmtNamRule(active.highHazardNam)} NAM</strong> · Sticky / low hazard:{' '}
-            <strong data-num="">{fmtNamRule(active.lowHazardNam)} NAM</strong> · {active.requestCount} {active.requestCount === 1 ? 'request' : 'requests'}
-          </span>
-        </div>
+      {wall.nowNam != null && wall.nowNam > 0 ? (
+        <p className="cap ul-days__now">
+          Not in the chart: <Num v={wall.nowNam} fmt={fmtNamRule} unit="NAM" /> on the chain&rsquo;s list has already finished its wait and has not been withdrawn, from requests of every size and age. It can be withdrawn and moved at any time.
+        </p>
       ) : null}
 
-      <div className="ul-wall__plot" role="group" aria-label="14-day forward unbonding maturity wall by dump hazard">
-        {poolCapNam != null && poolCapNam <= ceilingMax ? (
-          <div
-            className="ul-wall__cap"
-            style={{ bottom: `${Math.min(92, Math.max(8, (poolCapNam / ceilingMax) * 100)).toFixed(1)}%` }}
-            title={`Est. daily Osmosis pool absorption before >2% slippage: ~${fmtNamRule(poolCapNam)} NAM`}
-          >
-            <span className="ul-wall__cap-lbl">Pool ~2% impact ceiling ({namShort(poolCapNam)} NAM)</span>
-          </div>
+      <ul className="key ul-days__key">
+        <li className="key__i"><i className="key__sw ul-days__f--sold" aria-hidden="true" /><span><Term id="sold-before">Addresses that sold or moved to Osmosis</Term> at least <Num v={SELLS_MOST_PCT} fmt={(x) => fmtPctRule(x, 0)} /> of what they unlocked before</span></li>
+        <li className="key__i"><i className="key__sw ul-days__f--kept" aria-hidden="true" /><span><Term id="kept-staked">Addresses that restaked or kept</Term> most of it</span></li>
+        <li className="key__i"><i className="key__sw ul-days__f--none" aria-hidden="true" /><span>No earlier unlock on record, or a request without an address here</span></li>
+      </ul>
+
+      <div ref={boxRef} className="ul-days__box" role="img" aria-label={summary} hidden={!days.length}>
+        {w > 0 && h > 0 ? (
+          <svg width={w} height={h} viewBox={`0 0 ${w} ${h}`} aria-hidden="true">
+            {yT.ticks.map((t, i) => (
+              <g key={t}>
+                <line className="c-grid" x1={L} x2={w - R} y1={Y(t)} y2={Y(t)} />
+                <text className="c-tick" x={L - 8} y={Y(t) + 4} textAnchor="end">{yLabels[i]}</text>
+              </g>
+            ))}
+            {days.map((d, i) => {
+              const x = L + i * band + (band - barW) / 2;
+              let base = 0;
+              return (
+                <g key={d.day}>
+                  {GROUPS.map(({ g, cls }) => {
+                    const v = d[g];
+                    if (!(v > 0)) return null;
+                    const y0 = Y(base);
+                    const y1 = Y(base + v);
+                    base += v;
+                    return <rect key={g} className={cls} x={x} y={y1} width={barW} height={Math.max(0, y0 - y1)} />;
+                  })}
+                  {d.day % every === 0 ? (
+                    <text className="c-tick" x={L + i * band + band / 2} y={h - 6} textAnchor="middle">{xLabel(d.day)}</text>
+                  ) : null}
+                </g>
+              );
+            })}
+          </svg>
         ) : null}
-        <div className="ul-wall__bars">
-          {buckets.map((b, i) => {
-            const hPct = ceilingMax > 0 ? Math.min(100, (b.totalNam / ceilingMax) * 100) : 0;
-            const highShare = b.totalNam > 0 ? (b.highHazardNam / b.totalNam) * 100 : 0;
-            const isSel = hoverIdx === i;
-            return (
-              <button
-                key={b.dayOffset}
-                type="button"
-                className={`ul-wall__col${isSel ? ' is-active' : ''}`}
-                onMouseEnter={() => setHoverIdx(i)}
-                onFocus={() => setHoverIdx(i)}
-                onMouseLeave={() => setHoverIdx(null)}
-                aria-label={`${b.dayOffset === 0 ? 'Now' : `+${b.dayOffset}d`}: ${fmtNamRule(b.totalNam)} NAM${b.dayOffset === 0 ? ' ready to withdraw' : ''} (${fmtNamRule(b.highHazardNam)} NAM high hazard)`}
-              >
-                <span className="ul-wall__bar-wrap">
-                  {b.totalNam > 0 ? (
-                    <span className="ul-wall__bar" style={{ height: `${Math.max(4, hPct).toFixed(1)}%` }}>
-                      {b.highHazardNam > 0 ? (
-                        <span className="ul-wall__seg ul-wall__seg--high" style={{ height: `${Math.max(10, highShare).toFixed(1)}%` }} />
-                      ) : null}
-                      {b.lowHazardNam > 0 ? (
-                        <span className="ul-wall__seg ul-wall__seg--low" style={{ height: `${Math.max(0, 100 - highShare).toFixed(1)}%` }} />
-                      ) : null}
-                    </span>
-                  ) : (
-                    <span className="ul-wall__bar ul-wall__bar--zero" />
-                  )}
-                </span>
-                <span className="ul-wall__x">{b.dayOffset === 0 ? 'Now' : `+${b.dayOffset}d`}</span>
-              </button>
-            );
-          })}
-        </div>
       </div>
 
-      <div className="chart__foot">
-        <div className="key">
-          <span className="key__i">
-            <span className="key__sw ul-wall__sw--high" />
-            <span>High dump-hazard wallet (≥50% historical bridge/sell rate)</span>
-          </span>
-          <span className="key__i">
-            <span className="key__sw ul-wall__sw--low" />
-            <span>Sticky staker / low hazard (&lt;50% dump rate)</span>
-          </span>
-          <span className="key__i">
-            <span>As of {fmtDayClock(asOf)}</span>
-          </span>
-        </div>
-      </div>
-    </section>
+      {withNam.length ? (
+        <ul className="ul-days__list" aria-label="Each day with NAM whose wait ends">
+          {withNam.map((d) => (
+            <li key={d.day} className="ul-days__row">
+              <span className="ul-days__when">{xLabel(d.day)}<span className="ul-days__by">by {fmtDayClock(d.end)}</span></span>
+              <span className="ul-days__amt"><Num v={d.total} fmt={fmtNamRule} unit="NAM" /></span>
+              <span className="ul-days__how">
+                <span><Num v={d.n} fmt={fmtCount} /> {d.n === 1 ? 'request' : 'requests'}</span>
+                {parts(d)}
+              </span>
+            </li>
+          ))}
+        </ul>
+      ) : null}
+      <p className="cap">
+        {empty > 0 ? <>No unstaking wait ends on the other <Num v={empty} fmt={fmtCount} /> {empty === 1 ? 'day' : 'days'}. </> : null}
+        {wall.later > 0 ? <><Num v={wall.later} fmt={fmtNamRule} unit="NAM" /> more ends its wait after that. </> : null}
+        {wall.noDay > 0 ? <><Num v={wall.noDay} fmt={fmtNamRule} unit="NAM" /> still in its wait has no known day: the <Term id="epoch">epoch</Term> length was not read. </> : null}
+        Each day is a span of 24 hours from now.
+      </p>
+      <SourceLine items={scope} label="Where the unstaking days come from" />
+    </ProvScope>
   );
 }
 
-function UnlockRow({ u, asOf, st, shared, waitWords, mine }: { u: UnlockEntry; asOf: number; st: UnbondState | undefined; shared: number; waitWords: string; mine: boolean }) {
+function UnlockRow({ u, asOf, st, shared, waitWords, mine }: { u: UnlockEntry; asOf: number; st: UnbondState | undefined; shared: number; waitWords: React.ReactNode; mine: boolean }) {
   const name = u.labelPlain ?? null;
   const out = outcomeOf(u, asOf, st, shared, waitWords);
   return (

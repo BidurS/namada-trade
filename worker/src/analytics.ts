@@ -6,6 +6,7 @@ import type {
 } from '../../shared/types';
 import type { BondListing } from './sources/namada';
 import { evaluateFlows, INTERNAL_ADDRESSES, isInternal, type AlertThresholds } from '../../shared/alerts';
+import { SELLS_MOST_CUT } from '../../shared/supply-thresholds';
 import { kvGetJson, kvSet } from './db';
 import { NAM_AMOUNT, NOT_LEGACY_TWIN } from './flows-query';
 import { safeHttpUrl, explorerHashOf } from '../../shared/flow-rules';
@@ -764,7 +765,7 @@ export async function pressure(db: D1Database, asOf: number, replay: boolean, wi
   let transparentNam = 0;
   let highHazardRemainingNam = 0;
   for (const e of onDeck) {
-    if ((e.dumpHazardScore ?? 0) >= 0.6) highHazardRemainingNam += e.remaining;
+    if ((e.dumpHazardScore ?? 0) >= SELLS_MOST_CUT) highHazardRemainingNam += e.remaining;
     const isGenesis =
       e.labelSource === 'genesis' ||
       e.linkedLabelSource === 'genesis' ||

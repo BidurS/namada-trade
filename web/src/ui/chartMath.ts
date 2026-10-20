@@ -85,15 +85,19 @@ export function stackLabels(items: { x: number; text: string }[], charW = 6.6, g
   });
 }
 
+/** A takeaway calls a change smaller than this percent "less than" it rather than up or down. */
+export const FLAT_PCT = 0.05;
+
 /**
  * The chart's takeaway title: "Executed price up 72% since 18 Sep". Whole percent from 10 %
- * up, one decimal below; "flat" under 0.05 %. Needs two points; otherwise null.
+ * up, one decimal below; under FLAT_PCT it says "changed less than FLAT_PCT%". Needs two points; otherwise null.
  */
 export function takeaway(first: number | null | undefined, last: number | null | undefined, sinceLabel: string, what = 'Executed price'): string | null {
   if (first == null || last == null || !(first > 0) || !Number.isFinite(last)) return null;
   const pct = ((last - first) / first) * 100;
   const a = Math.abs(pct);
-  if (a < 0.05) return `${what} flat since ${sinceLabel}`;
+  // the cut is said in the title, so a small change on a narrow axis is never called "flat" without its rule
+  if (a < FLAT_PCT) return `${what} changed less than ${FLAT_PCT}% since ${sinceLabel}`;
   const n = a >= 10 ? Math.round(a).toString() : (Math.round(a * 10) / 10).toString();
   return `${what} ${pct > 0 ? 'up' : 'down'} ${n}% since ${sinceLabel}`;
 }

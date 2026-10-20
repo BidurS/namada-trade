@@ -5,15 +5,25 @@
 // between two quotes the readout is a straight line between them with an Estimate tag naming
 // both sizes; outside the quoted range it shows "—" and says it will not guess.
 // The component never draws a number that the quotes and a straight line do not produce.
-import { useId, useMemo, useState } from 'react';
+//
+// The ticket's curve has a second view, "Each slice": the price move of the NAM between one
+// listed size and the next, on its own (the server's slice figures when it sent them, else the
+// same arithmetic over the size table's own rows: what the pools pay for the extra NAM against
+// the quoted price, as trade/jump.ts does). The three readout figures then all describe that
+// slice. When the server marks the size above which selling starts to cost much more per extra
+// NAM, a dashed vertical marks it and the key says what it is; the screen prints the sentence.
+import React, { useId, useMemo, useState } from 'react';
 import type { SlippageCurvePoint } from '../../../shared/types';
 import type { Stamp } from '../lib/prov';
-import { fmtCoin, fmtNamRule, fmtPctSigned, fmtUsdRule } from '../lib/format';
+import { fmtCoin, fmtNamRule, fmtPctRule, fmtPctSigned, fmtUsdRule } from '../lib/format';
+
+const fmtPct2 = (n: number) => fmtPctRule(n, 2);
 import { CurveQuote, SLIDER_MAX, curveAt, fromApi, logPos, normalise, sizeToSlider, sliderToSize } from './curveMath';
 import { niceTicks, pathOf, tickLabel } from './chartMath';
 import { useSize } from './useSize';
 import { Segmented } from './Segmented';
 import { Tag } from './Tag';
+import { Term } from './Term';
 import { SourceLine } from './SourceLine';
 
 export interface OrderSizeCurveProps {
@@ -24,11 +34,11 @@ export interface OrderSizeCurveProps {
   onChange?: (n: number) => void;
   /** Which side the readout reports. Both lines are always drawn. */
   side?: 'sell' | 'buy';
-  /** explore: Home's "Drag an order size"; ticket: the Trade size block (same state as the amount). */
+  /** explore: Home's "Drag an order size"; ticket: the Trade size block (same state as the amount), with the slice view. */
   mode?: 'explore' | 'ticket';
-  /** Order size (NAM) where Concentrated Liquidity tick exhaustion causes a >2.5x jump in marginal slippage. */
+  /** The listed size the server marked: above it each extra NAM sold gets a much lower price. Drawn as a dashed vertical. */
   liquidityCliffNam?: number | null;
-  /** Plain explanation of the Concentrated Liquidity tick cliff. */
+  /** The server's own sentence about that mark. Not printed: it carries typed figures and expert words; the screen says it from fields. */
   cliffNote?: string | null;
   /** The size table's stamp, for the SourceLine under the curve. */
   prov?: Stamp | null;
@@ -37,56 +47,61 @@ export interface OrderSizeCurveProps {
   className?: string;
 }
 
+type View = 'avg' | 'slice';
+
+/** One slice of the size table: the NAM between the listed size before (`from`, 0 for the first) and `n`. */
+interface Slice {
+  n: number;
+  from: number;
+  /** Price per NAM the pools pay (selling) or ask (buying) for this slice alone. */
+  sellUsd: number | null;
+  buyUsd: number | null;
+  /** How far selling or buying this slice on its own moves the price, percent, magnitude. */
+  sellMove: number | null;
+  buyMove: number | null;
+}
+
 const isApi = (p: SlippageCurvePoint | CurveQuote): p is SlippageCurvePoint => 'amountNam' in p;
+const fin = (x: number | null | undefined): x is number => x != null && Number.isFinite(x);
 
-export function OrderSizeCurve({
-  points,
-  value,
-  onChange,
-  side = 'sell',
-  mode = 'explore',
-  liquidityCliffNam,
-  cliffNote,
-  prov,
-  caption = 'Drag an order size',
-  className = '',
-}: OrderSizeCurveProps) {
+/**
+ * The slices of the size table, by their upper size. The server's figures when it sent them
+ * (marginalSellUsd, marginalSellImpactPct, marginalBuyUsd); otherwise the same arithmetic over the
+ * rows: the USDC difference between two listed sizes over their NAM difference, against the quoted
+ * price (worth / size). Nothing is invented: a row without the needed quote gives null.
+ */
+function slicesOf(points: (SlippageCurvePoint | CurveQuote)[], P: CurveQuote[]): Map<number, Slice> {
+  const api = new Map<number, SlippageCurvePoint>();
+  for (const p of points) if (isApi(p)) api.set(p.amountNam, p);
+  const out = new Map<number, Slice>();
+  let prev: CurveQuote | null = null;
+  for (const p of P) {
+    const a = api.get(p.n);
+    const spot = fin(p.worth) && p.n > 0 ? p.worth / p.n : null;
+    const dN = p.n - (prev?.n ?? 0);
+    const sU = a?.marginalSellUsd;
+    const sM = a?.marginalSellImpactPct;
+    const bU = a?.marginalBuyUsd;
+    let sellUsd: number | null = fin(sU) ? sU : null;
+    if (sellUsd == null && dN > 0 && fin(p.sellOut) && (prev == null || fin(prev.sellOut))) sellUsd = Math.max(0, (p.sellOut - (prev?.sellOut ?? 0)) / dN);
+    let sellMove: number | null = fin(sM) ? sM : null;
+    if (sellMove == null && sellUsd != null && spot != null && spot > 0) sellMove = Math.max(0, ((spot - sellUsd) / spot) * 100);
+    let buyUsd: number | null = fin(bU) ? bU : null;
+    if (buyUsd == null && dN > 0 && fin(p.buyIn) && (prev == null || fin(prev.buyIn))) buyUsd = Math.max(0, (p.buyIn - (prev?.buyIn ?? 0)) / dN);
+    const buyMove = buyUsd != null && spot != null && spot > 0 ? Math.max(0, ((buyUsd - spot) / spot) * 100) : null;
+    out.set(p.n, { n: p.n, from: prev?.n ?? 0, sellUsd, buyUsd, sellMove, buyMove });
+    prev = p;
+  }
+  return out;
+}
+
+export function OrderSizeCurve({ points, value, onChange, side = 'sell', mode = 'explore', liquidityCliffNam, prov, caption = 'Drag an order size', className = '' }: OrderSizeCurveProps) {
   const P = useMemo(() => normalise(points.map((p) => (isApi(p) ? fromApi(p) : p))), [points]);
-  const [curveView, setCurveView] = useState<'avg' | 'marginal'>('avg');
-
-  // Compute marginal slice slippage (% impact on the incremental ΔNAM between tier i-1 and tier i)
-  const marginalMap = useMemo(() => {
-    const out = new Map<number, { marginalSellMove: number | null; marginalBuyMove: number | null; marginalSellUsd: number | null }>();
-    const apiBySize = new Map<number, SlippageCurvePoint>();
-    for (const p of points) if (isApi(p)) apiBySize.set(p.amountNam, p);
-
-    let prevN = 0;
-    let prevSellOut = 0;
-    let prevBuyIn = 0;
-    for (const p of P) {
-      const api = apiBySize.get(p.n);
-      const dN = p.n - prevN;
-      const spot = p.worth != null && p.n > 0 ? p.worth / p.n : null;
-      let mSellMove: number | null = api?.marginalSellImpactPct ?? null;
-      let mSellUsd: number | null = api?.marginalSellUsd ?? null;
-      if (mSellMove == null && dN > 0 && p.sellOut != null && spot && spot > 0) {
-        const dUsdc = Math.max(0, p.sellOut - prevSellOut);
-        mSellUsd = dUsdc / dN;
-        mSellMove = Math.max(0, ((spot - mSellUsd) / spot) * 100);
-      }
-      let mBuyMove: number | null = null;
-      if (dN > 0 && p.buyIn != null && spot && spot > 0) {
-        const dBuyUsdc = Math.max(0, p.buyIn - prevBuyIn);
-        const mBuyUsd = dBuyUsdc / dN;
-        mBuyMove = Math.max(0, ((mBuyUsd - spot) / spot) * 100);
-      }
-      if (p.sellOut != null) prevSellOut = p.sellOut;
-      if (p.buyIn != null) prevBuyIn = p.buyIn;
-      prevN = p.n;
-      out.set(p.n, { marginalSellMove: mSellMove ?? p.sellMove, marginalBuyMove: mBuyMove ?? p.buyMove, marginalSellUsd: mSellUsd });
-    }
-    return out;
-  }, [P, points]);
+  const slices = useMemo(() => slicesOf(points, P), [points, P]);
+  const slicesOk = P.some((p) => slices.get(p.n)?.sellMove != null || slices.get(p.n)?.buyMove != null);
+  const [viewPick, setViewPick] = useState<View>('avg');
+  const view: View = mode === 'ticket' && slicesOk ? viewPick : 'avg';
+  const isSlice = view === 'slice';
 
   const sizes = P.map((p) => p.n);
   const lo = sizes[0] ?? null;
@@ -109,33 +124,22 @@ export function OrderSizeCurve({
   const R = 12;
   const T = 12;
   const B = 26;
-  const isMarginal = curveView === 'marginal';
-  const maxMove = Math.max(
-    0,
-    ...P.map((p) => {
-      const m = marginalMap.get(p.n);
-      return Math.max(
-        p.sellMove ?? 0,
-        p.buyMove ?? 0,
-        isMarginal ? (m?.marginalSellMove ?? 0) : 0,
-        isMarginal ? (m?.marginalBuyMove ?? 0) : 0,
-      );
-    }),
-  );
+  const sliceList = P.map((p) => slices.get(p.n)).filter((s): s is Slice => !!s);
+  const maxMove = isSlice
+    ? Math.max(0, ...sliceList.map((s) => Math.max(s.sellMove ?? 0, s.buyMove ?? 0)))
+    : Math.max(0, ...P.map((p) => Math.max(p.sellMove ?? 0, p.buyMove ?? 0)));
   const yT = niceTicks(0, maxMove > 0 ? maxMove * 1.02 : 1, { zero: true, maxTicks: 5 });
   const X = (s: number) => (lo && hi ? L + logPos(s, lo, hi) * (w - L - R) : L);
   const Y = (m: number) => T + (1 - m / (yT.hi || 1)) * (H - T - B);
-  const sellPts = P.filter((p) => p.sellMove != null).map((p) => [X(p.n), Y(p.sellMove as number)] as [number, number]);
-  const buyPts = P.filter((p) => p.buyMove != null).map((p) => [X(p.n), Y(p.buyMove as number)] as [number, number]);
-  const mSellPts = P.filter((p) => marginalMap.get(p.n)?.marginalSellMove != null).map(
-    (p) => [X(p.n), Y(marginalMap.get(p.n)!.marginalSellMove as number)] as [number, number],
-  );
-  // Step-function staircase path for Concentrated Liquidity tick boundaries
-  const stepPathOf = (pts: [number, number][]) =>
-    pts.length > 1
-      ? pts.map(([x, y], i) => (i === 0 ? `M${x.toFixed(1)},${y.toFixed(1)}` : `H${x.toFixed(1)} V${y.toFixed(1)}`)).join(' ')
-      : '';
-  const cliffX = liquidityCliffNam && lo && hi && liquidityCliffNam >= lo && liquidityCliffNam <= hi ? X(liquidityCliffNam) : null;
+  // the two lines: the whole order's average move, or each slice's own move, never both
+  const sellPts = isSlice
+    ? sliceList.filter((s) => s.sellMove != null).map((s) => [X(s.n), Y(s.sellMove as number)] as [number, number])
+    : P.filter((p) => p.sellMove != null).map((p) => [X(p.n), Y(p.sellMove as number)] as [number, number]);
+  const buyPts = isSlice
+    ? sliceList.filter((s) => s.buyMove != null).map((s) => [X(s.n), Y(s.buyMove as number)] as [number, number])
+    : P.filter((p) => p.buyMove != null).map((p) => [X(p.n), Y(p.buyMove as number)] as [number, number]);
+  const jump = fin(liquidityCliffNam) && lo != null && hi != null && liquidityCliffNam >= lo && liquidityCliffNam <= hi ? liquidityCliffNam : null;
+  const jumpX = jump != null ? X(jump) : null;
   const short = (x: number) => (x >= 1000 ? `${fmtNamRule(x / 1000)}k`.replace('.00k', 'k') : fmtNamRule(x));
   // Every quoted size is labelled (the caption says "the dots are the N sizes"): the first anchored at
   // its start, the last at its end, the rest centred. A middle label that would touch its neighbour
@@ -165,26 +169,51 @@ export function OrderSizeCurve({
     return out;
   })();
 
+  // ---------------- the whole order (average) reading ----------------
   const v = reading.kind === 'quote' ? reading.q : reading.kind === 'estimate' ? reading.v : null;
   const move = v ? (side === 'sell' ? v.sellMove : v.buyMove) : null;
-  const activeTier = useMemo(() => {
-    if (!P.length) return null;
-    return P.find((p) => p.n >= n) ?? P[P.length - 1];
-  }, [P, n]);
-  const activeMarginal = activeTier ? marginalMap.get(activeTier.n) ?? null : null;
-  const marginalMove = activeMarginal ? (side === 'sell' ? activeMarginal.marginalSellMove : activeMarginal.marginalBuyMove) : null;
-
-  const cx = reading.kind === 'out' ? null : X(n);
-  const shownMove = isMarginal ? (marginalMove ?? move) : move;
-  const cy = shownMove != null ? Y(shownMove) : null;
-
   const get = v ? (side === 'sell' ? v.sellOut : v.buyIn) : null;
-  const signedMove = shownMove == null ? null : side === 'sell' ? -shownMove : shownMove;
+  const signedMove = move == null ? null : side === 'sell' ? -move : move;
+
+  // ---------------- the slice reading: the slice the set size falls in ----------------
+  const holder = n > 0 && hi != null && n <= hi ? (P.find((p) => p.n >= n) ?? null) : null;
+  const slice = holder ? (slices.get(holder.n) ?? null) : null;
+  const sliceNam = slice ? slice.n - slice.from : null;
+  const sliceUsd = slice ? (side === 'sell' ? slice.sellUsd : slice.buyUsd) : null;
+  const sliceMove = slice ? (side === 'sell' ? slice.sellMove : slice.buyMove) : null;
+  const sliceGet = sliceUsd != null && sliceNam != null ? sliceUsd * sliceNam : null;
+  const signedSlice = sliceMove == null ? null : side === 'sell' ? -sliceMove : sliceMove;
+  // the whole order up to the slice's top, so the reader sees why the part moves more than the whole
+  const wholeAtTop = holder ? (side === 'sell' ? holder.sellMove : holder.buyMove) : null;
+  const sliceWhy: React.ReactNode = isSlice && slice && slice.from > 0 && sliceMove != null && wholeAtTop != null && sliceNam != null && sliceMove > wholeAtTop
+    ? (
+      <>
+        The last <span data-num="">{fmtNamRule(sliceNam)}</span> NAM of a <span data-num="">{fmtNamRule(slice.n)}</span> NAM order moves the price{' '}
+        <span data-num="">{fmtPct2(sliceMove)}</span>, more than the <span data-num="">{fmtPct2(wholeAtTop)}</span> the whole order averages, because each extra NAM{' '}
+        {side === 'sell' ? 'sells at a lower' : 'is bought at a higher'} price.
+      </>
+    )
+    : null;
+
+  const shownMove = isSlice ? sliceMove : move;
+  const cx = reading.kind === 'out' ? null : X(n);
+  const cy = shownMove != null ? Y(shownMove) : null;
   const sliderVal = lo && hi ? sizeToSlider(Math.min(hi, Math.max(lo, n || lo)), lo, hi) : 0;
 
-  const how =
-    reading.kind === 'quote'
-      ? `A real quote: the pools were asked about ${fmtNamRule(n)} NAM.${isMarginal && activeMarginal?.marginalSellUsd != null ? ` Incremental slice executes at ${fmtUsdRule(activeMarginal.marginalSellUsd)}/NAM.` : ''}`
+  const how = isSlice
+    ? reading.kind === 'out'
+      ? lo != null && hi != null
+        ? `No quote covers ${fmtNamRule(n)} NAM. The pools were asked about ${fmtNamRule(lo)} to ${fmtNamRule(hi)} NAM, so no figure is shown.`
+        : 'The size table is empty, so no figure is shown.'
+      : slice && sliceMove != null
+        ? slice.from === 0
+          ? `The first ${fmtNamRule(slice.n)} NAM on its own: a real quote.`
+          : `The slice from ${fmtNamRule(slice.from)} to ${fmtNamRule(slice.n)} NAM on its own, from the two real quotes around it.`
+        : slice
+          ? `The size table has no figure for the slice from ${fmtNamRule(slice.from)} to ${fmtNamRule(slice.n)} NAM, so none is shown.`
+          : 'The size table is empty, so no figure is shown.'
+    : reading.kind === 'quote'
+      ? `A real quote: the pools were asked about ${fmtNamRule(n)} NAM.`
       : reading.kind === 'estimate'
         ? `A straight line between the real ${fmtNamRule(reading.a.n)} and ${fmtNamRule(reading.b.n)} NAM quotes. The pools were not asked about ${fmtNamRule(n)} NAM.`
         : lo != null && hi != null
@@ -192,7 +221,9 @@ export function OrderSizeCurve({
           : 'The size table is empty, so no figure is shown.';
 
   const aria = P.length
-    ? `Price move by order size, log scale from ${fmtNamRule(lo)} to ${fmtNamRule(hi)} NAM. Selling solid, buying dashed. ${P.length} real quotes.`
+    ? `${isSlice ? 'Price move of each slice on its own' : 'Price move by order size'}, log scale from ${fmtNamRule(lo)} to ${fmtNamRule(hi)} NAM. Selling solid, buying dashed. ${P.length} real quotes.${
+        jump != null ? ` A dashed vertical marks ${fmtNamRule(jump)} NAM: above it each extra NAM sold gets a much lower price.` : ''
+      }`
     : 'Price move by order size: no quotes.';
 
   return (
@@ -200,16 +231,16 @@ export function OrderSizeCurve({
       {mode === 'ticket' ? (
         <div className="curve__mode">
           <Segmented
-            label="Slippage curve view"
+            label="What the curve shows"
             variant="range"
-            value={curveView}
-            onChange={(v) => setCurveView(v as 'avg' | 'marginal')}
+            value={view}
+            onChange={(x) => setViewPick(x as View)}
             options={[
-              { value: 'avg', label: 'Average impact' },
-              { value: 'marginal', label: 'Marginal tick cliffs' },
+              { value: 'avg', label: 'Whole order' },
+              { value: 'slice', label: 'Each slice', disabled: !slicesOk },
             ]}
           />
-          {cliffNote ? <span className="cap">{cliffNote}</span> : null}
+          {!slicesOk ? <p className="cap">The size table gave no figure for any slice on its own, so that view is off.</p> : null}
         </div>
       ) : null}
       <figure className="curve" aria-labelledby={`${id}c`}>
@@ -229,38 +260,40 @@ export function OrderSizeCurve({
                   {short(p.n)}
                 </text>
               ))}
-              {cliffX != null ? (
+              {jumpX != null && jump != null ? (
                 <g>
-                  <line className="c-evt" x1={cliffX} x2={cliffX} y1={T} y2={H - B} />
-                  <text className="c-evtl" x={Math.min(w - R - 4, cliffX + 4)} y={T + 10} textAnchor={cliffX > w - 110 ? 'end' : 'start'}>
-                    CL tick cliff
+                  <line className="c-evt" x1={jumpX} x2={jumpX} y1={T} y2={H - B} />
+                  <text className="c-evtl" x={jumpX > w - 110 ? jumpX - 4 : jumpX + 4} y={T + 10} textAnchor={jumpX > w - 110 ? 'end' : 'start'}>
+                    above {short(jump)}
                   </text>
                 </g>
               ) : null}
               {buyPts.length > 1 ? <path className="cv-buy" d={pathOf(buyPts)} /> : null}
               {buyPts.map(([x, y], i) => <circle key={`b${i}`} className="cv-db" cx={x} cy={y} r={w >= 480 ? 4 : 3.5} />)}
-              {isMarginal && mSellPts.length > 1 ? (
-                <g className="cv-wipe">
-                  <path className="cv-sell" d={stepPathOf(mSellPts)} />
-                  <path className="cv-buy" d={pathOf(sellPts)} />
-                </g>
-              ) : sellPts.length > 1 ? (
-                <g className="cv-wipe">
+              {sellPts.length > 1 ? (
+                <g className="cv-wipe" key={view}>
                   <path className="cv-sell" d={pathOf(sellPts)} />
                 </g>
               ) : null}
-              {(isMarginal ? mSellPts : sellPts).map(([x, y], i) => (
-                <circle key={`s${i}`} className="cv-ds" cx={x} cy={y} r={w >= 480 ? 4 : 3.5} />
-              ))}
+              {sellPts.map(([x, y], i) => <circle key={`s${i}`} className="cv-ds" cx={x} cy={y} r={w >= 480 ? 4 : 3.5} />)}
               {cx != null ? <line className="cv-cur" x1={cx} x2={cx} y1={T} y2={H - B} /> : null}
               {cx != null && cy != null ? <circle className="cv-curd" cx={cx} cy={cy} r={6} /> : null}
             </svg>
           ) : null}
         </div>
         <p className="curve__key">
-          <span><i className="key__ln" />{isMarginal ? 'marginal slice impact (step)' : 'selling'}</span>
-          <span><i className="key__ln key__ln--dash" />{isMarginal ? 'average impact' : 'buying'}</span>
-          <span>{isMarginal ? 'Concentrated liquidity tick depth & marginal slippage' : 'Price move by order size'}</span>
+          <span><i className="key__ln" />selling</span>
+          <span><i className="key__ln key__ln--dash" />buying</span>
+          {jump != null ? <span><i className="key__ln key__ln--evt" />dashed vertical: above this size each extra NAM sold gets a much lower price</span> : null}
+          <span>
+            {isSlice ? (
+              <>
+                <Term id="slice">Each slice</Term> on its own: the NAM between one listed size and the next
+              </>
+            ) : (
+              'Price move by order size'
+            )}
+          </span>
         </p>
         <div className="curve__ctl">
           <label className="curve__lbl" htmlFor={`${id}r`}>Order size</label>
@@ -295,29 +328,59 @@ export function OrderSizeCurve({
             }}
           />
         </div>
-        <dl className="curve__read" aria-live="polite">
-          <div>
-            <dt>Worth</dt>
-            <dd data-num="" data-status={v?.worth == null ? 'none' : undefined}>{v?.worth == null ? '—' : fmtUsdRule(v.worth)}</dd>
-          </div>
-          <div>
-            <dt>{side === 'sell' ? 'You get' : 'You pay'}</dt>
-            <dd data-num="" data-status={get == null ? 'none' : undefined}>
-              {get == null ? '—' : <>{fmtCoin(get)}<span className="u"> USDC</span></>}
-            </dd>
-          </div>
-          <div>
-            <dt>{isMarginal ? 'Marginal slice move' : 'Price moves'}</dt>
-            <dd data-num="" data-status={signedMove == null ? 'none' : undefined}>{signedMove == null ? '—' : fmtPctSigned(signedMove)}</dd>
-          </div>
-        </dl>
+        {isSlice ? (
+          <dl className="curve__read" aria-live="polite">
+            <div>
+              <dt>{slice && slice.from > 0 ? <><Term id="slice">Slice</Term> from {fmtNamRule(slice.from)} to {fmtNamRule(slice.n)}</> : slice ? <>The first <Term id="slice">slice</Term>, up to {fmtNamRule(slice.n)}</> : <Term id="slice">Slice</Term>}</dt>
+              <dd data-num="" data-status={sliceNam == null ? 'none' : undefined}>
+                {sliceNam == null ? '—' : <>{fmtNamRule(sliceNam)}<span className="u"> NAM</span></>}
+              </dd>
+            </div>
+            <div>
+              <dt>{side === 'sell' ? 'You get for that slice' : 'You pay for that slice'}</dt>
+              <dd data-num="" data-status={sliceGet == null ? 'none' : undefined}>
+                {sliceGet == null ? '—' : <>{fmtCoin(sliceGet)}<span className="u"> USDC</span></>}
+              </dd>
+            </div>
+            <div>
+              <dt>Price move for that slice</dt>
+              <dd data-num="" data-status={signedSlice == null ? 'none' : undefined}>{signedSlice == null ? '—' : fmtPctSigned(signedSlice)}</dd>
+            </div>
+          </dl>
+        ) : (
+          <dl className="curve__read" aria-live="polite">
+            <div>
+              <dt>Worth</dt>
+              <dd data-num="" data-status={v?.worth == null ? 'none' : undefined}>{v?.worth == null ? '—' : fmtUsdRule(v.worth)}</dd>
+            </div>
+            <div>
+              <dt>{side === 'sell' ? 'You get' : 'You pay'}</dt>
+              <dd data-num="" data-status={get == null ? 'none' : undefined}>
+                {get == null ? '—' : <>{fmtCoin(get)}<span className="u"> USDC</span></>}
+              </dd>
+            </div>
+            <div>
+              <dt>Price moves</dt>
+              <dd data-num="" data-status={signedMove == null ? 'none' : undefined}>{signedMove == null ? '—' : fmtPctSigned(signedMove)}</dd>
+            </div>
+          </dl>
+        )}
         <p className="curve__how">
-          {reading.kind === 'estimate' ? <Tag cat="Estimate" term="estimate" /> : null}
-          <span>{how}</span>
+          {!isSlice && reading.kind === 'estimate' ? <Tag cat="Estimate" term="estimate" /> : null}
+          <span>
+            {how}
+            {isSlice && slice && sliceUsd != null ? (
+              <>
+                {' '}
+                {side === 'sell' ? 'The pools pay' : 'The pools ask'} <span data-num="">{fmtUsdRule(sliceUsd)}</span> per NAM for it.
+              </>
+            ) : null}
+            {sliceWhy ? <> {sliceWhy}</> : null}
+          </span>
         </p>
         {P.length ? (
           <p className="curve__note">
-            The dots are the {P.length} sizes the pools were asked about ({fmtNamRule(lo)} to {fmtNamRule(hi)} NAM). Between two dots the page draws a straight line between the two real quotes, so treat it as an estimate. The scale is logarithmic: equal steps are equal multiples.
+            The dots are the {P.length} sizes the pools were asked about ({fmtNamRule(lo)} to {fmtNamRule(hi)} NAM). Between two dots the page draws a straight line between the two real quotes, so treat it as an estimate. Along the bottom each step is a multiple, not a fixed amount: {P.map((p) => short(p.n)).join(', ')}.
           </p>
         ) : null}
       </figure>

@@ -198,7 +198,9 @@ test.describe('sheets, once', () => {
       loggedOut = true;
       return route.fulfill({ json: { success: true } });
     });
-    await page.route('**/api/me/**', (route) => route.fulfill({ status: 401, json: { error: 'sign in first' } }));
+    // a server that is down for the account's own data (503), never a 401: a refused token signs the device out
+    // (lib/auth.ts authFetch, since the security review), and this test needs the device signed in
+    await page.route('**/api/me/**', (route) => route.fulfill({ status: 503, json: { error: 'down for the test' } }));
     await gotoRoute(page, '/alerts');
     await page.locator('header .ibtn[aria-label^="Account"]').click();
     const d = page.locator('dialog.sh-acct');

@@ -44,7 +44,10 @@ export function scopeSummary(items: ScopeItem[], now: number): { status: ReturnT
   const stamps = items.map((i) => i.p).filter((p): p is Stamp => !!p);
   const worst = stamps.length ? worstStatus(stamps.map((s) => s.status)) : 'missing';
   const ui = uiStatus(worst);
-  return { status: ui, text: `${SEP}${sourcesText(items)}${SEP}${ageRange(stamps, now)}${SEP}${STATUS_WORD[ui]}` };
+  // the ages of the stamps that have a value: a missing figure has no age to show ("Flow index · no data", as the stamp says it)
+  const aged = stamps.filter((s) => s.status !== 'missing');
+  const age = aged.length ? `${SEP}${ageRange(aged, now)}` : '';
+  return { status: ui, text: `${SEP}${sourcesText(items)}${age}${SEP}${STATUS_WORD[ui]}` };
 }
 
 export function SourceLine({ items, label, lead = 'Source', text, bare, className }: SourceLineProps) {

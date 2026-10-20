@@ -88,7 +88,8 @@ function pressureFixture(live: any) {
     deck({ address: 'osmo1fixturegonebbbbbbbbbbbbbbbbbbbbbbbbbbb', bridgedIn: 500, soldSince: 500, remaining: 0 }),
   ];
   // unbondingAll is the server's total of every request still in its wait; null here so the band reads these rows.
-  return { ...live, unbondingDays: live.unbondingDays ?? 13.75, unbondingAll: null, unlocks, onDeck, onDeckTotal: 600 };
+  // no chain list of every request (production sends one since 2026-10-20): these figures come from the listed requests
+  return { ...live, unbondingDays: live.unbondingDays ?? 13.75, unbondingAll: null, unbondTermStructure: undefined, unbondTermStructureProv: undefined, unlocks, onDeck, onDeckTotal: 600 };
 }
 
 /** Ready to sell rows whose receiver sits over a linked Namada address (named and not), and three addresses with nothing left. */
@@ -111,6 +112,50 @@ function stackedFixture(live: any) {
   ];
   return { ...base, onDeck, onDeckTotal: onDeck.reduce((t, e) => t + e.remaining, 0) };
 }
+
+/**
+ * The unstaking days and where the NAM came from, over the fixture: the chain's own list of every request (a
+ * day-1 and a day-5 bucket, one bucket with no known time, NAM whose wait is over), a listed request of an address
+ * that sold what it unlocked before, and Ready to sell rows with a selling estimate above and below the cut, a
+ * likely shielded-set round trip and a likely middle address.
+ */
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+function deepFixture(live: any) {
+  const base = pressureFixture(live);
+  const a: number = live.asOf;
+  const SELLER = 'tnam1qfixturesellerssssssssssssssssssssssssss';
+  const unlocks = [
+    ...base.unlocks,
+    { kind: 'withdraw', address: SELLER, label: null, labelPlain: null, amountNam: 300_000, ts: a - 9 * D, liquidAt: null, txHash: `${'EF'.repeat(31)}01`, outcome: { kind: 'sold', amountNam: 250_000 } },
+    { kind: 'unbond', address: SELLER, label: null, labelPlain: null, amountNam: 400_000, ts: a - 9 * D, liquidAt: a + 4.5 * D, liquidAtSource: 'estimate', txHash: `${'EF'.repeat(31)}02`, outcome: null },
+  ];
+  const term = {
+    at: a, height: 1, currentEpoch: 100, epochSec: 21_600, epochSecSource: 'fixture',
+    withdrawableNowNam: 7_654_321, inFlightNam: 1_403_000, totalUnbondingNam: 9_057_321,
+    buckets: [
+      { withdrawEpoch: 90, estimatedAt: a, withdrawableNow: true, amountNam: 7_654_321, count: 30 },
+      { withdrawEpoch: 101, estimatedAt: a + 0.5 * D, withdrawableNow: false, amountNam: 3_000, count: 7 },
+      { withdrawEpoch: 118, estimatedAt: a + 4.5 * D, withdrawableNow: false, amountNam: 900_000, count: 3 },
+      { withdrawEpoch: 140, estimatedAt: a + 11.5 * D, withdrawableNow: false, amountNam: 500_000, count: 1 },
+      { withdrawEpoch: 150, estimatedAt: null, withdrawableNow: false, amountNam: 1_234, count: 1 },
+    ],
+  };
+  const deck = (o: Record<string, unknown>) => ({ label: null, labelPlain: null, linkedNamada: null, linkedLabel: null, linkedLabelPlain: null, soldSince: 0, bridgedOutSince: 0, priorSells30d: 0, firstArrival: a - 2 * D, lastSeen: a - D, ...o });
+  const onDeck = [
+    deck({ address: 'osmo1fixturehighaaaaaaaaaaaaaaaaaaaaaaaaaaa', bridgedIn: 1000, soldSince: 400, soldCounted: 400, sentBackCounted: 0, remaining: 600, dumpHazardScore: 0.7, priorSells30d: 8_174 }),
+    deck({ address: 'osmo1fixturelowbbbbbbbbbbbbbbbbbbbbbbbbbbbb', bridgedIn: 500, soldCounted: 0, sentBackCounted: 0, remaining: 500, dumpHazardScore: 0.2,
+      linkedNamada: 'tnam1qfixtureburnercccccccccccccccccccccccccc', hopOriginNamada: { address: 'tnam1qfixtureorigindddddddddddddddddddddddd', label: null, labelPlain: null },
+      passthroughFrom: { address: 'tnam1qfixtureshieldeeeeeeeeeeeeeeeeeeeeeeeee', dwellMs: 3_600_000, anonymitySetK: 3, confidence: 'medium' } }),
+  ];
+  const pipelineSummary = { cohorts: { genesisBackersNam: 0, maspTurnstileNam: 500, burnerHopNam: 0, transparentNam: 1000 }, highHazardRemainingNam: 600 };
+  return {
+    ...base, unbondingDays: 14.01, unlocks, unbondTermStructure: term, unbondTermStructureProv: { source: 'Namada RPC (bond listing: every unbond on the chain)', at: a, status: 'live' },
+    onDeck, onDeckTotal: 1100, onDeckTotals: { bridgedIn: 1500, sold: 400, sentBack: 0, remaining: 1100 }, pipelineSummary,
+  };
+}
+
+/** Words the screen must not use: verdicts on wallets and expert terms as plain words. */
+const JUDGING = /\b(dump|hazard|sticky|turnstile|maturity wall|pipeline|on deck|burner|cohort|disposition|MASP)\b/i;
 
 test.describe('layout, every viewport', () => {
   test('live: one h1, the key figures, no overflow, no <table>, 44 px targets, text at least 11 px', async ({ page }) => {
@@ -154,6 +199,49 @@ test.describe('taps, every viewport', () => {
     expect(await wrongTaps(page)).toEqual([]);
     const a = await layoutAudit(page, 'main');
     expect(a.overflowX).toBe(false);
+    expect(a.smallTargets).toEqual([]);
+  });
+});
+
+test.describe('unstaking days and origins, every viewport', () => {
+  test('the day chart has no controls narrower than 44 px, every day reads as a row, nothing judges a wallet', async ({ page }) => {
+    await gotoRoute(page, '/supply');
+    await ready(page);
+    const live = await page.evaluate(() => fetch('/api/pressure?days=7').then((r) => r.json()));
+    await page.route('**/api/pressure?*', (route) => route.fulfill({ json: deepFixture(live) }));
+    await page.reload();
+    await ready(page);
+    const days = page.locator('.ul-days');
+    // the wait of 14.01 days is "about 14 days" in the lead, and the chart runs the same 14 days
+    await expect(days.locator('#ul-days-h')).toHaveText('NAM whose unstaking wait ends each day for the next 14 days');
+    await expect(page.locator('#unstaking .ipg-lead')).toContainText('takes about 14 days');
+    // the strip's "still unstaking" is the chain list's own figure, the one the chart adds up
+    const still = page.locator('.sp-facts .fact').nth(4);
+    await expect(still.locator('.fact__n')).toContainText('1,403,000');
+    await expect(still.locator('.fact__l')).toContainText("from the chain's own list");
+    await expect(days.locator('.ul-days__box svg text.c-tick').first()).toBeAttached();
+    await expect(days.locator('.ul-days__box button, .ul-days__box [tabindex]')).toHaveCount(0);
+    // day 1: the chain's 3,000 NAM, no address; day 5: the chain's 900,000, of which the listed 400,000 of an address that sold before
+    const rows = days.locator('.ul-days__row');
+    await expect(rows).toHaveCount(3);
+    await expect(rows.nth(0)).toContainText('+1d');
+    await expect(rows.nth(0)).toContainText('3,000');
+    await expect(rows.nth(0)).toContainText('7 requests');
+    await expect(rows.nth(1)).toContainText('+5d');
+    await expect(rows.nth(1)).toContainText('900,000');
+    await expect(rows.nth(1)).toContainText('400,000 from addresses that sold or moved most before');
+    await expect(rows.nth(1)).toContainText('500,000 with no earlier unlock on record');
+    await expect(rows.nth(2)).toContainText('+12d');
+    await expect(days).toContainText('7,654,321');
+    await expect(days).toContainText('1,234');
+    await expect(days.locator('.ul-days__key')).toContainText('at least 60% of what they unlocked before');
+    await expect(days.locator('.srcb')).toBeVisible();
+    await expect(page.locator('main')).not.toContainText(JUDGING);
+    expect(await unstamped(page)).toEqual([]);
+    const a = await layoutAudit(page, 'main');
+    expect(a.overflowX, `scrollWidth ${a.scrollWidth} > ${a.innerWidth}`).toBe(false);
+    expect(a.tables).toBe(0);
+    expect(a.smallText).toEqual([]);
     expect(a.smallTargets).toEqual([]);
   });
 });
@@ -303,11 +391,11 @@ test.describe('once', () => {
     await expect(facts.nth(3).locator('.fact__n')).toContainText('2,300,000');
     await expect(facts.nth(3).locator('.fact__l')).toContainText('only requests of 100,000 NAM or more');
     await expect(facts.nth(4).locator('.fact__n')).toContainText('554,062');
-    await expect(facts.nth(4).locator('.fact__l')).toContainText('requests of any size');
+    await expect(facts.nth(4).locator('.fact__l')).toContainText('counting requests of every size');
     await expect(facts.nth(4).locator('.fact__l')).not.toContainText('only requests of');
     // the source sheet names what each staking figure counts
     await page.locator('.sp-facts .srcb').first().click();
-    await expect(page.locator('dialog[open]')).toContainText('Unstaked NAM still in its wait, requests of any size');
+    await expect(page.locator('dialog[open]')).toContainText('Unstaked NAM still in its wait, requests of every size');
     await expect(page.locator('dialog[open]')).toContainText('Unstaked NAM whose wait is over and that was not withdrawn, only requests of 100,000 NAM or more');
     await page.keyboard.press('Escape');
     const lay = await layoutAudit(page, 'main');
@@ -315,7 +403,7 @@ test.describe('once', () => {
     expect(lay.smallTargets).toEqual([]);
   });
 
-  test('ready to sell: an address with nothing left is named under the list, not a row; the column says "last bridged in"', async ({ page }) => {
+  test('ready to sell: an address with nothing left is named under the list, not a row; the column says "last crossed in"', async ({ page }) => {
     await gotoRoute(page, '/supply');
     await ready(page);
     const live = await page.evaluate(() => fetch('/api/pressure?days=7').then((r) => r.json()));
@@ -323,7 +411,7 @@ test.describe('once', () => {
     await page.reload();
     await ready(page);
     await expect(page.locator('.rts__row')).toHaveCount(1);
-    await expect(page.locator('.rts__row')).toContainText('last bridged in');
+    await expect(page.locator('.rts__row')).toContainText('last crossed in');
     await expect(page.locator('.rts-gone')).toContainText('One more address that received NAM in the last 7 days has none of it left, all sold or sent back');
     await expect(page.locator('.rts-gone .xaddr')).toHaveCount(1);
     await expect(page.locator('main')).not.toContainText('last seen');
@@ -382,10 +470,123 @@ test.describe('once', () => {
     await expect(page.locator('.sp-facts .facts__old')).toHaveCount(0);
   });
 
+  test('where the NAM came from: two bars written out, a selling estimate only at the cut, likely links hedged', async ({ page }) => {
+    await gotoRoute(page, '/supply');
+    await ready(page);
+    const live = await page.evaluate(() => fetch('/api/pressure?days=7').then((r) => r.json()));
+    await page.route('**/api/pressure?*', (route) => route.fulfill({ json: deepFixture(live) }));
+    await page.reload();
+    await ready(page);
+    const pipe = page.locator('.sp-pipe');
+    await expect(pipe.locator('#sp-pipe-h')).toHaveText('Where this NAM came from, and what happened to it');
+    await expect(pipe.locator('.sp-pipe__item')).toHaveCount(7);
+    await expect(pipe.locator('.sp-pipe__item', { hasText: 'Out of the shielded set' })).toContainText('500');
+    await expect(pipe.locator('.sp-pipe__item', { hasText: 'Still there' })).toContainText('1,100');
+    await expect(pipe).toContainText('600 NAM sits with addresses whose selling estimate is 60% or more');
+    await expect(pipe.locator('.srcb')).toBeVisible();
+    await expect(pipe.locator('[title]')).toHaveCount(0);
+    const rows = page.locator('.rts__row');
+    await expect(rows.nth(0).locator('.rts__tags')).toContainText('Selling estimate 70%');
+    await expect(rows.nth(0).locator('.rts__tags')).toContainText('Sold 8,174 NAM in the 30 days before the window');
+    await expect(rows.nth(1)).not.toContainText('Selling estimate');
+    await expect(rows.nth(1)).toContainText('likely through a middle address, from');
+    await expect(rows.nth(1)).toContainText('Likely out of the shielded set less than a day after going in (one of 3 moves of that size it could match)');
+    await expect(page.locator('main')).not.toContainText(JUDGING);
+    // a server that does not send the split: said, not hidden
+    await page.unroute('**/api/pressure?*');
+    await page.route('**/api/pressure?*', (route) => route.fulfill({ json: { ...deepFixture(live), pipelineSummary: undefined } }));
+    await page.reload();
+    await ready(page);
+    await expect(page.locator('.sp-pipe')).toHaveCount(0);
+    await expect(page.locator('.sp-pipe__none')).toContainText('not sent by this server');
+  });
+
+  test('a server that answers for a shorter window than the one picked says so', async ({ page }) => {
+    await gotoRoute(page, '/supply');
+    await ready(page);
+    const live = await page.evaluate(() => fetch('/api/pressure?days=7').then((r) => r.json()));
+    await page.route('**/api/pressure?*', (route) => {
+      const days = Number(new URL(route.request().url()).searchParams.get('days'));
+      return route.fulfill({ json: { ...live, windowDays: Math.min(days, 30) } });
+    });
+    await page.getByRole('radio', { name: '1 year' }).check();
+    await expect(page.locator('.sp-hero__note')).toHaveText('You picked the last year, but the server answered for the last 30 days: every figure on this page covers the last 30 days.');
+    await page.getByRole('radio', { name: '7 days' }).check();
+    await expect(page.locator('.sp-hero__note')).toHaveCount(0);
+  });
+
   test('G7: nothing on the screen animates under reduced motion', async ({ page }) => {
     await gotoRoute(page, '/supply', { reducedMotion: true });
     await ready(page);
     await page.waitForTimeout(800);
     expect(await animationsIn(page, 'main')).toBe(0);
+  });
+});
+
+// ---------------------------------------------------------------- the review's edge cases (once)
+test.describe('edge cases, once', () => {
+  test('a split of origins without its parts, or with one part missing, never crashes and never prints shares over a part', async ({ page }, info) => {
+    test.skip(onlyIn(info.project.name), 'runs once');
+    await gotoRoute(page, '/supply');
+    await ready(page);
+    const live = await page.evaluate(() => fetch('/api/pressure?days=7').then((r) => r.json()));
+    const base = { ...live, onDeckTotals: { bridgedIn: 2_335, sold: 300, sentBack: 35, remaining: 2_000 } };
+    // no cohorts at all: the screen stands, and the origins are said to be not sent
+    await page.route('**/api/pressure?*', (route) => route.fulfill({ json: { ...base, pipelineSummary: { highHazardRemainingNam: 5 } } }));
+    await page.reload();
+    await ready(page);
+    await expect(page.locator('.sp-pipe__none')).toBeVisible();
+    await expect(page.locator('main')).not.toContainText('did not load');
+    // one cohort missing: its figure is "—" with the reason, no percentages and no bar for the origins
+    await page.unroute('**/api/pressure?*');
+    await page.route('**/api/pressure?*', (route) => route.fulfill({
+      json: { ...base, pipelineSummary: { highHazardRemainingNam: 0, cohorts: { genesisBackersNam: null, maspTurnstileNam: 0, burnerHopNam: 0, transparentNam: 2_335 } } },
+    }));
+    await page.reload();
+    await ready(page);
+    const before = page.locator('.sp-pipe__row').first();
+    await expect(before).toContainText('did not send every origin');
+    await expect(before.locator('.sp-pipe__track')).toHaveCount(0);
+    await expect(before.locator('.sp-pipe__pct')).toHaveCount(0);
+    await expect(before.locator('[data-num][data-status="none"]').first()).toHaveText('—');
+    expect(await unstamped(page)).toEqual([]);
+  });
+
+  test('a response without its window says so, never "undefined days"', async ({ page }, info) => {
+    test.skip(onlyIn(info.project.name), 'runs once');
+    await gotoRoute(page, '/supply');
+    await ready(page);
+    const live = await page.evaluate(() => fetch('/api/pressure?days=7').then((r) => r.json()));
+    const j = { ...live };
+    delete j.windowDays;
+    await page.route('**/api/pressure?*', (route) => route.fulfill({ json: j }));
+    await page.reload();
+    await ready(page);
+    await expect(page.locator('main')).not.toContainText('undefined');
+    await expect(page.locator('.sp-hero__note')).toHaveCount(0);
+  });
+
+  test('staked NAM over a longer range: a failed answer reads as "—" with Try again, never the 14-day readings under it', async ({ page }, info) => {
+    test.skip(onlyIn(info.project.name), 'runs once');
+    await gotoRoute(page, '/supply');
+    await ready(page);
+    const live = await page.evaluate(() => fetch('/api/pressure?days=7').then((r) => r.json()));
+    // a record that began 15 days ago, so the ranges are offered
+    const a: number = live.asOf;
+    const bondedTrend = Array.from({ length: 61 }, (_, i) => ({ ts: a - (60 - i) * 6 * 3_600_000, value: 267_000_000 + i * 100 }));
+    await page.route('**/api/pressure?*', (route) => route.fulfill({ json: { ...live, bondedTrend } }));
+    await page.route('**/api/metrics/history*', (route) => route.fulfill({ status: 500, body: 'no' }));
+    await page.reload();
+    await ready(page);
+    const mode = page.locator('.ul-chart__mode');
+    if (await mode.count()) await mode.getByRole('radio', { name: 'Staked NAM over time' }).check();
+    await page.locator('.ul-chart').getByRole('radio', { name: '1y' }).check();
+    const miss = page.locator('.ul-stake-miss');
+    await expect(miss).toContainText('— The server did not answer for that range.');
+    await expect(miss.getByRole('button', { name: 'Try again' })).toBeVisible();
+    await expect(page.locator('.ul-chart .chart-box')).toHaveCount(0);
+    // back to 14d: the recorded readings again
+    await miss.getByRole('radio', { name: '14d' }).click();
+    await expect(page.locator('.ul-chart .chart-box svg').first()).toBeVisible();
   });
 });
