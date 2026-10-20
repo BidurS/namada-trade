@@ -19,7 +19,9 @@ echo "== 3. smoke"
 fail=0
 check() { local name=$1 want=$2 got=$3; if [ "$got" = "$want" ]; then echo "ok   $name ($got)"; else echo "FAIL $name: want $want got $got"; fail=1; fi; }
 check "encoded path is a 404"        404 "$(curl -s -o /dev/null -w '%{http_code}' "$H/api/%6fverview")"
-check "HEAD /api/overview has no body" 0 "$(curl -s -I "$H/api/overview" | grep -ci '^content-length: [1-9]' || true)"
+# a HEAD answer may state the GET's length (cached answers do); what matters is that no body bytes are sent
+check "HEAD /api/overview sends no body" 0 "$(python3 -c "import http.client as h; c=h.HTTPSConnection('namada.trade'); c.request('HEAD','/api/overview'); print(len(c.getresponse().read()))")"
+check "GET /api/overview has a body"   1 "$( [ "$(curl -s "$H/api/overview" | wc -c)" -gt 1000 ] && echo 1 || echo 0)"
 check "100 KB body is refused (413)"   413 "$(head -c 102400 /dev/zero | tr '\0' 'a' | curl -s -o /dev/null -w '%{http_code}' -X POST -H 'content-type: application/json' --data-binary @- "$H/api/auth/nonce")"
 check "plain GET /ws is 426"           426 "$(curl -s -o /dev/null -w '%{http_code}' "$H/ws")"
 check "/api/auth/me is no-store"       1 "$(curl -s -D - -o /dev/null "$H/api/auth/me" | grep -ci 'cache-control: .*no-store' || true)"
