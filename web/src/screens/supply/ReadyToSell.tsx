@@ -4,9 +4,9 @@
 // when the flow index is old. An address with nothing left (all of it sold or sent back) is not a
 // row of this list: such addresses are listed briefly under it. "Last bridged in" is the last
 // crossing to Osmosis in the window, not the address's last move of any kind.
-import type { OnDeckEntry, Overview, Pressure } from '../../../../shared/types';
+import type { OnDeckEntry, Overview, Pressure, SupplyCohortBreakdown } from '../../../../shared/types';
 import { EmptyState, Num, ProvScope, SourceLine, Tag, Term, derive, useUiNow, type ScopeItem } from '../../ui';
-import { fmtAge, fmtAgo, fmtAddr, fmtNamRule, fmtUsdRule, fmtUsdWhole } from '../../lib/format';
+import { fmtAge, fmtAgo, fmtAddr, fmtNamRule, fmtPctRule, fmtUsdRule, fmtUsdWhole } from '../../lib/format';
 import { AddrName, YouTag, useShowAll } from '../../ui';
 import { isOld, lastWindow, oldRowsSentence } from './parts';
 
@@ -53,6 +53,17 @@ export function ReadyToSell({ data, overview: o, isMine }: { data: Pressure; ove
         ) : null}
       </div>
 
+      {data.pipelineSummary && (data.onDeckTotals?.bridgedIn ?? 0) > 0 ? (
+        <CohortPipelineChart
+          summary={data.pipelineSummary}
+          bridgedIn={data.onDeckTotals?.bridgedIn ?? 0}
+          sold={data.onDeckTotals?.sold ?? 0}
+          sentBack={data.onDeckTotals?.sentBack ?? 0}
+          remaining={data.onDeckTotal}
+          windowDays={data.windowDays}
+        />
+      ) : null}
+
       {data.onDeck.length === 0 ? (
         <EmptyState title={`No NAM crossed to Osmosis in ${lastWindow(data.windowDays)}.`}>
           Every crossing from Namada to Osmosis would be listed here with what was sold or sent back since.
@@ -94,9 +105,114 @@ export function ReadyToSell({ data, overview: o, isMine }: { data: Pressure; ove
   );
 }
 
+function CohortPipelineChart({
+  summary,
+  bridgedIn,
+  sold,
+  sentBack,
+  remaining,
+  windowDays,
+}: {
+  summary: SupplyCohortBreakdown;
+  bridgedIn: number;
+  sold: number;
+  sentBack: number;
+  remaining: number;
+  windowDays: number;
+}) {
+  const c = summary.cohorts;
+  const totalCohort = Math.max(
+    1e-9,
+    c.genesisBackersNam + c.maspTurnstileNam + c.burnerHopNam + c.transparentNam,
+  );
+  const segments = [
+    { key: 'genesis', label: 'Genesis backers', nam: c.genesisBackersNam, cls: 'sp-pipe__seg--genesis' },
+    { key: 'turnstile', label: 'MASP turnstile (<24h)', nam: c.maspTurnstileNam, cls: 'sp-pipe__seg--turnstile' },
+    { key: 'burner', label: '2-hop burner relays', nam: c.burnerHopNam, cls: 'sp-pipe__seg--burner' },
+    { key: 'transparent', label: 'Direct transparent', nam: c.transparentNam, cls: 'sp-pipe__seg--transparent' },
+  ].filter((s) => s.nam > 0.005);
+
+  const soldPct = bridgedIn > 0 ? Math.min(100, (sold / bridgedIn) * 100) : 0;
+  const backPct = bridgedIn > 0 ? Math.min(100 - soldPct, (sentBack / bridgedIn) * 100) : 0;
+  const remPct = Math.max(0, 100 - soldPct - backPct);
+
+  return (
+    <div className="sp-pipe" role="region" aria-label={`Cross-chain supply-to-dump pipeline, ${lastWindow(windowDays)}`}>
+      <div className="sp-pipe__head">
+        <p className="eyebrow">Supply-to-dump pipeline · Origin cohort attribution ({lastWindow(windowDays)})</p>
+        <p className="cap">
+          Where the <span data-num="">{fmtNamRule(bridgedIn)}</span> NAM bridged to Osmosis originated on Namada, and how much of it has already sold vs. remains on deck.
+          {summary.highHazardRemainingNam > 0 ? (
+            <> High-hazard wallets (historical dump rate ≥50%) hold <strong data-num="">{fmtNamRule(summary.highHazardRemainingNam)} NAM</strong> of the remaining balance.</>
+          ) : null}
+        </p>
+      </div>
+      <div className="sp-pipe__bars">
+        <div className="sp-pipe__row">
+          <span className="sp-pipe__lbl">1. Source cohort</span>
+          <div className="sp-pipe__track" role="img" aria-label="Bridged NAM by origin cohort">
+            {segments.map((s) => (
+              <span
+                key={s.key}
+                className={`sp-pipe__seg ${s.cls}`}
+                style={{ width: `${Math.max(2, (s.nam / totalCohort) * 100).toFixed(1)}%` }}
+                title={`${s.label}: ${fmtNamRule(s.nam)} NAM (${fmtPctRule((s.nam / totalCohort) * 100, 1)})`}
+              />
+            ))}
+          </div>
+        </div>
+        <div className="sp-pipe__row">
+          <span className="sp-pipe__lbl">2. Osmosis disposition</span>
+          <div className="sp-pipe__track" role="img" aria-label="Disposition of bridged NAM on Osmosis">
+            {sold > 0.005 ? (
+              <span
+                className="sp-pipe__seg sp-pipe__seg--sold"
+                style={{ width: `${Math.max(2, soldPct).toFixed(1)}%` }}
+                title={`Sold into pools: ${fmtNamRule(sold)} NAM (${fmtPctRule(soldPct, 1)})`}
+              />
+            ) : null}
+            {remaining > 0.005 ? (
+              <span
+                className="sp-pipe__seg sp-pipe__seg--rem"
+                style={{ width: `${Math.max(2, remPct).toFixed(1)}%` }}
+                title={`Ready to sell (on deck): ${fmtNamRule(remaining)} NAM (${fmtPctRule(remPct, 1)})`}
+              />
+            ) : null}
+            {sentBack > 0.005 ? (
+              <span
+                className="sp-pipe__seg sp-pipe__seg--back"
+                style={{ width: `${Math.max(2, backPct).toFixed(1)}%` }}
+                title={`Sent back to Namada: ${fmtNamRule(sentBack)} NAM (${fmtPctRule(backPct, 1)})`}
+              />
+            ) : null}
+          </div>
+        </div>
+      </div>
+      <div className="sp-pipe__legend">
+        {segments.map((s) => (
+          <span key={s.key} className="sp-pipe__item">
+            <i className={`sp-pipe__sw ${s.cls}`} aria-hidden="true" />
+            <span>{s.label}: <strong data-num="">{fmtNamRule(s.nam)}</strong> NAM</span>
+          </span>
+        ))}
+        <span className="sp-pipe__item">
+          <i className="sp-pipe__sw sp-pipe__seg--sold" aria-hidden="true" />
+          <span>Sold: <strong data-num="">{fmtNamRule(sold)}</strong> NAM</span>
+        </span>
+        <span className="sp-pipe__item">
+          <i className="sp-pipe__sw sp-pipe__seg--rem" aria-hidden="true" />
+          <span>On deck: <strong data-num="">{fmtNamRule(remaining)}</strong> NAM</span>
+        </span>
+      </div>
+    </div>
+  );
+}
+
 function RtsRow({ e, now, price, mine }: { e: OnDeckEntry; now: number; price: number | null; mine: boolean }) {
   const name = e.labelPlain ?? null;
   const linked = e.linkedLabelPlain ?? null;
+  const hazardPct = e.dumpHazardScore != null ? Math.round(e.dumpHazardScore * 100) : null;
+  const hasTags = e.priorSells30d > 0 || (hazardPct != null && hazardPct > 0) || !!e.passthroughFrom || mine;
   return (
     <div className="rts__row" role="row">
       <span className="rts__id" role="cell">
@@ -109,9 +225,26 @@ function RtsRow({ e, now, price, mine }: { e: OnDeckEntry; now: number; price: n
               <AddrName address={e.linkedNamada} label={linked} prefix="from" withAddr source={e.linkedLabelSource} author={e.linkedLabelAuthor} className={linked ? 'xaddr--sm' : 'xaddr--sm xaddr--mono'} />
             </span>
           ) : null}
+          {e.hopOriginNamada ? (
+            <span className="rts__link">
+              <AddrName address={e.hopOriginNamada.address} label={e.hopOriginNamada.labelPlain ?? null} prefix="via 2-hop relay from" withAddr className="xaddr--sm xaddr--mono" />
+            </span>
+          ) : null}
         </span>
-        {e.priorSells30d > 0 || mine ? (
+        {hasTags ? (
           <span className="rts__tags">
+            {hazardPct != null && hazardPct > 0 ? (
+              <Tag
+                look={hazardPct >= 60 ? 'ref' : 'cat'}
+                cat={<>Dump hazard: <span data-num="">{hazardPct}%</span></>}
+              />
+            ) : null}
+            {e.passthroughFrom ? (
+              <Tag
+                look="ref"
+                cat={<>MASP turnstile (&lt;24h · k={e.passthroughFrom.anonymitySetK})</>}
+              />
+            ) : null}
             {e.priorSells30d > 0 ? <Tag cat={<>Sold before: <span data-num="">{fmtNamRule(e.priorSells30d)}</span> NAM</>} /> : null}
             {mine ? <YouTag /> : null}
           </span>

@@ -257,6 +257,72 @@ export function safeClip(curve: SlippageCurvePoint[], targetPct: number): SafeCl
   return { nam: pts[pts.length - 1].amountNam, how: 'at_least', ...smallest };
 }
 
+/**
+ * Annotate a slippage ladder with marginal slice pricing (ΔUSDC / ΔNAM between adjacent tiers) and detect
+ * Concentrated Liquidity tick-boundary cliffs where marginal slippage jumps >2.5x or liquidity is exhausted.
+ */
+export function annotateSlippageCurve(
+  curve: SlippageCurvePoint[],
+  spotUsd: number | null,
+): { curve: SlippageCurvePoint[]; liquidityCliffNam: number | null; cliffNote: string | null } {
+  const sorted = [...curve].sort((a, b) => a.amountNam - b.amountNam);
+  let liquidityCliffNam: number | null = null;
+  let cliffNote: string | null = null;
+  let prevNam = 0;
+  let prevSellUsdc = 0;
+  let prevBuyUsdc = 0;
+  let prevBuyNam = 0;
+  let prevMarginalImpact = 0;
+
+  const annotated = sorted.map((p, idx) => {
+    const dNam = p.amountNam - prevNam;
+    let marginalSellUsd: number | null = null;
+    let marginalSellImpactPct: number | null = null;
+    let marginalBuyUsd: number | null = null;
+
+    if (dNam > 0 && p.sellOutUsdc != null) {
+      const dUsdc = p.sellOutUsdc - prevSellUsdc;
+      marginalSellUsd = Math.max(0, dUsdc / dNam);
+      if (spotUsd && spotUsd > 0) {
+        marginalSellImpactPct = Math.max(0, ((spotUsd - marginalSellUsd) / spotUsd) * 100);
+      }
+      prevSellUsdc = p.sellOutUsdc;
+    }
+    const actualBuyNam = p.buyOutNam ?? p.amountNam;
+    const dBuyNam = actualBuyNam - prevBuyNam;
+    if (dBuyNam > 0 && p.buyInUsdc != null) {
+      const dBuyUsdc = p.buyInUsdc - prevBuyUsdc;
+      if (dBuyUsdc > 0) marginalBuyUsd = dBuyUsdc / dBuyNam;
+      prevBuyUsdc = p.buyInUsdc;
+      prevBuyNam = actualBuyNam;
+    }
+
+    if (
+      liquidityCliffNam == null &&
+      idx > 0 &&
+      marginalSellImpactPct != null &&
+      marginalSellImpactPct >= 1.5 &&
+      (prevMarginalImpact > 0 ? marginalSellImpactPct / prevMarginalImpact >= 2.5 : marginalSellImpactPct >= 5.0)
+    ) {
+      liquidityCliffNam = prevNam;
+      const ratio = prevMarginalImpact > 0 ? (marginalSellImpactPct / prevMarginalImpact).toFixed(1) : '∞';
+      cliffNote = `Concentrated Liquidity cliff above ${prevNam.toLocaleString('en-US')} NAM: marginal sell slippage jumps ${ratio}x (${prevMarginalImpact.toFixed(2)}% → ${marginalSellImpactPct.toFixed(2)}%) on the ${prevNam.toLocaleString('en-US')}–${p.amountNam.toLocaleString('en-US')} NAM slice.`;
+    }
+    if (marginalSellImpactPct != null && marginalSellImpactPct > 0) {
+      prevMarginalImpact = marginalSellImpactPct;
+    }
+    prevNam = p.amountNam;
+    return {
+      ...p,
+      marginalSellUsd,
+      marginalSellImpactPct,
+      marginalBuyUsd,
+    };
+  });
+
+  return { curve: annotated, liquidityCliffNam, cliffNote };
+}
+
 async function buildCurve(): Promise<QuoteCurveResponse> {
   const [priceRes, poolRes] = await Promise.all([fetchNamPrice(), fetchNamPools()]);
   const pools = poolRes.pools;
@@ -295,6 +361,7 @@ async function buildCurve(): Promise<QuoteCurveResponse> {
   }
 
   const c1 = safeClip(curve, 1), c3 = safeClip(curve, 3);
+  const annotated = annotateSlippageCurve(curve, spotUsd);
   return {
     spotUsd,
     poolsCount: pools.length,
@@ -304,7 +371,9 @@ async function buildCurve(): Promise<QuoteCurveResponse> {
     maxSafeClip3PctNam: c3?.nam ?? null,
     safeClip1Pct: c1,
     safeClip3Pct: c3,
-    curve,
+    liquidityCliffNam: annotated.liquidityCliffNam,
+    cliffNote: annotated.cliffNote,
+    curve: annotated.curve,
     prov,
   };
 }

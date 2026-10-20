@@ -19,7 +19,7 @@ import { HOLDERS_UNION, HOLDER_COUNTS_SQL, HOLDER_DUST_SQL, NAMADA_TOP10_SQL, OS
 import { label_plain, category_plain, labelSearchTerms, labelAuthorShort, tagByline } from './labels';
 import { counterpartiesOf } from '../../shared/flow-rules';
 import {
-  FLOW_SELECT, rowToFlow, safeParseJson, provAt, metricAt, coverageOf, pressure, blindSpot, alertsBetween, lastAlertBefore, metricSeries, osmosisNetIbc,
+  FLOW_SELECT, rowToFlow, safeParseJson, provAt, metricAt, coverageOf, pressure, blindSpot, alertsBetween, lastAlertBefore, metricSeries, osmosisNetIbc, orderflowSeries,
 } from './analytics';
 import { NAM_AMOUNT, NOT_LEGACY_TWIN as NOT_TWIN } from './flows-query';
 import { INTERNAL_ADDRESSES } from '../../shared/alerts';
@@ -263,13 +263,19 @@ export function holderFiguresProv(top10At: number | null | undefined, countAt: n
 // ---------------------------------------------------------------- decision endpoints
 app.get('/api/pressure', async (c) => {
   const { asOf, replay } = asOfParam(c);
-  const days = Math.min(30, Math.max(1, parseInt(c.req.query('days') || '7', 10)));
+  const days = Math.min(365, Math.max(1, parseInt(c.req.query('days') || '7', 10)));
   return c.json(await pressure(c.env.DB, asOf, replay, days));
 });
 
 app.get('/api/blindspot', async (c) => {
   const { asOf, replay } = asOfParam(c);
   return c.json(await blindSpot(c.env.DB, asOf, replay));
+});
+
+app.get('/api/orderflow', async (c) => {
+  const { asOf, replay } = asOfParam(c);
+  const hours = Math.min(24 * 1500, Math.max(1, parseInt(c.req.query('hours') || '720', 10) || 720));
+  return c.json(await orderflowSeries(c.env.DB, asOf, replay, hours));
 });
 
 app.get('/api/alerts/rules', (c) => c.json({ rules: alertRules(thresholdsParam(c)), defaults: DEFAULT_THRESHOLDS }));
@@ -915,22 +921,58 @@ app.post('/api/labels', async (c) => {
 
 /**
  * Bucket size for a metric history: minutes up to 2 days; hours up to 14 days, and up to 31 days for prices (at
- * most 744 points, so 30 days of hourly swap medians come back one point per hour); 6 hours beyond.
+ * most 744 points, so 30 days of hourly swap medians come back one point per hour); 6 hours up to 400 days; 24 hours beyond.
  */
 export function historyBucketMs(key: string, hours: number): number {
   if (hours <= 48) return 60000;
   if (hours <= 24 * 14 || (key.startsWith('price.') && hours <= 24 * 31)) return H;
-  return 6 * H;
+  if (hours <= 24 * 400) return 6 * H;
+  return D;
 }
 
 // Each point is the LAST reading of its bucket (value, at ts), with the bucket's lowest and highest reading (lo, hi)
 // and how many readings it holds (n); `bucketMs` says how long a bucket is.
 app.get('/api/metrics/history', async (c) => {
   const key = c.req.query('key') || 'price.usd';
-  const hours = Math.min(24 * 400, Math.max(1, parseInt(c.req.query('hours') || '24', 10) || 24));
+  const hours = Math.min(24 * 1500, Math.max(1, parseInt(c.req.query('hours') || '24', 10) || 24));
   const { asOf } = asOfParam(c);
   const bucket = historyBucketMs(key, hours);
-  const history = await metricSeries(c.env.DB, key, asOf - hours * H, asOf, bucket);
+  const from = asOf - hours * H;
+  let history = await metricSeries(c.env.DB, key, from, asOf, bucket);
+
+  // For long-term staked NAM history (>14 days), stitch earlier `supply.pos_bonded` readings before `supply.total_stake` was introduced.
+  if (key === 'supply.total_stake' && hours > 24 * 14) {
+    const earliest = history[0]?.ts ?? asOf;
+    if (earliest > from + D) {
+      const older = await metricSeries(c.env.DB, 'supply.pos_bonded', from, earliest - 1, bucket);
+      if (older.length) history = [...older.filter((p) => p.ts < earliest), ...history];
+    }
+  }
+  // For long-term price.swap_1h history (>30 days), backfill any earlier swap buckets directly from D1 swap flows if metrics are sparse.
+  if (key === 'price.swap_1h' && hours > 24 * 30) {
+    const earliest = history[0]?.ts ?? asOf;
+    if (earliest > from + D) {
+      const flowRows = await c.env.DB.prepare(
+        `SELECT CAST(ts / ? AS INTEGER) * ? AS ts,
+                AVG(CASE WHEN price_usd > 0 THEN price_usd WHEN counter_denom='USDC' AND counter_amount > 0 AND amount_num > 0 THEN counter_amount / amount_num ELSE NULL END) AS value,
+                MIN(CASE WHEN price_usd > 0 THEN price_usd WHEN counter_denom='USDC' AND counter_amount > 0 AND amount_num > 0 THEN counter_amount / amount_num ELSE NULL END) AS lo,
+                MAX(CASE WHEN price_usd > 0 THEN price_usd WHEN counter_denom='USDC' AND counter_amount > 0 AND amount_num > 0 THEN counter_amount / amount_num ELSE NULL END) AS hi,
+                COUNT(*) AS n
+         FROM flows
+         WHERE chain='osmosis' AND kind IN ('buy','sell') AND ts >= ? AND ts < ?
+           AND (price_usd > 0 OR (counter_denom='USDC' AND counter_amount > 0 AND amount_num >= 50))
+         GROUP BY CAST(ts / ? AS INTEGER)
+         ORDER BY ts ASC`,
+      )
+        .bind(bucket, bucket, from, earliest, bucket)
+        .all<any>()
+        .catch(() => ({ results: [] as any[] }));
+      const older = (flowRows.results || [])
+        .filter((r: any) => r.value != null && r.value > 0 && r.ts < earliest)
+        .map((r: any) => ({ ts: Number(r.ts), value: Number(r.value), lo: Number(r.lo ?? r.value), hi: Number(r.hi ?? r.value), n: Number(r.n || 1) }));
+      if (older.length) history = [...older, ...history];
+    }
+  }
   return c.json({ key, bucketMs: bucket, history });
 });
 

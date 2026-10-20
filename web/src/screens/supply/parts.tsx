@@ -100,7 +100,13 @@ export const isOld = (p: Stamp | null | undefined) => !!p && (p.status === 'stal
 
 // ---------------------------------------------------------------- windows
 
-export type WindowDays = 1 | 7 | 30;
-export const WINDOW_WORDS: Record<WindowDays, string> = { 1: 'day', 7: `7${NBSP}days`, 30: `30${NBSP}days` };
-/** "the last day", "the last 7 days" (number and unit never split over two lines) */
-export const lastWindow = (d: number) => (d === 1 ? 'the last day' : `the last ${d}${NBSP}days`);
+export type WindowDays = 1 | 7 | 30 | 90 | 365;
+export const WINDOW_WORDS: Record<WindowDays, string> = {
+  1: 'day',
+  7: `7${NBSP}days`,
+  30: `30${NBSP}days`,
+  90: `90${NBSP}days`,
+  365: 'year',
+};
+/** "the last day", "the last 7 days", "the last year" (number and unit never split over two lines) */
+export const lastWindow = (d: number) => (d === 1 ? 'the last day' : d === 365 ? 'the last year' : `the last ${d}${NBSP}days`);

@@ -37,12 +37,31 @@
 
   /* ---------- the chart ---------- */
   .shd-chart__in { width: 100%; max-width: var(--max); margin-inline: auto; padding: var(--s-7) var(--gutter); min-width: 0; }
+  .shd-chart__mode { margin-bottom: var(--s-4); max-width: 26rem; }
   .shd-chart__skel { display: grid; gap: var(--s-4); }
   .shd-chart__box { height: 160px; }
   .shd-sk--top { height: 206px; }
   .shd-sk--read { height: 48px; width: 70%; }
   .shd-sk--stats { height: 142px; }
   @media (min-width: 640px) { .shd-chart__box { height: 260px; } .shd-sk--top { height: 124px; } .shd-sk--read { height: 28px; } .shd-sk--stats { height: 87px; } }
+
+  /* ---------- MASP Net Shielding Pulse & Turnstile Chart (Chart 4) ---------- */
+  .shd-pulse { display: grid; gap: var(--s-3); }
+  .shd-pulse__readout { display: flex; flex-wrap: wrap; justify-content: space-between; gap: var(--s-1) var(--s-3); padding: var(--s-2) 0; border-top: 1px solid var(--c-line); border-bottom: 1px solid var(--c-line); font-size: var(--t-12); line-height: 18px; color: var(--c-ink-2); }
+  .shd-pulse__when { font-family: var(--font-code); color: var(--c-ink); font-weight: var(--w-medium); }
+  .shd-pulse__plot { position: relative; height: 208px; padding-block: var(--s-2); }
+  .shd-pulse__zero { position: absolute; left: 0; right: 0; top: 50%; border-top: 1px solid var(--c-ink-2); pointer-events: none; z-index: 1; }
+  .shd-pulse__bars { display: grid; grid-auto-flow: column; grid-auto-columns: minmax(2px, 1fr); gap: 1px; height: 100%; }
+  .shd-pulse__col { display: grid; grid-template-rows: 1fr 1fr; height: 100%; padding: 0; border: 0; background: transparent; cursor: pointer; }
+  .shd-pulse__col.is-active { background: rgba(255, 255, 255, 0.06); }
+  .shd-pulse__half { display: flex; width: 100%; overflow: hidden; }
+  .shd-pulse__half--up { align-items: flex-end; }
+  .shd-pulse__half--down { align-items: flex-start; }
+  .shd-pulse__bar { display: flex; flex-direction: column; width: 100%; min-height: 2px; }
+  .shd-pulse__bar--in, .shd-pulse__sw--in { background: var(--shielded); }
+  .shd-pulse__bar--out, .shd-pulse__sw--out { background: var(--sell); }
+  .shd-pulse__turn, .shd-pulse__sw--turn { background: var(--c-mark); width: 100%; }
+  .mor__pt { display: inline-block; margin-top: 2px; }
 
   /* ---------- Inside the shielded set ---------- */
   .shd-facts .facts { margin-top: 0; }

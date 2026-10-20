@@ -11,16 +11,16 @@
 // tab is visible and when it becomes visible again (supply/parts useLiveLoad); a refresh that fails
 // keeps them, marked old with the reason.
 import { useMemo, useState } from 'react';
-import type { BlindSpot, Flow, Overview } from '../../../../shared/types';
+import type { BlindSpot, Flow, MaspPassthroughLink, MaspPulseBucket, Overview } from '../../../../shared/types';
 import { BODY } from '../../../../shared/copy';
 import type { ScreenProps } from '../../app/index';
 import { useOverview, useReplay } from '../../app/index';
 import { fetchBlindSpot } from '../../api';
 import {
-  Derived, EmptyState, Fact, HeroNumber, Notice, Num, ProvChip, ProvDot, ProvScope, Skeleton, SkeletonBlock, SourceLine, SupplyBar, Tag, Term,
-  derive, useUiNow, type FactItem, type ScopeItem, type Stamp,
+  Derived, EmptyState, Fact, HeroNumber, Notice, Num, ProvChip, ProvDot, ProvScope, Segmented, Skeleton, SkeletonBlock, SourceLine, SupplyBar, Tag, Term,
+  derive, namShort, useUiNow, type FactItem, type ScopeItem, type Stamp,
 } from '../../ui';
-import { fmtAgo, fmtAddr, fmtDateline, fmtNamRule, fmtNamSigned, fmtPctRule, fmtUsdRule, fmtUtcLong } from '../../lib/format';
+import { fmtAgo, fmtAddr, fmtDateline, fmtDayClock, fmtDayMonth, fmtNamRule, fmtNamSigned, fmtPctRule, fmtUsdRule, fmtUtcLong } from '../../lib/format';
 import { ageOutStamps, plainSource } from '../../lib/prov';
 import { AddrName, RecordLink, useShowAll } from '../../ui';
 import { isOld, oldRowsSentence, refreshFailedNote, refreshFailedSentence, useLiveLoad } from '../supply/parts';
@@ -28,7 +28,9 @@ import { SeriesChart, type SeriesRange } from '../../ui';
 
 const DAY = 86_400_000;
 const RANGES: SeriesRange[] = [
+  { value: '7d', label: '7d', ms: 7 * DAY },
   { value: '30d', label: '30d', ms: 30 * DAY },
+  { value: '90d', label: '90d', ms: 90 * DAY },
   { value: '1y', label: '1y', ms: 365 * DAY },
   { value: 'all', label: 'All', ms: null },
 ];
@@ -45,6 +47,7 @@ export default function ShieldedScreen({ route }: ScreenProps) {
   const { at, rewound } = useReplay();
   const now = useUiNow();
   const [range, setRange] = useState('all');
+  const [chartTab, setChartTab] = useState<'total' | 'pulse'>('total');
   const load = useLiveLoad<BlindSpot>(at, 'blindspot', () => fetchBlindSpot(at));
   // after a failed refresh the figures stay, every stamp marked old with the reason
   const data = useMemo(
@@ -143,6 +146,7 @@ export default function ShieldedScreen({ route }: ScreenProps) {
 
   // ---------------- the chart ----------------
   const trend = data?.trend ?? [];
+  const pulse = data?.pulseSeries ?? [];
   const firstDaily = trend[0]?.ts ?? null;
   // where the readings switch from one a day to the recent, more frequent ones (from the data itself)
   const switchAt = (() => {
@@ -152,7 +156,26 @@ export default function ShieldedScreen({ route }: ScreenProps) {
   const chart = (
     <section className="ground-ink shd-chart" aria-label="Shielded NAM over time" data-decision="D5">
       <div className="shd-chart__in">
-        {data && trend.length ? (
+        {data && pulse.length > 0 ? (
+          <div className="shd-chart__mode">
+            <Segmented
+              label="Shielded chart view"
+              value={chartTab}
+              onChange={setChartTab}
+              options={[
+                { value: 'total', label: 'Total in set' },
+                { value: 'pulse', label: 'Net flow pulse & turnstile' },
+              ]}
+            />
+          </div>
+        ) : null}
+        {chartTab === 'pulse' && data && pulse.length > 0 ? (
+          <MaspPulseChart
+            buckets={pulse}
+            stickySharePct7d={data.stickySharePct7d}
+            passthroughCount={data.passthroughs7d?.length ?? 0}
+          />
+        ) : data && trend.length ? (
           <SeriesChart
             points={trend.map((p) => ({ t: p.ts, v: p.value }))}
             end={data.asOf}
@@ -268,6 +291,9 @@ function Inside({ data, overview: o, now }: { data: BlindSpot; overview: Overvie
           <Num v={data.shielded.value} prov={sp} fmt={fmtNamRule} unit="NAM" showAge={false} /> sit in the shielded set. Moving NAM in or out is public; what happens inside is not.
           {' '}<Num v={bridged7} prov={cov} fmt={fmtNamRule} unit="NAM" showAge={false} /> crossed the bridge straight into or out of it in 7 days
           {data.lastBridgeAt != null ? <>, the last {fmtAgo(data.lastBridgeAt, now)}</> : null}.
+          {data.stickySharePct7d != null ? (
+            <> Over the last 7 days, <strong data-num="">{fmtPctRule(data.stickySharePct7d, 1)}</strong> of shielded inflows stayed in the pool rather than exiting within 24 hours{data.passthroughs7d?.length ? <> ({data.passthroughs7d.length} fast turnstile {data.passthroughs7d.length === 1 ? 'passthrough' : 'passthroughs'} detected)</> : null}.</>
+          ) : null}
         </p>
       </div>
       <Fact items={items} sourceLabel="Where the shielded figures come from" className="shd-facts" />
@@ -317,7 +343,12 @@ function MovesOut({ data, overview: o, now }: { data: BlindSpot; overview: Overv
               <span role="columnheader">To</span>
               <span role="columnheader" className="r">Record</span>
             </div>
-            {rows.map((f) => <MoveOutRow key={f.id} f={f} now={now} price={price?.value ?? null} priceWords={priceWords} />)}
+            {rows.map((f) => {
+              const pt = data.passthroughs7d?.find(
+                (p) => p.outTo === f.to && Math.abs(p.outTs - f.ts) < 60_000,
+              );
+              return <MoveOutRow key={f.id} f={f} now={now} price={price?.value ?? null} priceWords={priceWords} passthrough={pt} />;
+            })}
           </div>
           {more}
         </div>
@@ -327,7 +358,7 @@ function MovesOut({ data, overview: o, now }: { data: BlindSpot; overview: Overv
   );
 }
 
-function MoveOutRow({ f, now, price, priceWords }: { f: Flow; now: number; price: number | null; priceWords: string }) {
+function MoveOutRow({ f, now, price, priceWords, passthrough }: { f: Flow; now: number; price: number | null; priceWords: string; passthrough?: MaspPassthroughLink }) {
   const name = f.toLabelPlain ?? null;
   const usd = price != null ? <Num v={f.amount * price} fmt={fmtUsdRule} /> : <span className="cap">no price</span>;
   return (
@@ -340,9 +371,132 @@ function MoveOutRow({ f, now, price, priceWords }: { f: Flow; now: number; price
         <span className="mor__tow">to </span>
         <AddrName address={f.to} label={name} source={f.toLabelSource} author={f.toLabelAuthor} />
         {name ? <span className="mono mor__addr">{fmtAddr(f.to)}</span> : null}
+        {passthrough ? (
+          <span className="mor__pt">
+            <Tag look="ref" cat={<>Turnstile &lt;24h ({(passthrough.dwellMs / 3_600_000).toFixed(1)}h dwell · k={passthrough.anonymitySetK})</>} />
+          </span>
+        ) : null}
       </span>
       <span className="mor__cap" role="cell">{fmtAgo(f.ts, now)} · worth {usd} {priceWords}</span>
       <span className="mor__rec" role="cell"><RecordLink chain="namada" hash={f.explorerHash || f.txHash} /></span>
+    </div>
+  );
+}
+
+function MaspPulseChart({
+  buckets,
+  stickySharePct7d,
+  passthroughCount,
+}: {
+  buckets: MaspPulseBucket[];
+  stickySharePct7d?: number | null;
+  passthroughCount: number;
+}) {
+  const [pulseDays, setPulseDays] = useState<7 | 14 | 30>(30);
+  const [hoverIdx, setHoverIdx] = useState<number | null>(null);
+  const sliceCount = Math.max(4, Math.round((pulseDays * 24) / 6));
+  const vis = buckets.slice(-sliceCount);
+  const maxBar = Math.max(1, ...vis.map((b) => Math.max(b.inNam, b.outNam)));
+  const totalIn = vis.reduce((s, b) => s + b.inNam, 0);
+  const totalOut = vis.reduce((s, b) => s + b.outNam, 0);
+  const totalTurnstile = vis.reduce((s, b) => s + b.turnstileNam, 0);
+  const netDelta = totalIn - totalOut;
+  const active = hoverIdx != null && vis[hoverIdx] ? vis[hoverIdx] : vis[vis.length - 1];
+
+  return (
+    <div className="chart chart--shielded shd-pulse">
+      <div className="chart__head">
+        <div>
+          <h2 id="shd-chart-h" className="chart__t">
+            {netDelta >= 0 ? 'Net shielding inflow' : 'Net unshielding outflow'} of {namShort(Math.abs(netDelta))} NAM over {pulseDays} days
+          </h2>
+          <p className="chart__u">
+            6-hour MASP flow pulse: <strong data-num="">{fmtNamRule(totalIn)} NAM</strong> shielded in vs.{' '}
+            <strong data-num="">{fmtNamRule(totalOut)} NAM</strong> unshielded out
+            {totalTurnstile > 0 ? (
+              <>, including <strong data-num="">{fmtNamRule(totalTurnstile)} NAM</strong> in matched &lt;24h turnstile passthroughs</>
+            ) : null}
+            {stickySharePct7d != null ? <> · 7d sticky share: <strong data-num="">{fmtPctRule(stickySharePct7d, 1)}</strong> ({passthroughCount} fast exits)</> : null}.
+          </p>
+        </div>
+        <div className="seg" role="group" aria-label="Pulse window">
+          {([7, 14, 30] as const).map((d) => (
+            <button
+              key={d}
+              type="button"
+              className="seg__btn"
+              aria-pressed={pulseDays === d}
+              onClick={() => {
+                setPulseDays(d);
+                setHoverIdx(null);
+              }}
+            >
+              {d}d
+            </button>
+          ))}
+        </div>
+      </div>
+
+      {active ? (
+        <div className="shd-pulse__readout" aria-live="polite">
+          <span className="shd-pulse__when">{fmtDayClock(active.ts)} (6h bucket)</span>
+          <span className="shd-pulse__stats">
+            In: <strong data-num="">+{fmtNamRule(active.inNam)} NAM</strong> · Out: <strong data-num="">−{fmtNamRule(active.outNam)} NAM</strong> · Net:{' '}
+            <strong data-num="">{fmtNamSigned(active.netNam)} NAM</strong>
+            {active.turnstileNam > 0 ? <> · &lt;24h turnstile: <strong data-num="">{fmtNamRule(active.turnstileNam)} NAM</strong></> : null}
+          </span>
+        </div>
+      ) : null}
+
+      <div className="shd-pulse__plot" role="img" aria-label={`MASP 6-hour inflow and outflow pulse over ${pulseDays} days`}>
+        <div className="shd-pulse__zero" aria-hidden="true" />
+        <div className="shd-pulse__bars">
+          {vis.map((b, i) => {
+            const inPct = Math.min(100, (b.inNam / maxBar) * 100);
+            const outPct = Math.min(100, (b.outNam / maxBar) * 100);
+            const turnPct = b.outNam > 0 ? Math.min(100, (b.turnstileNam / b.outNam) * 100) : 0;
+            return (
+              <button
+                key={b.ts}
+                type="button"
+                className={`shd-pulse__col${hoverIdx === i ? ' is-active' : ''}`}
+                onMouseEnter={() => setHoverIdx(i)}
+                onFocus={() => setHoverIdx(i)}
+                onMouseLeave={() => setHoverIdx(null)}
+                aria-label={`${fmtDayMonth(b.ts)}: +${fmtNamRule(b.inNam)} in, -${fmtNamRule(b.outNam)} out`}
+              >
+                <span className="shd-pulse__half shd-pulse__half--up">
+                  {b.inNam > 0 ? <span className="shd-pulse__bar shd-pulse__bar--in" style={{ height: `${Math.max(4, inPct).toFixed(1)}%` }} /> : null}
+                </span>
+                <span className="shd-pulse__half shd-pulse__half--down">
+                  {b.outNam > 0 ? (
+                    <span className="shd-pulse__bar shd-pulse__bar--out" style={{ height: `${Math.max(4, outPct).toFixed(1)}%` }}>
+                      {b.turnstileNam > 0 ? <span className="shd-pulse__turn" style={{ height: `${Math.max(15, turnPct).toFixed(1)}%` }} /> : null}
+                    </span>
+                  ) : null}
+                </span>
+              </button>
+            );
+          })}
+        </div>
+      </div>
+
+      <div className="chart__foot">
+        <div className="key">
+          <span className="key__i">
+            <span className="key__sw shd-pulse__sw--in" />
+            <span>Shielded inflow (+NAM)</span>
+          </span>
+          <span className="key__i">
+            <span className="key__sw shd-pulse__sw--out" />
+            <span>Unshielded outflow (−NAM)</span>
+          </span>
+          <span className="key__i">
+            <span className="key__sw shd-pulse__sw--turn" />
+            <span>&lt;24h turnstile passthrough</span>
+          </span>
+        </div>
+      </div>
     </div>
   );
 }

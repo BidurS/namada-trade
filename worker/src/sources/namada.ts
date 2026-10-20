@@ -345,6 +345,12 @@ class Borsh {
   }
   u8() { return this.take(1)[0]; }
   u32() { const v = this.view.getUint32(this.p, true); this.p += 4; return v; }
+  u64() {
+    const lo = BigInt(this.view.getUint32(this.p, true));
+    const hi = BigInt(this.view.getUint32(this.p + 4, true));
+    this.p += 8;
+    return Number((hi << 32n) | lo);
+  }
   skip(n: number) { this.take(n); }
   /** token::Amount: 32 bytes little-endian, exact (base units). */
   amount(): bigint {
@@ -440,20 +446,58 @@ export async function allNamBalances(opts: ReadOpts = {}): Promise<BalanceListin
   return { ...parseBalanceListing(r.value), height: r.height, provider: r.provider, readMs: r.readMs };
 }
 
+/** One pending or withdrawable unbond decoded from /vp/pos/bonds_and_unbonds/to. */
+export interface UnbondListingItem {
+  validator: string;
+  startEpoch: number;
+  withdrawEpoch: number;
+  amountBase: bigint;
+  grossBase: bigint;
+  slashedBase: bigint;
+  amountNam: number;
+}
+
+/** One slash record decoded from /vp/pos/bonds_and_unbonds/to. */
+export interface SlashListingItem {
+  source: string;
+  validator: string;
+  epoch: number;
+  block: number;
+  kind: number;
+  rateBase: bigint;
+}
+
 /**
- * One source's bonds from the bond listing: the sum of its bond entries net of what was slashed from them (base
- * units; `grossBase` before the deduction, `slashedBase` the deduction) and the per-validator split, net as well.
+ * One source's bonds and unbonds from the bond listing: the sum of its bond entries net of what was slashed from them
+ * (base units; `grossBase` before the deduction, `slashedBase` the deduction), the per-validator split, and its
+ * unbonds (both in-flight and withdrawable, net of slashing).
  */
-export interface BondedSource { bondedBase: bigint; grossBase: bigint; slashedBase: bigint; delegations: { validator: string; amountNam: number }[] }
+export interface BondedSource {
+  bondedBase: bigint;
+  grossBase: bigint;
+  slashedBase: bigint;
+  unbondingBase: bigint;
+  unbondGrossBase: bigint;
+  unbondSlashedBase: bigint;
+  delegations: { validator: string; amountNam: number }[];
+  unbonds: UnbondListingItem[];
+}
 
 export interface BondListing {
-  /** source address → its bonds; sources whose bonds sum to 0 (unbonds only, or slashed whole) are listed with bondedBase 0n */
+  /** source address → its bonds and unbonds; sources whose bonds sum to 0 (unbonds only, or slashed whole) are listed with bondedBase 0n */
   sources: Map<string, BondedSource>;
   /** source × validator entries in the answer; the sum of every bond entry net of slashing, gross, and the slashed total; the decoded size */
   entries: number;
   totalBase: bigint;
   grossBase: bigint;
   slashedBase: bigint;
+  /** sum of every unbond entry net of slashing (in-flight + withdrawable), gross, and slashed; counts of entries carrying unbonds/slashes */
+  unbondingBase: bigint;
+  unbondGrossBase: bigint;
+  unbondSlashedBase: bigint;
+  entriesWithUnbonds: number;
+  entriesWithSlashes: number;
+  slashes: SlashListingItem[];
   bytes: number;
 }
 
@@ -461,46 +505,116 @@ export interface BondListing {
  * Decode a /vp/pos/bonds_and_unbonds/to answer (every bond on the chain; the per-validator variant
  * …/to/<validator> has the same layout): borsh HashMap<BondId { source, validator }, Detail { bonds: Vec<{ start
  * u64, amount Amount, slashed Option<Amount> }>, unbonds: Vec<{ start u64, withdraw u64, amount, slashed Option }>,
- * slashes: Vec<{ epoch u64, block u64, type u8, rate Amount }> }>, count first. A bond entry's `slashed` is what a
- * slash took from its `amount`, so a source's stake is amount − slashed (on 2026-10-20: 268,038,299 NAM gross, of
+ * slashes: Vec<{ epoch u64, block u64, type u8, rate Amount }> }>, count first. A bond or unbond entry's `slashed`
+ * is what a slash took from its `amount`, so net stake is amount − slashed (on 2026-10-20: 268,038,299 NAM gross, of
  * which 860,517 NAM slashed, against a total stake of 267,175,777 NAM; the 2,006 NAM left over are bonds still in
  * the pipeline, listed before they count). Throws on a cut or malformed answer.
  */
 export function parseBondListing(value: string | null): BondListing {
   const bytes = base64Bytes(value ?? '');
   const b = new Borsh(bytes);
-  const sources = new Map<string, Map<string, { gross: bigint; slashed: bigint }>>();
+  const sources = new Map<string, {
+    byValidator: Map<string, { gross: bigint; slashed: bigint }>;
+    unbonds: UnbondListingItem[];
+    uGross: bigint;
+    uSlashed: bigint;
+  }>();
+  const slashes: SlashListingItem[] = [];
   const n = b.u32();
-  let gross = 0n, slashed = 0n;
+  let gross = 0n, slashed = 0n, unbondGross = 0n, unbondSlashed = 0n;
+  let entriesWithUnbonds = 0, entriesWithSlashes = 0;
   for (let i = 0; i < n; i++) {
     const source = b.address();
     const validator = b.address();
     if (source.internal || validator.internal) throw new Error(`bond listing: entry ${i} names an internal address`);
     let g = 0n, sl = 0n;
-    for (let k = b.u32(); k > 0; k--) { b.skip(8); g += b.amount(); if (b.u8() === 1) sl += b.amount(); }
-    for (let k = b.u32(); k > 0; k--) { b.skip(16); b.skip(32); if (b.u8() === 1) b.skip(32); }
-    for (let k = b.u32(); k > 0; k--) { b.skip(16); b.u8(); b.skip(32); }
+    for (let k = b.u32(); k > 0; k--) { b.u64(); g += b.amount(); if (b.u8() === 1) sl += b.amount(); }
     if (sl > g) throw new Error(`bond listing: entry ${i} has more slashed than bonded`);
-    const byValidator = sources.get(source.address) ?? sources.set(source.address, new Map()).get(source.address)!;
-    const v = byValidator.get(validator.address) ?? byValidator.set(validator.address, { gross: 0n, slashed: 0n }).get(validator.address)!;
+
+    let src = sources.get(source.address);
+    if (!src) {
+      src = { byValidator: new Map(), unbonds: [], uGross: 0n, uSlashed: 0n };
+      sources.set(source.address, src);
+    }
+
+    const uCount = b.u32();
+    if (uCount > 0) entriesWithUnbonds++;
+    for (let k = uCount; k > 0; k--) {
+      const startEpoch = b.u64();
+      const withdrawEpoch = b.u64();
+      const ug = b.amount();
+      const usl = b.u8() === 1 ? b.amount() : 0n;
+      if (usl > ug) throw new Error(`bond listing: entry ${i} has more slashed than unbonded`);
+      const unet = ug - usl;
+      src.uGross += ug;
+      src.uSlashed += usl;
+      unbondGross += ug;
+      unbondSlashed += usl;
+      if (unet > 0n) {
+        src.unbonds.push({
+          validator: validator.address,
+          startEpoch,
+          withdrawEpoch,
+          amountBase: unet,
+          grossBase: ug,
+          slashedBase: usl,
+          amountNam: Number(unet) / 1e6,
+        });
+      }
+    }
+
+    const sCount = b.u32();
+    if (sCount > 0) entriesWithSlashes++;
+    for (let k = sCount; k > 0; k--) {
+      const epoch = b.u64();
+      const block = b.u64();
+      const kind = b.u8();
+      const rateBase = b.amount();
+      slashes.push({ source: source.address, validator: validator.address, epoch, block, kind, rateBase });
+    }
+
+    const v = src.byValidator.get(validator.address) ?? src.byValidator.set(validator.address, { gross: 0n, slashed: 0n }).get(validator.address)!;
     v.gross += g; v.slashed += sl;
     gross += g; slashed += sl;
   }
   if (!b.done) throw new Error(`bond listing: ${bytes.length - b.offset} unread bytes`);
   const out = new Map<string, BondedSource>();
-  for (const [source, byValidator] of sources) {
+  for (const [source, s] of sources) {
     let bondedBase = 0n, grossBase = 0n, slashedBase = 0n;
     const delegations: BondedSource['delegations'] = [];
-    for (const [validator, v] of byValidator) {
+    for (const [validator, v] of s.byValidator) {
       const net = v.gross - v.slashed;
       bondedBase += net; grossBase += v.gross; slashedBase += v.slashed;
       if (net > 0n) delegations.push({ validator, amountNam: Number(net) / 1e6 });
     }
     // sorted, so the same bonds always give the same JSON (the cron writes only rows whose JSON changed)
     delegations.sort((x, y) => (x.validator < y.validator ? -1 : x.validator > y.validator ? 1 : 0));
-    out.set(source, { bondedBase, grossBase, slashedBase, delegations });
+    s.unbonds.sort((x, y) => x.withdrawEpoch - y.withdrawEpoch || (x.validator < y.validator ? -1 : x.validator > y.validator ? 1 : 0));
+    out.set(source, {
+      bondedBase,
+      grossBase,
+      slashedBase,
+      unbondingBase: s.uGross - s.uSlashed,
+      unbondGrossBase: s.uGross,
+      unbondSlashedBase: s.uSlashed,
+      delegations,
+      unbonds: s.unbonds,
+    });
   }
-  return { sources: out, entries: n, totalBase: gross - slashed, grossBase: gross, slashedBase: slashed, bytes: bytes.length };
+  return {
+    sources: out,
+    entries: n,
+    totalBase: gross - slashed,
+    grossBase: gross,
+    slashedBase: slashed,
+    unbondingBase: unbondGross - unbondSlashed,
+    unbondGrossBase: unbondGross,
+    unbondSlashedBase: unbondSlashed,
+    entriesWithUnbonds,
+    entriesWithSlashes,
+    slashes,
+    bytes: bytes.length,
+  };
 }
 
 /** Every bond on the chain in one query (see parseBondListing), with the node and height that answered. */

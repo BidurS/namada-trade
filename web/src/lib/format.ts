@@ -161,6 +161,12 @@ export const fmtDayMonth = (ts: number | null | undefined): string => {
   const d = new Date(ts);
   return `${d.getUTCDate()} ${MON[d.getUTCMonth()]}`;
 };
+/** "26 Jun 2026" (UTC). */
+export const fmtDayMonthYear = (ts: number | null | undefined): string => {
+  if (!ok(ts)) return '—';
+  const d = new Date(ts);
+  return `${d.getUTCDate()} ${MON[d.getUTCMonth()]} ${d.getUTCFullYear()}`;
+};
 
 /** "17 Oct, 10:00 UTC" (chart readout). */
 export const fmtDayClock = (ts: number | null | undefined): string => (!ok(ts) ? '—' : `${fmtDayMonth(ts)}, ${fmtUtcClock(ts)}`);

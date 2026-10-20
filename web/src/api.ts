@@ -1,10 +1,10 @@
 import type {
   Overview, AddressReport, SearchResult, PoolInfo, PriceQuote, QuoteCurveResponse, Check, IntelResponse,
-  Pressure, BlindSpot, AlertRuleInfo, Provenance, SourceHealth, UserSettings, SessionInfo,
+  Pressure, BlindSpot, OrderflowResponse, AlertRuleInfo, Provenance, SourceHealth, UserSettings, SessionInfo,
   FlowsResponse, HoldersResponse, AlertsRecentResponse,
 } from '../../shared/types';
 
-export type { FlowsResponse, HoldersResponse, AlertsRecentResponse };
+export type { FlowsResponse, HoldersResponse, AlertsRecentResponse, OrderflowResponse };
 
 import { authFetch } from './lib/auth';
 import { filterFlows, plainNotes, serverIgnoredFlowFilter, withAddressReport, withFlow, withHolder, withOverview, withPressure } from './lib/compat';
@@ -25,6 +25,7 @@ async function get<T>(url: string): Promise<T> {
 export const fetchOverview = (asOf: number | null) => get<Overview>(`/api/overview${at(asOf)}`).then(withOverview);
 export const fetchPressure = (asOf: number | null, days = 7) => get<Pressure>(`/api/pressure${at(asOf, new URLSearchParams({ days: String(days) }))}`).then(withPressure);
 export const fetchBlindSpot = (asOf: number | null) => get<BlindSpot>(`/api/blindspot${at(asOf)}`).then((b) => ({ ...b, unshields: b.unshields.map(withFlow) }));
+export const fetchOrderflow = (hours = 720, asOf: number | null = null) => get<OrderflowResponse>(`/api/orderflow${at(asOf, new URLSearchParams({ hours: String(hours) }))}`);
 export const fetchAlertRules = () => get<{ rules: AlertRuleInfo[] }>('/api/alerts/rules');
 /**
  * Alert hits in [since, until) and `last`: the most recent hit of any age before `until` (the empty state's

@@ -11,14 +11,14 @@
 import { useMemo, useState } from 'react';
 import type { ScreenProps } from '../../app/index';
 import { REWIND_WORDS, useClock, useOverview, useReplay } from '../../app/index';
-import { Button, Notice, PriceChart, ProvScope, SkeletonBlock, type ChartRange } from '../../ui/index';
+import { Button, Notice, OrderflowChart, PriceChart, ProvScope, Segmented, SkeletonBlock, type ChartRange } from '../../ui/index';
 import type { Stamp } from '../../ui/index';
 import { fmtNamRule, fmtPctSigned, fmtUtcClock } from '../../lib/format';
 import { ageOutStamps } from '../../lib/prov';
 import { PRICE_MOVES } from '../../generated/events';
 import type { Reading, Side, TicketMode } from './model';
 import { DEFAULT_SIZE, PRESET_SIZES, depthOf, fromQuote, fromTable, markerEvents, parseAmount, quoteKey, serviceAnswered, tablePoints } from './model';
-import { usePools, usePriceHistory, useQuote, useSizeTable } from './data';
+import { useOrderflowHistory, usePools, usePriceHistory, useQuote, useSizeTable } from './data';
 import { Ticket } from './Ticket';
 import { SizeBlock } from './SizeBlock';
 import { Pools } from './Pools';
@@ -29,7 +29,7 @@ const TRADE = routeById('trade')!;
 const EVENTS = markerEvents(PRICE_MOVES, (p) => fmtPctSigned(p, 1));
 
 export default function TradeScreen({ route }: ScreenProps) {
-  const { overview } = useOverview();
+  const { overview, liveFlows } = useOverview();
   const { at, rewound } = useReplay();
   const clock = useClock();
   const live = !rewound;
@@ -56,11 +56,13 @@ export default function TradeScreen({ route }: ScreenProps) {
   };
 
   // ---- data (live-only requests are off under Rewind)
+  const [range, setRange] = useState<ChartRange>('30d');
+  const [chartView, setChartView] = useState<'price' | 'orderflow'>('price');
   const table = useSizeTable(live);
   const pools = usePools(live);
-  const history = usePriceHistory(at);
+  const history = usePriceHistory(at, range);
+  const orderflow = useOrderflowHistory(at, range);
   const { result } = useQuote(live, side, amount, immediate);
-  const [range, setRange] = useState<ChartRange>('30d');
 
   const pts = tablePoints(table.data);
   const up = serviceAnswered(result);
@@ -121,7 +123,44 @@ export default function TradeScreen({ route }: ScreenProps) {
         </div>
         <div className="split__b ground-ink">
           <div className="tk-chart">
-            {history.data ? (
+            <div className="tk-chart__mode">
+              <Segmented
+                label="Chart view"
+                value={chartView}
+                onChange={setChartView}
+                options={[
+                  { value: 'price', label: 'Executed price' },
+                  { value: 'orderflow', label: 'Orderflow & CVD' },
+                ]}
+              />
+            </div>
+            {chartView === 'orderflow' ? (
+              orderflow.data ? (
+                <OrderflowChart
+                  headingId="h-chart"
+                  data={orderflow.data}
+                  liveFlows={liveFlows}
+                  range={range}
+                  onRange={setRange}
+                  end={at ?? clock}
+                  cursorAt={at}
+                />
+              ) : orderflow.error ? (
+                <section className="tk-chartfail" aria-labelledby="h-chart">
+                  <h2 id="h-chart" className="h2">The orderflow history did not load</h2>
+                  <Notice tone="warning" title={orderflow.error} action={<Button size="sm" onClick={orderflow.retry}>Try again</Button>}>
+                    The orderflow chart is not shown until it answers. The quote and the size table do not depend on it.
+                  </Notice>
+                </section>
+              ) : (
+                <div className="tk-chartskel" aria-busy="true" aria-label="Fetching the orderflow history">
+                  <SkeletonBlock height={56} width="70%" />
+                  <SkeletonBlock height={20} width="50%" />
+                  <SkeletonBlock height={28} width={220} />
+                  <SkeletonBlock height={208} className="tk-chartskel__plot" />
+                </div>
+              )
+            ) : history.data ? (
               <ProvScope old={kept} oldSentence={kept ? <>The latest refresh of the price history did not answer, so this is the history fetched at {fmtUtcClock(history.fetchedAt)}, and it is shown dimmed.</> : null}>
                 <PriceChart
                   headingId="h-chart"

@@ -2,7 +2,7 @@
 // Durable Object runtime: the API cache rule and the page security policy.
 import type { Env } from './util';
 
-export const CACHEABLE_API = /^\/api\/(overview|pools|pressure|blindspot|flows|holders|metrics\/history|quote\/curve|alerts\/rules|alerts\/recent|intel)$/;
+export const CACHEABLE_API = /^\/api\/(overview|pools|pressure|blindspot|orderflow|flows|holders|metrics\/history|quote\/curve|alerts\/rules|alerts\/recent|intel)$/;
 
 const THRESHOLDS = ['ibcInventory', 'unlock', 'bigSwap', 'unshield', 'bond'];
 /**
@@ -15,6 +15,7 @@ export const CACHE_PARAMS: Record<string, string[]> = {
   '/api/pools': [],
   '/api/pressure': ['at', 'days'],
   '/api/blindspot': ['at'],
+  '/api/orderflow': ['at', 'hours'],
   '/api/flows': ['chain', 'kind', 'whale', 'minNam', 'arb', 'pairs', 'search', 'at', 'page', 'limit'],
   '/api/holders': ['chain', 'by', 'category', 'search', 'page', 'limit'],
   '/api/metrics/history': ['key', 'hours', 'at'],
@@ -58,9 +59,16 @@ export function isHeavy(url: URL, method = 'GET'): boolean {
  * path family, 120 a minute (REPLAY_LIMITER), and only on a cache miss (cachedApi), so going back to a moment
  * already shown, or the pages the app itself asks for, costs nothing.
  */
+/** The windows the pages ask for (web/src/screens/trade/data.ts rangeFetchHours; supply/parts.tsx WindowDays). */
+const ORDERFLOW_HOURS = new Set(['24', '168', '720', '2160', '8760', '28800']);
+const PRESSURE_DAYS = new Set(['1', '7', '30', '90', '365']);
 export function isReplay(url: URL): boolean {
   const p = url.pathname;
   if (p === '/api/metrics/history' || url.searchParams.has('at') || url.searchParams.has('since')) return true;
+  // Orderflow and pressure aggregate the flows table over the window asked for; the ranges the pages offer are a
+  // few cache entries each, any other value is a cache miss that reaches D1.
+  if (p === '/api/orderflow') return !ORDERFLOW_HOURS.has(url.searchParams.get('hours') ?? '720');
+  if (p === '/api/pressure') return !PRESSURE_DAYS.has(url.searchParams.get('days') ?? '7');
   if ((p === '/api/alerts/recent' || p === '/api/alerts/rules') && THRESHOLDS.some((k) => url.searchParams.has(k))) return true;
   if (p === '/api/flows' || p === '/api/holders') {
     if (url.searchParams.has('minNam')) return true;

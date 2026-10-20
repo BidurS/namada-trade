@@ -32,21 +32,6 @@ export const OSMOSIS = {
   assetlist: 'https://raw.githubusercontent.com/osmosis-labs/assetlists/main/osmosis-1/generated/frontend/assetlist.json',
 } as const;
 
-/**
- * IBC transfers that left NAM locked in Namada's bridge account (the one escrow for every channel) with no NAM
- * minted on any chain. Each is checked on both chains before it is listed; the bridge cross-check counts them, so
- * a known, explained gap is not shown as a fault. If one is ever refunded the check moves by its amount and says so.
- */
-export const IBC_STUCK: readonly { nam: number; channel: string; sequence: number; counterparty: string; sentAt: string; namadaHeight: number; note: string }[] = [
-  {
-    nam: 1614, channel: 'channel-5', sequence: 1647, counterparty: 'Noble', sentAt: '2026-06-26', namadaHeight: 7_067_154,
-    // Namada block 7,067,154: send_packet seq 1647 on channel-5 (to Noble channel-136), receiver an osmo1 address.
-    // Noble 53,512,565 (2026-06-26 11:14 UTC): recv_packet with an error acknowledgement; the acknowledgement was
-    // never relayed back, so Namada did not refund it. Noble's NAM supply is 0; the bridge gap is exactly 1,614 NAM.
-    note: 'Sent to Noble on 26 Jun 2026; Noble refused it and the refusal was never relayed back, so Namada never refunded it.',
-  },
-];
-
 export const NAMADA = {
   chainId: 'namada.5f5de2dd1b88cba30586420',
   /** Ordered by preference. Both have full history (earliest block 1) and tx_index on. */

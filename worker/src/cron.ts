@@ -5,14 +5,15 @@ import { fetchNamPools, fetchNamPrice } from './sources/sqs';
 import { namBalance, namTotalSupply, namTotalStake, namadaEpoch, namadaStatusAll, delegationsAt, answeringRpcs, QUICK, RpcBreaker, allNamBalances, allBonds, type BalanceListing, type BondListing, type ReadOpts, type Rpc } from './sources/namada';
 import { fetchIntel } from './sources/intel';
 import { sendDiscordForumAlert, sendDiscordGovAlert } from './sources/discord';
-import { NAM, NAMADA, OSMOSIS, IBC_STUCK } from './config';
+import { NAM, NAMADA, OSMOSIS } from './config';
 import { fetchJson, toNam } from './util';
 import type { SourceHealth } from '../../shared/types';
 import type { Stmt } from './db';
 import { sweepAuth } from './auth';
 import { NOT_LEGACY_TWIN } from './flows-query';
-import { unbondAddresses, fetchUnbonds, type UnbondWithdrawCache } from './analytics';
-import { chainParams, indexState, NAMADA_CURSOR_MAX_LAG, NAMADA_CURSOR_STALE_MS, OSMOSIS_LIVE_STALE_MS, OSMOSIS_SWEEP_STALE_MS, timedOutSends, ibcRowOf } from './analytics';
+import { unbondAddresses, fetchUnbonds, buildUnbondTermStructure, cachedChainParams, type UnbondWithdrawCache } from './analytics';
+import { chainParams, indexState, NAMADA_CURSOR_MAX_LAG, NAMADA_CURSOR_STALE_MS, OSMOSIS_LIVE_STALE_MS, OSMOSIS_SWEEP_STALE_MS, timedOutSends, ibcRowOf, safeParseJson } from './analytics';
+import { INDEXER_IBC_STATUS, innerTxOfRow, reconcileStuckPackets, stuckTotalNam, type StuckCandidate, type StuckList } from './ibc-stuck';
 import type { LiveUnbondStatus, LiveScanStatus } from './live-hub';
 import type { AlertsSkipped } from './sources/discord';
 import {
@@ -21,6 +22,10 @@ import {
 } from './holders';
 
 const INDEXER = 'https://indexer.namada.net/api/v1';
+/** kv key of the IBC packets stuck in the escrow (ibc-stuck.ts). */
+export const STUCK_PACKETS_KV = 'ibc.stuck_packets';
+/** A Namada → Osmosis send on record on Namada only for this long is looked up as a stuck packet. */
+export const STUCK_CANDIDATE_AGE_MS = 24 * 3600000;
 
 async function syncIntelAndAlerts(env: Env) {
   try {
@@ -238,6 +243,8 @@ export interface BondListingRecord {
   sources: number; stakers: number; totalNam: number; bytes: number;
   /** the sum before slashing was taken off, what was slashed, and what the net sum exceeds the chain's total stake by (bonds still in the pipeline; null when the stake was not read that tick) */
   grossNam?: number; slashedNam?: number; pipelineNam?: number | null;
+  /** sum of every unbond entry net of slashing (in-flight + withdrawable) decoded from the same listing; undefined when the answer had none */
+  unbondingNam?: number;
   written: number; zeroed: number; remaining: number; ticks: number; durationMs: number;
   failedAt?: number | null;
   error?: string;
@@ -515,6 +522,8 @@ export async function runBondListing(env: Env, health: SourceHealth[], now: numb
     at: now, completeAt: prev?.completeAt ?? null, height: listing.height, epoch, provider: listing.provider,
     sources: listing.sources.size, stakers: 0, totalNam, bytes: listing.bytes,
     grossNam: Number(listing.grossBase) / 1e6, slashedNam: Number(listing.slashedBase) / 1e6, pipelineNam: ctx.stakeNam != null ? totalNam - ctx.stakeNam : null,
+    // no 0 for a missing figure: a listing without unbonds leaves it undefined
+    unbondingNam: listing.unbondingBase != null ? Number(listing.unbondingBase) / 1e6 : undefined,
     written: 0, zeroed: 0, remaining: 0, ticks, durationMs: 0, failedAt: null, failures: 0,
   };
   try {
@@ -540,7 +549,21 @@ export async function runBondListing(env: Env, health: SourceHealth[], now: numb
     rec.remaining = (toWrite.length - part.length) + (toZero.length - zeroPart.length);
     if (part.length) rec.written = await runBatch(env.DB, stmt.stakesVerified(part, epoch, listing.height, now, BOND_LISTING_SRC));
     if (zeroPart.length) rec.zeroed = await runBatch(env.DB, stmt.stakesVerified(zeroPart.map((address) => ({ address, bondedNam: 0, delegations: [] })), epoch, listing.height, now, BOND_LISTING_SRC));
-    if (rec.remaining === 0) rec.completeAt = now;
+    if (rec.remaining === 0) {
+      rec.completeAt = now;
+      // Persist consensus unbond maturity schedule and withdraw cache directly from the decoded bond listing
+      try {
+        const params = await cachedChainParams(env.DB);
+        const epochSec = params ? Math.max(params.minEpochSec, params.epochSec ?? params.minEpochSec) : 21600;
+        const { termStructure, withdrawCache } = buildUnbondTermStructure(listing, listing.height, epoch, now, epochSec);
+        await Promise.all([
+          kvSet(env.DB, 'unbond.term_structure', termStructure).catch(() => {}),
+          kvSet(env.DB, 'unbond.withdraw', withdrawCache).catch(() => {}),
+        ]);
+      } catch (e) {
+        console.error('unbond term structure', e);
+      }
+    }
     rec.durationMs = Date.now() - t0;
     health.push({ name, ok: true, at: now, latencyMs: rec.durationMs, note:
       `${listing.entries.toLocaleString('en-US')} bond entries at height ${listing.height.toLocaleString('en-US')} (${mb(listing.bytes)} from ${listing.provider}): `
@@ -645,11 +668,13 @@ export async function bondedCoverageCheck(db: D1Database, now: number, stakeNam:
   const pct = (bond.totalNam / stakeNam) * 100;
   const recent = now - bond.at < 3 * BOND_LISTING_MS;
   const ok = Math.abs(100 - pct) < 2 && bond.remaining === 0 && recent && !bond.error;
+  const unbondingNam = bond.unbondingNam ?? null;
+  const posAccountedNam = unbondingNam != null ? bond.totalNam + unbondingNam : null;
   return stmt.check('bonded_coverage', ok ? 'ok' : 'warn', title, {
     ...common,
     coveragePct: pct.toFixed(1) + '%', stakers: bond.stakers, knownAddresses: bond.sources, pendingAddresses: bond.remaining,
     listingTotalNam: bond.totalNam, listingGrossNam: bond.grossNam ?? null, slashedNam: bond.slashedNam ?? null, pipelineNam: bond.totalNam - stakeNam,
-    listingAt: bond.at, listingHeight: bond.height, listingEpoch: bond.epoch, listingCompleteAt: bond.completeAt,
+    unbondingNam, posAccountedNam, listingAt: bond.at, listingHeight: bond.height, listingEpoch: bond.epoch, listingCompleteAt: bond.completeAt,
     note: !recent ? 'The bond listing is older than three of its intervals.' : bond.error ? `The last bond listing failed: ${bond.error}` : bond.remaining ? `${bond.remaining} addresses are still being written.` : undefined,
   }, now);
 }
@@ -792,18 +817,6 @@ export async function runCron(env: Env) {
     // 4. Integrity checks. Each compares two independent sources.
     const checkStmts = [];
 
-    if (ibcEscrowNam != null && osmoSupply != null) {
-      // Namada keeps one escrow for every channel; NAM on other chains is 0 (checked 2026-10-19), and transfers
-      // known to be stuck in it (config IBC_STUCK) are counted, so only an unexplained gap needs a look.
-      const stuckNam = IBC_STUCK.reduce((a, x) => a + x.nam, 0);
-      const rawGap = ibcEscrowNam - osmoSupply;
-      const drift = rawGap - stuckNam;
-      const ibcDiff = Math.abs(drift);
-      checkStmts.push(stmt.check('ibc_conservation', ibcDiff < 100 ? 'ok' : ibcDiff < 10000 ? 'warn' : 'fail',
-        'IBC conservation: Namada escrow = Osmosis voucher supply + known stuck transfers',
-        { namadaIbcEscrow: ibcEscrowNam, osmosisSupply: osmoSupply, rawGapNam: rawGap, stuckNam, stuck: IBC_STUCK, driftNam: drift, sources: ['Namada RPC abci_query', 'Keplr Osmosis bank/supply'] }, now));
-    }
-
     const rpcDiff = validRpcs.length >= 2 ? Math.abs(validRpcs[0].height - validRpcs[1].height) : null;
     checkStmts.push(stmt.check('rpc_consensus', validRpcs.length >= 2 && (rpcDiff ?? 0) <= 3 ? 'ok' : validRpcs.length >= 1 ? 'warn' : 'fail',
       'Namada RPC agreement (5ElementsNodes vs Papadritta)', { statuses: rpcStatuses, heightDiff: rpcDiff }, now));
@@ -891,12 +904,14 @@ export async function runCron(env: Env) {
     // Every bridge crossing should be on record on both chains (14 days; the last 30 minutes are not judged).
     const from14 = now - 14 * 86400000;
     const [nb, ob, orf] = await Promise.all([
-      env.DB.prepare(`SELECT f.id, f.kind, f.ts, f.from_addr, f.to_addr, f.amount_num FROM flows f WHERE f.chain='namada' AND f.kind IN ('ibc_in','ibc_out') AND f.ts >= ?
+      env.DB.prepare(`SELECT f.id, f.kind, f.ts, f.height, f.from_addr, f.to_addr, f.amount_num, f.meta FROM flows f WHERE f.chain='namada' AND f.kind IN ('ibc_in','ibc_out') AND f.ts >= ?
                       AND (f.from_addr LIKE 'osmo1%' OR f.to_addr LIKE 'osmo1%' OR f.from_addr = ? OR f.to_addr = ?) AND (f.meta IS NULL OR f.meta NOT LIKE '%"tokenSymbol":%') AND ${NOT_LEGACY_TWIN}`)
         .bind(from14, NAMADA.internal.ibc, NAMADA.internal.ibc).all<any>().catch(() => null),
       env.DB.prepare(`SELECT id, kind, ts, from_addr, to_addr, amount_num, meta FROM flows WHERE chain='osmosis' AND kind IN ('ibc_in','ibc_out') AND ts >= ?`).bind(from14 - 15 * 60000).all<any>().catch(() => null),
       env.DB.prepare(`SELECT id, ts, from_addr, to_addr, amount_num, meta FROM flows WHERE chain='osmosis' AND kind='other' AND ts >= ? AND meta LIKE '%"ibcTimeoutRefund":true%'`).bind(from14).all<any>().catch(() => null),
     ]);
+    // Namada → Osmosis sends on record on Namada only for a day or more: candidates for the stuck-packet list.
+    const stuckCandidates: StuckCandidate[] = [];
     if (nb && ob && orf) {
       const outs = (ob.results || []).filter((r: any) => r.kind === 'ibc_out');
       const gone = timedOutSends(outs.map(ibcRowOf), (orf.results || []).map(ibcRowOf));
@@ -909,6 +924,34 @@ export async function runCron(env: Env) {
         { namadaRows: (nb.results || []).length, osmosisRows: osmo.length, onlyOnNamada: u.namadaOnly.length, onlyOnOsmosis: u.osmosisOnly.length,
           onlyOnNamadaNam: u.namadaOnly.reduce((a, r) => a + r.amount_num, 0), onlyOnOsmosisNam: u.osmosisOnly.reduce((a, r) => a + r.amount_num, 0),
           examples: { namada: sample(u.namadaOnly), osmosis: sample(u.osmosisOnly) } }, now));
+      for (const r of u.namadaOnly) {
+        if (r.kind !== 'ibc_out' || !String(r.to_addr ?? '').startsWith('osmo1') || now - r.ts < STUCK_CANDIDATE_AGE_MS) continue;
+        const innerTx = innerTxOfRow(r);
+        if (!innerTx) continue;
+        const m = typeof r.meta === 'string' ? safeParseJson(r.meta, {}) : r.meta ?? {};
+        stuckCandidates.push({ innerTx, wrapperTx: m?.wrapper ?? (m?.innerTxHash ? r.id.split(':')[1]?.toLowerCase() ?? null : null), height: r.height ?? null, sentAt: new Date(r.ts).toISOString(), nam: r.amount_num, channel: m?.channel ?? null, sequence: m?.packetSequence != null ? Number(m.packetSequence) : null, counterparty: null });
+      }
+    }
+
+    // IBC conservation: the escrow, less the packets stuck in it (ibc-stuck.ts: each one's status re-read from the
+    // indexer every tick, so a relayed acknowledgement or timeout drops it on its own), against the Osmosis supply.
+    // Namada keeps one escrow for every channel; NAM on other chains is 0 (checked 2026-10-19).
+    if (ibcEscrowNam != null && osmoSupply != null) {
+      const prevStuck = await kvGetJson<StuckList>(env.DB, STUCK_PACKETS_KV).catch(() => null);
+      const lookup = (inner: string) => fetchJson<any>(INDEXER_IBC_STATUS(inner), { timeoutMs: 6000, retries: 0, signal })
+        .then((r) => (typeof r?.status === 'string' ? { status: r.status, timeout: r.timeout != null ? new Date(Number(r.timeout) / 1e6).toISOString() : null } : null));
+      const stuck = await reconcileStuckPackets(prevStuck, stuckCandidates, lookup, now);
+      await kvSet(env.DB, STUCK_PACKETS_KV, stuck).catch(() => {});
+      const stuckNam = stuckTotalNam(stuck);
+      const rawGap = ibcEscrowNam - osmoSupply;
+      const drift = rawGap - stuckNam;
+      const ibcDiff = Math.abs(drift);
+      checkStmts.push(stmt.check('ibc_conservation', ibcDiff < 100 ? 'ok' : ibcDiff < 10000 ? 'warn' : 'fail',
+        'IBC conservation: Namada escrow = Osmosis voucher supply + packets stuck in the escrow',
+        { namadaIbcEscrow: ibcEscrowNam, osmosisSupply: osmoSupply, rawGapNam: rawGap, stuckNam, driftNam: drift,
+          stuckPackets: stuck.packets.map((p) => ({ innerTx: p.innerTx, nam: p.nam, sentAt: p.sentAt, height: p.height, channel: p.channel, sequence: p.sequence, counterparty: p.counterparty, note: p.note, status: p.status, verifiedAt: p.verifiedAt, stale: !!p.stale, timeout: p.timeout, evidence: p.evidence })),
+          stuckDropped: stuck.dropped.slice(-3),
+          sources: ['Namada RPC abci_query', 'Keplr Osmosis bank/supply', 'indexer.namada.net /ibc/{tx}/status'] }, now));
     }
 
     // SQS mid vs the last hour's executed swap price
@@ -985,8 +1028,10 @@ export async function runCron(env: Env) {
     // pages never wait on the indexer.
     if (!late()) await chainParams(env.DB, signal).catch(() => {});
 
-    // The indexer's withdraw times of the unbonds the unlock list shows (every 10 minutes): exact where it has them.
-    if (now % 600000 < 60000 && !late()) {
+    // Unbond withdraw times: when the consensus bond listing is current, `runBondListing` already decoded every
+    // unbond on chain; fall back to the indexer only when the bond listing has not completed recently.
+    const consensusUnbondsFresh = !!bondRec?.completeAt && now - bondRec.completeAt < 3 * BOND_LISTING_MS;
+    if (!consensusUnbondsFresh && now % 600000 < 60000 && !late()) {
       const addrs = await unbondAddresses(env.DB, now);
       const byAddress: UnbondWithdrawCache['byAddress'] = {};
       let failedUnbonds = 0;

@@ -3,9 +3,11 @@
 // 5 Oct", "Restaked, not a sale", "Moved to Osmosis", "Sold on Osmosis", "Shielded", "Still
 // spendable"), then the staked-NAM chart. Unstaked NAM that can be withdrawn now, or soon, is listed
 // first (unbonds.ts); the Supply band links here with the Unstaking filter on.
+import { useEffect, useMemo, useState } from 'react';
 import type { Overview, Pressure, UnlockEntry } from '../../../../shared/types';
+import { fetchMetricHistory } from '../../api';
 import { unbondingStamp, type Stamp } from '../../lib/prov';
-import { AddrName, Num, ProvScope, RecordLink, Segmented, SourceLine, Tag, Term, YouTag, useShowAll, useUiNow } from '../../ui';
+import { AddrName, Num, ProvScope, RecordLink, Segmented, SourceLine, Tag, Term, YouTag, namShort, useShowAll, useUiNow, type SeriesRange } from '../../ui';
 import { NBSP, fmtAge, fmtAddr, fmtDayClock, fmtDayMonth, fmtNamRule, fmtNamSigned, fmtUtcLong } from '../../lib/format';
 import { isOld, oldRowsSentence } from './parts';
 import { spendableFirst, type UnbondState } from './unbonds';
@@ -54,6 +56,26 @@ function outcomeOf(u: UnlockEntry, asOf: number, st: UnbondState | undefined, sh
 
 const KIND_SIGN: Record<UnlockEntry['kind'], 1 | -1> = { bond: 1, unbond: -1, withdraw: -1 };
 
+type StakeRange = '14d' | '30d' | '90d' | '1y' | 'all';
+const STAKE_RANGES: { id: StakeRange; label: string; hours: number; ms: number | null }[] = [
+  { id: '14d', label: '14d', hours: 24 * 14, ms: 14 * DAY },
+  { id: '30d', label: '30d', hours: 24 * 30, ms: 30 * DAY },
+  { id: '90d', label: '90d', hours: 24 * 90, ms: 90 * DAY },
+  { id: '1y', label: '1y', hours: 24 * 365, ms: 365 * DAY },
+  { id: 'all', label: 'All', hours: 24 * 1200, ms: null },
+];
+const STAKE_SERIES_RANGES: SeriesRange[] = STAKE_RANGES.map((r) => ({ value: r.id, label: r.label, ms: r.ms }));
+
+interface UnlockWallBucket {
+  dayOffset: number;
+  windowStartTs: number;
+  windowEndTs: number;
+  totalNam: number;
+  highHazardNam: number;
+  lowHazardNam: number;
+  requestCount: number;
+}
+
 export function Unlocks({
   data,
   overview: o,
@@ -95,10 +117,31 @@ export function Unlocks({
     ? `${data.unbondingEpochs} epochs of about ${data.epochHours.toFixed(1)}${NBSP}h`
     : data.unbondingDays != null ? `the request time + ${data.unbondingDays.toFixed(2)}${NBSP}days` : 'the request time + the unstaking wait';
 
-  // staked NAM over the last 14 days (readings every 6 hours)
-  const trend = data.bondedTrend;
+  // staked NAM over the selected window (14d from Pressure.bondedTrend, or 30d/90d/1y/All from /api/metrics/history)
+  const [chartTab, setChartTab] = useState<'wall' | 'stake'>('wall');
+  const [stakeRange, setStakeRange] = useState<StakeRange>('14d');
+  const [longTrend, setLongTrend] = useState<{ ts: number; value: number }[] | null>(null);
+  useEffect(() => {
+    if (stakeRange === '14d') {
+      setLongTrend(null);
+      return;
+    }
+    let alive = true;
+    const hrs = STAKE_RANGES.find((r) => r.id === stakeRange)?.hours ?? 24 * 30;
+    fetchMetricHistory('supply.total_stake', hrs, data.asOf).then(
+      (rows) => {
+        if (alive && rows.length) setLongTrend(rows);
+      },
+      () => {},
+    );
+    return () => {
+      alive = false;
+    };
+  }, [stakeRange, data.asOf]);
+
+  const trend = stakeRange !== '14d' && longTrend && longTrend.length ? longTrend : data.bondedTrend;
   const tFirst = trend[0]?.ts ?? null;
-  const shortHistory = tFirst != null && tFirst - (data.asOf - 14 * DAY) > DAY;
+  const shortHistory = stakeRange === '14d' && tFirst != null && tFirst - (data.asOf - 14 * DAY) > DAY;
   // fresh while the last reading came on the series' own schedule (within two of its usual gaps)
   const gaps = trend.slice(1).map((p, i) => p.ts - trend[i].ts).sort((a, b) => a - b);
   const usualGap = gaps.length ? gaps[Math.floor(gaps.length / 2)] : null;
@@ -112,6 +155,59 @@ export function Unlocks({
         note: onSchedule ? 'The chain\'s total stake as recorded by this site from a Namada node.' : 'The last reading is older than two of the usual gaps between readings.',
       }
     : null;
+  // Build 15-day forward maturity wall buckets (0 = withdrawable now, 1..14 = upcoming days across the 56-epoch wait)
+  const timeline = useMemo<UnlockWallBucket[]>(() => {
+    const buckets: UnlockWallBucket[] = Array.from({ length: 15 }, (_, d) => ({
+      dayOffset: d,
+      windowStartTs: d === 0 ? data.asOf - 14 * DAY : data.asOf + (d - 1) * DAY,
+      windowEndTs: d === 0 ? data.asOf : data.asOf + d * DAY,
+      totalNam: 0,
+      highHazardNam: 0,
+      lowHazardNam: 0,
+      requestCount: 0,
+    }));
+    // Identify addresses with historical dump/bridge outcomes or high onDeck dumpHazardScore
+    const highHazardAddrs = new Set<string>();
+    for (const u of data.unlocks) {
+      if (u.kind === 'withdraw' && (u.outcome?.kind === 'sold' || u.outcome?.kind === 'bridged_out')) {
+        highHazardAddrs.add(u.address);
+      }
+    }
+    for (const od of data.onDeck) {
+      if ((od.dumpHazardScore ?? 0) >= 0.5) {
+        if (od.linkedNamada) highHazardAddrs.add(od.linkedNamada);
+        if (od.hopOriginNamada?.address) highHazardAddrs.add(od.hopOriginNamada.address);
+      }
+    }
+    for (const u of data.unlocks) {
+      if (u.kind !== 'unbond') continue;
+      const st = states.get(u);
+      if (!st || st.kind === 'withdrawn' || st.kind === 'unknown') continue;
+      const d = st.kind === 'ready' ? 0 : Math.max(1, Math.min(14, Math.ceil((st.liquidAt - data.asOf) / DAY)));
+      const b = buckets[d];
+      b.totalNam += u.amountNam;
+      if (highHazardAddrs.has(u.address)) b.highHazardNam += u.amountNam;
+      else b.lowHazardNam += u.amountNam;
+      b.requestCount += 1;
+    }
+    // Also incorporate consensus ABCI unbond term structure buckets if present and higher than indexed large unbonds
+    if (data.unbondTermStructure?.buckets?.length) {
+      for (const cb of data.unbondTermStructure.buckets) {
+        const d = cb.withdrawableNow || cb.estimatedAt == null
+          ? 0
+          : Math.max(1, Math.min(14, Math.ceil((cb.estimatedAt - data.asOf) / DAY)));
+        const b = buckets[d];
+        if (cb.amountNam > b.totalNam) {
+          const diff = cb.amountNam - b.totalNam;
+          b.totalNam += diff;
+          b.lowHazardNam += diff;
+          b.requestCount = Math.max(b.requestCount, cb.count);
+        }
+      }
+    }
+    return buckets;
+  }, [data.unlocks, data.onDeck, data.unbondTermStructure, data.asOf, states]);
+  const hasWall = timeline.some((b) => b.totalNam > 0);
 
   const scope = [
     { label: 'Staking, unstaking and unlocking moves', p: cov },
@@ -173,27 +269,168 @@ export function Unlocks({
       )}
       <SourceLine items={scope} label="Where the staking figures come from" />
 
-      {trend.length ? (
+      {hasWall || trend.length ? (
         <div className="ul-chart">
-          <SeriesChart
-            points={trend.map((p) => ({ t: p.ts, v: p.value }))}
-            end={data.asOf}
-            tone="ink"
-            what="Staked NAM"
-            level={3}
-            headingId="ul-chart-h"
-            unit={
-              <>
-                NAM staked with validators (the chain&rsquo;s total stake), {trend.length} readings recorded by this site{tFirst != null ? <> since {fmtUtcLong(tFirst)}</> : null}, the last of each 6 hours.
-                {shortHistory ? ' Earlier readings were not recorded, and a node keeps too little history to read them back.' : ''}
-              </>
-            }
-            prov={trendStamp}
-            provLabel="Staked NAM readings"
-          />
+          {hasWall && trend.length ? (
+            <div className="ul-chart__mode">
+              <Segmented
+                label="Staking chart view"
+                value={chartTab}
+                onChange={setChartTab}
+                options={[
+                  { value: 'wall', label: 'Upcoming unlock wall (14d)' },
+                  { value: 'stake', label: 'Staked NAM history' },
+                ]}
+              />
+            </div>
+          ) : null}
+          {chartTab === 'wall' && hasWall ? (
+            <UnlockMaturityWallChart
+              buckets={timeline}
+              asOf={data.asOf}
+              unbondingDays={data.unbondingDays}
+              unbondingEpochs={data.unbondingEpochs}
+              liquidityUsd={o?.dex.liquidityUsd ?? null}
+              priceUsd={o?.price.usd.value ?? null}
+            />
+          ) : trend.length ? (
+            <SeriesChart
+              points={trend.map((p) => ({ t: p.ts, v: p.value }))}
+              end={data.asOf}
+              tone="ink"
+              what="Staked NAM"
+              level={3}
+              headingId="ul-chart-h"
+              ranges={STAKE_SERIES_RANGES}
+              range={stakeRange}
+              onRange={(v) => setStakeRange(v as StakeRange)}
+              unit={
+                <>
+                  NAM staked with validators (the chain&rsquo;s total stake), {trend.length} readings recorded by this site{tFirst != null ? <> since {fmtUtcLong(tFirst)}</> : null}.
+                  {shortHistory ? ' Earlier readings were not recorded, and a node keeps too little history to read them back.' : ''}
+                </>
+              }
+              prov={trendStamp}
+              provLabel="Staked NAM readings"
+            />
+          ) : null}
         </div>
       ) : null}
     </ProvScope>
+  );
+}
+
+function UnlockMaturityWallChart({
+  buckets,
+  asOf,
+  unbondingDays,
+  unbondingEpochs,
+  liquidityUsd,
+  priceUsd,
+}: {
+  buckets: UnlockWallBucket[];
+  asOf: number;
+  unbondingDays?: number | null;
+  unbondingEpochs?: number | null;
+  liquidityUsd: number | null;
+  priceUsd: number | null;
+}) {
+  const [hoverIdx, setHoverIdx] = useState<number | null>(null);
+  const maxNam = Math.max(1, ...buckets.map((b) => b.totalNam));
+  // Approximate 2% pool slippage absorption capacity in NAM (roughly ~1% of pool USD depth converted to NAM)
+  const poolCapNam = liquidityUsd && priceUsd && priceUsd > 0 ? (liquidityUsd * 0.015) / priceUsd : null;
+  const ceilingMax = poolCapNam != null && poolCapNam < maxNam * 1.4 ? Math.max(maxNam, poolCapNam * 1.1) : maxNam * 1.1;
+  const totalUpcoming = buckets.reduce((s, b) => s + b.totalNam, 0);
+  const totalHighHazard = buckets.reduce((s, b) => s + b.highHazardNam, 0);
+  const active = hoverIdx != null ? buckets[hoverIdx] : buckets.find((b) => b.totalNam > 0) ?? buckets[0];
+
+  return (
+    <section className="chart chart--ink ul-wall" aria-labelledby="ul-wall-h">
+      <div className="chart__head">
+        <div>
+          <h3 id="ul-wall-h" className="h3">56-epoch forward unlock term structure (Maturity wall)</h3>
+          <p className="chart__u">
+            <strong data-num="">{fmtNamRule(totalUpcoming)} NAM</strong> unlocking across {unbondingEpochs ?? 56} epochs (~{(unbondingDays ?? 14).toFixed(1)} days), split by wallet historical dump hazard (
+            <strong data-num="">{fmtNamRule(totalHighHazard)} NAM</strong> from high-hazard sellers vs. sticky restakers).
+          </p>
+        </div>
+      </div>
+
+      {active ? (
+        <div className="ul-wall__readout" aria-live="polite">
+          <span className="ul-wall__when">
+            {active.dayOffset === 0 ? 'Now (Wait over, ready to withdraw)' : `+${active.dayOffset}d (${fmtDayMonth(active.windowStartTs)} – ${fmtDayMonth(active.windowEndTs)})`}
+          </span>
+          <span className="ul-wall__stats">
+            Total: <strong data-num="">{fmtNamRule(active.totalNam)} NAM</strong> · High dump hazard (≥50%):{' '}
+            <strong data-num="">{fmtNamRule(active.highHazardNam)} NAM</strong> · Sticky / low hazard:{' '}
+            <strong data-num="">{fmtNamRule(active.lowHazardNam)} NAM</strong> · {active.requestCount} {active.requestCount === 1 ? 'request' : 'requests'}
+          </span>
+        </div>
+      ) : null}
+
+      <div className="ul-wall__plot" role="img" aria-label="14-day forward unbonding maturity wall by dump hazard">
+        {poolCapNam != null && poolCapNam <= ceilingMax ? (
+          <div
+            className="ul-wall__cap"
+            style={{ bottom: `${Math.min(92, Math.max(8, (poolCapNam / ceilingMax) * 100)).toFixed(1)}%` }}
+            title={`Est. daily Osmosis pool absorption before >2% slippage: ~${fmtNamRule(poolCapNam)} NAM`}
+          >
+            <span className="ul-wall__cap-lbl">Pool ~2% impact ceiling ({namShort(poolCapNam)} NAM)</span>
+          </div>
+        ) : null}
+        <div className="ul-wall__bars">
+          {buckets.map((b, i) => {
+            const hPct = ceilingMax > 0 ? Math.min(100, (b.totalNam / ceilingMax) * 100) : 0;
+            const highShare = b.totalNam > 0 ? (b.highHazardNam / b.totalNam) * 100 : 0;
+            const isSel = hoverIdx === i;
+            return (
+              <button
+                key={b.dayOffset}
+                type="button"
+                className={`ul-wall__col${isSel ? ' is-active' : ''}`}
+                onMouseEnter={() => setHoverIdx(i)}
+                onFocus={() => setHoverIdx(i)}
+                onMouseLeave={() => setHoverIdx(null)}
+                aria-label={`${b.dayOffset === 0 ? 'Ready now' : `Day +${b.dayOffset}`}: ${fmtNamRule(b.totalNam)} NAM (${fmtNamRule(b.highHazardNam)} high hazard)`}
+              >
+                <span className="ul-wall__bar-wrap">
+                  {b.totalNam > 0 ? (
+                    <span className="ul-wall__bar" style={{ height: `${Math.max(4, hPct).toFixed(1)}%` }}>
+                      {b.highHazardNam > 0 ? (
+                        <span className="ul-wall__seg ul-wall__seg--high" style={{ height: `${Math.max(10, highShare).toFixed(1)}%` }} />
+                      ) : null}
+                      {b.lowHazardNam > 0 ? (
+                        <span className="ul-wall__seg ul-wall__seg--low" style={{ height: `${Math.max(0, 100 - highShare).toFixed(1)}%` }} />
+                      ) : null}
+                    </span>
+                  ) : (
+                    <span className="ul-wall__bar ul-wall__bar--zero" />
+                  )}
+                </span>
+                <span className="ul-wall__x">{b.dayOffset === 0 ? 'Now' : `+${b.dayOffset}d`}</span>
+              </button>
+            );
+          })}
+        </div>
+      </div>
+
+      <div className="chart__foot">
+        <div className="key">
+          <span className="key__i">
+            <span className="key__sw ul-wall__sw--high" />
+            <span>High dump-hazard wallet (≥50% historical bridge/sell rate)</span>
+          </span>
+          <span className="key__i">
+            <span className="key__sw ul-wall__sw--low" />
+            <span>Sticky staker / low hazard (&lt;50% dump rate)</span>
+          </span>
+          <span className="key__i">
+            <span>As of {fmtDayClock(asOf)}</span>
+          </span>
+        </div>
+      </div>
+    </section>
   );
 }
 

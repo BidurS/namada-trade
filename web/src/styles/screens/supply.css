@@ -23,7 +23,26 @@
   .sp-hero__def { color: var(--c-ink-2); }
   .sp-hero__skel { display: grid; gap: 6px; }
   .sp-hero__skel .hero-n__top { min-height: 24px; }
-  .sp-hero__win { width: 100%; max-width: 26rem; }
+  .sp-hero__win { width: 100%; max-width: 32rem; }
+
+  /* ---------- Cross-chain supply-to-dump cohort pipeline (Chart 3) ---------- */
+  .sp-pipe { display: grid; gap: var(--s-3); margin: var(--s-3) 0 var(--s-4); padding: var(--s-4); border: 1px solid var(--c-line); background: var(--c-bg); }
+  .sp-pipe__head { display: grid; gap: var(--s-1); }
+  .sp-pipe__bars { display: grid; gap: var(--s-2); }
+  .sp-pipe__row { display: grid; gap: 6px; }
+  .sp-pipe__lbl { font: var(--w-medium) var(--t-12) / 16px var(--font-code); color: var(--c-ink-2); }
+  .sp-pipe__track { display: flex; height: 14px; width: 100%; gap: 2px; background: var(--c-line); overflow: hidden; }
+  .sp-pipe__seg { display: block; height: 100%; min-width: 3px; }
+  .sp-pipe__seg--genesis { background: var(--c-mark); }
+  .sp-pipe__seg--turnstile { background: var(--shielded); }
+  .sp-pipe__seg--burner { background: var(--sell); }
+  .sp-pipe__seg--transparent { background: var(--c-ink-2); }
+  .sp-pipe__seg--sold { background: var(--sell); }
+  .sp-pipe__seg--rem { background: var(--c-ink); }
+  .sp-pipe__seg--back { background: var(--buy); }
+  .sp-pipe__legend { display: flex; flex-wrap: wrap; gap: var(--s-2) var(--s-4); font-size: var(--t-12); line-height: 18px; color: var(--c-ink-2); }
+  .sp-pipe__item { display: inline-flex; align-items: center; gap: 6px; }
+  .sp-pipe__sw { display: inline-block; width: 10px; height: 10px; }
 
   /* ---------- the band's six figures: Osmosis in the first row, staking in the second (3 columns);
      2 x 3 on phones. Hairlines between columns, a hairline above every row after the first. ---------- */
@@ -141,6 +160,26 @@
   }
   .ul-chart { margin-top: var(--s-4); padding-top: var(--s-5); border-top: 1px solid var(--c-line); max-width: 48rem; }
   .ul-chart .chartsec__h { font-size: var(--t-18); line-height: var(--lh-18); max-width: none; }
+  .ul-chart__mode { margin-bottom: var(--s-4); max-width: 28rem; }
+
+  /* ---------- 56-Epoch Forward Unlock Term Structure / Maturity Wall (Chart 2) ---------- */
+  .ul-wall { display: grid; gap: var(--s-3); }
+  .ul-wall__readout { display: flex; flex-wrap: wrap; justify-content: space-between; gap: var(--s-1) var(--s-3); padding: var(--s-2) 0; border-top: 1px solid var(--c-line); border-bottom: 1px solid var(--c-line); font-size: var(--t-12); line-height: 18px; color: var(--c-ink-2); }
+  .ul-wall__when { font-family: var(--font-code); color: var(--c-ink); font-weight: var(--w-medium); }
+  .ul-wall__plot { position: relative; height: 196px; padding-top: var(--s-3); border-bottom: 1px solid var(--c-ink-2); }
+  .ul-wall__cap { position: absolute; left: 0; right: 0; border-top: 1px dashed var(--c-mark); pointer-events: none; z-index: 2; }
+  .ul-wall__cap-lbl { position: absolute; right: 0; top: -18px; font: var(--w-medium) 11px / 14px var(--font-code); color: var(--c-mark); background: var(--c-bg); padding-inline: 4px; }
+  .ul-wall__bars { display: grid; grid-template-columns: repeat(15, minmax(0, 1fr)); gap: 4px; height: 100%; align-items: end; }
+  .ul-wall__col { display: grid; grid-template-rows: 1fr auto; gap: 6px; height: 100%; padding: 0; border: 0; background: transparent; color: inherit; cursor: pointer; text-align: center; }
+  .ul-wall__col:focus-visible { outline: var(--ring-w) solid var(--c-focus); outline-offset: 2px; }
+  .ul-wall__bar-wrap { display: flex; align-items: flex-end; justify-content: center; height: 100%; width: 100%; }
+  .ul-wall__bar { display: flex; flex-direction: column; justify-content: flex-end; width: 100%; max-width: 28px; min-height: 3px; background: var(--c-line); overflow: hidden; }
+  .ul-wall__bar--zero { height: 2px; opacity: 0.4; }
+  .ul-wall__col.is-active .ul-wall__bar { box-shadow: 0 0 0 1px var(--c-ink); }
+  .ul-wall__seg { display: block; width: 100%; }
+  .ul-wall__seg--high, .ul-wall__sw--high { background: var(--c-mark); }
+  .ul-wall__seg--low, .ul-wall__sw--low { background: var(--c-ink-2); }
+  .ul-wall__x { font: var(--w-medium) 10px / 14px var(--font-code); color: var(--c-ink-2); }
 
   /* ---------- Votes in progress ---------- */
   .votes { display: grid; }

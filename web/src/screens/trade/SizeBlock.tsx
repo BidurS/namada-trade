@@ -54,7 +54,16 @@ export function SizeBlock({ rewound, table, amount, side, onPick }: SizeBlockPro
   } else {
     body = (
       <>
-        <OrderSizeCurve points={pts} value={amount ?? 0} onChange={onPick} side={side} mode="ticket" caption="Price move by order size" />
+        <OrderSizeCurve
+          points={pts}
+          value={amount ?? 0}
+          onChange={onPick}
+          side={side}
+          mode="ticket"
+          caption="Price move by order size"
+          liquidityCliffNam={table.data?.liquidityCliffNam}
+          cliffNote={table.data?.cliffNote}
+        />
         <DataList kind="ladder" label="Price move by order size" className="tk-ladder">
           {pts.map((p) => (
             <LadderRow

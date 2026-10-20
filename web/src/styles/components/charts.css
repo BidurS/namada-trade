@@ -27,6 +27,8 @@
   .c-quote-dot { fill: var(--c-bg); stroke: var(--c-ink-3); stroke-width: 1.5; }
   .c-shielded { fill: none; stroke: var(--shielded); stroke-width: 2; stroke-linejoin: round; }
   .c-shielded-dot { fill: var(--shielded); }
+  .c-bar-buy { fill: var(--buy); opacity: 0.82; }
+  .c-bar-sell { fill: var(--sell); opacity: 0.82; }
   .c-evt { stroke: var(--c-ink-3); stroke-width: 1; stroke-dasharray: 3 3; }
   .c-evtl { fill: var(--c-ink); font-family: var(--font-code); font-weight: 500; font-size: 11px; paint-order: stroke; stroke: var(--c-bg); stroke-width: 3px; stroke-linejoin: round; }
   .c-at { stroke: var(--c-mark); stroke-width: 1.5; stroke-dasharray: 2 3; }
@@ -43,6 +45,10 @@
   .key__ln { display: inline-block; width: 22px; height: 0; margin-right: var(--s-2); border-top: 2px solid var(--c-ink); vertical-align: middle; }
   .key__ln--dash { border-top-style: dashed; border-top-color: var(--c-ink-3); }
   .key__ln--evt { width: 0; height: 14px; margin-right: var(--s-2); border-top: 0; border-left: 1px dashed var(--c-ink-3); }
+  .key__sw { display: inline-block; width: 10px; height: 10px; margin-right: var(--s-2); vertical-align: middle; }
+  .key__sw--buy { background: var(--buy); }
+  .key__sw--sell { background: var(--sell); }
+  .tk-chart__mode, .curve__mode { margin-bottom: var(--s-3); max-width: 24rem; }
   .cstats { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); border-top: 1px solid var(--c-line); }
   .cstats > div { display: grid; gap: 2px; padding: var(--s-3) var(--s-3) var(--s-3) 0; border-bottom: 1px solid var(--c-line); min-width: 0; }
   .cstats > div:nth-child(even) { padding-left: var(--s-3); border-left: 1px solid var(--c-line); }
