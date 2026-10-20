@@ -24,11 +24,13 @@ export interface Proof {
   /** smallest alert size used for the base rate (NAM) */
   minAlertNam: number | null;
   thresholds: { ibcInventory: number; unlock: number; bigSwap: number; unshield: number; bond: number };
-  /** the Rewind example: the largest withdrawal from staking and the first alert before it */
-  largestWithdrawal: {
+  /** the Rewind example: the largest move out of the staking account and the first alert before it */
+  rewindExample: {
     eventId: string;
+    /** 'withdraw': withdrawn from staking by a holder; 'pos_balance': the staking account's own balance moved in one transfer */
+    kind: 'withdraw' | 'pos_balance';
     amountNam: number;
-    /** block time of the withdrawal */
+    /** block time of the move */
     at: number;
     /** time of the first alert in the window before it */
     firstAlertAt: number;
@@ -42,7 +44,7 @@ export interface Proof {
 
 export const PROOF: Proof = {
   "reportDate": "2026-10-20",
-  "reportGeneratedAt": 1792459920000,
+  "reportGeneratedAt": 1792526580000,
   "marketEventsTested": 22,
   "pricePoints": 104,
   "priceMovesFlagged": 10,
@@ -62,8 +64,9 @@ export const PROOF: Proof = {
     "unshield": 50000,
     "bond": 1000000
   },
-  "largestWithdrawal": {
+  "rewindExample": {
     "eventId": "whale_namada:6C1989767A6939F9A",
+    "kind": "pos_balance",
     "amountNam": 331386682,
     "at": 1788219314259,
     "firstAlertAt": 1788116742844,

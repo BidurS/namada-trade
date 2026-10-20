@@ -137,7 +137,7 @@ function Trust({ checks, rewound, failed }: { checks: Check[]; rewound: boolean;
   const idle = checks.filter((c) => c.status === 'idle');
   const pass = checks.filter((c) => c.status === 'ok');
   const cs = checksStamp(checks);
-  const ex = PROOF.largestWithdrawal;
+  const ex = PROOF.rewindExample;
   const day = reportDay(PROOF.reportDate);
   const each = PROOF.priceMovesFlagged === PROOF.priceMovesTested;
 
@@ -163,7 +163,7 @@ function Trust({ checks, rewound, failed }: { checks: Check[]; rewound: boolean;
           <li>
             <p>
               <b>Rewind:</b> see the site as it was. Try{' '}
-              <Link to={`/supply?at=${ex.rewindAt}`} className="why__a">{fmtUtcLong(ex.firstAlertAt)}</Link>, the first alert before {fmtNamRule(Math.floor(ex.amountNam / 1e6))} million NAM were withdrawn from staking.
+              <Link to={`/supply?at=${ex.rewindAt}`} className="why__a">{fmtUtcLong(ex.firstAlertAt)}</Link>, the first alert before {fmtNamRule(Math.floor(ex.amountNam / 1e6))} million NAM {ex.kind === 'withdraw' ? 'were withdrawn from staking' : 'moved out of the staking account in one transfer'}.
             </p>
           </li>
         ) : null}

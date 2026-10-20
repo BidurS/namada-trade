@@ -1,0 +1,29 @@
+-- 2026-10-20. The staking account's own balance moved by wasm transfers (docs/design/screener-plan.md 3.0).
+-- Not applied by the build: the orchestrator applies it with `npm run db:apply -- scripts/out/repair/pos_balance_2026-10-20.sql`
+-- (a copy of the tracked scripts/repair-pos-balance.sql; test/repair-pos-balance.test.ts checks they are the same)
+-- after migration 0007 and the deploy whose classifier writes 'pos_balance' (worker/src/parse/namada.ts classify).
+--
+-- What it fixes. Nine Namada flow rows carry descriptor transfer-from-wasm with the staking account
+-- (tnam1qgqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqc8j2fp) on one side. The old classifier filed the three out of it as
+-- 'withdraw' (blocks 7,900,823 / 7,900,851 / 7,900,866, 31 Aug 2026: 1,000,000 + 331,386,682.183413 + 1 NAM to
+-- tnam1qry99h4faqtkleuuyecxzrswq7vgkj2hu5kg6dqp) and the six into it as 'bond' (blocks 8,013,290 to 8,013,375 on
+-- 22 Sep and 8,121,844 on 1 Oct: 100 + 99,999,900 + 100,000,000 + 100,000,000 + 29,386,967.189242 +
+-- 2,999,715.994171 NAM from tnam1qrk5pyvtzxjmykcqmhglssshdjf3njac2qvqmlse). Out and in are equal to the base unit
+-- (332,386,683.183413 NAM each way); the chain's total stake did not move and neither address holds a bond.
+-- Read on production 2026-10-20 (read-only): exactly these nine rows match the guard below (listed by their wrapper-hash
+-- ids as stored now, and by their inner-hash ids as builds before the 17 Oct re-keying stored them, so a restored
+-- backup is repaired the same way); no other row with
+-- that descriptor touches the staking account. Every live bond row comes from the indexer (meta.source) or the
+-- unbond decoder, never from a token/transfer event, so no real bond carries this descriptor.
+--
+-- Effects: the "NAM unstaked" and "Large amount staked" alerts stop firing on these rows (shared/alerts.ts tests the
+-- kind), the Supply unlock lists and the 30-day flow figures leave them out, and the staking estimate of
+-- tnam1qrk5py… (332,386,683 NAM from these six rows alone; the chain lists 0) becomes unknown (NULL: no bond or
+-- unbond on record), never 0. Idempotent: a second run changes nothing.
+UPDATE flows SET kind = 'pos_balance' WHERE chain = 'namada' AND kind IN ('bond', 'withdraw') AND json_extract(meta, '$.descriptor') = 'transfer-from-wasm' AND (from_addr = 'tnam1qgqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqc8j2fp' OR to_addr = 'tnam1qgqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqc8j2fp') AND id IN ('namada:7ABE4624B78CD1C37019AA55F0533ED377FB3ABC2F3A46DAED46588DD419D634:0', 'namada:C742D695F6ED7897475E22C7B58B708F0FF6F7DA71FBD2212AC1866F37405746:0', 'namada:D6BB0859F632A73BB5158B36B179A123EF4026D48DAC8FB5356A7ECB65E2D307:0', 'namada:6CE238E7E93504F151BE97311640BFF1FEA91DEC7B129BFDCD98C0498E211B19:0', 'namada:333718A78AB5097D35DBC97202D439CFC4EDC69A924944C50722A0AD6D2F5A31:0', 'namada:8D27AF94D35CBAF7046FAF9DA9B6D5383BC9458222D1E2F0F68492229DD8F556:0', 'namada:0D4F39FABEE73904DF8529DB7EAD621C6ADF5AFD32AFB4DF5F8A31DE6187AFCB:0', 'namada:DE2990109B9ABCD28F07476F52DFF9102FAB8DFFC103A8E3C61588E076E40F05:0', 'namada:1DA077C41DBB414A178A349B4A98343C4C6FC45105078277B14C4D4336439E9B:0', 'namada:0695A76C4B2BBE9EAC81BAAF6F399575F648CE5F9989A66C152A9703470639F1:0', 'namada:6C1989767A6939F9A495E96C7232BFA00C5C20265C29C73EA40B69D2E7DA0EFC:0', 'namada:B0A8F6DF70A31DC6A6B60D63A9A44F19B8651BD27614A5F472BA7F90AF1FFBC6:0', 'namada:F485AC50092DBB24850C2A4C428A4690A8728588BC79DA5A3014E71FE5BE4507:0', 'namada:59AA5A3380F1047107C6FE92F7464B76B715C0E6DDD9E5FA2B9EE05A13056E9E:0', 'namada:3B6C6C648886F5C2D2A3F767AE5CDD157A9B1E6AAFD0D9CF6FF582B71AD926DB:0', 'namada:5F9E44142731CC939DF6F4B02F2C08A82770F14B04A7A3F10A75B6F5A83F7DBE:0', 'namada:192A229ECB1C195D1198D59D9FEACFF96D3D6BDB4DAC21FA4036E569F4DBF9A0:0', 'namada:4F4C800000252987C3CD815EA2CCF4A91A40D3DD94C9FB723B769E73C1D9360A:0');
+-- The flow-history estimate of the two addresses on the other side, recomputed as the cron computes it (cron.ts step 5:
+-- Σ bond from it − Σ unbond to it); with no such rows left the estimate is NULL.
+UPDATE stakes SET estimated_num = (SELECT SUM(CASE WHEN kind = 'bond' THEN amount_num ELSE -amount_num END) FROM flows WHERE chain = 'namada' AND ((kind = 'bond' AND from_addr = stakes.address) OR (kind = 'unbond' AND to_addr = stakes.address))) WHERE address IN ('tnam1qrk5pyvtzxjmykcqmhglssshdjf3njac2qvqmlse', 'tnam1qry99h4faqtkleuuyecxzrswq7vgkj2hu5kg6dqp');
+-- Check after applying: one row, 9 flows, 664,773,366.366826 NAM (332,386,683.183413 each way); estimated_num NULL for both addresses.
+--   SELECT kind, COUNT(*), SUM(amount_num) FROM flows WHERE kind = 'pos_balance' GROUP BY kind;
+--   SELECT address, estimated_num FROM stakes WHERE address IN ('tnam1qrk5pyvtzxjmykcqmhglssshdjf3njac2qvqmlse', 'tnam1qry99h4faqtkleuuyecxzrswq7vgkj2hu5kg6dqp');

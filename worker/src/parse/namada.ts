@@ -69,9 +69,18 @@ function entries(json: string | undefined): { account: string; token: string; am
 
 const I = NAMADA.internal;
 
-function classify(descriptor: string, from: string | null, to: string | null): Flow['kind'] {
+/**
+ * The kind of one token/transfer event. The staking account's own balance moved by a wasm transfer (descriptor
+ * `transfer-from-wasm`, either side the staking account) is 'pos_balance', not a bond or a withdrawal: on
+ * 2026-08-31 such a transfer moved 331,386,682 NAM out of the staking account and on 22 Sep and 1 Oct the same
+ * amount came back, while the chain's total stake never moved and the receiving address had no bond
+ * (docs/design/screener-plan.md 3.0). Holders' own bonds are recorded from the indexer and the live unbond decoder;
+ * the chain's staking logic moves NAM with its own descriptors (pos-claim-rewards, pos-withdraw-token).
+ */
+export function classify(descriptor: string, from: string | null, to: string | null): Flow['kind'] {
   if (descriptor === 'pos-claim-rewards') return 'rewards';
   if (descriptor === 'pos-withdraw-token') return 'withdraw';
+  if (descriptor === 'transfer-from-wasm' && (to === I.pos || from === I.pos)) return 'pos_balance';
   if (to === I.pos) return 'bond';
   if (from === I.pos) return 'withdraw';
   // IBC before MASP: a shielded IBC withdrawal (MASP -> escrow) is 'ibc_out' and a shielded IBC deposit

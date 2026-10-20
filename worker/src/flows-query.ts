@@ -64,7 +64,7 @@ export function flowsWhere(f: FlowsFilter): { where: string; params: unknown[] }
   if (f.kind && f.kind !== 'all') {
     if (f.kind === 'dex') conditions.push("f.kind IN ('buy','sell','lp_add','lp_remove')");
     else if (f.kind === 'ibc') conditions.push("f.kind IN ('ibc_in','ibc_out')");
-    else if (f.kind === 'native') conditions.push("f.kind IN ('bond','withdraw','shield','unshield','rewards')");
+    else if (f.kind === 'native') conditions.push("f.kind IN ('bond','withdraw','shield','unshield','rewards','pos_balance')");
     else { conditions.push('f.kind = ?'); params.push(f.kind); }
   }
   if (f.whale) conditions.push('f.amount_num >= 10000');

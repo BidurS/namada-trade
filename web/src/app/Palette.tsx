@@ -38,15 +38,15 @@ export interface RewindPreset {
 
 /**
  * The Rewind presets (system.md 8): the three biggest price moves in docs/events.json and the
- * replay report's example (the first alert before the largest withdrawal from staking, owner
+ * replay report's example (the first alert before the largest move out of the staking account, owner
  * decision 3). Every figure is a field of the generated exports; nothing is typed here.
  */
 async function loadPresets(): Promise<RewindPreset[]> {
   try {
     const [{ PRICE_MOVES }, { PROOF }] = await Promise.all([import('../generated/events'), import('../generated/proof')]);
     const out: RewindPreset[] = [];
-    const w = PROOF.largestWithdrawal;
-    if (w) out.push({ at: w.rewindAt, label: `The first alert before ${Math.round(w.amountNam / 1e6)} million NAM were withdrawn from staking`, note: fmtUtcLong(w.rewindAt) });
+    const w = PROOF.rewindExample;
+    if (w) out.push({ at: w.rewindAt, label: `The first alert before ${Math.round(w.amountNam / 1e6)} million NAM ${w.kind === 'withdraw' ? 'were withdrawn from staking' : 'moved out of the staking account in one transfer'}`, note: fmtUtcLong(w.rewindAt) });
     const biggest = [...PRICE_MOVES].sort((a, b) => Math.abs(b.pct) - Math.abs(a.pct)).slice(0, 3);
     for (const m of biggest) {
       const hours = Math.round((m.t1 - m.t0) / 3_600_000);

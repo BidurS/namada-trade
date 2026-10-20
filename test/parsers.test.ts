@@ -2,7 +2,7 @@ import { describe, it, expect } from 'vitest';
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { normFromTxSearch, parseOsmosisTx, type OsmoCtx } from '../worker/src/parse/osmosis';
-import { parseNamadaBlock } from '../worker/src/parse/namada';
+import { parseNamadaBlock, classify } from '../worker/src/parse/namada';
 import { NAMADA, NAM } from '../worker/src/config';
 import { decodeU256LE, parseCoins, toNam, namFromCoins } from '../worker/src/util';
 
@@ -208,5 +208,37 @@ describe('namada parser: MASP legs', () => {
     expect(fl[0].amount).toBeCloseTo(4.682433, 6);
     expect(fl[0].meta?.escrow).toBe(NAMADA.internal.ibc);
     expect(p.links).toHaveLength(0);
+  });
+});
+
+// docs/design/screener-plan.md 3.0: the staking account's own balance moved by wasm transfers. Blocks 7,900,851 (31 Aug
+// 2026, 331,386,682.183413 NAM out of the staking account), 8,013,338 (22 Sep, 99,999,900 NAM in) and 8,121,844 (1 Oct,
+// 2,999,715.994171 NAM in), block_results as the node served them (5ElementsNodes, read 2026-10-20).
+describe('the staking account balance transfers (pos_balance)', () => {
+  const POS = NAMADA.internal.pos;
+  const block = (h: number) => {
+    const r = fx(`namada_block_${h}.json`).result;
+    return { height: h, ts: 1, events: [...(r.end_block_events ?? [])] };
+  };
+  it.each([
+    [7900851, POS, 'tnam1qry99h4faqtkleuuyecxzrswq7vgkj2hu5kg6dqp', 331386682.183413],
+    [8013338, 'tnam1qrk5pyvtzxjmykcqmhglssshdjf3njac2qvqmlse', POS, 99999900],
+    [8121844, 'tnam1qrk5pyvtzxjmykcqmhglssshdjf3njac2qvqmlse', POS, 2999715.994171],
+  ])('block %i is filed as pos_balance, never a bond or a withdrawal', (h, from, to, nam) => {
+    const p = parseNamadaBlock(block(h), null);
+    expect(p.flows).toHaveLength(1);
+    expect(p.flows[0]).toMatchObject({ kind: 'pos_balance', from, to, amount: nam, meta: { descriptor: 'transfer-from-wasm' } });
+    // the post-balances are still recorded (the staking account's balance is read every tick anyway)
+    expect(p.balances.some((b) => b.address === POS)).toBe(true);
+  });
+  it('the chain\'s own staking moves keep their kinds; a transfer between two holders stays a transfer', () => {
+    const someone = 'tnam1qrk5pyvtzxjmykcqmhglssshdjf3njac2qvqmlse';
+    expect(classify('pos-withdraw-token', POS, someone)).toBe('withdraw');
+    expect(classify('pos-claim-rewards', POS, someone)).toBe('rewards');
+    // a NAM move into or out of the staking account without the wasm-transfer descriptor keeps the old reading
+    expect(classify('', someone, POS)).toBe('bond');
+    expect(classify('', POS, someone)).toBe('withdraw');
+    expect(classify('transfer-from-wasm', someone, 'tnam1qry99h4faqtkleuuyecxzrswq7vgkj2hu5kg6dqp')).toBe('transfer');
+    expect(classify('transfer-from-wasm', someone, NAMADA.internal.masp)).toBe('shield');
   });
 });

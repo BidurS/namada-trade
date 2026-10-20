@@ -112,10 +112,13 @@ export interface Proof {
   baseRatePct: number | null;
   minAlertNam: number | null;
   thresholds: AlertThresholds;
-  largestWithdrawal: {
+  rewindExample: {
     eventId: string;
+    /** 'withdraw': unlocked and withdrawn from staking by a holder; 'pos_balance': the staking account's own balance
+     *  moved in one transfer (not a holder's withdrawal: docs/design/screener-plan.md 3.0, owner decision 3) */
+    kind: 'withdraw' | 'pos_balance';
     amountNam: number;
-    at: number;                  // the withdrawal's block time
+    at: number;                  // the move's block time
     firstAlertAt: number;        // the first alert in the window before it (exact, from events.json)
     firstAlertRule: string;
     leadHours: number;
@@ -123,6 +126,9 @@ export interface Proof {
     txHash: string;
   } | null;
 }
+
+/** The staking account (shared/alerts.ts INTERNAL_ADDRESSES.pos). */
+const POS = 'tnam1qgqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqc8j2fp';
 
 export function buildProof(r: Report, ev: EventsFile): Proof {
   const market = ev.events.filter((e) => e.type === 'price_move' || e.type === 'whale_flow');
@@ -133,21 +139,25 @@ export function buildProof(r: Report, ev: EventsFile): Proof {
   if (priceRows.length !== r.priceMoves) throw new Error(`report lists ${priceRows.length} price moves but says ${r.priceMoves}`);
   if (priceRows.filter((x) => x.rules.length > 0).length !== r.flagged) throw new Error('report flag count does not match its table');
 
-  // The largest withdrawal from staking among the market events, and the first alert before it.
-  const withdrawals = market.filter((e) => e.type === 'whale_flow' && e.flow?.kind === 'withdraw').sort((a, b) => b.flow.amountNam - a.flow.amountNam);
-  let largest: Proof['largestWithdrawal'] = null;
-  if (withdrawals.length) {
-    const w = withdrawals[0];
+  // The Rewind example (owner decision 3): the largest move of NAM out of the staking account among the market
+  // events, and the first alert before it. Since 2026-10-20 the 331 million NAM of 31 Aug 2026 is filed as what it
+  // was, a transfer of the staking account's own balance ('pos_balance'), not a withdrawal by a holder; the
+  // sentence says which kind it is (Home, Palette).
+  const outs = market.filter((e) => e.type === 'whale_flow' && (e.flow?.kind === 'withdraw' || (e.flow?.kind === 'pos_balance' && e.flow?.from === POS)))
+    .sort((a, b) => b.flow.amountNam - a.flow.amountNam);
+  let example: Proof['rewindExample'] = null;
+  if (outs.length) {
+    const w = outs[0];
     const row = need(r.rows.find((x) => x.id === w.id), `row ${w.id}`);
     const hits = evaluateFlows(w.leadSignals.map(toFlow), r.thresholds).filter((h) => h.ts < w.t1);
     if (!hits.length || !row.firstAlert || row.leadH == null) throw new Error(`no alert before ${w.id}`);
     const first = hits.reduce((a, h) => (h.ts < a.ts ? h : a));
     if (isoMinute(first.ts) !== row.firstAlert) throw new Error(`first alert for ${w.id}: events.json ${isoMinute(first.ts)}, report ${row.firstAlert}`);
-    const amt = /^withdraw ([\d,]+)/.exec(row.move);
-    if (!amt || num(amt[1]) !== Math.round(w.flow.amountNam)) throw new Error(`withdrawal amount for ${w.id}: report "${row.move}", events.json ${w.flow.amountNam}`);
+    const amt = /^(withdraw|pos_balance) ([\d,]+)/.exec(row.move);
+    if (!amt || amt[1] !== w.flow.kind || num(amt[2]) !== Math.round(w.flow.amountNam)) throw new Error(`move amount for ${w.id}: report "${row.move}", events.json ${w.flow.kind} ${w.flow.amountNam}`);
     if (Math.abs((w.t1 - first.ts) / H - row.leadH) > 0.051) throw new Error(`lead for ${w.id}: report ${row.leadH} h`);
-    largest = {
-      eventId: w.id, amountNam: w.flow.amountNam, at: w.flow.ts, firstAlertAt: first.ts, firstAlertRule: first.ruleId,
+    example = {
+      eventId: w.id, kind: w.flow.kind, amountNam: w.flow.amountNam, at: w.flow.ts, firstAlertAt: first.ts, firstAlertRule: first.ruleId,
       leadHours: row.leadH, rewindAt: first.ts + 1, txHash: String(w.flow.id).split(':')[1] ?? '',
     };
   }
@@ -158,7 +168,7 @@ export function buildProof(r: Report, ev: EventsFile): Proof {
     priceMovesFlagged: r.flagged, priceMovesTested: r.priceMoves,
     medianLeadHours: r.medianLeadH, leadRangeHours: r.leadRangeH, windowHours: r.windowH,
     baseRatePct: r.baseRatePct, minAlertNam: r.minAlertNam, thresholds: r.thresholds,
-    largestWithdrawal: largest,
+    rewindExample: example,
   };
 }
 
@@ -213,11 +223,13 @@ export interface Proof {
   /** smallest alert size used for the base rate (NAM) */
   minAlertNam: number | null;
   thresholds: { ibcInventory: number; unlock: number; bigSwap: number; unshield: number; bond: number };
-  /** the Rewind example: the largest withdrawal from staking and the first alert before it */
-  largestWithdrawal: {
+  /** the Rewind example: the largest move out of the staking account and the first alert before it */
+  rewindExample: {
     eventId: string;
+    /** 'withdraw': withdrawn from staking by a holder; 'pos_balance': the staking account's own balance moved in one transfer */
+    kind: 'withdraw' | 'pos_balance';
     amountNam: number;
-    /** block time of the withdrawal */
+    /** block time of the move */
     at: number;
     /** time of the first alert in the window before it */
     firstAlertAt: number;

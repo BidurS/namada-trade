@@ -37,7 +37,9 @@ describe('export-proof', () => {
     expect(p.marketEventsTested).toBe(ev.events.filter((e: any) => e.type !== 'trade').length);
     expect(p.priceMovesTested).toBe(ev.events.filter((e: any) => e.type === 'price_move').length);
     expect(p.reportDate).toBe(r.generated.slice(0, 10));
-    const w = p.largestWithdrawal!;
+    const w = p.rewindExample!;
+    // the 331M of 31 Aug 2026 was the staking account's own balance moved in one transfer, not a withdrawal (screener-plan 3.0)
+    expect(w.kind).toBe('pos_balance');
     expect(w.amountNam).toBe(331386682);
     // the first alert is at 19:05 in the report; rewound one millisecond after it, that alert is visible
     expect(new Date(w.firstAlertAt).toISOString().slice(0, 16)).toBe('2026-08-30T19:05');
@@ -47,8 +49,11 @@ describe('export-proof', () => {
   });
 
   it('refuses a report that disagrees with events.json', async () => {
-    const md = (await readReport()).replace(/withdraw 331,386,682/, 'withdraw 331,000,000');
-    expect(() => buildProof(parseReport(md), events())).toThrow(/withdrawal amount/);
+    const md = (await readReport()).replace(/pos_balance 331,386,682/, 'pos_balance 331,000,000');
+    expect(() => buildProof(parseReport(md), events())).toThrow(/move amount/);
+    // and one that files the move under another kind
+    const md2 = (await readReport()).replace(/pos_balance 331,386,682/, 'withdraw 331,386,682');
+    expect(() => buildProof(parseReport(md2), events())).toThrow(/move amount/);
     expect(() => parseReport('# nothing here')).toThrow(/Generated/);
   });
 

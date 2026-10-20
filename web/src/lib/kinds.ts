@@ -11,7 +11,7 @@ import type { Chain, FlowKind } from '../../../shared/types';
 export type TagKind =
   | 'buy' | 'sell' | 'shieldIn' | 'shieldOut' | 'staked' | 'unstaking' | 'unlocked'
   | 'toOsmosis' | 'toNamada' | 'bridgedIn' | 'bridgedOut' | 'poolAdd' | 'poolRemove' | 'bot' | 'pgf'
-  | 'transfer' | 'reward' | 'bridgeRefund';
+  | 'transfer' | 'reward' | 'bridgeRefund' | 'posBalance';
 
 export type Hue = 'buy' | 'sell' | 'ibc' | 'shield' | 'pos' | 'neutral';
 
@@ -51,6 +51,8 @@ export const KINDS: Record<TagKind, KindInfo> = {
   // An Osmosis → Namada send whose packet timed out: the bridge gave the NAM back to the sender on Osmosis
   // (shared/flow-rules.ts isIbcRefund). Not a trade and not a crossing, so it has no sign.
   bridgeRefund: { word: 'Bridge refund',   glyph: 'bridge',      hue: 'ibc',     expert: 'IBC timeout refund (the send timed out; the NAM went back to the sender on Osmosis)', term: 'bridged' },
+  // A transfer of the staking account's own balance (shared/types.ts 'pos_balance'): not staking or unstaking by a holder.
+  posBalance: { word: 'Staking account balance', glyph: 'lock',  hue: 'pos',     expert: 'Internal transfer', term: 'staking-account' },
 };
 
 /** The API's flow kind to the tag kind. */
@@ -70,6 +72,7 @@ export const FLOW_TO_TAG: Record<FlowKind, TagKind> = {
   pgf: 'pgf',
   transfer: 'transfer',
   rewards: 'reward',
+  pos_balance: 'posBalance',
 };
 
 /** Where a bridge crossing took the NAM, from one of its records; null for other kinds or an unknown chain. */

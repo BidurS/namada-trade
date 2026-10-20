@@ -30,8 +30,11 @@ export const BOND_LISTING_SRC = 'bonds_listing';
 
 /** Two readings of the same balance further apart than this start a new span (nothing is assumed across a gap). */
 export const SPAN_MAX_GAP_MS = 6 * H;
-/** Spans that ended before this are deleted (nothing older than 7 days is ever asked for). */
-export const SPAN_KEEP_MS = 8 * D;
+/**
+ * Spans that ended before this are deleted. 31 days since 2026-10-20 (was 8): the 30-day movers (screener-plan 3.1)
+ * need a reading 30 days back, and spans are written on change only, so the longer keep costs storage, not writes.
+ */
+export const SPAN_KEEP_MS = 31 * D;
 
 
 // ---------------------------------------------------------------- status (W2): shared/holder-status.ts
@@ -146,22 +149,23 @@ export const D1_MAX_PARAMS = 100;
 export interface ListedBalance { address: string; balance: string }
 
 /**
- * The listing's balances, several rows per statement (8 parameters each, 12 rows a statement). Guarded twice: a
+ * The listing's balances, several rows per statement (9 parameters each, 11 rows a statement). Guarded twice: a
  * row the LiveHub wrote from a later block (its updated_height is above the listing's height) keeps the newer
  * post-balance, and a read older than the row's chain read never re-stamps it (as stmt.verifiedBalance). The
  * guards make the write idempotent: the next tick's diff finds the row equal and skips it.
  */
 export function listingBalanceStmts(rows: ListedBalance[], height: number, at: number, src = BALANCE_LISTING_SRC): Stmt[] {
   const out: Stmt[] = [];
-  for (const part of chunks(rows, 0, 8)) {
+  // first_seen (migration 0007) only on a new row that holds NAM; an existing row keeps its own (the update leaves it alone).
+  for (const part of chunks(rows, 0, 9)) {
     out.push({
-      sql: `INSERT INTO holders (chain,address,balance,balance_num,updated_height,updated_at,verified_at,verified_src)
-            VALUES ${part.map(() => '(?,?,?,?,?,?,?,?)').join(',')}
+      sql: `INSERT INTO holders (chain,address,balance,balance_num,updated_height,updated_at,verified_at,verified_src,first_seen)
+            VALUES ${part.map(() => '(?,?,?,?,?,?,?,?,?)').join(',')}
             ON CONFLICT(chain,address) DO UPDATE SET
               balance=excluded.balance, balance_num=excluded.balance_num, updated_height=excluded.updated_height,
               updated_at=excluded.updated_at, verified_at=excluded.verified_at, verified_src=excluded.verified_src
             WHERE excluded.updated_height >= COALESCE(holders.updated_height, 0) AND excluded.verified_at >= COALESCE(holders.verified_at, 0)`,
-      params: part.flatMap((r) => ['namada', r.address, r.balance, toNam(r.balance), height, at, at, src]),
+      params: part.flatMap((r) => ['namada', r.address, r.balance, toNam(r.balance), height, at, at, src, toNam(r.balance) > 0 ? at : null]),
     });
   }
   return out;

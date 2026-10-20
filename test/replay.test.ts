@@ -58,10 +58,14 @@ describe('alert rules vs. historical events', () => {
     expect(rows.length).toBe(data.events.length);
   });
 
-  it('fires on the known whale events', () => {
+  it('fires on the known whale events, and never on the staking account\'s own balance transfers', () => {
     const whale = rows.filter((r) => r.type === 'whale_flow');
-    // the 331M PoS withdrawal and the 100M bonds must trip the unlock/bond rules via their own lead windows' neighbours
     expect(whale.length).toBeGreaterThan(0);
+    // The 331M of 31 Aug 2026 and the 100M "bonds" of 22 Sep were transfers of the staking account's own balance
+    // (docs/design/screener-plan.md 3.0): filed as pos_balance, they trip neither "NAM unstaked" nor "Large amount staked".
+    const pos = data.events.filter((e: any) => e.type === 'whale_flow' && e.flow.kind === 'pos_balance');
+    expect(pos.length).toBeGreaterThan(0);
+    for (const e of pos) expect(evaluateFlows([toFlow(e.flow)], DEFAULT_THRESHOLDS).filter((h) => h.ruleId === 'unlock' || h.ruleId === 'bond')).toEqual([]);
     const big = data.events.find((e: any) => e.type === 'whale_flow' && e.flow.kind === 'withdraw');
     if (big) expect(evaluateFlows([toFlow(big.flow)], DEFAULT_THRESHOLDS).some((h) => h.ruleId === 'unlock')).toBe(true);
   });

@@ -43,6 +43,9 @@ describe('alert rules in plain words (W9)', () => {
       '30,000 NAM bridged to Osmosis',
     ]);
     expect(hits[4].detail).toBe('by Early backers (genesis)');
+    // The staking account's own balance moved in one transfer (screener-plan 3.0) is neither staking nor unstaking.
+    expect(evaluateFlow({ ...base, kind: 'pos_balance', amount: 331386682 })).toEqual([]);
+    expect(evaluateFlow({ ...base, kind: 'pos_balance', from: 'tnam1qxuser00000000000000000000000000000000', to: 'tnam1qgqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqc8j2fp', amount: 100000000 })).toEqual([]);
     expect(hits[5].detail).toMatch(/^to Staking account/);
     for (const h of hits) expect(`${h.title} ${h.detail}`).not.toMatch(BANNED);
   });

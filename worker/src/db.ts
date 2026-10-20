@@ -18,15 +18,15 @@ export const stmt = {
       f.priceUsd ?? null, f.valueUsd ?? null, f.meta ? JSON.stringify(f.meta) : null,
     ],
   }),
-  /** Namada post-balance: only overwrite if the update is newer than what we have */
+  /** Namada post-balance: only overwrite if the update is newer than what we have. A new row holding NAM gets first_seen (migration 0007); an existing row keeps its own. */
   namadaBalance: (b: BalanceUpdate, at: number): Stmt => ({
-    sql: `INSERT INTO holders (chain,address,balance,balance_num,updated_height,updated_at)
-          VALUES ('namada',?,?,?,?,?)
+    sql: `INSERT INTO holders (chain,address,balance,balance_num,updated_height,updated_at,first_seen)
+          VALUES ('namada',?,?,?,?,?,?)
           ON CONFLICT(chain,address) DO UPDATE SET
             balance=excluded.balance, balance_num=excluded.balance_num,
             updated_height=excluded.updated_height, updated_at=excluded.updated_at
           WHERE excluded.updated_height >= COALESCE(holders.updated_height,0)`,
-    params: [b.address, b.balance, toNam(b.balance), b.height, at],
+    params: [b.address, b.balance, toNam(b.balance), b.height, at, toNam(b.balance) > 0 ? at : null],
   }),
   /**
    * A balance read from the chain (or the Osmosis bank) at `at`. Monotonic: a read older than the one stored is

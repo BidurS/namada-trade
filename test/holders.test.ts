@@ -123,14 +123,15 @@ describe('recording reads (W13)', () => {
     expect(rows).toEqual([{ address: 'osmo1gone', balance_num: 0, verified_at: NOW }, { address: 'osmo1stay', balance_num: 1, verified_at: NOW }]);
   });
 
-  it('prunes spans that ended more than 8 days ago', async () => {
+  it('prunes spans that ended more than 31 days ago (the 30-day movers need a reading 30 days back)', async () => {
     const db = testD1();
     insert(db, 'balance_spans', [
-      { chain: 'namada', address: 'x', from_ts: NOW - 10 * D, to_ts: NOW - 9 * D, balance: '1', balance_num: 1 },
-      { chain: 'namada', address: 'x', from_ts: NOW - 8 * D, to_ts: NOW - 7.5 * D, balance: '2', balance_num: 2 },
+      { chain: 'namada', address: 'x', from_ts: NOW - 33 * D, to_ts: NOW - 32 * D, balance: '1', balance_num: 1 },
+      { chain: 'namada', address: 'x', from_ts: NOW - 31 * D, to_ts: NOW - 30.5 * D, balance: '2', balance_num: 2 },
+      { chain: 'namada', address: 'x', from_ts: NOW - 10 * D, to_ts: NOW - 9 * D, balance: '3', balance_num: 3 },
     ]);
     await runStmts(db, [pruneSpansStmt(NOW)]);
-    expect(db.raw.prepare('SELECT COUNT(*) n FROM balance_spans').get().n).toBe(1);
+    expect(db.raw.prepare('SELECT balance FROM balance_spans ORDER BY from_ts').all().map((r: any) => r.balance)).toEqual(['2', '3']);
   });
 
   it('computes 24 h and 7 d changes from spans, null where no reading covers the window start', async () => {

@@ -5,7 +5,11 @@ export type Chain = 'osmosis' | 'namada';
 export type FlowKind =
   | 'buy' | 'sell' | 'transfer' | 'ibc_in' | 'ibc_out'
   | 'bond' | 'unbond' | 'withdraw' | 'rewards' | 'shield' | 'unshield'
-  | 'lp_add' | 'lp_remove' | 'pgf' | 'other';
+  | 'lp_add' | 'lp_remove' | 'pgf' | 'other'
+  /** A transparent transfer of the staking account's own balance (descriptor `transfer-from-wasm`, either side the
+   *  staking account): not a holder staking or unstaking, and the chain's total stake does not move with it
+   *  (docs/design/screener-plan.md 3.0). */
+  | 'pos_balance';
 
 export interface Flow {
   id: string;

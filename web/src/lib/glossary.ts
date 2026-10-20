@@ -20,6 +20,7 @@ export const GLOSSARY: GlossaryEntry[] = [
   { id: 'staked', plain: 'Staked', expert: 'Bonded', text: 'Locked with a validator. Staked NAM cannot be sold.' },
   { id: 'unstaking', plain: 'Unstaking', expert: 'Unbonding', text: 'The wait, set by the chain, before staked NAM can be spent.' },
   { id: 'unlocked', plain: 'Unlocked', expert: 'Withdrawn, liquid', text: 'Finished unstaking. It can now be bridged and sold.' },
+  { id: 'staking-account', plain: 'Staking account balance', expert: 'Internal transfer', text: "The staking account's balance holds staked NAM, NAM on its way out and unclaimed rewards; normally only the chain's own staking logic moves it." },
   { id: 'shielded-set', plain: 'Shielded set', expert: 'MASP, the Multi-Asset Shielded Pool', text: 'The total inside is public; who owns it is not.' },
   { id: 'bridged', plain: 'Bridged', expert: 'IBC transfer', text: 'Moved between Namada and Osmosis. NAM has to cross before it can be sold.' },
   { id: 'ready-to-sell', plain: 'Ready to sell', expert: 'Inventory on deck', text: 'NAM that crossed to Osmosis and has not been sold or sent back.' },

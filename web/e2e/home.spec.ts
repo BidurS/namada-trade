@@ -10,8 +10,8 @@ import { PROOF } from '../src/generated/proof';
 import { REWIND_AT, animationsIn, apiUrls, expect, gotoRoute, isExempt, isLiveOnly, layoutAudit, onlyIn, test, trackRequests } from './helpers';
 
 const HOME = ROUTES.find((r) => r.id === 'home')!;
-/** The rewind example on the page: the first alert before the largest withdrawal from staking. */
-const EXAMPLE_AT = PROOF.largestWithdrawal?.rewindAt ?? REWIND_AT;
+/** The rewind example on the page: the first alert before the largest move out of the staking account (scripts/export-proof.ts). */
+const EXAMPLE_AT = PROOF.rewindExample?.rewindAt ?? REWIND_AT;
 /** The dated design snapshot (17 Oct 2026 11:24 UTC): a full size table to answer /api/quote/curve with. */
 const SNAP = JSON.parse(fs.readFileSync(new URL('../../docs/design/data/snapshot.json', import.meta.url), 'utf8'));
 const BUSY = 'The Osmosis quote service is busy right now.';

@@ -20,6 +20,7 @@ import {
   INTERNAL_ADDRS, BALANCE_LISTING_SRC, BOND_LISTING_SRC, SPAN_EXTEND_MS,
   osmosisDroppedStmt, spanStmts, listingBalanceStmts, listingZeroStmts, listingSpanStmts, pruneSpansStmt, type ListedBalance,
 } from './holders';
+import * as series from './series';
 
 const INDEXER = 'https://indexer.namada.net/api/v1';
 /** kv key of the IBC packets stuck in the escrow (ibc-stuck.ts). */
@@ -493,8 +494,8 @@ export async function runBalanceListing(env: Env, health: SourceHealth[], now: n
     written: 0, zeroed: 0, remaining: 0, ticks, durationMs: 0, spansAt: prev?.spansAt ?? null, extendedAt: prev?.extendedAt ?? null, failedAt: null, failures: 0, refusedProvider: null,
   };
   try {
-    const stored = await pagedRows<{ address: string; balance: string; balance_num: number; updated_height: number | null; verified_src: string | null }>(
-      env.DB, `SELECT address, balance, balance_num, updated_height, verified_src FROM holders WHERE chain = 'namada'`);
+    const stored = await pagedRows<{ address: string; balance: string; balance_num: number; updated_height: number | null; verified_src: string | null; updated_at: number | null; first_seen: number | null }>(
+      env.DB, `SELECT address, balance, balance_num, updated_height, verified_src, updated_at, first_seen FROM holders WHERE chain = 'namada'`);
     const storedBy = new Map(stored.map((r) => [r.address, r]));
     const toWrite: ListedBalance[] = [];
     let totalBase = 0n;
@@ -517,7 +518,10 @@ export async function runBalanceListing(env: Env, health: SourceHealth[], now: n
     if (part.length) rec.written = await runBatch(env.DB, listingBalanceStmts(part, listing.height, now));
     if (zeroPart.length) rec.zeroed = await runBatch(env.DB, listingZeroStmts(zeroPart, listing.height, now));
     if (rec.remaining === 0) {
+      const prevCompleteAt = rec.completeAt;
       rec.completeAt = now;
+      // The holder keys of a complete listing (series.ts: holders.namada, .new_1h, .gone_1h, .under1, .user_nam) and its listings row.
+      await series.balanceListingSeries(env.DB, now, listing.entries, stored, prevCompleteAt, listing).catch((e) => console.error('holder listing series', e));
       // Spans: a separate batch, so a missing table (migration not applied) never undoes the balances.
       const extend = rec.extendedAt == null || now - rec.extendedAt >= SPAN_EXTEND_MS;
       try {
@@ -610,6 +614,8 @@ export async function runBondListing(env: Env, health: SourceHealth[], now: numb
     if (zeroPart.length) rec.zeroed = await runBatch(env.DB, stmt.stakesVerified(zeroPart.map((address) => ({ address, bondedNam: 0, delegations: [] })), epoch, listing.height, now, BOND_LISTING_SRC));
     if (rec.remaining === 0) {
       rec.completeAt = now;
+      // The stake keys, the unbond queue, validator_daily and the listings row (series.ts).
+      await series.bondListingSeries(env.DB, now, listing, epoch, ctx.stakeNam ?? null).catch((e) => console.error('bond listing series', e));
       // Persist consensus unbond maturity schedule and withdraw cache directly from the decoded bond listing
       try {
         // Without the chain parameters there is no epoch length and no clock time for an unbond (the epoch alone is kept).
@@ -867,11 +873,15 @@ export async function runCron(env: Env) {
     ).bind(hour, hour + 3600000).all<{ amount_num: number; counter_amount: number }>().catch(() => ({ results: [] as any[] }));
     const px = (swaps.results || []).map((s) => s.counter_amount / s.amount_num).sort((a, b) => a - b);
     if (px.length) {
-      const m = px.length % 2 ? px[px.length >> 1] : (px[px.length / 2 - 1] + px[px.length / 2]) / 2;
+      const m = series.medianOf(px);
       metricStmts.push(stmt.metric(hour, 'price.swap_1h', m), stmt.metric(hour, 'price.swap_1h.n', px.length));
     }
 
     await runBatch(env.DB, [...internalStmts, ...metricStmts]);
+
+    // 3b. The series (worker/src/series.ts): once an hour and once a day, each in the first minutes of the hour.
+    await series.hourly(env, now, { pools: poolRes.pools, poolsAt: poolRes.at, health, listingTick: which !== null, signal }).catch((e) => { console.error('series hourly', e); health.push({ name: 'Series (hourly)', ok: false, at: now, note: String(e).slice(0, 160) }); });
+    await series.daily(env, now, { health, signal }).catch((e) => { console.error('series daily', e); health.push({ name: 'Series (daily snapshot)', ok: false, at: now, note: String(e).slice(0, 160) }); });
 
     // 4. Integrity checks. Each compares two independent sources.
     const checkStmts = [];
@@ -1029,10 +1039,11 @@ export async function runCron(env: Env) {
     // What has been learnt so far is written now: a stall in the stake phase must not hide it.
     await mergeHealth(env, health);
 
-    // 5. Bonded stake. Estimates for every address from bond/unbond history (every 10 min). Who stakes comes from the
-    //    chain's bond listing (5a): an address the listing does not name has no bonds, so holders no longer need a
-    //    stakes row of their own.
-    if (now % 600000 < 60000 || !(await env.DB.prepare('SELECT 1 FROM stakes LIMIT 1').first().catch(() => null))) {
+    // 5. Bonded stake. Estimates for every address from bond/unbond history (hourly since 2026-10-20: the bond listing
+    //    is the chain's figure, the estimate only matters before a listing has gone through; screener-plan 5.5 b).
+    //    Who stakes comes from the chain's bond listing (5a): an address the listing does not name has no bonds, so
+    //    holders no longer need a stakes row of their own.
+    if (now % 3600000 < 60000 || !(await env.DB.prepare('SELECT 1 FROM stakes LIMIT 1').first().catch(() => null))) {
       await env.DB.prepare(`INSERT INTO stakes (address, estimated_num, updated_at)
         SELECT addr, SUM(amt), ? FROM (
           SELECT from_addr addr, amount_num amt FROM flows WHERE chain='namada' AND kind='bond' AND from_addr IS NOT NULL
