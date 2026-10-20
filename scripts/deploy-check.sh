@@ -9,8 +9,8 @@ cd "$(dirname "$0")/.."
 H=https://namada.trade
 
 echo "== 1. migrations"
-npx wrangler d1 migrations list namada-trade-db --remote
-yes | npx wrangler d1 migrations apply namada-trade-db --remote
+for i in 1 2 3 4 5; do out=$(npx wrangler d1 migrations list namada-trade-db --remote 2>&1) && ! echo "$out" | grep -q 7403 && { echo "$out" | tail -4; break; }; echo "retrying (Cloudflare 7403)"; sleep 6; done
+{ yes || true; } | npx wrangler d1 migrations apply namada-trade-db --remote
 
 echo "== 2. deploy"
 npm run deploy 2>&1 | grep -E "Current Version ID|Deployed|rror"
