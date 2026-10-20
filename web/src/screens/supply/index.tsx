@@ -36,6 +36,8 @@ const WINDOWS: { value: `${WindowDays}`; label: string }[] = [
   { value: '1', label: '1 day' },
   { value: '7', label: '7 days' },
   { value: '30', label: '30 days' },
+  { value: '90', label: '90 days' },
+  { value: '365', label: '1 year' },
 ];
 
 export default function SupplyScreen({ route }: ScreenProps) {

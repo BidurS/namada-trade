@@ -12,6 +12,7 @@ import { fmtCoin, fmtNamRule, fmtPctSigned, fmtUsdRule } from '../lib/format';
 import { CurveQuote, SLIDER_MAX, curveAt, fromApi, logPos, normalise, sizeToSlider, sliderToSize } from './curveMath';
 import { niceTicks, pathOf, tickLabel } from './chartMath';
 import { useSize } from './useSize';
+import { Segmented } from './Segmented';
 import { Tag } from './Tag';
 import { SourceLine } from './SourceLine';
 
@@ -25,6 +26,10 @@ export interface OrderSizeCurveProps {
   side?: 'sell' | 'buy';
   /** explore: Home's "Drag an order size"; ticket: the Trade size block (same state as the amount). */
   mode?: 'explore' | 'ticket';
+  /** Order size (NAM) where Concentrated Liquidity tick exhaustion causes a >2.5x jump in marginal slippage. */
+  liquidityCliffNam?: number | null;
+  /** Plain explanation of the Concentrated Liquidity tick cliff. */
+  cliffNote?: string | null;
   /** The size table's stamp, for the SourceLine under the curve. */
   prov?: Stamp | null;
   /** Visually hidden caption (the visible heading is the screen's). */
@@ -34,8 +39,55 @@ export interface OrderSizeCurveProps {
 
 const isApi = (p: SlippageCurvePoint | CurveQuote): p is SlippageCurvePoint => 'amountNam' in p;
 
-export function OrderSizeCurve({ points, value, onChange, side = 'sell', mode = 'explore', prov, caption = 'Drag an order size', className = '' }: OrderSizeCurveProps) {
+export function OrderSizeCurve({
+  points,
+  value,
+  onChange,
+  side = 'sell',
+  mode = 'explore',
+  liquidityCliffNam,
+  cliffNote,
+  prov,
+  caption = 'Drag an order size',
+  className = '',
+}: OrderSizeCurveProps) {
   const P = useMemo(() => normalise(points.map((p) => (isApi(p) ? fromApi(p) : p))), [points]);
+  const [curveView, setCurveView] = useState<'avg' | 'marginal'>('avg');
+
+  // Compute marginal slice slippage (% impact on the incremental ΔNAM between tier i-1 and tier i)
+  const marginalMap = useMemo(() => {
+    const out = new Map<number, { marginalSellMove: number | null; marginalBuyMove: number | null; marginalSellUsd: number | null }>();
+    const apiBySize = new Map<number, SlippageCurvePoint>();
+    for (const p of points) if (isApi(p)) apiBySize.set(p.amountNam, p);
+
+    let prevN = 0;
+    let prevSellOut = 0;
+    let prevBuyIn = 0;
+    for (const p of P) {
+      const api = apiBySize.get(p.n);
+      const dN = p.n - prevN;
+      const spot = p.worth != null && p.n > 0 ? p.worth / p.n : null;
+      let mSellMove: number | null = api?.marginalSellImpactPct ?? null;
+      let mSellUsd: number | null = api?.marginalSellUsd ?? null;
+      if (mSellMove == null && dN > 0 && p.sellOut != null && spot && spot > 0) {
+        const dUsdc = Math.max(0, p.sellOut - prevSellOut);
+        mSellUsd = dUsdc / dN;
+        mSellMove = Math.max(0, ((spot - mSellUsd) / spot) * 100);
+      }
+      let mBuyMove: number | null = null;
+      if (dN > 0 && p.buyIn != null && spot && spot > 0) {
+        const dBuyUsdc = Math.max(0, p.buyIn - prevBuyIn);
+        const mBuyUsd = dBuyUsdc / dN;
+        mBuyMove = Math.max(0, ((mBuyUsd - spot) / spot) * 100);
+      }
+      if (p.sellOut != null) prevSellOut = p.sellOut;
+      if (p.buyIn != null) prevBuyIn = p.buyIn;
+      prevN = p.n;
+      out.set(p.n, { marginalSellMove: mSellMove ?? p.sellMove, marginalBuyMove: mBuyMove ?? p.buyMove, marginalSellUsd: mSellUsd });
+    }
+    return out;
+  }, [P, points]);
+
   const sizes = P.map((p) => p.n);
   const lo = sizes[0] ?? null;
   const hi = sizes[sizes.length - 1] ?? null;
@@ -57,12 +109,33 @@ export function OrderSizeCurve({ points, value, onChange, side = 'sell', mode = 
   const R = 12;
   const T = 12;
   const B = 26;
-  const maxMove = Math.max(0, ...P.map((p) => Math.max(p.sellMove ?? 0, p.buyMove ?? 0)));
+  const isMarginal = curveView === 'marginal';
+  const maxMove = Math.max(
+    0,
+    ...P.map((p) => {
+      const m = marginalMap.get(p.n);
+      return Math.max(
+        p.sellMove ?? 0,
+        p.buyMove ?? 0,
+        isMarginal ? (m?.marginalSellMove ?? 0) : 0,
+        isMarginal ? (m?.marginalBuyMove ?? 0) : 0,
+      );
+    }),
+  );
   const yT = niceTicks(0, maxMove > 0 ? maxMove * 1.02 : 1, { zero: true, maxTicks: 5 });
   const X = (s: number) => (lo && hi ? L + logPos(s, lo, hi) * (w - L - R) : L);
   const Y = (m: number) => T + (1 - m / (yT.hi || 1)) * (H - T - B);
   const sellPts = P.filter((p) => p.sellMove != null).map((p) => [X(p.n), Y(p.sellMove as number)] as [number, number]);
   const buyPts = P.filter((p) => p.buyMove != null).map((p) => [X(p.n), Y(p.buyMove as number)] as [number, number]);
+  const mSellPts = P.filter((p) => marginalMap.get(p.n)?.marginalSellMove != null).map(
+    (p) => [X(p.n), Y(marginalMap.get(p.n)!.marginalSellMove as number)] as [number, number],
+  );
+  // Step-function staircase path for Concentrated Liquidity tick boundaries
+  const stepPathOf = (pts: [number, number][]) =>
+    pts.length > 1
+      ? pts.map(([x, y], i) => (i === 0 ? `M${x.toFixed(1)},${y.toFixed(1)}` : `H${x.toFixed(1)} V${y.toFixed(1)}`)).join(' ')
+      : '';
+  const cliffX = liquidityCliffNam && lo && hi && liquidityCliffNam >= lo && liquidityCliffNam <= hi ? X(liquidityCliffNam) : null;
   const short = (x: number) => (x >= 1000 ? `${fmtNamRule(x / 1000)}k`.replace('.00k', 'k') : fmtNamRule(x));
   // Every quoted size is labelled (the caption says "the dots are the N sizes"): the first anchored at
   // its start, the last at its end, the rest centred. A middle label that would touch its neighbour
@@ -94,16 +167,24 @@ export function OrderSizeCurve({ points, value, onChange, side = 'sell', mode = 
 
   const v = reading.kind === 'quote' ? reading.q : reading.kind === 'estimate' ? reading.v : null;
   const move = v ? (side === 'sell' ? v.sellMove : v.buyMove) : null;
+  const activeTier = useMemo(() => {
+    if (!P.length) return null;
+    return P.find((p) => p.n >= n) ?? P[P.length - 1];
+  }, [P, n]);
+  const activeMarginal = activeTier ? marginalMap.get(activeTier.n) ?? null : null;
+  const marginalMove = activeMarginal ? (side === 'sell' ? activeMarginal.marginalSellMove : activeMarginal.marginalBuyMove) : null;
+
   const cx = reading.kind === 'out' ? null : X(n);
-  const cy = move != null ? Y(move) : null;
+  const shownMove = isMarginal ? (marginalMove ?? move) : move;
+  const cy = shownMove != null ? Y(shownMove) : null;
 
   const get = v ? (side === 'sell' ? v.sellOut : v.buyIn) : null;
-  const signedMove = move == null ? null : side === 'sell' ? -move : move;
+  const signedMove = shownMove == null ? null : side === 'sell' ? -shownMove : shownMove;
   const sliderVal = lo && hi ? sizeToSlider(Math.min(hi, Math.max(lo, n || lo)), lo, hi) : 0;
 
   const how =
     reading.kind === 'quote'
-      ? `A real quote: the pools were asked about ${fmtNamRule(n)} NAM.`
+      ? `A real quote: the pools were asked about ${fmtNamRule(n)} NAM.${isMarginal && activeMarginal?.marginalSellUsd != null ? ` Incremental slice executes at ${fmtUsdRule(activeMarginal.marginalSellUsd)}/NAM.` : ''}`
       : reading.kind === 'estimate'
         ? `A straight line between the real ${fmtNamRule(reading.a.n)} and ${fmtNamRule(reading.b.n)} NAM quotes. The pools were not asked about ${fmtNamRule(n)} NAM.`
         : lo != null && hi != null
@@ -116,6 +197,21 @@ export function OrderSizeCurve({ points, value, onChange, side = 'sell', mode = 
 
   return (
     <div className={`curve-box ${className}`} data-mode={mode} data-prov-scope="">
+      {mode === 'ticket' ? (
+        <div className="curve__mode">
+          <Segmented
+            label="Slippage curve view"
+            variant="range"
+            value={curveView}
+            onChange={(v) => setCurveView(v as 'avg' | 'marginal')}
+            options={[
+              { value: 'avg', label: 'Average impact' },
+              { value: 'marginal', label: 'Marginal tick cliffs' },
+            ]}
+          />
+          {cliffNote ? <span className="cap">{cliffNote}</span> : null}
+        </div>
+      ) : null}
       <figure className="curve" aria-labelledby={`${id}c`}>
         <figcaption id={`${id}c`} className="sr-only">{caption}</figcaption>
         <div className="curve__plot" ref={boxRef} style={{ height: H }}>
@@ -133,23 +229,38 @@ export function OrderSizeCurve({ points, value, onChange, side = 'sell', mode = 
                   {short(p.n)}
                 </text>
               ))}
+              {cliffX != null ? (
+                <g>
+                  <line className="c-evt" x1={cliffX} x2={cliffX} y1={T} y2={H - B} />
+                  <text className="c-evtl" x={Math.min(w - R - 4, cliffX + 4)} y={T + 10} textAnchor={cliffX > w - 110 ? 'end' : 'start'}>
+                    CL tick cliff
+                  </text>
+                </g>
+              ) : null}
               {buyPts.length > 1 ? <path className="cv-buy" d={pathOf(buyPts)} /> : null}
               {buyPts.map(([x, y], i) => <circle key={`b${i}`} className="cv-db" cx={x} cy={y} r={w >= 480 ? 4 : 3.5} />)}
-              {sellPts.length > 1 ? (
+              {isMarginal && mSellPts.length > 1 ? (
+                <g className="cv-wipe">
+                  <path className="cv-sell" d={stepPathOf(mSellPts)} />
+                  <path className="cv-buy" d={pathOf(sellPts)} />
+                </g>
+              ) : sellPts.length > 1 ? (
                 <g className="cv-wipe">
                   <path className="cv-sell" d={pathOf(sellPts)} />
                 </g>
               ) : null}
-              {sellPts.map(([x, y], i) => <circle key={`s${i}`} className="cv-ds" cx={x} cy={y} r={w >= 480 ? 4 : 3.5} />)}
+              {(isMarginal ? mSellPts : sellPts).map(([x, y], i) => (
+                <circle key={`s${i}`} className="cv-ds" cx={x} cy={y} r={w >= 480 ? 4 : 3.5} />
+              ))}
               {cx != null ? <line className="cv-cur" x1={cx} x2={cx} y1={T} y2={H - B} /> : null}
               {cx != null && cy != null ? <circle className="cv-curd" cx={cx} cy={cy} r={6} /> : null}
             </svg>
           ) : null}
         </div>
         <p className="curve__key">
-          <span><i className="key__ln" />selling</span>
-          <span><i className="key__ln key__ln--dash" />buying</span>
-          <span>Price move by order size</span>
+          <span><i className="key__ln" />{isMarginal ? 'marginal slice impact (step)' : 'selling'}</span>
+          <span><i className="key__ln key__ln--dash" />{isMarginal ? 'average impact' : 'buying'}</span>
+          <span>{isMarginal ? 'Concentrated liquidity tick depth & marginal slippage' : 'Price move by order size'}</span>
         </p>
         <div className="curve__ctl">
           <label className="curve__lbl" htmlFor={`${id}r`}>Order size</label>
@@ -196,7 +307,7 @@ export function OrderSizeCurve({ points, value, onChange, side = 'sell', mode = 
             </dd>
           </div>
           <div>
-            <dt>Price moves</dt>
+            <dt>{isMarginal ? 'Marginal slice move' : 'Price moves'}</dt>
             <dd data-num="" data-status={signedMove == null ? 'none' : undefined}>{signedMove == null ? '—' : fmtPctSigned(signedMove)}</dd>
           </div>
         </dl>

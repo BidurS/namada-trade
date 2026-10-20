@@ -7,8 +7,10 @@ import {
   matchMaspPassthroughs,
   blindSpot,
   pressure,
+  orderflowSeries,
   type PoolLeg,
 } from '../worker/src/analytics';
+import { app } from '../worker/src/api';
 import {
   DEFAULT_THRESHOLDS,
   liquidityNormalizedThresholds,
@@ -24,7 +26,7 @@ import type { Flow, SlippageCurvePoint, SourceHealth } from '../shared/types';
 const fx = (n: string) => JSON.parse(readFileSync(new URL(`./fixtures/${n}`, import.meta.url), 'utf8'));
 const BONDS = fx('bonds_listing.json');
 const H = 3600_000, D = 86400_000, M = 60_000;
-const NOW = Date.UTC(2026, 9, 20, 12, 0);
+const NOW = Date.UTC(2026, 9, 18, 12, 0);
 const MASP = INTERNAL_ADDRESSES.masp;
 const POS = INTERNAL_ADDRESSES.pos;
 
@@ -271,5 +273,111 @@ describe('5. Concentrated Liquidity Tick-Cliff Detector on Slippage Curve', () =
     expect(res.cliffNote).toMatch(/Concentrated Liquidity cliff above 10,000 NAM/);
     expect(res.curve[2].marginalSellImpactPct).toBeCloseTo(1.1, 2); // (9.92 - 4.975) / 5000 = 0.000989 -> 1.1%
     expect(res.curve[3].marginalSellImpactPct).toBeCloseTo(20.0, 2); // (21.92 - 9.92) / 15000 = 0.0008 -> 20%
+  });
+});
+
+describe('6. Dune-Grade Live Charts & Long-Term Multi-Year Analytics', () => {
+  it('computes signed orderflow buckets, running CVD, VWAP, and bid absorption regime while excluding arb bots', async () => {
+    const db = testD1();
+    insert(db, 'flows', [
+      // Heavy sell volume (100k NAM) absorbed at $0.1000
+      {
+        id: 's1', chain: 'osmosis', height: 10, ts: NOW - 6 * H, tx_hash: 'S1', kind: 'sell',
+        from_addr: 'osmo1seller', to_addr: 'pool', amount_num: 100_000, price_usd: 0.1000, value_usd: 10_000,
+        meta: JSON.stringify({ effectivePriceUsd: 0.1000, poolId: '1' }),
+      },
+      // Modest buy volume (20k NAM) at $0.0998 (price barely drops -0.2% despite -80k net delta -> bid_absorption!)
+      {
+        id: 'b1', chain: 'osmosis', height: 12, ts: NOW - 2 * H, tx_hash: 'B1', kind: 'buy',
+        from_addr: 'pool', to_addr: 'osmo1buyer', amount_num: 20_000, price_usd: 0.0998, value_usd: 1_996,
+        meta: JSON.stringify({ effectivePriceUsd: 0.0998, poolId: '1' }),
+      },
+      // Arb bot swap (excluded from CVD)
+      {
+        id: 'a1', chain: 'osmosis', height: 13, ts: NOW - 1 * H, tx_hash: 'A1', kind: 'buy',
+        from_addr: 'pool', to_addr: 'osmo1bot', amount_num: 500_000, price_usd: 0.1000, value_usd: 50_000,
+        meta: JSON.stringify({ arb: true, effectivePriceUsd: 0.1000 }),
+      },
+    ]);
+
+    const of = await orderflowSeries(db as any, NOW, false, 24);
+    expect(of.grossVolumeNam).toBe(120_000);
+    expect(of.netCvdNam).toBe(-80_000);
+    expect(of.buySharePct).toBeCloseTo((20_000 / 120_000) * 100, 3);
+    expect(of.absorptionRegime).toBe('bid_absorption');
+    expect(of.buckets.some((b) => b.sellNam === 100_000 && b.vwapUsd === 0.1)).toBe(true);
+    expect(of.buckets[of.buckets.length - 1].cvdNam).toBe(-80_000);
+
+    // Also verify GET /api/orderflow endpoint for 1y (8760h)
+    const req = new Request(`https://namada.trade/api/orderflow?hours=8760&at=${NOW}`);
+    const res = await app.fetch(req, { DB: db } as any);
+    expect(res?.status).toBe(200);
+    const body = (await res!.json()) as any;
+    expect(body.hours).toBe(8760);
+    expect(body.bucketMs).toBe(D);
+    expect(body.netCvdNam).toBe(-80_000);
+  });
+
+  it('populates pipelineSummary cohort attribution in pressure() and pulseSeries in blindSpot()', async () => {
+    const db = testD1();
+    const vault = 'tnam1qgenesis_investor';
+    const burner = 'tnam1qhop_relay';
+    const osmoDest = 'osmo1whale_dump';
+
+    insert(db, 'labels', [
+      { address: vault, chain: 'namada', label: 'Genesis: early_backer', category: 'backer', source: 'genesis' },
+    ]);
+    insert(db, 'address_links', [
+      { osmo_addr: osmoDest, namada_addr: burner, first_seen: NOW - 20 * H, last_seen: NOW - 20 * H, transfers: 1, volume_num: 300_000 },
+    ]);
+    insert(db, 'flows', [
+      { id: 'h1', chain: 'namada', height: 1, ts: NOW - 22 * H, tx_hash: 'H1', kind: 'transfer', from_addr: vault, to_addr: burner, amount_num: 300_000, meta: null },
+      { id: 'h2', chain: 'osmosis', height: 2, ts: NOW - 20 * H, tx_hash: 'H2', kind: 'ibc_in', from_addr: burner, to_addr: osmoDest, amount_num: 300_000, meta: null },
+      { id: 'h3', chain: 'osmosis', height: 3, ts: NOW - 18 * H, tx_hash: 'H3', kind: 'sell', from_addr: osmoDest, to_addr: 'pool', amount_num: 100_000, meta: null },
+      // MASP shield + fast turnstile exit
+      { id: 'm1', chain: 'namada', height: 4, ts: NOW - 10 * H, tx_hash: 'M1', kind: 'shield', from_addr: 'tnam1quser', to_addr: MASP, amount_num: 80_000, meta: null },
+      { id: 'm2', chain: 'namada', height: 5, ts: NOW - 9 * H, tx_hash: 'M2', kind: 'unshield', from_addr: MASP, to_addr: 'tnam1qexit', amount_num: 79_990, meta: null },
+    ]);
+
+    const p90 = await pressure(db as any, NOW, false, 90);
+    expect(p90.windowDays).toBe(90);
+    expect(p90.pipelineSummary).toBeDefined();
+    expect(p90.pipelineSummary?.cohorts.genesisBackersNam).toBe(300_000);
+
+    const bs = await blindSpot(db as any, NOW, false);
+    expect(bs.pulseSeries).toBeDefined();
+    expect(bs.pulseSeries!.length).toBeGreaterThan(0);
+    const totalIn = bs.pulseSeries!.reduce((s, b) => s + b.inNam, 0);
+    const totalTurn = bs.pulseSeries!.reduce((s, b) => s + b.turnstileNam, 0);
+    expect(totalIn).toBe(80_000);
+    expect(totalTurn).toBe(79_990);
+  });
+
+  it('serves long-range /api/metrics/history up to 1,500 days by stitching pos_bonded and swap flows', async () => {
+    const db = testD1();
+    insert(db, 'metrics', [
+      { key: 'supply.pos_bonded', ts: NOW - 200 * D, value: 410_000_000 },
+      { key: 'supply.total_stake', ts: NOW - 2 * D, value: 455_000_000 },
+      { key: 'price.swap_1h', ts: NOW - 1 * D, value: 0.085 },
+    ]);
+    insert(db, 'flows', [
+      {
+        id: 'old-swap', chain: 'osmosis', height: 1, ts: NOW - 180 * D, tx_hash: 'OS1', kind: 'buy',
+        from_addr: 'pool', to_addr: 'osmo1early', amount_num: 10_000, price_usd: 0.12, value_usd: 1_200,
+        meta: JSON.stringify({ effectivePriceUsd: 0.12, singlePool: true, counterSymbol: 'USDC' }),
+      },
+    ]);
+
+    const stakeRes = await app.fetch(new Request(`https://namada.trade/api/metrics/history?key=supply.total_stake&hours=${24 * 365}&at=${NOW}`), { DB: db } as any);
+    const stakeJson = (await stakeRes!.json()) as any;
+    expect(stakeJson.history.length).toBe(2);
+    expect(stakeJson.history[0].value).toBe(410_000_000);
+    expect(stakeJson.history[1].value).toBe(455_000_000);
+
+    const swapRes = await app.fetch(new Request(`https://namada.trade/api/metrics/history?key=price.swap_1h&hours=${24 * 365}&at=${NOW}`), { DB: db } as any);
+    const swapJson = (await swapRes!.json()) as any;
+    expect(swapJson.history.length).toBe(2);
+    expect(swapJson.history[0].value).toBe(0.12);
+    expect(swapJson.history[1].value).toBe(0.085);
   });
 });

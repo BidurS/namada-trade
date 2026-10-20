@@ -2,7 +2,7 @@
 // Durable Object runtime: the API cache rule and the page security policy.
 import type { Env } from './util';
 
-export const CACHEABLE_API = /^\/api\/(overview|pools|pressure|blindspot|flows|holders|metrics\/history|quote\/curve|alerts\/rules|alerts\/recent|intel)$/;
+export const CACHEABLE_API = /^\/api\/(overview|pools|pressure|blindspot|orderflow|flows|holders|metrics\/history|quote\/curve|alerts\/rules|alerts\/recent|intel)$/;
 
 const THRESHOLDS = ['ibcInventory', 'unlock', 'bigSwap', 'unshield', 'bond'];
 /**
@@ -15,6 +15,7 @@ export const CACHE_PARAMS: Record<string, string[]> = {
   '/api/pools': [],
   '/api/pressure': ['at', 'days'],
   '/api/blindspot': ['at'],
+  '/api/orderflow': ['at', 'hours'],
   '/api/flows': ['chain', 'kind', 'whale', 'minNam', 'arb', 'pairs', 'search', 'at', 'page', 'limit'],
   '/api/holders': ['chain', 'by', 'category', 'search', 'page', 'limit'],
   '/api/metrics/history': ['key', 'hours', 'at'],

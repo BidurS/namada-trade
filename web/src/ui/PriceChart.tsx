@@ -16,7 +16,7 @@ import { SourceLine } from './SourceLine';
 import { useUiNow } from './now';
 import { Price } from './Num';
 
-export type ChartRange = '24h' | '7d' | '30d';
+export type ChartRange = '24h' | '7d' | '30d' | '90d' | '1y' | 'all';
 export interface SeriesPoint {
   t: number;
   v: number;
@@ -49,12 +49,24 @@ export interface PriceChartProps {
   className?: string;
 }
 
-const RANGE_MS: Record<ChartRange, number> = { '24h': 86_400_000, '7d': 7 * 86_400_000, '30d': 30 * 86_400_000 };
-const RANGES: { value: ChartRange; label: string }[] = [
+export const RANGE_MS: Record<ChartRange, number | null> = {
+  '24h': 86_400_000,
+  '7d': 7 * 86_400_000,
+  '30d': 30 * 86_400_000,
+  '90d': 90 * 86_400_000,
+  '1y': 365 * 86_400_000,
+  'all': null,
+};
+export const RANGES: { value: ChartRange; label: string }[] = [
   { value: '24h', label: '24h' },
   { value: '7d', label: '7d' },
   { value: '30d', label: '30d' },
+  { value: '90d', label: '90d' },
+  { value: '1y', label: '1y' },
+  { value: 'all', label: 'All' },
 ];
+const MON = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+const monthYear = (t: number) => `${MON[new Date(t).getUTCMonth()]} ${new Date(t).getUTCFullYear()}`;
 
 const CHAR = 6.6; // JetBrains Mono at 11 px: 0.6 em advance
 
@@ -66,7 +78,10 @@ export function PriceChart({ series, events = [], range, onRange, end, cursorAt,
   const exec = useMemo(() => [...(series.executed ?? [])].filter((p) => Number.isFinite(p.v) && Number.isFinite(p.t)).sort((a, b) => a.t - b.t), [series.executed]);
   const quoted = useMemo(() => [...(series.quoted ?? [])].filter((p) => Number.isFinite(p.v) && Number.isFinite(p.t)).sort((a, b) => a.t - b.t), [series.quoted]);
   const tEnd = end ?? Math.max(exec[exec.length - 1]?.t ?? 0, quoted[quoted.length - 1]?.t ?? 0, 0);
-  const tStart = tEnd - RANGE_MS[range];
+  const earliest = Math.min(exec[0]?.t ?? Infinity, quoted[0]?.t ?? Infinity);
+  const spanMs = RANGE_MS[range];
+  const tStart = spanMs != null ? tEnd - spanMs : Number.isFinite(earliest) ? Math.min(earliest, tEnd - 86_400_000) : tEnd - 30 * 86_400_000;
+  const actualSpan = Math.max(86_400_000, tEnd - tStart);
   const E = exec.filter((p) => p.t >= tStart && p.t <= tEnd);
   const Q = quoted.filter((p) => p.t >= tStart && p.t <= tEnd);
   const isPrice = variant === 'price';
@@ -86,8 +101,9 @@ export function PriceChart({ series, events = [], range, onRange, end, cursorAt,
   const Y = lin(yT.lo, yT.hi, Math.max(T + 1, h - B), T);
   const ePts = E.map((p) => [X(p.t), Y(p.v)] as [number, number]);
   const qPts = Q.map((p) => [X(p.t), Y(p.v)] as [number, number]);
-  const xTicks = [tStart + RANGE_MS[range] * (1 / 24), tStart + RANGE_MS[range] / 2, tEnd];
-  const xFmt = (t: number) => (range === '24h' ? fmtUtcClock(t).replace(' UTC', '') : fmtDayMonth(t));
+  const xTicks = [tStart + actualSpan * (1 / 24), tStart + actualSpan / 2, tEnd];
+  const longSpan = actualSpan > 200 * 86_400_000;
+  const xFmt = (t: number) => (range === '24h' ? fmtUtcClock(t).replace(' UTC', '') : longSpan ? monthYear(t) : fmtDayMonth(t));
 
   // ---------------- readout ----------------
   const last = E[E.length - 1] ?? null;
@@ -105,10 +121,10 @@ export function PriceChart({ series, events = [], range, onRange, end, cursorAt,
   const high = E.length ? E.reduce((a, b) => (b.v > a.v ? b : a)) : null;
   const lastQ = Q[Q.length - 1] ?? null;
   const heading = title ?? takeaway(first?.v, last?.v, fmtDayMonth(first?.t), isPrice ? 'Executed price' : 'Shielded NAM') ?? (E.length ? (isPrice ? 'Executed price' : 'Shielded NAM') : isPrice ? 'No trades in this window' : 'No readings in this window');
-  const hours = Math.round(RANGE_MS[range] / 3_600_000);
+  const hours = Math.max(1, Math.round(actualSpan / 3_600_000));
   const withTrades = hoursWithData(E.map((p) => p.t));
   const H = level === 3 ? 'h3' : 'h2';
-  const unitLine = unit ?? (isPrice ? `USDC per NAM, hourly median of executed swaps, ${E.length} points.` : `NAM in the shielded set, ${E.length} readings.`);
+  const unitLine = unit ?? (isPrice ? `USDC per NAM, ${actualSpan > 31 * 86_400_000 ? 'bucketed' : 'hourly median of'} executed swaps, ${E.length} points.` : `NAM in the shielded set, ${E.length} readings.`);
 
   const scope = [
     ...(prov?.executed ? [{ label: isPrice ? 'Executed price (swaps)' : 'Shielded NAM', p: prov.executed }] : []),

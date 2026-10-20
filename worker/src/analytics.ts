@@ -1,8 +1,8 @@
 // Decision-level queries over D1 (see docs/decisions.md). Every function takes `asOf` so the same
 // code serves the live UI and replay mode.
 import type {
-  AlertHit, BlindSpot, ChainParams, Flow, GovernanceProposal, IntelResponse, MaspPassthroughLink, MoverEntry, OnDeckEntry,
-  Pressure, Provenance, Sourced, UnbondMaturityBucket, UnbondTermStructure, UnlockEntry,
+  AlertHit, BlindSpot, ChainParams, Flow, GovernanceProposal, IntelResponse, MaspPassthroughLink, MaspPulseBucket, MoverEntry, OnDeckEntry,
+  OrderflowBucket, OrderflowResponse, Pressure, Provenance, Sourced, SupplyCohortBreakdown, UnbondMaturityBucket, UnbondTermStructure, UnlockEntry,
 } from '../../shared/types';
 import type { BondListing } from './sources/namada';
 import { evaluateFlows, INTERNAL_ADDRESSES, isInternal, type AlertThresholds } from '../../shared/alerts';
@@ -458,6 +458,8 @@ export function allocateFollowUps<K extends string>(
 
 export async function pressure(db: D1Database, asOf: number, replay: boolean, windowDays = 7): Promise<Pressure> {
   const from = asOf - windowDays * D;
+  const trendSpanDays = Math.max(14, windowDays);
+  const trendBucketMs = trendSpanDays > 90 ? D : 6 * H;
 
   const [ibcIn, ibcInAll, sells, sendsOut, unlockRows, bondedTrend, swapRows, cov, params, intel] = await Promise.all([
     db.prepare(`SELECT f.to_addr AS addr, SUM(f.amount_num) AS nam, MIN(f.ts) AS first_ts, MAX(f.ts) AS last_ts, l.label, l.source AS label_source, l.author AS label_author
@@ -469,9 +471,9 @@ export async function pressure(db: D1Database, asOf: number, replay: boolean, wi
                 AND (meta IS NULL OR meta NOT LIKE '%"arb":true%')`).bind(from - 30 * D, asOf).all<any>(),
     osmosisSendsOut(db, from, asOf),
     db.prepare(`${FLOW_SELECT} WHERE f.chain='namada' AND f.kind IN ('withdraw','bond','unbond') AND f.amount_num >= ? AND f.ts >= ? AND f.ts < ? AND ${NOT_LEGACY_TWIN}
-                ORDER BY f.ts DESC LIMIT 60`).bind(UNLOCKS_MIN_NAM, asOf - UNLOCKS_WINDOW_DAYS * D, asOf).all<any>(),
+                ORDER BY f.ts DESC LIMIT 60`).bind(UNLOCKS_MIN_NAM, asOf - Math.max(UNLOCKS_WINDOW_DAYS, windowDays) * D, asOf).all<any>(),
     // The chain's own total stake (not the staking account's balance, which also holds NAM on its way out).
-    metricSeries(db, 'supply.total_stake', asOf - 14 * D, asOf, 6 * H),
+    metricSeries(db, 'supply.total_stake', asOf - trendSpanDays * D, asOf, trendBucketMs),
     db.prepare(`SELECT kind, from_addr, to_addr, ts, amount_num FROM flows WHERE chain='osmosis' AND kind IN ('buy','sell') AND ts >= ? AND ts < ?
                 AND (meta IS NULL OR meta NOT LIKE '%"arb":true%')`).bind(from, asOf).all<any>(),
     coverageOf(db, asOf, replay),
@@ -712,12 +714,43 @@ export async function pressure(db: D1Database, asOf: number, replay: boolean, wi
     ? provAt('Namada governance (indexer)', intel.fetchedAt, now, 6 * H, current)
     : { source: 'Namada governance (indexer)', at: null, status: 'missing', note: 'Votes have not been read yet.' };
 
+  // Cohort attribution for Chart 3 (Cross-Chain Supply-to-Dump Pipeline)
+  let genesisBackersNam = 0;
+  let maspTurnstileNam = 0;
+  let burnerHopNam = 0;
+  let transparentNam = 0;
+  let highHazardRemainingNam = 0;
+  for (const e of onDeck) {
+    if ((e.dumpHazardScore ?? 0) >= 0.6) highHazardRemainingNam += e.remaining;
+    const isGenesis =
+      e.labelSource === 'genesis' ||
+      e.linkedLabelSource === 'genesis' ||
+      /genesis|backer|foundation|team/i.test(e.label ?? '') ||
+      /genesis|backer|foundation|team/i.test(e.linkedLabel ?? '') ||
+      /genesis|backer|foundation|team/i.test(e.hopOriginNamada?.label ?? '');
+    const isMasp = e.linkedNamada === MASP || !!e.passthroughFrom;
+    if (isGenesis) genesisBackersNam += e.bridgedIn;
+    else if (isMasp) maspTurnstileNam += e.bridgedIn;
+    else if (e.hopOriginNamada) burnerHopNam += e.bridgedIn;
+    else transparentNam += e.bridgedIn;
+  }
+  const pipelineSummary: SupplyCohortBreakdown = {
+    cohorts: {
+      genesisBackersNam,
+      maspTurnstileNam,
+      burnerHopNam,
+      transparentNam,
+    },
+    highHazardRemainingNam,
+  };
+
   return {
     asOf, windowDays, onDeck, onDeckTotal: onDeckTotals.remaining, onDeckTotals, ibcIn7d, ibcOut7d, ibcRefunded7d: sendsOut.refunded,
-    unlocks, unlocksWindowDays: UNLOCKS_WINDOW_DAYS, unlocksMinNam: UNLOCKS_MIN_NAM, unbondingAll,
+    unlocks, unlocksWindowDays: Math.max(UNLOCKS_WINDOW_DAYS, windowDays), unlocksMinNam: UNLOCKS_MIN_NAM, unbondingAll,
     unbondingDays: wait ? wait.days : null, unbondingEpochs: wait?.epochs ?? null, epochHours: wait ? wait.epochSec / 3600 : null,
     unbondingProv, chainParams: params,
     ...(unbondTermStructure ? { unbondTermStructure } : {}),
+    pipelineSummary,
     bondedTrend: bondedTrend.map((p) => ({ ts: p.ts, value: p.value })), movers, proposals, proposalsProv,
     coverage: cov.both,
     coverageByChain: { osmosis: cov.osmosis, namada: cov.namada },
@@ -833,6 +866,7 @@ export function maspLegs(namada: any[], osmosisOut: IbcRow[], osmosisIn: any[]):
 }
 
 export async function blindSpot(db: D1Database, asOf: number, replay: boolean): Promise<BlindSpot> {
+  const from30 = asOf - 30 * D;
   const from7 = asOf - 7 * D;
   const [shielded, total, trendRecent, trendDaily, namadaLegs, osmoOut, osmoIn, unshieldRows, cov] = await Promise.all([
     metricAt(db, 'supply.masp_shielded', asOf),
@@ -842,10 +876,10 @@ export async function blindSpot(db: D1Database, asOf: number, replay: boolean): 
     // NAM only (shielding another coin is not NAM), each transfer once (older twin rows left out).
     db.prepare(`SELECT f.kind, f.ts, f.from_addr, f.to_addr, f.amount_num FROM flows f WHERE f.chain='namada' AND f.ts >= ? AND f.ts < ?
                 AND f.kind IN ('shield','unshield','ibc_in','ibc_out') AND (f.to_addr = ? OR f.from_addr = ?) AND ${NAM_AMOUNT} AND ${NOT_LEGACY_TWIN}`)
-      .bind(from7, asOf, MASP, MASP).all<any>().catch(() => ({ results: [] as any[] })),
-    osmosisSendsOut(db, from7 - PAIR_MS, asOf).catch(() => ({ outs: [] as IbcRow[], refunded: 0 })),
+      .bind(from30, asOf, MASP, MASP).all<any>().catch(() => ({ results: [] as any[] })),
+    osmosisSendsOut(db, from30 - PAIR_MS, asOf).catch(() => ({ outs: [] as IbcRow[], refunded: 0 })),
     db.prepare(`SELECT ts, from_addr, to_addr, amount_num FROM flows WHERE chain='osmosis' AND kind='ibc_in' AND from_addr = ? AND ts >= ? AND ts < ?`)
-      .bind(MASP, from7 - PAIR_MS, asOf).all<any>().catch(() => ({ results: [] as any[] })),
+      .bind(MASP, from30 - PAIR_MS, asOf).all<any>().catch(() => ({ results: [] as any[] })),
     // The largest moves out of the pool to an address: unshields and crossings straight out over the bridge.
     db.prepare(`${FLOW_SELECT} WHERE f.chain='namada' AND f.ts >= ? AND f.ts < ? AND f.from_addr = ?
                 AND (f.kind = 'unshield' OR (f.kind = 'ibc_out' AND f.to_addr LIKE 'osmo1%'))
@@ -854,7 +888,8 @@ export async function blindSpot(db: D1Database, asOf: number, replay: boolean): 
     coverageOf(db, asOf, replay),
   ]);
 
-  const legs = maspLegs(namadaLegs.results || [], osmoOut.outs, osmoIn.results || []).filter((l) => l.ts >= from7 && l.ts < asOf);
+  const allLegs30 = maspLegs(namadaLegs.results || [], osmoOut.outs, osmoIn.results || []).filter((l) => l.ts >= from30 && l.ts < asOf);
+  const legs = allLegs30.filter((l) => l.ts >= from7);
   const sum = (since: number, dir: 'in' | 'out', bridge?: boolean) => legs.filter((l) => l.ts >= since && l.dir === dir && (bridge == null || l.bridge === bridge)).reduce((a, l) => a + l.amount, 0);
   const d1 = asOf - D;
   const bridgeLegs = legs.filter((l) => l.bridge);
@@ -868,6 +903,46 @@ export async function blindSpot(db: D1Database, asOf: number, replay: boolean): 
   const turnstileNam7d = passthroughs7d.reduce((a, p) => a + p.outAmount, 0);
   const maxFlow7d = Math.max(shields7d, unshields7d);
   const stickySharePct7d = maxFlow7d > 0 ? Math.max(0, Math.min(100, (1 - turnstileNam7d / maxFlow7d) * 100)) : null;
+
+  // Build 6-hour pulse buckets over the 30-day window for Chart 4 (MASP Net Shielding Pulse & Turnstile)
+  const passthroughs30 = matchMaspPassthroughs(allLegs30);
+  const pulseBucketMs = 6 * H;
+  const pulseMap = new Map<number, { inNam: number; outNam: number; turnstileNam: number; bridgeInNam: number; bridgeOutNam: number }>();
+  for (const l of allLegs30) {
+    const b = Math.floor(l.ts / pulseBucketMs) * pulseBucketMs;
+    const cur = pulseMap.get(b) ?? { inNam: 0, outNam: 0, turnstileNam: 0, bridgeInNam: 0, bridgeOutNam: 0 };
+    if (l.dir === 'in') {
+      cur.inNam += l.amount;
+      if (l.bridge) cur.bridgeInNam += l.amount;
+    } else {
+      cur.outNam += l.amount;
+      if (l.bridge) cur.bridgeOutNam += l.amount;
+    }
+    pulseMap.set(b, cur);
+  }
+  for (const pt of passthroughs30) {
+    const b = Math.floor(pt.outTs / pulseBucketMs) * pulseBucketMs;
+    const cur = pulseMap.get(b) ?? { inNam: 0, outNam: 0, turnstileNam: 0, bridgeInNam: 0, bridgeOutNam: 0 };
+    cur.turnstileNam += pt.outAmount;
+    pulseMap.set(b, cur);
+  }
+  let cumNetNam = 0;
+  const pulseSeries: MaspPulseBucket[] = [...pulseMap.entries()]
+    .sort((a, b) => a[0] - b[0])
+    .map(([ts, b]) => {
+      const netNam = b.inNam - b.outNam;
+      cumNetNam += netNam;
+      return {
+        ts,
+        inNam: b.inNam,
+        outNam: b.outNam,
+        netNam,
+        cumNetNam,
+        turnstileNam: b.turnstileNam,
+        bridgeInNam: b.bridgeInNam,
+        bridgeOutNam: b.bridgeOutNam,
+      };
+    });
 
   const bridgeIn7d = sum(from7, 'in', true), bridgeOut7d = sum(from7, 'out', true);
   return {
@@ -884,9 +959,96 @@ export async function blindSpot(db: D1Database, asOf: number, replay: boolean): 
     passthroughs7d,
     turnstileNam7d,
     stickySharePct7d,
+    pulseSeries,
     // The pool's figures come from Namada records (and Osmosis records of crossings): both indexes matter.
     coverage: cov.both,
     coverageByChain: { osmosis: cov.osmosis, namada: cov.namada },
+  };
+}
+
+// ---------------------------------------------------------------- orderflow & CVD (D1, Chart 1)
+
+/**
+ * Signed orderflow & Cumulative Volume Delta (CVD) over any time window (`hours`, up to 1,500 days).
+ * Excludes atomic arbitrage round-trips (`arb: true`) so `netDeltaNam` and `cvdNam` measure genuine directional
+ * taker pressure against Osmosis pools, and compares CVD direction with VWAP price change to detect limit/CL
+ * absorption vs. directional trend.
+ */
+export async function orderflowSeries(db: D1Database, asOf: number, replay: boolean, hours = 24 * 30): Promise<OrderflowResponse> {
+  const bucketMs = hours <= 48 ? H : hours <= 24 * 14 ? 2 * H : hours <= 24 * 45 ? 6 * H : D;
+  const from = asOf - hours * H;
+  const [rows, cov] = await Promise.all([
+    db.prepare(
+      `SELECT CAST(ts / ? AS INTEGER) * ? AS b_ts,
+              SUM(CASE WHEN kind='buy' THEN amount_num ELSE 0 END) AS buy_nam,
+              SUM(CASE WHEN kind='sell' THEN amount_num ELSE 0 END) AS sell_nam,
+              SUM(CASE WHEN price_usd > 0 AND amount_num > 0 THEN price_usd * amount_num
+                       WHEN counter_denom='USDC' AND counter_amount > 0 THEN counter_amount
+                       ELSE 0 END) AS usd_notional,
+              SUM(CASE WHEN (price_usd > 0 OR (counter_denom='USDC' AND counter_amount > 0)) AND amount_num > 0 THEN amount_num ELSE 0 END) AS priced_nam,
+              COUNT(*) AS trades
+       FROM flows
+       WHERE chain='osmosis' AND kind IN ('buy','sell') AND ts >= ? AND ts <= ?
+         AND (meta IS NULL OR meta NOT LIKE '%"arb":true%')
+       GROUP BY CAST(ts / ? AS INTEGER)
+       ORDER BY b_ts ASC`,
+    )
+      .bind(bucketMs, bucketMs, from, asOf, bucketMs)
+      .all<any>()
+      .catch(() => ({ results: [] as any[] })),
+    coverageOf(db, asOf, replay),
+  ]);
+
+  let cvdNam = 0;
+  let totalBuy = 0;
+  let totalSell = 0;
+  const buckets: OrderflowBucket[] = (rows.results || []).map((r: any) => {
+    const buyNam = Number(r.buy_nam || 0);
+    const sellNam = Number(r.sell_nam || 0);
+    const netDeltaNam = buyNam - sellNam;
+    cvdNam += netDeltaNam;
+    totalBuy += buyNam;
+    totalSell += sellNam;
+    const pricedNam = Number(r.priced_nam || 0);
+    const usdNotional = Number(r.usd_notional || 0);
+    return {
+      ts: Number(r.b_ts),
+      buyNam,
+      sellNam,
+      netDeltaNam,
+      cvdNam,
+      vwapUsd: pricedNam > 0 && usdNotional > 0 ? usdNotional / pricedNam : null,
+      trades: Number(r.trades || 0),
+    };
+  });
+
+  const grossVolumeNam = totalBuy + totalSell;
+  const buySharePct = grossVolumeNam > 0 ? (totalBuy / grossVolumeNam) * 100 : null;
+  const priced = buckets.filter((b) => b.vwapUsd != null && b.vwapUsd > 0);
+  const firstPx = priced[0]?.vwapUsd ?? null;
+  const lastPx = priced[priced.length - 1]?.vwapUsd ?? null;
+  const priceChangePct = firstPx && lastPx && firstPx > 0 ? ((lastPx - firstPx) / firstPx) * 100 : null;
+
+  const netRatio = grossVolumeNam > 0 ? cvdNam / grossVolumeNam : 0;
+  let absorptionRegime: OrderflowResponse['absorptionRegime'] = 'balanced';
+  if (Math.abs(netRatio) >= 0.08 && priceChangePct != null) {
+    if (netRatio < -0.08 && priceChangePct >= -1.0) absorptionRegime = 'bid_absorption';
+    else if (netRatio > 0.08 && priceChangePct <= 1.0) absorptionRegime = 'ask_absorption';
+    else if (netRatio > 0.08 && priceChangePct > 1.0) absorptionRegime = 'trend_up';
+    else if (netRatio < -0.08 && priceChangePct < -1.0) absorptionRegime = 'trend_down';
+  }
+
+  return {
+    asOf,
+    hours,
+    bucketMs,
+    buckets,
+    netCvdNam: cvdNam,
+    grossVolumeNam,
+    buySharePct,
+    priceChangePct,
+    absorptionRegime,
+    prov: cov.osmosis,
   };
 }
 

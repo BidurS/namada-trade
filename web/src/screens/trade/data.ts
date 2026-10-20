@@ -2,9 +2,10 @@
 // never made while rewound (N3, W12); the price history goes through the shell's fetch wrapper,
 // which adds ?at= under Rewind. Polls run only while the tab is visible.
 import { useCallback, useEffect, useRef, useState } from 'react';
-import type { PoolInfo, Provenance, QuoteCurveResponse } from '../../../../shared/types';
-import { fetchMetricHistory, fetchPools, fetchQuote, fetchQuoteCurve } from '../../api';
+import type { OrderflowResponse, PoolInfo, Provenance, QuoteCurveResponse } from '../../../../shared/types';
+import { fetchMetricHistory, fetchOrderflow, fetchPools, fetchQuote, fetchQuoteCurve } from '../../api';
 import { useVisible } from '../../app/index';
+import type { ChartRange } from '../../ui/index';
 import type { QuoteCode, QuoteResult, Side } from './model';
 import { quoteKey } from './model';
 
@@ -100,8 +101,11 @@ export interface HistoryLoad extends Load<History> {
 export const historyFailWords = (e: unknown): string =>
   e instanceof Error && /HTTP \d+/.test(e.message) ? 'The server answered with an error.' : 'The server did not answer.';
 
+const rangeFetchHours = (range: ChartRange): number =>
+  range === 'all' ? 24 * 1200 : range === '1y' ? 24 * 365 : range === '90d' ? 24 * 90 : 24 * 30;
+
 interface HistoryState {
-  for: number | null;
+  for: string;
   data: History | null;
   error: string | null;
   fetchedAt: number | null;
@@ -109,48 +113,101 @@ interface HistoryState {
 }
 
 /**
- * 30 days of the executed-swap price (hourly medians) and the recorded quoted price, as of `at` under Rewind.
- * A failed request is an error, never an empty series: with nothing shown yet it says so (and the screen offers
- * Try again); after a good answer a failed refresh keeps that series, with `failedAt` set, so the screen marks
- * it old and says since when. It never reads as "no trades in this window".
+ * Executed-swap price (hourly/6h/24h medians) and recorded quoted price across short or multi-month/year windows,
+ * as of `at` under Rewind. Switching between 24h, 7d, and 30d reuses the 30-day fetch; 90d, 1y, and All fetch deeper history.
  */
-export function usePriceHistory(at: number | null): HistoryLoad {
+export function usePriceHistory(at: number | null, range: ChartRange = '30d'): HistoryLoad {
   const visible = useVisible();
-  // the answer remembers which moment it is for, so a new ?at= never shows the previous window
-  const [state, setState] = useState<HistoryState>({ for: at, data: null, error: null, fetchedAt: null, failedAt: null });
+  const hours = rangeFetchHours(range);
+  const key = `${at ?? 'live'}:${hours}`;
+  const [state, setState] = useState<HistoryState>({ for: key, data: null, error: null, fetchedAt: null, failedAt: null });
   const [tick, setTick] = useState(0);
-  const hasData = state.for === at && state.data != null;
+  const hasData = state.for === key && state.data != null;
   useEffect(() => {
     if (!visible && hasData) return;
     let alive = true;
     const run = () =>
-      Promise.all([fetchMetricHistory('price.swap_1h', 24 * 30, at), fetchMetricHistory('price.usd', 24 * 30, at)]).then(
+      Promise.all([fetchMetricHistory('price.swap_1h', hours, at), fetchMetricHistory('price.usd', hours, at)]).then(
         ([e, q]) => {
           if (!alive) return;
-          setState({ for: at, data: { executed: e.map((r) => ({ t: r.ts, v: r.value })), quoted: q.map((r) => ({ t: r.ts, v: r.value })) }, error: null, fetchedAt: Date.now(), failedAt: null });
+          setState({ for: key, data: { executed: e.map((r) => ({ t: r.ts, v: r.value })), quoted: q.map((r) => ({ t: r.ts, v: r.value })) }, error: null, fetchedAt: Date.now(), failedAt: null });
         },
         (err: unknown) => {
           if (!alive) return;
           const error = historyFailWords(err);
-          // a refresh keeps the series it had for this moment (marked old by the screen); a first load has nothing to keep
-          setState((s) => (s.for === at && s.data ? { ...s, error, failedAt: Date.now() } : { for: at, data: null, error, fetchedAt: null, failedAt: Date.now() }));
+          setState((s) => (s.for === key && s.data ? { ...s, error, failedAt: Date.now() } : { for: key, data: null, error, fetchedAt: null, failedAt: Date.now() }));
         },
       );
     run();
-    // the executed price is an hourly median: a 5 min refresh is plenty; a rewound window never changes
     const id = at ? 0 : window.setInterval(run, 300_000);
     return () => {
       alive = false;
       if (id) window.clearInterval(id);
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [at, visible, tick]);
+  }, [key, visible, tick]);
   const retry = useCallback(() => {
-    // back to the waiting state while the new request is out (an earlier series, if any, stays shown)
-    setState((s) => (s.for === at && !s.data ? { ...s, error: null } : s));
+    setState((s) => (s.for === key && !s.data ? { ...s, error: null } : s));
     setTick((n) => n + 1);
-  }, [at]);
-  const mine = state.for === at;
+  }, [key]);
+  const mine = state.for === key;
+  const data = mine ? state.data : null;
+  const error = mine ? state.error : null;
+  return { data, error, loading: data == null && error == null, fetchedAt: mine ? state.fetchedAt : null, failedAt: mine && error ? state.failedAt : null, retry };
+}
+
+export interface OrderflowLoad extends Load<OrderflowResponse> {
+  fetchedAt: number | null;
+  failedAt: number | null;
+  retry: () => void;
+}
+
+interface OrderflowState {
+  for: string;
+  data: OrderflowResponse | null;
+  error: string | null;
+  fetchedAt: number | null;
+  failedAt: number | null;
+}
+
+/**
+ * Signed orderflow & Cumulative Volume Delta (CVD) buckets across short or multi-month/year windows.
+ */
+export function useOrderflowHistory(at: number | null, range: ChartRange = '30d'): OrderflowLoad {
+  const visible = useVisible();
+  const hours = rangeFetchHours(range);
+  const key = `${at ?? 'live'}:${hours}`;
+  const [state, setState] = useState<OrderflowState>({ for: key, data: null, error: null, fetchedAt: null, failedAt: null });
+  const [tick, setTick] = useState(0);
+  const hasData = state.for === key && state.data != null;
+  useEffect(() => {
+    if (!visible && hasData) return;
+    let alive = true;
+    const run = () =>
+      fetchOrderflow(hours, at).then(
+        (d) => {
+          if (!alive) return;
+          setState({ for: key, data: d, error: null, fetchedAt: Date.now(), failedAt: null });
+        },
+        (err: unknown) => {
+          if (!alive) return;
+          const error = historyFailWords(err);
+          setState((s) => (s.for === key && s.data ? { ...s, error, failedAt: Date.now() } : { for: key, data: null, error, fetchedAt: null, failedAt: Date.now() }));
+        },
+      );
+    run();
+    const id = at ? 0 : window.setInterval(run, 120_000);
+    return () => {
+      alive = false;
+      if (id) window.clearInterval(id);
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [key, visible, tick]);
+  const retry = useCallback(() => {
+    setState((s) => (s.for === key && !s.data ? { ...s, error: null } : s));
+    setTick((n) => n + 1);
+  }, [key]);
+  const mine = state.for === key;
   const data = mine ? state.data : null;
   const error = mine ? state.error : null;
   return { data, error, loading: data == null && error == null, fetchedAt: mine ? state.fetchedAt : null, failedAt: mine && error ? state.failedAt : null, retry };

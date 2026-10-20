@@ -403,6 +403,18 @@ export interface ChainParams {
   fetchedAt: number;
 }
 
+export interface SupplyCohortBreakdown {
+  /** Bridged in over the window by cohort (NAM) */
+  cohorts: {
+    genesisBackersNam: number;
+    maspTurnstileNam: number;
+    burnerHopNam: number;
+    transparentNam: number;
+  };
+  /** High-risk remaining inventory (dumpHazardScore >= 0.6) in NAM */
+  highHazardRemainingNam: number;
+}
+
 export interface Pressure {
   asOf: number;
   windowDays: number;
@@ -436,6 +448,8 @@ export interface Pressure {
   chainParams?: ChainParams | null;
   /** Consensus-verified epoch-by-epoch unlock term structure decoded from the ABCI bond/unbond listing. */
   unbondTermStructure?: UnbondTermStructure | null;
+  /** Cohort breakdown of supply crossing to Osmosis and remaining on deck. */
+  pipelineSummary?: SupplyCohortBreakdown;
   /** NAM staked (the chain's total stake), last reading of each 6-hour period over 14 days */
   bondedTrend: { ts: number; value: number }[];
   movers: MoverEntry[];
@@ -471,6 +485,17 @@ export interface MaspPassthroughLink {
   confidence: 'high' | 'medium' | 'low';
 }
 
+export interface MaspPulseBucket {
+  ts: number;
+  inNam: number;
+  outNam: number;
+  netNam: number;
+  cumNetNam: number;
+  turnstileNam: number;
+  bridgeInNam: number;
+  bridgeOutNam: number;
+}
+
 export interface BlindSpot {
   asOf: number;
   shielded: Sourced<number>;
@@ -502,6 +527,8 @@ export interface BlindSpot {
   turnstileNam7d?: number;
   /** Share of 7d MASP activity that remained sticky (not rapid round-trip transit), in [0, 100] */
   stickySharePct7d?: number | null;
+  /** Bucketed MASP inflow/outflow pulse and turnstile volume over time */
+  pulseSeries?: MaspPulseBucket[];
   coverage: Provenance;
   coverageByChain?: { osmosis: Provenance; namada: Provenance };
 }
@@ -681,6 +708,29 @@ export interface QuoteCurveResponse {
   liquidityCliffNam?: number | null;
   cliffNote?: string | null;
   curve: SlippageCurvePoint[];
+  prov: Provenance;
+}
+
+export interface OrderflowBucket {
+  ts: number;
+  buyNam: number;
+  sellNam: number;
+  netDeltaNam: number;
+  cvdNam: number;
+  vwapUsd: number | null;
+  trades: number;
+}
+
+export interface OrderflowResponse {
+  asOf: number;
+  hours: number;
+  bucketMs: number;
+  buckets: OrderflowBucket[];
+  netCvdNam: number;
+  grossVolumeNam: number;
+  buySharePct: number | null;
+  priceChangePct: number | null;
+  absorptionRegime: 'bid_absorption' | 'ask_absorption' | 'trend_up' | 'trend_down' | 'balanced';
   prov: Provenance;
 }
 
