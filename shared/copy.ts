@@ -87,7 +87,7 @@ export const BODY: Record<string, PageCopy> = {
   holders: {
     paras: [
       'Holders are addresses with spendable or staked NAM on Namada, or NAM on Osmosis. Protocol accounts, such as the staking, shielded pool and bridge accounts, are left out because they hold NAM on behalf of others.',
-      'Staked NAM is read from the chain address by address. NAM in the shielded pool cannot be attributed to anyone, so the share held by the largest addresses describes only the visible part of the supply.',
+      'Spendable and staked NAM are read from the chain for every address: the chain lists all balances and all bonds, address by address, and the flow index keeps moved addresses current in between. NAM in the shielded pool cannot be attributed to anyone, so the share held by the largest addresses describes only the visible part of the supply.',
     ],
     facts: ['holders', 'top10', 'shielded', 'supply'],
   },

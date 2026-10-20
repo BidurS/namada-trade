@@ -185,7 +185,12 @@ export function checkDetail(c: Check): string | null {
       if (x == null) return null;
       const n = detailNum(d.stakers);
       const pending = detailNum(d.pendingAddresses) ?? 0;
-      return `${fmtPctRule(x, 1)} of staked NAM traced${n != null ? ` to ${fmtCount(n)} addresses` : ''}${pending > 0 ? `; ${fmtCount(pending)} more addresses are still being read` : ''}`;
+      const to = n != null ? ` to ${fmtCount(n)} addresses` : '';
+      const still = pending > 0 ? `; ${fmtCount(pending)} more addresses are still being read` : '';
+      // The chain's bond listing counts bonds before they start earning (the pipeline), so it can run a little
+      // above the total stake: then every staked NAM is traced, and the figure says why it exceeds 100%.
+      if (x > 100) return `All staked NAM traced${to}; their bonds add up to ${fmtPctRule(x, 1)} of the total stake because bonds still waiting to start are listed too${still}`;
+      return `${fmtPctRule(x, 1)} of staked NAM traced${to}${still}`;
     }
     case 'rpc_consensus': {
       const x = detailNum(d.heightDiff);

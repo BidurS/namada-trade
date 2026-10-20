@@ -15,7 +15,7 @@ import { stmt, kvGet, kvSet, kvGetJson } from './db';
 import { toNam, chainOf } from './util';
 import { OSMOSIS, INTERNAL_LABELS } from './config';
 import { flowsWhere, flowsFilterFromQuery, FLOWS_ORDER } from './flows-query';
-import { HOLDERS_UNION, HOLDER_COUNTS_SQL, NAMADA_TOP10_SQL, OSMOSIS_TOP10_SQL, LIQUID_STALE_MS, holderStatus, liquidChanges, chunks } from './holders';
+import { HOLDERS_UNION, HOLDER_COUNTS_SQL, HOLDER_DUST_SQL, NAMADA_TOP10_SQL, OSMOSIS_TOP10_SQL, LIQUID_STALE_MS, BALANCE_LISTING_SRC, BOND_LISTING_SRC, holderStatus, liquidChanges, chunks, listingTimes, confirmedAt, stakeNum, type ListingTimes } from './holders';
 import { label_plain, category_plain, labelSearchTerms, labelAuthorShort, tagByline } from './labels';
 import { counterpartiesOf } from '../../shared/flow-rules';
 import {
@@ -125,7 +125,9 @@ app.get('/api/overview', async (c) => {
   const mt = (k: string) => m.get(k)?.ts ?? null;
 
   const MASP = INTERNAL_ADDRESSES.masp;
-  const [osmoStats, netIbc, namadaStats, heights, refPriceRow, cov, holderCounts, top10Osmo, top10Nam] = await Promise.all([
+  // When the chain listings last confirmed every Namada balance and bond: the holder figures are as of then.
+  const listed = await listingTimes(db);
+  const [osmoStats, netIbc, namadaStats, heights, refPriceRow, cov, holderCounts, top10Osmo, top10Nam, dust] = await Promise.all([
     db.prepare(`SELECT COUNT(*) total_flows,
           SUM(CASE WHEN kind='buy' THEN 1 ELSE 0 END) buys, SUM(CASE WHEN kind='sell' THEN 1 ELSE 0 END) sells,
           SUM(CASE WHEN kind='buy' THEN amount_num ELSE 0 END) buy_nam, SUM(CASE WHEN kind='sell' THEN amount_num ELSE 0 END) sell_nam
@@ -145,7 +147,8 @@ app.get('/api/overview', async (c) => {
     // Same definition as the holder list: spendable or staked, protocol and pool accounts excluded.
     db.prepare(HOLDER_COUNTS_SQL).first<{ namada: number | null; osmosis: number | null; namada_at: number | null; osmosis_at: number | null }>(),
     db.prepare(OSMOSIS_TOP10_SQL).first<{ s: number; at: number | null }>(),
-    db.prepare(NAMADA_TOP10_SQL).first<{ s: number; at: number | null }>(),
+    db.prepare(NAMADA_TOP10_SQL).bind(listed.balance ?? 0, listed.bond ?? 0).first<{ s: number; at: number | null }>(),
+    db.prepare(HOLDER_DUST_SQL).first<{ n: number }>().catch(() => null),
   ]);
 
   // Price: live SQS when available; otherwise the last stored value, honestly marked stale.
@@ -219,6 +222,7 @@ app.get('/api/overview', async (c) => {
     },
     namada: {
       holders: holderCounts?.namada ?? null,
+      holdersUnder1Nam: dust?.n ?? null,
       flows24h: namadaStats?.total_flows || 0,
       bonded24h: namadaStats?.bonded || 0, withdrawn24h: namadaStats?.withdrawn || 0,
       shielded24h: namadaStats?.shielded || 0, unshielded24h: namadaStats?.unshielded || 0,
@@ -229,7 +233,8 @@ app.get('/api/overview', async (c) => {
       namadaTop10Pct: totalSupply ? ((top10Nam?.s || 0) / totalSupply) * 100 : null,
       // One stamp per chain for its holder figures (the count and the top-10 share), so every screen gives them the
       // same age: the time the balances behind them were read, never this answer's time (owner decision 7).
-      namadaProv: holderFiguresProv(top10Nam?.at, holderCounts?.namada_at, now),
+      // The Namada count is as of the last complete balance listing (every address compared then), else the newest row write.
+      namadaProv: holderFiguresProv(top10Nam?.at, listed.balance ?? holderCounts?.namada_at, now),
       osmosisProv: holderFiguresProv(top10Osmo?.at, holderCounts?.osmosis_at, now),
     },
     checks,
@@ -240,9 +245,10 @@ app.get('/api/overview', async (c) => {
 
 /**
  * The stamp of one chain's holder figures (overview.concentration.namadaProv / osmosisProv): the older of the oldest
- * reading among the ten biggest holders (NAMADA_TOP10_SQL / OSMOSIS_TOP10_SQL `at`) and the newest write of the
- * chain's holder rows (HOLDER_COUNTS_SQL `namada_at` / `osmosis_at`, what the count is as of). Old past 6 hours, as a
- * holder row is (owner decision 7). Holder balances are current readings: under Rewind too, the stamp is their age.
+ * reading among the ten biggest holders (NAMADA_TOP10_SQL / OSMOSIS_TOP10_SQL `at`) and what the count is as of (for
+ * Namada the last complete balance listing, kv balance.listing; else HOLDER_COUNTS_SQL `namada_at` / `osmosis_at`,
+ * the newest write of the chain's holder rows). Old past 6 hours, as a holder row is (owner decision 7). Holder
+ * balances are current readings: under Rewind too, the stamp is their age.
  */
 export function holderFiguresProv(top10At: number | null | undefined, countAt: number | null | undefined, now: number): Provenance {
   const ats = [top10At, countAt].filter((t): t is number => t != null && Number.isFinite(t) && t > 0);
@@ -283,12 +289,13 @@ app.get('/api/alerts/recent', async (c) => {
 });
 
 // ---------------------------------------------------------------- holder list query (shared by /api/holders and its export)
-// Namada rows are the union of liquid holders and bonded stakers; Osmosis rows have no stake.
+// Namada rows are the union of liquid holders and bonded stakers; Osmosis rows have no stake. A stake is the
+// chain's figure, or the flow estimate only while no bond listing has gone through (holders.ts stakeNum).
 // Module accounts (PoS, PGF, MASP, IBC escrow, governance, the Osmosis transfer module) are not holders.
 const HOLDERS_BASE = `
-    SELECT x.chain, x.address, COALESCE(h.balance_num, 0) balance_num, h.address IS NOT NULL has_row, h.updated_at, h.verified_at,
-           s.bonded_num, s.estimated_num, s.verified_at bonded_verified_at,
-           COALESCE(h.balance_num, 0) + COALESCE(s.bonded_num, s.estimated_num, 0) total_num, l.label, l.category,
+    SELECT x.chain, x.address, COALESCE(h.balance_num, 0) balance_num, h.address IS NOT NULL has_row, h.updated_at, h.verified_at, h.verified_src liquid_src,
+           s.bonded_num, s.estimated_num, s.verified_at bonded_verified_at, s.verified_src bonded_src,
+           COALESCE(h.balance_num, 0) + ${stakeNum('s.')} total_num, l.label, l.category,
            l.source label_source, l.author label_author
     FROM (${HOLDERS_UNION}) x
     LEFT JOIN holders h ON h.chain = x.chain AND h.address = x.address
@@ -312,7 +319,7 @@ function holdersWhere(chain: string, search: string, category: string, by: 'tota
   if (cat === 'none') conds.push('l.label IS NULL');
   else if (/^[a-z_]{1,24}$/.test(cat)) { conds.push('LOWER(l.category) = ?'); params.push(cat); }
   const where = conds.length ? `WHERE ${conds.join(' AND ')}` : '';
-  const order = by === 'liquid' ? 'balance_num DESC' : by === 'bonded' ? 'COALESCE(s.bonded_num, s.estimated_num, 0) DESC' : 'total_num DESC';
+  const order = by === 'liquid' ? 'balance_num DESC' : by === 'bonded' ? `${stakeNum('s.')} DESC` : 'total_num DESC';
   return { where, params, order };
 }
 const holdersBy = (v: string | undefined) => (['total', 'liquid', 'bonded'].includes(v || '') ? v : 'total') as 'total' | 'liquid' | 'bonded';
@@ -322,6 +329,19 @@ const holderChain = (v: string | undefined): (typeof HOLDER_CHAINS)[number] | nu
   const c = (v || 'all').trim().toLowerCase();
   return (HOLDER_CHAINS as readonly string[]).includes(c) ? (c as (typeof HOLDER_CHAINS)[number]) : null;
 };
+/**
+ * The stake a holder row shows: the chain's figure; the flow estimate only while no bond listing has gone through
+ * (the same rule as the list's SQL, holders.ts stakeNum). The estimate itself is always carried beside it.
+ */
+const stakeShown = (r: { chain: string; bonded_num: number | null; estimated_num: number | null }, listed: ListingTimes) =>
+  r.chain === 'namada' ? r.bonded_num ?? (listed.bond == null ? r.estimated_num : null) ?? null : null;
+/**
+ * A Namada address with a stakes row and no holders row after a complete balance listing: the listing read every
+ * balance on the chain and had none for it, so its spendable balance is a confirmed 0 as of the listing, not
+ * "not read yet" (M1, 2026-10-20).
+ */
+const listedWithNoNam = (r: { chain: string; has_row: unknown }, listed: ListingTimes) => r.chain === 'namada' && !r.has_row && listed.balance != null;
+const NO_NAM_NOTE = 'The chain lists no spendable NAM for this address.';
 /** Where a label came from, and for a user tag the start of its author's address ("Tag by tnam1qxyz…"). */
 const labelOrigin = (source: string | null | undefined, author: string | null | undefined) => ({
   label_source: source ?? null,
@@ -347,10 +367,11 @@ app.get('/api/holders', async (c) => {
   const { where, params, order } = holdersWhere(chain, search, c.req.query('category') || '', by);
 
   const now = Date.now();
-  const [totalRes, rows, supplyRow] = await Promise.all([
+  const [totalRes, rows, supplyRow, listed] = await Promise.all([
     db.prepare(`SELECT COUNT(*) total FROM (${base} ${where})`).bind(...params).first<{ total: number }>(),
     db.prepare(`${base} ${where} ORDER BY ${order}, x.address LIMIT ? OFFSET ?`).bind(...params, limit, offset).all<any>(),
     metricAt(db, 'supply.total', now),
+    listingTimes(db),
   ]);
   const rawHolders = rows.results || [];
 
@@ -381,22 +402,27 @@ app.get('/api/holders', async (c) => {
     const label = r.label || fallback?.label || null;
     const category = r.category || fallback?.category || null;
     const source = r.label ? r.label_source ?? null : fallback ? 'auto' : null;
-    // Owner decision 7: the chain read of the stake is authoritative when it exists.
-    const bonded = r.chain === 'namada' ? (r.bonded_num ?? r.estimated_num ?? null) : null;
+    // Owner decision 7: the chain read of the stake is authoritative when it exists. A reading a chain listing
+    // confirmed (its source, unchanged since) is as fresh as the last complete listing (holders.ts confirmedAt).
+    const bonded = stakeShown(r, listed);
+    const noNam = listedWithNoNam(r, listed);
+    const verifiedAt = noNam ? listed.balance : confirmedAt(r.verified_at, r.liquid_src, BALANCE_LISTING_SRC, listed.balance);
+    const bondedVerifiedAt = confirmedAt(r.bonded_verified_at, r.bonded_src, BOND_LISTING_SRC, listed.bond);
     const st = holderStatus({
-      chain: r.chain, verifiedAt: r.verified_at ?? null, hasLiquidRow: !!r.has_row,
-      bondedRead: r.bonded_num ?? null, bondedVerifiedAt: r.bonded_verified_at ?? null, bondedEstimated: r.estimated_num ?? null,
+      chain: r.chain, verifiedAt, hasLiquidRow: !!r.has_row || noNam,
+      bondedRead: r.bonded_num ?? null, bondedVerifiedAt, bondedEstimated: r.estimated_num ?? null,
     }, now);
+    if (noNam) st.statusNote = st.statusNote ? `${NO_NAM_NOTE} ${st.statusNote}` : NO_NAM_NOTE;
     const ch = changes.get(r.address);
     return {
       rank: offset + i + 1, chain: r.chain, address: r.address, balance: r.balance_num,
-      bonded, bondedEstimated: r.estimated_num ?? null, bondedVerifiedAt: r.bonded_verified_at ?? null,
+      bonded, bondedEstimated: r.estimated_num ?? null, bondedVerifiedAt,
       total: r.total_num,
       pctSupply: supplyTotal ? (r.total_num / supplyTotal) * 100 : null,
       change24h: ch?.d24 ?? null, change7d: ch?.d7 ?? null,
       label, category, label_plain: label_plain(label, r.address, source), category_plain: category_plain(category, label),
       ...labelOrigin(source, r.label_author),
-      linked: [...new Set(linksMap.get(r.address) || [])], updatedAt: r.updated_at ?? null, verifiedAt: r.verified_at ?? null,
+      linked: [...new Set(linksMap.get(r.address) || [])], updatedAt: r.updated_at ?? null, verifiedAt,
       status: st.status, statusNote: st.statusNote,
     };
   });
@@ -474,7 +500,11 @@ app.get('/api/address/:addr', async (c) => {
       const res = await namBalance(addr, live);
       balance = { value: toNam(res.balance), prov: { source: `Namada RPC ${res.provider}`, at: now, height: res.height, status: 'live' } };
     } catch (e) {
-      balance = { value: holder?.balance_num ?? null, prov: provAt('D1 index (RPC failed)', holder?.updated_at ?? null, now, 30 * 60000, { height: holder?.updated_height, note: 'The live read from the chain failed, so this is the last indexed balance.' }) };
+      const listedAt = holder ? null : (await listingTimes(db)).balance;
+      balance = listedAt != null
+        // no row after a complete listing of every balance: the chain listed none for this address
+        ? { value: 0, prov: provAt(`chain balance listing (${BALANCE_LISTING_SRC})`, listedAt, now, LIQUID_STALE_MS, { note: `The live read from the chain failed. ${NO_NAM_NOTE}` }) }
+        : { value: holder?.balance_num ?? null, prov: provAt('D1 index (RPC failed)', holder?.updated_at ?? null, now, 30 * 60000, { height: holder?.updated_height, note: 'The live read from the chain failed, so this is the last indexed balance.' }) };
     }
   } else {
     balance = { value: holder?.balance_num ?? null, prov: provAt(holder?.verified_src ? `Keplr Osmosis REST (${holder.verified_src})` : 'D1 index', holder?.verified_at ?? holder?.updated_at ?? null, now, 15 * 60000, { height: holder?.updated_height }) };
@@ -498,7 +528,7 @@ app.get('/api/address/:addr', async (c) => {
         const list = safeParseJson(stakeRow.delegations, []) as { validator: string; amountNam: number }[];
         const v = stakeRow.bonded_num ?? stakeRow.estimated_num ?? 0;
         staking = { bondedNam: v, unbondingNam: 0, totalPositionNam: liveBal + v, delegations: toDelegations(list), estimatedNam: stakeRow.estimated_num ?? null,
-          prov: stakeRow.bonded_num != null ? provAt(`stakes table (${stakeRow.verified_src}, epoch ${stakeRow.verified_epoch})`, stakeRow.verified_at, now, 12 * H, { note: 'The live read from the chain failed, so this is the last stored reading.' })
+          prov: stakeRow.bonded_num != null ? provAt(`stakes table (${stakeRow.verified_src}, epoch ${stakeRow.verified_epoch})`, confirmedAt(stakeRow.verified_at, stakeRow.verified_src, BOND_LISTING_SRC, (await listingTimes(db)).bond), now, 12 * H, { note: 'The live read from the chain failed, so this is the last stored reading.' })
             : { source: 'bond/unbond history (estimate)', at: null, status: 'stale', note: 'Estimated from staking history; not read from the chain yet.' } };
       }
     }
@@ -763,10 +793,11 @@ app.get('/api/export/holders', async (c) => {
   const by = holdersBy(c.req.query('by'));
   const limit = Math.min(HOLDER_EXPORT_MAX, Math.max(100, parseInt(c.req.query('limit') || String(HOLDER_EXPORT_MAX), 10) || HOLDER_EXPORT_MAX));
   const { where, params, order } = holdersWhere(chain, (c.req.query('search') || '').trim(), c.req.query('category') || '', by);
-  const [rows, totalRes, supplyRow] = await Promise.all([
+  const [rows, totalRes, supplyRow, listed] = await Promise.all([
     db.prepare(`${HOLDERS_BASE} ${where} ORDER BY ${order}, x.address LIMIT ?`).bind(...params, limit).all<any>(),
     db.prepare(`SELECT COUNT(*) total FROM (${HOLDERS_BASE} ${where})`).bind(...params).first<{ total: number }>(),
     metricAt(db, 'supply.total', Date.now()),
+    listingTimes(db),
   ]);
   const matching = totalRes?.total ?? 0;
   const total = supplyRow?.value ?? null;
@@ -774,14 +805,15 @@ app.get('/api/export/holders', async (c) => {
     const label = r.label || INTERNAL_LABELS[r.address]?.label || null;
     const category = r.category || INTERNAL_LABELS[r.address]?.category || null;
     const source = r.label ? r.label_source ?? null : INTERNAL_LABELS[r.address] ? 'auto' : null;
-    const staked = r.chain === 'namada' ? (r.bonded_num ?? r.estimated_num ?? null) : null;
+    const staked = stakeShown(r, listed);
     return {
       rank: idx + 1, chain: r.chain, address: r.address,
-      spendableNam: r.balance_num, stakedNam: staked, stakedIsEstimate: r.chain === 'namada' && r.bonded_num == null && r.estimated_num != null,
+      spendableNam: r.balance_num, stakedNam: staked, stakedIsEstimate: r.chain === 'namada' && r.bonded_num == null && staked != null,
       totalNam: r.total_num, pctTotalSupply: total ? ((r.total_num / total) * 100).toFixed(6) : '',
       label: label_plain(label, r.address, source) ?? '', category: category_plain(category, label) ?? '',
       labelSource: source ?? '',
-      spendableCheckedAt: isoOrBlank(r.verified_at), stakeCheckedAt: isoOrBlank(r.bonded_verified_at),
+      spendableCheckedAt: isoOrBlank(listedWithNoNam(r, listed) ? listed.balance : confirmedAt(r.verified_at, r.liquid_src, BALANCE_LISTING_SRC, listed.balance)),
+      stakeCheckedAt: isoOrBlank(confirmedAt(r.bonded_verified_at, r.bonded_src, BOND_LISTING_SRC, listed.bond)),
     };
   });
   const cut = list.length < matching;

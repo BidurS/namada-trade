@@ -72,6 +72,73 @@ export async function fetchJson<T = any>(
   throw lastErr instanceof Error ? new Error(redact(lastErr.message)) : new Error(`fetch failed: ${redact(url)}`);
 }
 
+/** A body read that ended early: how much arrived, of how much (the Content-Length, when sent), in how long. */
+export class ReadCutError extends Error {
+  readonly bytes: number;
+  readonly total: number | null;
+  readonly ms: number;
+  readonly firstByteMs: number | null;
+  constructor(message: string, bytes: number, total: number | null, ms: number, firstByteMs: number | null) {
+    super(message);
+    this.bytes = bytes; this.total = total; this.ms = ms; this.firstByteMs = firstByteMs;
+  }
+}
+
+const mbOf = (n: number) => `${(n / 1e6).toFixed(1)} MB`;
+const secOf = (ms: number) => `${(ms / 1000).toFixed(ms < 10_000 ? 1 : 0)} s`;
+
+/**
+ * GET `url` and read the whole body, counting what arrives: for the multi-megabyte chain listings, whose answer a
+ * public node can stream slowly. One attempt; `timeoutMs` covers the whole read, and the caller's `signal` ends it
+ * too. A read cut short (the timeout, the deadline, the connection) throws a ReadCutError whose message says what
+ * happened ("timeout: 4.2 MB of 12.0 MB arrived in 180 s (first byte after 5.8 s)"), so the Sources sheet can
+ * say it; a 4xx/5xx answer throws an HttpError as fetchJson does.
+ */
+export async function fetchText(
+  url: string,
+  opts: { timeoutMs?: number; init?: RequestInit; signal?: AbortSignal } = {},
+): Promise<{ text: string; bytes: number; total: number | null; ms: number; firstByteMs: number }> {
+  const { timeoutMs = 15000, init, signal } = opts;
+  if (signal?.aborted) throw new Error(`deadline passed before ${redact(url)}`);
+  const t0 = Date.now();
+  const ctrl = new AbortController();
+  const timer = setTimeout(() => ctrl.abort('timeout'), timeoutMs);
+  const onAbort = () => ctrl.abort('deadline');
+  signal?.addEventListener('abort', onAbort);
+  let bytes = 0, total: number | null = null, firstByteMs: number | null = null;
+  const parts: Uint8Array[] = [];
+  try {
+    const res = await fetch(url, { ...init, signal: ctrl.signal, headers: { 'User-Agent': UA, Accept: 'application/json', ...(init?.headers || {}) } });
+    if (!res.ok) throw new HttpError(res.status, url, await res.text());
+    const cl = Number(res.headers.get('content-length'));
+    total = Number.isFinite(cl) && cl > 0 ? cl : null;
+    firstByteMs = Date.now() - t0;
+    if (!res.body) {
+      const text = await res.text();
+      return { text, bytes: text.length, total, ms: Date.now() - t0, firstByteMs };
+    }
+    const reader = res.body.getReader();
+    for (;;) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      parts.push(value);
+      bytes += value.length;
+    }
+    const all = new Uint8Array(bytes);
+    let o = 0;
+    for (const p of parts) { all.set(p, o); o += p.length; }
+    return { text: new TextDecoder().decode(all), bytes, total, ms: Date.now() - t0, firstByteMs };
+  } catch (e) {
+    if (e instanceof HttpError) throw e;
+    const ms = Date.now() - t0;
+    const why = ctrl.signal.aborted ? String(ctrl.signal.reason) : redact(String(e instanceof Error ? e.message : e)).slice(0, 80);
+    throw new ReadCutError(`${why}: ${mbOf(bytes)}${total ? ` of ${mbOf(total)}` : ''} arrived in ${secOf(ms)}${firstByteMs != null ? ` (first byte after ${secOf(firstByteMs)})` : ''}`, bytes, total, ms, firstByteMs);
+  } finally {
+    clearTimeout(timer);
+    signal?.removeEventListener('abort', onAbort);
+  }
+}
+
 /** Try each base URL in order, return the first success along with the provider used. */
 export async function withFailover<T>(
   bases: readonly { provider: string; url: string }[],
