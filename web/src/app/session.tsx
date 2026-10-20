@@ -1,7 +1,7 @@
 // Who is signed in (F1 wiring around lib/auth.ts, which is unchanged). A session proves an
 // address by a signed message; nothing moves. Signing out ends this device's session only.
-import React, { createContext, useCallback, useContext, useMemo, useState } from 'react';
-import { loadSession, logout, type Session } from '../lib/auth';
+import React, { createContext, useCallback, useContext, useEffect, useMemo, useState } from 'react';
+import { loadSession, logout, SESSION_ENDED_EVENT, type Session } from '../lib/auth';
 
 export type { Session };
 
@@ -23,6 +23,12 @@ export function SessionProvider({ children }: { children: React.ReactNode }) {
     } finally {
       setSession(null);
     }
+  }, []);
+  // The server refused the stored token (lib/auth.ts authFetch): this device is signed out.
+  useEffect(() => {
+    const ended = () => setSession(null);
+    window.addEventListener(SESSION_ENDED_EVENT, ended);
+    return () => window.removeEventListener(SESSION_ENDED_EVENT, ended);
   }, []);
   const value = useMemo(() => ({ session, setSession, signOut }), [session, signOut]);
   return <SessionCtx.Provider value={value}>{children}</SessionCtx.Provider>;

@@ -29,11 +29,44 @@ export function answeringRpcs(statuses: { provider: string; error?: string }[]):
   return ok.length ? ok : RPCS;
 }
 
-/** Block metas (height, time, num_txs) for up to 20 blocks */
-export async function blockMetas(min: number, max: number) {
-  const { value } = await withFailover(RPCS, (b) =>
-    fetchJson(`${b}/blockchain?minHeight=${min}&maxHeight=${max}`, { timeoutMs: 15000 }),
-  );
+/**
+ * A read tried on each node in turn (a breaker's order when one is given): the first answer wins, and an answer
+ * without the expected shape counts as no answer, so the next node is asked. Timeouts and retries are per node.
+ */
+async function rpcRead<T>(fn: (base: string) => Promise<T>, opts: ReadOpts): Promise<{ value: T; provider: string }> {
+  const base = opts.rpcs?.length ? opts.rpcs : RPCS;
+  const list = opts.breaker ? opts.breaker.order(base) : base;
+  let lastErr: unknown;
+  for (const r of list) {
+    if (opts.signal?.aborted) break;
+    try { return { value: await fn(r.url), provider: r.provider }; } catch (e) {
+      lastErr = e;
+      if (!opts.signal?.aborted) opts.breaker?.failed(r.provider);
+    }
+  }
+  throw lastErr ?? new Error('deadline passed before any node answered');
+}
+
+/** The live scan's reads (live-hub.ts): one attempt per node, ten seconds; a block that times out is read again next tick. */
+export const LIVE_READ: ReadOpts = { timeoutMs: 10000, retries: 0 };
+
+/** The head from the first node that answers: a down node is never the reason the other is not asked. */
+export async function namadaStatusAny(opts: ReadOpts = QUICK) {
+  const list = opts.breaker ? opts.breaker.order(RPCS) : RPCS;
+  let last: unknown;
+  for (const r of list) {
+    try { return await namadaStatus(r, opts); } catch (e) { last = e; opts.breaker?.failed(r.provider); }
+  }
+  throw last ?? new Error('no Namada node answered /status');
+}
+
+/** Block metas (height, time, num_txs) for up to 20 blocks. Scripts take the patient defaults (15 s, 3 attempts a node). */
+export async function blockMetas(min: number, max: number, opts: ReadOpts = {}) {
+  const { value } = await rpcRead(async (b) => {
+    const v = await fetchJson(`${b}/blockchain?minHeight=${min}&maxHeight=${max}`, { timeoutMs: opts.timeoutMs ?? 15000, retries: opts.retries, signal: opts.signal });
+    if (!Array.isArray(v?.result?.block_metas)) throw new Error(`blockchain ${min}-${max}: answer without block_metas`);
+    return v;
+  }, opts);
   return (value.result.block_metas as any[]).map((m) => ({
     height: Number(m.header.height),
     ts: Date.parse(m.header.time),
@@ -41,10 +74,12 @@ export async function blockMetas(min: number, max: number) {
   }));
 }
 
-export async function blockResults(height: number, ts: number): Promise<NamadaBlock> {
-  const { value } = await withFailover(RPCS, (b) =>
-    fetchJson(`${b}/block_results?height=${height}`, { timeoutMs: 30000 }),
-  );
+export async function blockResults(height: number, ts: number, opts: ReadOpts = {}): Promise<NamadaBlock> {
+  const { value } = await rpcRead(async (b) => {
+    const v = await fetchJson(`${b}/block_results?height=${height}`, { timeoutMs: opts.timeoutMs ?? 30000, retries: opts.retries, signal: opts.signal });
+    if (!v?.result || typeof v.result !== 'object') throw new Error(`block_results ${height}: answer without a result`);
+    return v;
+  }, opts);
   const r = value.result;
   const events = [
     ...(r.begin_block_events ?? []),
@@ -56,11 +91,13 @@ export async function blockResults(height: number, ts: number): Promise<NamadaBl
 }
 
 /** Raw txs of a block (base64, CometBFT protobuf envelope around the borsh Namada Tx) */
-export async function blockTxs(height: number): Promise<string[]> {
-  const { value } = await withFailover(RPCS, (b) => fetchJson(`${b}/block?height=${height}`, { timeoutMs: 30000 }));
-  const txs = value?.result?.block?.data?.txs;
-  if (!Array.isArray(txs)) throw new Error(`block ${height}: no txs array in /block response`);
-  return txs as string[];
+export async function blockTxs(height: number, opts: ReadOpts = {}): Promise<string[]> {
+  const { value } = await rpcRead(async (b) => {
+    const v = await fetchJson(`${b}/block?height=${height}`, { timeoutMs: opts.timeoutMs ?? 30000, retries: opts.retries, signal: opts.signal });
+    if (!Array.isArray(v?.result?.block?.data?.txs)) throw new Error(`block ${height}: no txs array in /block response`);
+    return v;
+  }, opts);
+  return value.result.block.data.txs as string[];
 }
 
 /** Heights (with block time) that emitted token/transfer events within [lo, hi] */

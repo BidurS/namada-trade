@@ -34,10 +34,13 @@
   },
   "migrations": [{ "tag": "v1", "new_sqlite_classes": ["LiveHub"] }],
 
-  // Exports, search, address reports and searched flow lists read thousands of rows a call: 30 a minute per
-  // client address (worker/src/http.ts rateLimited). namespace_id is any number unique to this account.
+  // Exports, search, address reports, searched lists, quotes, and every write (sign-in, pairing, tags, settings):
+  // 30 a minute per client address and path family (worker/src/http.ts rateLimited). Rewound reads and metric
+  // histories, which miss the edge cache by design: 120 a minute (replayLimited). namespace_id is any number
+  // unique to this account.
   "ratelimits": [
-    { "name": "HEAVY_LIMITER", "namespace_id": "1001", "simple": { "limit": 30, "period": 60 } }
+    { "name": "HEAVY_LIMITER", "namespace_id": "1001", "simple": { "limit": 30, "period": 60 } },
+    { "name": "REPLAY_LIMITER", "namespace_id": "1002", "simple": { "limit": 120, "period": 60 } }
   ],
 
   // Every minute: holders refresh, prices, supply split, integrity checks, gap-fill.
@@ -52,5 +55,5 @@
   // Secrets (set with `wrangler secret put <NAME>`, locally in .dev.vars):
   //   KEPLR_KEY            -> keplr_xxx path key for api.keplr.app
   //   DISCORD_WEBHOOK_URL  -> whale alerts
-  //   ACCESS_AUD           -> optional: Cloudflare Access application AUD tag (enforces Access JWT presence)
+  //   ACCESS_AUD           -> optional: Cloudflare Access application AUD tag (checks the header is present only; Access itself is enforced at the edge)
 }

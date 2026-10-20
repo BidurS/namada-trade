@@ -1,6 +1,7 @@
 import { explorerHashOf } from '../../shared/flow-rules';
 import { Hono } from 'hono';
 import { cors } from 'hono/cors';
+import { bodyLimit } from 'hono/body-limit';
 import type { Env } from './util';
 import type {
   Overview, Holder, AddressReport, SearchResult, Check, IntelResponse, DonationConfig, SourceHealth, Provenance, Sourced,
@@ -37,7 +38,19 @@ export const app = new Hono<{ Bindings: Env }>();
 
 app.use('*', cors());
 
-// Cloudflare Access verification middleware (if ACCESS_AUD is configured)
+/** A request body is at most this long (the largest legitimate one, a settings update with a full watchlist, is under 7 KB). */
+export const MAX_BODY_BYTES = 16 * 1024;
+// A longer body is refused before it is read into memory or parsed.
+app.use('/api/*', bodyLimit({ maxSize: MAX_BODY_BYTES, onError: (c) => c.json({ error: 'Request body too large.' }, 413) }));
+// Every failure answers in the API's own JSON shape (the UI parses each answer as JSON), with nothing from the error itself.
+app.onError((e, c) => {
+  console.error(e);
+  return c.json({ error: 'Something went wrong on our side.' }, 500);
+});
+
+// Cloudflare Access: a presence check only (the header is never verified against Access's keys). Access itself is
+// enforced at Cloudflare's edge before a request reaches this Worker; this check adds nothing on a host Access does
+// not cover (workers.dev), so ACCESS_AUD must never be relied on as a sign-in gate (docs/security-review.md A8).
 app.use('/api/*', async (c, next) => {
   const aud = c.env.ACCESS_AUD;
   if (aud) {
@@ -66,6 +79,23 @@ function thresholdsParam(c: any): AlertThresholds {
     if (Number.isFinite(v) && v > 0) th[k] = v;
   }
   return th;
+}
+
+/**
+ * The JSON object of a request body. Anything else (no body, malformed JSON, `null`, an array) reads as an empty
+ * object, which every route then checks field by field: a bad body gets the route's own answer, never a 500.
+ */
+async function jsonObject(c: any): Promise<Record<string, any>> {
+  const v: unknown = await c.req.json().catch(() => null);
+  return v && typeof v === 'object' && !Array.isArray(v) ? (v as Record<string, any>) : {};
+}
+
+/** The last page a list can be asked for: the offset must stay an integer SQLite accepts (beyond is refused, not guessed). */
+export const PAGE_MAX = 100_000;
+/** `?page=`: 1 by default and for anything that is not a number; above PAGE_MAX the request is refused. */
+function pageParam(c: any): number | Response {
+  const page = Math.max(1, parseInt(c.req.query('page') || '1', 10) || 1);
+  return page > PAGE_MAX ? c.json({ error: `page must be between 1 and ${PAGE_MAX.toLocaleString('en-US')}` }, 400) : page;
 }
 
 // ---------------------------------------------------------------- GET /api/overview
@@ -308,7 +338,8 @@ app.get('/api/holders', async (c) => {
   if (!chain) return c.json({ error: 'chain must be all, namada or osmosis' }, 400);
   const search = (c.req.query('search') || '').trim();
   const by = holdersBy(c.req.query('by'));
-  const page = Math.max(1, parseInt(c.req.query('page') || '1', 10) || 1);
+  const page = pageParam(c);
+  if (page instanceof Response) return page;
   const limit = Math.min(100, Math.max(10, parseInt(c.req.query('limit') || '50', 10) || 50));
   const offset = (page - 1) * limit;
 
@@ -378,7 +409,8 @@ app.get('/api/holders', async (c) => {
 app.get('/api/flows', async (c) => {
   const db = c.env.DB;
   const { asOf } = asOfParam(c);
-  const page = Math.max(1, parseInt(c.req.query('page') || '1', 10) || 1);
+  const page = pageParam(c);
+  if (page instanceof Response) return page;
   const limit = Math.min(100, Math.max(10, parseInt(c.req.query('limit') || '50', 10) || 50));
   const offset = (page - 1) * limit;
   const { where, params } = flowsWhere(flowsFilterFromQuery((k) => c.req.query(k), asOf));
@@ -398,10 +430,14 @@ app.get('/api/pools', async (c) => {
   return c.json({ pools: r.pools, prov });
 });
 
+/** Far above all NAM in existence (about 1.15 billion): a larger size is refused before any quote service is asked. */
+export const QUOTE_MAX_NAM = 1e12;
 app.get('/api/quote', async (c) => {
   const amount = parseFloat(c.req.query('amount') || '1000');
-  const side = (c.req.query('side') || 'sell') as 'buy' | 'sell';
+  const side = c.req.query('side') || 'sell';
   if (!(amount > 0)) return c.json({ quote: null, error: 'Enter an amount above zero.' }, 400);
+  if (!(amount <= QUOTE_MAX_NAM)) return c.json({ quote: null, error: 'Enter an amount below one trillion NAM.' }, 400);
+  if (side !== 'buy' && side !== 'sell') return c.json({ quote: null, error: 'side must be buy or sell.' }, 400);
   return c.json(await quoteNamTrade(amount, side));
 });
 
@@ -500,12 +536,12 @@ app.get('/api/address/:addr', async (c) => {
 });
 
 // ---------------------------------------------------------------- GET /api/intel
+// The copy the cron keeps (refreshed every minute, stamped with its own fetch time). A visitor never makes the forum
+// and the indexer answer: an old copy shows its age, and the live read runs only when there is no copy at all.
 app.get('/api/intel', async (c) => {
   const db = c.env.DB;
-  if (c.req.query('refresh') !== 'true') {
-    const cached = await kvGetJson<IntelResponse>(db, 'intel.cache');
-    if (cached && Date.now() - (cached.fetchedAt || 0) < 90_000) return c.json(cached);
-  }
+  const cached = await kvGetJson<IntelResponse>(db, 'intel.cache');
+  if (cached) return c.json(cached);
   const intel = await fetchIntel();
   if (intel.topics.length > 0 || intel.proposals.length > 0) await kvSet(db, 'intel.cache', JSON.stringify(intel)).catch(() => {});
   return c.json(intel);
@@ -546,14 +582,15 @@ app.get('/api/search', async (c) => {
 
 // ---------------------------------------------------------------- auth (signed-message login, sessions, pairing)
 app.post('/api/auth/nonce', async (c) => {
-  const body = await c.req.json<any>().catch(() => ({}));
+  const body = await jsonObject(c);
   const address = String(body.address || '').trim();
-  if (!address.startsWith('tnam1') && !address.startsWith('osmo1')) return c.json({ error: 'address must be tnam1… or osmo1…' }, 400);
+  // A real address shape only (chainOf: bech32 charset, bounded length): the nonce row stores it as given.
+  if (!chainOf(address)) return c.json({ error: 'address must be tnam1… or osmo1…' }, 400);
   return c.json(await issueNonce(c.env.DB, address));
 });
 
 app.post('/api/auth/login', async (c) => {
-  const body = await c.req.json<any>().catch(() => ({}));
+  const body = await jsonObject(c);
   const r = await login(c.env.DB, body);
   return r.session ? c.json({ session: r.session }) : c.json({ error: r.error }, 401);
 });
@@ -585,11 +622,12 @@ async function requireFullSession(c: any, action: keyof typeof FULL_SESSION_ONLY
 app.post('/api/auth/pair', async (c) => {
   const s = await requireFullSession(c, 'pair');
   if (s instanceof Response) return s;
-  return c.json(await createPairCode(c.env.DB, s!));
+  const r = await createPairCode(c.env.DB, s!);
+  return 'error' in r ? c.json({ error: r.error }, 503) : c.json(r);
 });
 
 app.post('/api/auth/pair/claim', async (c) => {
-  const body = await c.req.json<any>().catch(() => ({}));
+  const body = await jsonObject(c);
   const r = await claimPairCode(c.env.DB, String(body.code || ''));
   return r.session ? c.json({ session: r.session }) : c.json({ error: r.error }, 400);
 });
@@ -614,7 +652,7 @@ app.get('/api/me/settings', async (c) => {
 
 app.put('/api/me/settings', async (c) => {
   const r = await me(c); if (r instanceof Response) return r;
-  const body = await c.req.json<any>().catch(() => ({}));
+  const body = await jsonObject(c);
   const cur = await settingsOrDefault(c.env.DB, r.key, r.s!.address);
   const next = applyUpdate(cur, body);
   if (typeof next === 'string') return c.json({ error: next }, 400);
@@ -796,11 +834,18 @@ app.get('/api/integrity', async (c) => {
 
 /** The categories a user tag may have: words about the tagger's own view, never curated ones (exchange, team…). */
 export const USER_TAG_CATEGORIES = ['watch', 'whale', 'bot', 'other'] as const;
+/** Tags one wallet may hold in all, and new tags the site takes in a day: enough for any real use, too few to deface the holder list. */
+export const TAGS_PER_AUTHOR = 200;
+export const TAGS_PER_DAY = 500;
+/** A tag is a name, never a place to send people: text that reads as a link is refused. */
+const TAG_LINK = /:\/\/|www\.|\.[a-z]{2,}\//i;
+/** Control and format characters (zero-width joiners, direction marks) hide or reshape text. */
+const TAG_HIDDEN = /[\p{Cc}\p{Cf}]/u;
 
 app.post('/api/labels', async (c) => {
   const sess = await sessionFromRequest(c.env.DB, c.req.raw);
   if (!sess) return c.json({ error: 'sign in first' }, 401);
-  const body = await c.req.json<any>().catch(() => ({}));
+  const body = await jsonObject(c);
   const address = String(body.address || '').trim();
   const label = String(body.label || '').trim().slice(0, 64);
   const category = String(body.category || 'watch').trim().toLowerCase();
@@ -811,6 +856,14 @@ app.post('/api/labels', async (c) => {
   // A tag cannot start like a spreadsheet formula (the exports also guard it).
   if (/^[=+\-@\t\r]/.test(label)) return c.json({ error: 'A tag cannot start with =, +, -, @ or a tab.' }, 400);
   const note = body.note ? String(body.note).slice(0, 160) : null;
+  if (TAG_LINK.test(label) || (note && TAG_LINK.test(note))) return c.json({ error: 'A tag cannot hold a link.' }, 400);
+  if (TAG_HIDDEN.test(label) || (note && TAG_HIDDEN.test(note))) return c.json({ error: 'A tag cannot hold hidden characters.' }, 400);
+  if (INTERNAL_LABELS[address]) return c.json({ error: 'This address has a curated name, which a tag cannot replace.' }, 409);
+  // Caps (a wallet's other tags, and the site's new tags today); editing one's own tag on this address is never counted.
+  const own = await c.env.DB.prepare(`SELECT COUNT(*) n FROM labels WHERE source = 'user' AND author = ? AND address != ?`).bind(sess.address, address).first<{ n: number }>().catch(() => null);
+  if (own && own.n >= TAGS_PER_AUTHOR) return c.json({ error: `A wallet can tag at most ${TAGS_PER_AUTHOR} addresses.` }, 400);
+  const today = await c.env.DB.prepare(`SELECT COUNT(*) n FROM labels WHERE source = 'user' AND updated_at > ? AND address != ?`).bind(Date.now() - D, address).first<{ n: number }>().catch(() => null);
+  if (today && today.n >= TAGS_PER_DAY) return c.json({ error: `Tagging is paused for today: the site takes ${TAGS_PER_DAY} new tags a day.` }, 400);
   const s = stmt.userTag(address, chain, label, category, sess.address, note, Date.now());
   const r = await c.env.DB.prepare(s.sql).bind(...s.params).run();
   if (!Number(r?.meta?.changes ?? 0)) {

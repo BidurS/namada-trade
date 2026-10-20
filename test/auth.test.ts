@@ -1,4 +1,4 @@
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, vi, beforeAll, afterAll } from 'vitest';
 import { ed25519 } from '@noble/curves/ed25519.js';
 import { secp256k1 } from '@noble/curves/secp256k1.js';
 import { sha256 } from '@noble/hashes/sha2.js';
@@ -6,6 +6,9 @@ import { base64, bech32m, hex } from '@scure/base';
 import { adr36SignDoc, namadaImplicitAddress, osmosisAddress, verifyKeplr, verifyNamada, loginMessage } from '../worker/src/auth';
 
 describe('Namada login', () => {
+  // The revealed-key check reads the indexer: answered here (no key revealed), so the test never leaves the machine.
+  beforeAll(() => vi.stubGlobal('fetch', vi.fn(async () => new Response(JSON.stringify({ publicKey: null }), { status: 200, headers: { 'content-type': 'application/json' } }))));
+  afterAll(() => vi.unstubAllGlobals());
   it('derives the implicit address the chain uses (real vector from indexer.namada.net)', () => {
     const pk = bech32m.fromWords(bech32m.decode('tpknam1qzq3h7phn3tyv0mk5q2ancu0c3d685lzwaq60lh8pd8r44pf0s0xgau0ngm', 100).words);
     expect(namadaImplicitAddress(pk)).toBe('tnam1qrk5pyvtzxjmykcqmhglssshdjf3njac2qvqmlse');

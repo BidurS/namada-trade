@@ -21,7 +21,7 @@ export const CACHE_PARAMS: Record<string, string[]> = {
   '/api/quote/curve': [],
   '/api/alerts/rules': THRESHOLDS,
   '/api/alerts/recent': ['at', 'since', ...THRESHOLDS],
-  '/api/intel': ['refresh'],
+  '/api/intel': [],
   '/api/export/holders': ['chain', 'by', 'category', 'search', 'limit', 'format'],
   '/api/export/flows': ['chain', 'kind', 'whale', 'minNam', 'arb', 'pairs', 'search', 'at', 'limit', 'format'],
 };
@@ -40,21 +40,44 @@ const EXPORTS = /^\/api\/export\/(holders|flows)$/;
 const EXPORT_EDGE_CACHE = 'public, max-age=5, s-maxage=60';
 
 /**
- * Requests that read many D1 rows per call: exports, search, address reports, and flow lists with a text search.
- * They are limited per client address (the HEAVY_LIMITER binding in wrangler.jsonc; skipped where it is absent).
+ * Requests that read many D1 rows per call (exports, search, address reports, flow and holder lists with a text
+ * search), ask an outside service per call (quotes), or write for whoever asks (sign-in, pairing, tags, settings,
+ * keys): limited per client address and path family, 30 a minute (the HEAVY_LIMITER binding in wrangler.jsonc;
+ * skipped where it is absent).
  */
-export function isHeavy(url: URL): boolean {
-  return /^\/api\/(export\/|search$|address\/)/.test(url.pathname) || (url.pathname === '/api/flows' && !!url.searchParams.get('search'));
+export function isHeavy(url: URL, method = 'GET'): boolean {
+  const p = url.pathname;
+  if (method === 'POST' || method === 'PUT' || method === 'DELETE') return /^\/api\/(auth\/|labels$|me($|\/))/.test(p);
+  if (method !== 'GET') return false;
+  return /^\/api\/(export\/|search$|address\/|quote$)/.test(p) || ((p === '/api/flows' || p === '/api/holders') && !!url.searchParams.get('search'));
+}
+/**
+ * Rewound reads (`?at=`, `?since=`) and metric histories: every distinct value is its own edge-cache entry, so a
+ * stream of them reaches D1 each time. Limited per client address and path family, 120 a minute (REPLAY_LIMITER),
+ * and only on a cache miss (cachedApi), so going back to a moment already shown costs nothing.
+ */
+export function isReplay(url: URL): boolean {
+  return url.pathname === '/api/metrics/history' || url.searchParams.has('at') || url.searchParams.has('since');
+}
+type Limiter = { limit(o: { key: string }): Promise<{ success: boolean }> } | undefined;
+async function limitBy(limiter: Limiter, request: Request, url: URL, message: string): Promise<Response | null> {
+  if (!limiter) return null;
+  const ip = request.headers.get('cf-connecting-ip') || 'unknown';
+  const r = await limiter.limit({ key: `${ip}:${url.pathname.split('/').slice(0, 3).join('/')}` }).catch(() => ({ success: true }));
+  if (r.success) return null;
+  return new Response(JSON.stringify({ error: message }), {
+    status: 429, headers: { 'content-type': 'application/json', 'retry-after': '60', 'x-robots-tag': 'noindex', 'cache-control': 'no-store', 'x-content-type-options': 'nosniff' },
+  });
 }
 export async function rateLimited(request: Request, env: Env): Promise<Response | null> {
   const url = new URL(request.url);
-  if (!isHeavy(url) || !env.HEAVY_LIMITER) return null;
-  const key = request.headers.get('cf-connecting-ip') || 'unknown';
-  const r = await env.HEAVY_LIMITER.limit({ key: `${key}:${url.pathname.split('/').slice(0, 3).join('/')}` }).catch(() => ({ success: true }));
-  if (r.success) return null;
-  return new Response(JSON.stringify({ error: 'Too many requests of this kind from your address; try again in a minute.' }), {
-    status: 429, headers: { 'content-type': 'application/json', 'retry-after': '60', 'x-robots-tag': 'noindex' },
-  });
+  if (!isHeavy(url, request.method)) return null;
+  return limitBy(env.HEAVY_LIMITER, request, url, 'Too many requests of this kind from your address; try again in a minute.');
+}
+export async function replayLimited(request: Request, env: Env): Promise<Response | null> {
+  const url = new URL(request.url);
+  if (!isReplay(url)) return null;
+  return limitBy(env.REPLAY_LIMITER, request, url, 'Too many rewound reads from your address; try again in a minute.');
 }
 
 /** What browsers may keep an API answer for. The edge keeps its own copy for 15 s (EDGE_CACHE). */
@@ -63,12 +86,15 @@ const EDGE_CACHE = 'public, max-age=5, s-maxage=15, stale-while-revalidate=30';
 
 /**
  * Every API answer: not for search indexes (the footer links /api/overview; robots.txt keeps the read paths
- * crawlable so pages render), and for cacheable ones the browser lifetime set here, whatever the stored copy says.
+ * crawlable so pages render), never sniffed into another type, and for cacheable ones the browser lifetime set
+ * here, whatever the stored copy says. Everything else (sign-in answers that carry a token, a user's settings,
+ * live quotes) is for this request only: no browser or shared cache keeps it.
  */
 function apiHeaders(res: Response, browserCache: string | null): Response {
   const out = new Response(res.body, res);
   out.headers.set('X-Robots-Tag', 'noindex');
-  if (browserCache) out.headers.set('Cache-Control', browserCache);
+  out.headers.set('X-Content-Type-Options', 'nosniff');
+  out.headers.set('Cache-Control', browserCache ?? 'no-store');
   return out;
 }
 
@@ -80,15 +106,29 @@ function apiHeaders(res: Response, browserCache: string | null): Response {
  */
 export async function cachedApi(request: Request, env: Env, ctx: ExecutionContext, fetchApp: (r: Request, e: Env, c: ExecutionContext) => Response | Promise<Response>): Promise<Response> {
   const url = new URL(request.url);
+  // No API path carries a percent-encoded character (addresses are bech32, ids are hex, typed text travels in the
+  // query string). The router matches the decoded path while the cache and limiter rules below see the raw one, so
+  // an encoded path (/api/%73earch) would only serve to slip past them: it is not found.
+  if (url.pathname.includes('%')) return apiHeaders(new Response(JSON.stringify({ error: 'Not found' }), { status: 404, headers: { 'content-type': 'application/json' } }), null);
+  // HEAD is answered from the GET's own cache entry, never stored itself: the router would run the GET handler and
+  // answer with no body, and that empty answer must never become the stored copy every visitor is served.
+  if (request.method === 'HEAD') {
+    const r = await cachedApi(new Request(request.url, { method: 'GET', headers: request.headers }), env, ctx, fetchApp);
+    return new Response(null, r);
+  }
   const limited = await rateLimited(request, env);
   if (limited) return limited;
   const isExport = EXPORTS.test(url.pathname);
-  const cacheable = request.method === 'GET' && (CACHEABLE_API.test(url.pathname) || isExport) && !request.headers.get('authorization');
+  // The cached routes are public market reads that never look at a session (test/review2-worker-round2.test.ts pins
+  // it), so an Authorization header changes nothing about the answer and does not get past the cache.
+  const cacheable = request.method === 'GET' && (CACHEABLE_API.test(url.pathname) || isExport);
   if (!cacheable) return apiHeaders(await fetchApp(request, env, ctx), null);
   const cache = caches.default;
   const key = new Request(cacheKeyUrl(url), { method: 'GET' });
   const hit = await cache.match(key);
   if (hit) return apiHeaders(hit, BROWSER_CACHE);
+  const replay = await replayLimited(request, env);
+  if (replay) return replay;
   const res = await fetchApp(request, env, ctx);
   if (res.status !== 200) return apiHeaders(res, null);
   const stored = new Response(res.body, res);

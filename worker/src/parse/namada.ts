@@ -1,5 +1,5 @@
 import { NAM, NAMADA } from '../config';
-import { toNam } from '../util';
+import { toNam, isRealAddress } from '../util';
 import type { Flow, Move } from '../../../shared/types';
 import type { RawEvent } from './osmosis';
 
@@ -43,7 +43,8 @@ function toTokenUnits(raw: string, decimals = 6): number {
 
 function attrs(e: RawEvent): Record<string, string> {
   const o: Record<string, string> = {};
-  for (const { key, value } of e.attributes) o[key] = value;
+  // Chain data as a node sent it: an event without attributes, or an attribute that is not a string, is read as empty.
+  for (const a of Array.isArray(e.attributes) ? e.attributes : []) if (a && typeof a.key === 'string') o[a.key] = typeof a.value === 'string' ? a.value : '';
   return o;
 }
 
@@ -290,7 +291,8 @@ export function parseNamadaBlock(block: NamadaBlock, priceUsd: number | null): N
         }
         const osmo = want === 'out' ? p.receiver : p.sender;
         const nam = want === 'out' ? p.sender : p.receiver;
-        if (osmo?.startsWith('osmo1') && nam?.startsWith('tnam1') && nam !== I.masp) {
+        // A link joins two real accounts only (a packet's receiver is text the sender chose), never the shielded pool.
+        if (isRealAddress(osmo) === 'osmosis' && isRealAddress(nam) === 'namada' && nam !== I.masp) {
           out.links.push({ osmo, namada: nam, amount, ts: block.ts });
         }
       }

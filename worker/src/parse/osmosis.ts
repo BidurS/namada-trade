@@ -1,5 +1,5 @@
 import { NAM, OSMOSIS } from '../config';
-import { namFromCoins, parseCoins } from '../util';
+import { namFromCoins, parseCoins, isRealAddress } from '../util';
 import type { Flow, Move } from '../../../shared/types';
 
 export interface RawEvent {
@@ -219,14 +219,15 @@ export function parseOsmosisTx(tx: NormTx, ctx: OsmoCtx): OsmoParsed {
       if (!ok) return;
       const amount = Number(pd.amount) / 10 ** NAM.decimals;
       out.flows.push(flow(tx, `ibc_in:${i}`, 'ibc_in', pd.sender, pd.receiver, amount, ctx.priceUsd, { memo: pd.memo, channel: NAM.osmoChannel }));
-      out.links.push({ osmo: pd.receiver, namada: pd.sender, amount, ts: tx.ts });
+      // A link joins two real accounts only (the packet's sender and receiver are text the sender chose).
+      if (isRealAddress(pd.receiver) === 'osmosis' && isRealAddress(pd.sender) === 'namada') out.links.push({ osmo: pd.receiver, namada: pd.sender, amount, ts: tx.ts });
     } else if (e.type === 'ibc_transfer') {
       const a = attrs(e);
       if (a.denom !== NAM.osmoDenom) return;
       const amount = Number(a.amount) / 10 ** NAM.decimals;
       const seq = seqFor(a.msg_index);
       out.flows.push(flow(tx, `ibc_out:${i}`, 'ibc_out', a.sender, a.receiver, amount, ctx.priceUsd, { memo: a.memo, channel: NAM.osmoChannel, ...(seq ? { packetSequence: seq } : {}) }));
-      if (a.receiver?.startsWith('tnam1')) out.links.push({ osmo: a.sender, namada: a.receiver, amount, ts: tx.ts });
+      if (isRealAddress(a.receiver) === 'namada' && isRealAddress(a.sender) === 'osmosis') out.links.push({ osmo: a.sender, namada: a.receiver, amount, ts: tx.ts });
     } else if (e.type === 'timeout_packet') {
       const a = attrs(e);
       if (a.packet_src_channel === NAM.osmoChannel) {

@@ -2,8 +2,8 @@ import { isInternal } from '../../../shared/alerts';
 
 /** A move's record on a public explorer: the explorer hash when the server sent one (shared/flow-rules.ts explorerHashOf). */
 export const explorerTxOf = (f: { chain: string; txHash: string; explorerHash?: string }) => explorerTx(f.chain, f.explorerHash || f.txHash);
-export const explorerTx = (chain: string, hash: string) => (chain === 'osmosis' ? `https://www.mintscan.io/osmosis/tx/${hash}` : `https://namada.valopers.com/transactions/${hash.toUpperCase()}`);
-export const explorerAddr = (addr: string) => (addr.startsWith('osmo1') ? `https://www.mintscan.io/osmosis/address/${addr}` : `https://namada.valopers.com/account/${addr}`);
+export const explorerTx = (chain: string, hash: string) => (chain === 'osmosis' ? `https://www.mintscan.io/osmosis/tx/${encodeURIComponent(hash)}` : `https://namada.valopers.com/transactions/${encodeURIComponent(hash.toUpperCase())}`);
+export const explorerAddr = (addr: string) => (addr.startsWith('osmo1') ? `https://www.mintscan.io/osmosis/address/${encodeURIComponent(addr)}` : `https://namada.valopers.com/account/${encodeURIComponent(addr)}`);
 
 // =====================================================================================
 // Design-system number rules (docs/design/system.md 5.3). The old views' helpers (and their

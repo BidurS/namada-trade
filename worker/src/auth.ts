@@ -1,8 +1,8 @@
 // Wallet login by signed message (no transaction, no fee), sessions, and desktop→phone pairing.
 //
 // Namada Keychain: ed25519 `signArbitrary` over sha256(message). The public key must match the key the
-// chain has for that address: we check the indexer's revealed key first and, independently, derive the
-// implicit address from the key (sha256(borsh pk)[0..20] behind a 0x00 discriminant, bech32m "tnam").
+// chain has for that address: the implicit address is derived from the key (sha256(borsh pk)[0..20] behind a
+// 0x00 discriminant, bech32m "tnam") and, once the signature verifies, the indexer's revealed key is compared too.
 // Keplr (Osmosis): ADR-36 `signArbitrary`; secp256k1 over sha256 of the amino sign doc; address =
 // bech32("osmo", ripemd160(sha256(pubkey))).
 import { ed25519 } from '@noble/curves/ed25519.js';
@@ -13,6 +13,9 @@ import { bech32, bech32m, base64, hex } from '@scure/base';
 import { kvGetJson, kvSet } from './db';
 import { fetchJson } from './util';
 import type { Chain, SessionInfo } from '../../shared/types';
+import { loginMessage, NONCE_RE } from '../../shared/login';
+
+export { loginMessage };
 
 const INDEXER = 'https://indexer.namada.net/api/v1';
 const NONCE_TTL = 5 * 60000;
@@ -34,10 +37,6 @@ export interface Session {
 
 const rand = (n: number) => hex.encode(crypto.getRandomValues(new Uint8Array(n)));
 
-export function loginMessage(address: string, nonce: string): string {
-  return `NamadaTrade login\naddress: ${address}\nnonce: ${nonce}\n\nThis signature only proves you control this address. It is not a transaction and costs nothing.`;
-}
-
 export async function issueNonce(db: D1Database, address: string): Promise<{ nonce: string; message: string; expiresAt: number }> {
   const nonce = rand(16);
   const expiresAt = Date.now() + NONCE_TTL;
@@ -45,10 +44,14 @@ export async function issueNonce(db: D1Database, address: string): Promise<{ non
   return { nonce, message: loginMessage(address, nonce), expiresAt };
 }
 
+/** One use: the row is read, then deleted, and only the caller whose delete removed it (one statement, atomic) goes on. */
 async function consumeNonce(db: D1Database, nonce: string, address: string): Promise<boolean> {
+  if (!NONCE_RE.test(nonce)) return false;
   const row = await kvGetJson<{ address: string; expiresAt: number }>(db, `authnonce:${nonce}`);
-  await db.prepare('DELETE FROM kv WHERE key = ?').bind(`authnonce:${nonce}`).run().catch(() => {});
-  return !!row && row.address === address && row.expiresAt > Date.now();
+  if (!row) return false;
+  const r = await db.prepare('DELETE FROM kv WHERE key = ?').bind(`authnonce:${nonce}`).run().catch(() => null);
+  if (Number(r?.meta?.changes ?? 0) !== 1) return false;
+  return row.address === address && row.expiresAt > Date.now();
 }
 
 // ---------------------------------------------------------------- Namada
@@ -70,7 +73,8 @@ function parseNamadaPubkey(input: string): Uint8Array {
 
 async function revealedKey(address: string): Promise<Uint8Array | null> {
   try {
-    const r = await fetchJson<any>(`${INDEXER}/revealed-public-key/${address}`, { timeoutMs: 6000, retries: 1 });
+    // One short attempt: a slow indexer holds a sign-in a few seconds, never longer (the check is a second opinion).
+    const r = await fetchJson<any>(`${INDEXER}/revealed-public-key/${address}`, { timeoutMs: 3000, retries: 0 });
     return r?.publicKey ? parseNamadaPubkey(r.publicKey) : null;
   } catch {
     return null;
@@ -80,14 +84,13 @@ async function revealedKey(address: string): Promise<Uint8Array | null> {
 /** Returns an error string, or null when the signature is valid for the address. */
 export async function verifyNamada(address: string, message: string, pubkeyIn: string, signatureIn: string): Promise<string | null> {
   let pk: Uint8Array;
-  try { pk = parseNamadaPubkey(pubkeyIn); } catch (e) { return String(e); }
+  try { pk = parseNamadaPubkey(pubkeyIn); } catch { return 'unrecognised Namada public key'; }
   if (pk[0] !== 0) return 'only ed25519 keys are supported';
   const key = pk.slice(1);
 
-  // Key ↔ address binding: derivation (always) and the chain's revealed key (when the account has one).
+  // Key ↔ address binding by derivation, then the signature (both local), and only for a proven signer the chain's
+  // revealed key (an outside read): a request with a bad signature never costs an indexer call.
   if (namadaImplicitAddress(pk) !== address) return 'public key does not belong to this address';
-  const revealed = await revealedKey(address);
-  if (revealed && hex.encode(revealed) !== hex.encode(pk)) return 'public key differs from the key revealed on chain';
 
   let sig: Uint8Array;
   try {
@@ -98,7 +101,11 @@ export async function verifyNamada(address: string, message: string, pubkeyIn: s
 
   const msg = new TextEncoder().encode(message);
   const ok = ed25519.verify(sig, sha256(msg), key) || ed25519.verify(sig, msg, key);
-  return ok ? null : 'signature does not verify';
+  if (!ok) return 'signature does not verify';
+
+  const revealed = await revealedKey(address);
+  if (revealed && hex.encode(revealed) !== hex.encode(pk)) return 'public key differs from the key revealed on chain';
+  return null;
 }
 
 // ---------------------------------------------------------------- Keplr / ADR-36
@@ -153,8 +160,13 @@ export function verifyKeplr(address: string, message: string, pubkeyB64: string,
 export const MAX_SESSIONS = 50;
 /** Live API keys an address may have; making one more is refused (revoke one first), never done by ending one. */
 export const MAX_API_KEYS = 20;
+/**
+ * Every row whose key starts with `prefix:`, as a range the primary key answers (`LIKE 'prefix:%'` cannot use the
+ * index under SQLite's case-insensitive LIKE and scans the whole table). ';' is the byte after ':'.
+ */
+export const keyPrefix = (prefix: string) => `(key >= '${prefix}:' AND key < '${prefix};')`;
 /** A stored session row from before tokens were hashed: its value still holds the token. */
-export const LEGACY_SESSION_SQL = `key LIKE 'session:%' AND json_extract(value, '$.token') IS NOT NULL`;
+export const LEGACY_SESSION_SQL = `${keyPrefix('session')} AND json_extract(value, '$.token') IS NOT NULL`;
 
 export const tokenHash = (token: string) => hex.encode(sha256(new TextEncoder().encode(token)));
 const sessionKey = (token: string) => `session:${tokenHash(token)}`;
@@ -170,7 +182,7 @@ async function linkedCounterpart(db: D1Database, address: string): Promise<strin
 
 /** Every stored session row of an address (hashed keys and rows written before hashing), newest first. */
 async function sessionRows(db: D1Database, address: string): Promise<{ key: string; s: Stored }[]> {
-  const r = await db.prepare(`SELECT key, value FROM kv WHERE key LIKE 'session:%' AND json_extract(value, '$.address') = ?`).bind(address).all<{ key: string; value: string }>().catch(() => ({ results: [] as { key: string; value: string }[] }));
+  const r = await db.prepare(`SELECT key, value FROM kv WHERE ${keyPrefix('session')} AND json_extract(value, '$.address') = ?`).bind(address).all<{ key: string; value: string }>().catch(() => ({ results: [] as { key: string; value: string }[] }));
   const out: { key: string; s: Stored }[] = [];
   for (const row of r.results || []) {
     try { out.push({ key: row.key, s: JSON.parse(row.value) as Stored }); } catch {}
@@ -230,7 +242,7 @@ export async function revokeSession(db: D1Database, address: string, id: string)
 
 /** Every session and API key of the address, wherever it was created, plus the old per-address index row. */
 export async function revokeAllSessions(db: D1Database, address: string) {
-  await db.prepare(`DELETE FROM kv WHERE key LIKE 'session:%' AND json_extract(value, '$.address') = ?`).bind(address).run().catch(() => {});
+  await db.prepare(`DELETE FROM kv WHERE ${keyPrefix('session')} AND json_extract(value, '$.address') = ?`).bind(address).run().catch(() => {});
   await db.prepare('DELETE FROM kv WHERE key = ?').bind(`sessions:${address}`).run().catch(() => {});
 }
 
@@ -275,20 +287,29 @@ export async function logout(db: D1Database, token: string) {
 
 // ---------------------------------------------------------------- pairing
 
-export async function createPairCode(db: D1Database, s: Session): Promise<{ code: string; expiresAt: number }> {
-  const code = rand(4).toUpperCase(); // 8 hex chars, 10-minute life, single use
-  const expiresAt = Date.now() + PAIR_TTL;
+export async function createPairCode(db: D1Database, s: Session): Promise<{ code: string; expiresAt: number } | { error: string }> {
   // `by`: the hash of the pairing device's token (never the token), so the cap cannot end that device.
-  await kvSet(db, `pair:${code}`, { address: s.address, chain: s.chain, expiresAt, by: tokenHash(s.token) });
-  return { code, expiresAt };
+  const by = tokenHash(s.token);
+  // A device shows one live code at a time: making a new one retires the ones it made before.
+  await db.prepare(`DELETE FROM kv WHERE ${keyPrefix('pair')} AND json_extract(value, '$.by') = ?`).bind(by).run().catch(() => {});
+  const expiresAt = Date.now() + PAIR_TTL;
+  for (let attempt = 0; attempt < 3; attempt++) {
+    const code = rand(4).toUpperCase(); // 8 hex chars, 10-minute life, single use
+    // A plain insert, never a replace: a code another device is showing is not overwritten (a colliding draw is drawn again).
+    const r = await db.prepare('INSERT OR IGNORE INTO kv (key,value,updated_at) VALUES (?,?,?)').bind(`pair:${code}`, JSON.stringify({ address: s.address, chain: s.chain, expiresAt, by }), Date.now()).run().catch(() => null);
+    if (Number(r?.meta?.changes ?? 0) === 1) return { code, expiresAt };
+  }
+  return { error: 'A code could not be made right now; try again.' };
 }
 
 export async function claimPairCode(db: D1Database, codeIn: string): Promise<{ session?: Session; error?: string }> {
   const code = codeIn.trim().toUpperCase();
   if (!/^[0-9A-F]{8}$/.test(code)) return { error: 'code is 8 characters' };
   const row = await kvGetJson<{ address: string; chain: Chain; expiresAt: number; by?: string }>(db, `pair:${code}`);
-  await db.prepare('DELETE FROM kv WHERE key = ?').bind(`pair:${code}`).run().catch(() => {});
-  if (!row || row.expiresAt < Date.now()) return { error: 'code expired or already used' };
+  if (!row) return { error: 'code expired or already used' };
+  // One use: only the claim whose delete removed the row goes on (two claims of one code cannot both pair).
+  const r = await db.prepare('DELETE FROM kv WHERE key = ?').bind(`pair:${code}`).run().catch(() => null);
+  if (Number(r?.meta?.changes ?? 0) !== 1 || row.expiresAt < Date.now()) return { error: 'code expired or already used' };
   return { session: await newDeviceSession(db, row.address, row.chain, 'pair', row.by ?? null) };
 }
 
@@ -296,8 +317,11 @@ export async function claimPairCode(db: D1Database, codeIn: string): Promise<{ s
  * Cron: drop expired nonces, sessions and pair codes, the per-address session index rows no longer used, and any
  * session row from before tokens were hashed (migration 0005 deletes them at deploy; this catches any left).
  */
+/** Alert claim rows (sources/discord.ts) are kept this long; nothing alerts for a move older than a day (LATE_ALERT_MAX_AGE_MS). */
+export const ALERT_CLAIM_KEEP_MS = 30 * 86400000;
 export async function sweepAuth(db: D1Database) {
-  await db.prepare(`DELETE FROM kv WHERE (key LIKE 'session:%' OR key LIKE 'authnonce:%' OR key LIKE 'pair:%') AND CAST(json_extract(value, '$.expiresAt') AS INTEGER) < ?`).bind(Date.now()).run().catch(() => {});
-  await db.prepare(`DELETE FROM kv WHERE key LIKE 'sessions:%'`).run().catch(() => {});
+  await db.prepare(`DELETE FROM kv WHERE (${keyPrefix('session')} OR ${keyPrefix('authnonce')} OR ${keyPrefix('pair')}) AND CAST(json_extract(value, '$.expiresAt') AS INTEGER) < ?`).bind(Date.now()).run().catch(() => {});
+  await db.prepare(`DELETE FROM kv WHERE ${keyPrefix('sessions')}`).run().catch(() => {});
   await db.prepare(`DELETE FROM kv WHERE ${LEGACY_SESSION_SQL}`).run().catch(() => {});
+  await db.prepare(`DELETE FROM kv WHERE ${keyPrefix('alert')} AND updated_at < ?`).bind(Date.now() - ALERT_CLAIM_KEEP_MS).run().catch(() => {});
 }
