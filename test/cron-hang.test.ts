@@ -41,7 +41,7 @@ function network(net: Net | ((url: string) => boolean)) {
           : path.includes('/shell/prefix/') ? BAL.value
           : path.includes('/vp/pos/bonds_and_unbonds/to') ? BONDS.value
           : path.includes('delegations_at') ? null
-          : u256(path.includes('total_stake') ? 75501646677000n : 1000000n); // 0.3% under the fixture's bond sum
+          : u256(path.includes('total_stake') ? 75338381473000n : 1000000n); // 0.3% under the fixture's bond sum
         res = json({ result: { response: { code: 0, value, height: '8343400' } } });
       }
     } else if (url.includes('denom_owners')) {
@@ -99,17 +99,17 @@ describe('a tick with both listings due', () => {
     network(() => false);
     const t1 = await virtualTick({ DB: db, KEPLR_KEY: 'k' }, PLAIN);
     expect(t1).toBeLessThan(5000);
-    expect(listedStakes(db)).toBe(13);
+    expect(listedStakes(db)).toBe(12);
     expect(listedHolders(db)).toBe(0);
     let h = healthOf(db);
     expect(h['Namada RPC (bond listing)']).toMatchObject({ ok: true });
-    expect(h['Namada RPC (bond listing)'].note).toMatch(/^48 bond entries at height 8,343,400 .*13 addresses stake 75,728,153 NAM.*13 rows written$/);
+    expect(h['Namada RPC (bond listing)'].note).toMatch(/^48 bond entries at height 8,343,400 .*12 addresses stake 75,564,397 NAM.*12 rows written$/);
     expect(h['Namada RPC (stake sample)']).toMatchObject({ ok: true });
     expect(h['Namada RPC (balance listing)']).toBeUndefined();
     const check = db.raw.prepare("SELECT status, detail FROM checks WHERE key='bonded_coverage'").get();
     expect(check.status).toBe('ok');
-    expect(JSON.parse(check.detail)).toMatchObject({ coveragePct: '100.3%', stakers: 13, knownAddresses: 15, pendingAddresses: 0 });
-    expect(record<BondListingRecord>(db, 'bond.listing')).toMatchObject({ completeAt: PLAIN, remaining: 0, written: 13 });
+    expect(JSON.parse(check.detail)).toMatchObject({ coveragePct: '100.3%', stakers: 12, knownAddresses: 15, pendingAddresses: 0 });
+    expect(record<BondListingRecord>(db, 'bond.listing')).toMatchObject({ completeAt: PLAIN, remaining: 0, written: 12 });
 
     const t2 = await virtualTick({ DB: db, KEPLR_KEY: 'k' }, PLAIN + 60000);
     expect(t2).toBeLessThan(5000);
@@ -135,14 +135,14 @@ describe('a hung Namada node', () => {
     const took = await virtualTick({ DB: db, KEPLR_KEY: '' }, PLAIN);
     expect(took).toBeLessThan(20000); // one 6 s status timeout, not minutes
     expect(calls.filter((u) => u.includes('5elementsnodes') && u.includes('abci_query'))).toHaveLength(0);
-    expect(listedStakes(db)).toBe(13);
-    expect(db.raw.prepare("SELECT value FROM metrics WHERE key='supply.total_stake'").get().value).toBeCloseTo(75501646.677, 3);
+    expect(listedStakes(db)).toBe(12);
+    expect(db.raw.prepare("SELECT value FROM metrics WHERE key='supply.total_stake'").get().value).toBeCloseTo(75338381.473, 3);
     const health = healthOf(db);
     expect(health['Namada RPC 5ElementsNodes'].ok).toBe(false);
     expect(health['Namada RPC (bond listing)']).toMatchObject({ ok: true });
     // the stub answers delegations_at with nothing, so every sampled stake "differs": reported, never written to a row
-    expect(health['Namada RPC (stake sample)'].note).toMatch(/^0 of 13 sampled stakes match the bond listing to the base unit, 13 differ/);
-    expect(db.raw.prepare('SELECT COUNT(*) n FROM stakes WHERE verified_src = ? AND bonded_num > 0').get(BOND_LISTING_SRC).n).toBe(13);
+    expect(health['Namada RPC (stake sample)'].note).toMatch(/^0 of 12 sampled stakes match the bond listing to the base unit, 12 differ/);
+    expect(db.raw.prepare('SELECT COUNT(*) n FROM stakes WHERE verified_src = ? AND bonded_num > 0').get(BOND_LISTING_SRC).n).toBe(12);
     // the lock is released at the end
     expect(locked(db)).toBe(0);
   });
@@ -155,7 +155,7 @@ describe('a hung Namada node', () => {
     // only the seven supply reads asked it; after they failed it was asked last for the rest of the tick
     expect(calls.filter((u) => u.includes('5elementsnodes') && u.includes('abci_query')).length).toBeLessThanOrEqual(7);
     expect(metricKeys(db)).toEqual(expect.arrayContaining(['supply.total', 'supply.total_stake', 'supply.masp_shielded', 'epoch', 'supply.osmosis']));
-    expect(listedStakes(db)).toBe(13);
+    expect(listedStakes(db)).toBe(12);
     const h = healthOf(db);
     expect(h['Namada RPC (bond listing)']).toMatchObject({ ok: true });
     expect(h['Namada RPC (stake sample)']).toMatchObject({ ok: true });
@@ -171,7 +171,7 @@ describe('a hung Namada node', () => {
     network({ hung: () => false, slowMs: (u) => (u.includes('5elementsnodes') && u.includes('abci_query') ? 9000 : 0) });
     const ms = await virtualTick({ DB: db, KEPLR_KEY: 'k' }, PLAIN);
     expect(ms).toBeLessThan(15000);
-    expect(listedStakes(db)).toBe(13);
+    expect(listedStakes(db)).toBe(12);
     expect(healthOf(db)['Namada RPC (bond listing)']).toMatchObject({ ok: true });
   });
 
@@ -200,7 +200,7 @@ describe('a hung Namada node', () => {
     const t1 = await virtualTick({ DB: db, KEPLR_KEY: 'k' }, PLAIN);
     expect(t1).toBeLessThanOrEqual(TICK_DEADLINE_MS + 1000);
     let h = healthOf(db);
-    expect(listedStakes(db)).toBe(13); // the bond listing ran before the sample
+    expect(listedStakes(db)).toBe(12); // the bond listing ran before the sample
     expect(h['Namada RPC (stake sample)'].ok).toBe(false);
     expect(h['Namada RPC (stake sample)'].note).toMatch(/^0 of 0 sampled stakes match.*reads failed.*left for the next tick \(time limit\)/);
     // next tick: the sample is cut LISTING_RESERVE_MS before the deadline and the balance listing runs in the time kept
@@ -216,7 +216,7 @@ describe('a hung Namada node', () => {
     const db = seeded(PLAIN);
     network((url) => url.includes('abci_query') && decodeURIComponent(url).includes('/vp/pos/bond/'));
     await virtualTick({ DB: db, KEPLR_KEY: 'k' }, PLAIN);
-    expect(listedStakes(db)).toBe(13);
+    expect(listedStakes(db)).toBe(12);
     expect(healthOf(db)['Namada RPC (stake sample)'].ok).toBe(false);
     expect(db.raw.prepare('SELECT COUNT(*) n FROM stakes WHERE verified_src != ?').get(BOND_LISTING_SRC).n).toBe(0);
   });
@@ -230,7 +230,7 @@ describe('a hung Keplr', () => {
     expect(ms).toBeLessThan(25000); // 10 s × 2 attempts on the supply read, run beside everything else
     expect(metricKeys(db)).toEqual(expect.arrayContaining(['supply.total', 'supply.total_stake', 'epoch']));
     expect(metricKeys(db)).not.toContain('supply.osmosis');
-    expect(listedStakes(db)).toBe(13);
+    expect(listedStakes(db)).toBe(12);
     expect(healthOf(db)['Keplr Osmosis REST (supply)'].ok).toBe(false);
   });
 
@@ -239,7 +239,7 @@ describe('a hung Keplr', () => {
     network((url) => url.includes('api.keplr.app'));
     const ms = await virtualTick({ DB: db, KEPLR_KEY: 'k' }, SYNC);
     expect(ms).toBeLessThan(25000);
-    expect(listedStakes(db)).toBe(13);
+    expect(listedStakes(db)).toBe(12);
     expect(healthOf(db)['Keplr Osmosis REST (holders)'].ok).toBe(false);
     expect(db.raw.prepare("SELECT balance_num FROM holders WHERE chain='osmosis' AND address='osmo1zzz'").get().balance_num).toBe(5);
   });
@@ -257,7 +257,7 @@ describe('a hung Keplr', () => {
     expect(healthOf(db)['Keplr Osmosis REST (holders)'].ok).toBe(false);
     expect(db.raw.prepare("SELECT balance_num FROM holders WHERE chain='osmosis' AND address='osmo1zzz'").get().balance_num).toBe(5);
     // the Namada phases did not wait for it
-    expect(listedStakes(db)).toBe(13);
+    expect(listedStakes(db)).toBe(12);
   });
 });
 
@@ -267,7 +267,7 @@ describe('a hung indexer', () => {
     network((url) => url.includes('indexer.namada.net'));
     const ms = await virtualTick({ DB: db, KEPLR_KEY: 'k' }, PLAIN);
     expect(ms).toBeLessThanOrEqual(TICK_DEADLINE_MS + 1000);
-    expect(listedStakes(db)).toBe(13);
+    expect(listedStakes(db)).toBe(12);
     expect(healthOf(db)['Namada indexer (indexer.namada.net)'].ok).toBe(false);
   });
 });

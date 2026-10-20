@@ -183,7 +183,8 @@ export interface ListingAnswer { value: string | null; height: number; provider:
  * ("5ElementsNodes: timeout: 4.2 MB of 12.0 MB arrived in 180 s (first byte after 5.8 s); Papadritta: …").
  */
 async function abciListing(path: string, opts: ReadOpts = {}): Promise<ListingAnswer> {
-  const list = opts.rpcs?.length ? opts.rpcs : RPCS;
+  const base = opts.rpcs?.length ? opts.rpcs : RPCS;
+  const list = opts.breaker ? opts.breaker.order(base) : base;
   const notes: string[] = [];
   for (const r of list) {
     if (opts.signal?.aborted) { notes.push(`${r.provider}: not asked, the deadline had passed`); break; }
@@ -195,6 +196,7 @@ async function abciListing(path: string, opts: ReadOpts = {}): Promise<ListingAn
       if (resp.code && resp.code !== 0) throw new AbciCodeError(path, Number(resp.code), String(resp.info || resp.log || ''));
       return { value: (resp.value as string | null) ?? null, height: Number(resp.height || 0), provider: r.provider, bytes, readMs: Date.now() - t0 };
     } catch (e) {
+      if (!opts.signal?.aborted) opts.breaker?.failed(r.provider);
       notes.push(`${r.provider}: ${e instanceof ReadCutError ? e.message : String(e instanceof Error ? e.message : e).slice(0, 120)}`);
     }
   }

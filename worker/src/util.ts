@@ -87,18 +87,21 @@ export class ReadCutError extends Error {
 const mbOf = (n: number) => `${(n / 1e6).toFixed(1)} MB`;
 const secOf = (ms: number) => `${(ms / 1000).toFixed(ms < 10_000 ? 1 : 0)} s`;
 
+/** Hard cap on a streamed text response (32 MB: over twice the 12 MB balance listing, well inside the 128 MB Worker isolate limit). */
+export const FETCH_TEXT_MAX_BYTES = 32 * 1024 * 1024;
+
 /**
  * GET `url` and read the whole body, counting what arrives: for the multi-megabyte chain listings, whose answer a
  * public node can stream slowly. One attempt; `timeoutMs` covers the whole read, and the caller's `signal` ends it
- * too. A read cut short (the timeout, the deadline, the connection) throws a ReadCutError whose message says what
- * happened ("timeout: 4.2 MB of 12.0 MB arrived in 180 s (first byte after 5.8 s)"), so the Sources sheet can
- * say it; a 4xx/5xx answer throws an HttpError as fetchJson does.
+ * too. A read cut short (the timeout, the deadline, the connection, or `maxBytes` exceeded) throws a ReadCutError
+ * whose message says what happened ("timeout: 4.2 MB of 12.0 MB arrived in 180 s (first byte after 5.8 s)"), so
+ * the Sources sheet can say it; a 4xx/5xx answer throws an HttpError as fetchJson does.
  */
 export async function fetchText(
   url: string,
-  opts: { timeoutMs?: number; init?: RequestInit; signal?: AbortSignal } = {},
+  opts: { timeoutMs?: number; maxBytes?: number; init?: RequestInit; signal?: AbortSignal } = {},
 ): Promise<{ text: string; bytes: number; total: number | null; ms: number; firstByteMs: number }> {
-  const { timeoutMs = 15000, init, signal } = opts;
+  const { timeoutMs = 15000, maxBytes = FETCH_TEXT_MAX_BYTES, init, signal } = opts;
   if (signal?.aborted) throw new Error(`deadline passed before ${redact(url)}`);
   const t0 = Date.now();
   const ctrl = new AbortController();
@@ -113,20 +116,30 @@ export async function fetchText(
     const cl = Number(res.headers.get('content-length'));
     total = Number.isFinite(cl) && cl > 0 ? cl : null;
     firstByteMs = Date.now() - t0;
+    if (total != null && total > maxBytes) {
+      await res.body?.cancel().catch(() => {});
+      throw new Error(`response too large (${mbOf(total)} > ${mbOf(maxBytes)})`);
+    }
     if (!res.body) {
       const text = await res.text();
+      if (text.length > maxBytes) throw new Error(`response too large (${mbOf(text.length)} > ${mbOf(maxBytes)})`);
       return { text, bytes: text.length, total, ms: Date.now() - t0, firstByteMs };
     }
     const reader = res.body.getReader();
     for (;;) {
       const { done, value } = await reader.read();
       if (done) break;
-      parts.push(value);
       bytes += value.length;
+      if (bytes > maxBytes) {
+        await reader.cancel().catch(() => {});
+        throw new Error(`response too large (${mbOf(bytes)} > ${mbOf(maxBytes)})`);
+      }
+      parts.push(value);
     }
     const all = new Uint8Array(bytes);
     let o = 0;
     for (const p of parts) { all.set(p, o); o += p.length; }
+    parts.length = 0;
     return { text: new TextDecoder().decode(all), bytes, total, ms: Date.now() - t0, firstByteMs };
   } catch (e) {
     if (e instanceof HttpError) throw e;

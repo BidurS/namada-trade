@@ -159,7 +159,7 @@ export function listingBalanceStmts(rows: ListedBalance[], height: number, at: n
             ON CONFLICT(chain,address) DO UPDATE SET
               balance=excluded.balance, balance_num=excluded.balance_num, updated_height=excluded.updated_height,
               updated_at=excluded.updated_at, verified_at=excluded.verified_at, verified_src=excluded.verified_src
-            WHERE excluded.updated_height >= COALESCE(holders.updated_height, 0) AND excluded.verified_at >= COALESCE(holders.verified_at, 0)`,
+            WHERE excluded.updated_height >= CASE WHEN COALESCE(holders.updated_height, 0) > 1000000000 THEN 0 ELSE COALESCE(holders.updated_height, 0) END AND excluded.verified_at >= COALESCE(holders.verified_at, 0)`,
       params: part.flatMap((r) => ['namada', r.address, r.balance, toNam(r.balance), height, at, at, src]),
     });
   }
@@ -174,7 +174,7 @@ export function listingBalanceStmts(rows: ListedBalance[], height: number, at: n
 export function listingZeroStmts(addresses: string[], height: number, at: number, src = BALANCE_LISTING_SRC): Stmt[] {
   return chunks(addresses.filter((a) => !INTERNAL_ADDRS.includes(a)), 4).map((part) => ({
     sql: `UPDATE holders SET balance='0', balance_num=0, updated_height=?, updated_at=?, verified_at=?, verified_src=?
-          WHERE chain='namada' AND balance_num > 0 AND COALESCE(updated_height, 0) <= ?1 AND address IN (${part.map(() => '?').join(',')})`,
+          WHERE chain='namada' AND balance_num > 0 AND (CASE WHEN COALESCE(updated_height, 0) > 1000000000 THEN 0 ELSE COALESCE(updated_height, 0) END) <= ?1 AND address IN (${part.map(() => '?').join(',')})`,
     params: [height, at, at, src, ...part],
   }));
 }

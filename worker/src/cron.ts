@@ -285,6 +285,73 @@ async function pagedRows<T extends { address: string }>(db: D1Database, select: 
 export type BalanceLister = (opts: ReadOpts) => Promise<BalanceListing & { height: number; provider: string }>;
 export type BondLister = (opts: ReadOpts) => Promise<BondListing & { height: number; provider: string }>;
 
+/** Maximum plausible block height (1 billion blocks > 190 years at 6 s/block) and allowed drift from RPC consensus head. */
+export const MAX_REASONABLE_HEIGHT = 1_000_000_000;
+export const MAX_LISTING_HEIGHT_DRIFT = 1_000;
+export const MAX_LISTING_HEIGHT_AHEAD = 100;
+
+/**
+ * Verify that a Namada balance listing is safe to apply (holders.ts balanceGate):
+ * 1. Valid block height (positive integer <= MAX_REASONABLE_HEIGHT, and near headHeight when known) so a lagging
+ *    or spoofed node cannot zero holders or poison updated_height.
+ * 2. Supply conservation: the sum of user balances + internal protocol balances in the listing must match the
+ *    atomic `/balance/minted` key in the same response within 0.5%.
+ */
+export function balanceGate(
+  listing: (BalanceListing & { height: number }) | null | undefined,
+  headHeight: number | null = null,
+): { ok: boolean; reason?: string; sumBase: bigint; mintedBase: bigint } {
+  if (!listing || listing.entries.size === 0) return { ok: false, reason: 'empty balance listing', sumBase: 0n, mintedBase: 0n };
+  if (!Number.isInteger(listing.height) || listing.height <= 0 || listing.height > MAX_REASONABLE_HEIGHT) {
+    return { ok: false, reason: `invalid listing height ${listing.height}`, sumBase: 0n, mintedBase: 0n };
+  }
+  if (headHeight != null && headHeight > 0) {
+    if (listing.height < headHeight - MAX_LISTING_HEIGHT_DRIFT) {
+      return { ok: false, reason: `stale listing height ${listing.height} (head is ${headHeight})`, sumBase: 0n, mintedBase: 0n };
+    }
+    if (listing.height > headHeight + MAX_LISTING_HEIGHT_AHEAD) {
+      return { ok: false, reason: `listing height ${listing.height} is ahead of head ${headHeight}`, sumBase: 0n, mintedBase: 0n };
+    }
+  }
+  if (!listing.minted) return { ok: false, reason: 'balance listing is missing the minted total key', sumBase: 0n, mintedBase: 0n };
+  let mintedBase = 0n;
+  try { mintedBase = BigInt(listing.minted); } catch { return { ok: false, reason: 'invalid minted total', sumBase: 0n, mintedBase: 0n }; }
+  if (mintedBase <= 0n) return { ok: false, reason: 'minted total is not positive', sumBase: 0n, mintedBase };
+  let sumBase = 0n;
+  for (const v of listing.entries.values()) sumBase += BigInt(v);
+  for (const v of listing.internal.values()) sumBase += BigInt(v);
+  const diff = sumBase > mintedBase ? sumBase - mintedBase : mintedBase - sumBase;
+  const pct = Number((diff * 1_000_000n) / mintedBase) / 10_000;
+  if (pct > 0.5) {
+    return { ok: false, reason: `balance listing sum differs from minted total by ${pct.toFixed(2)}%`, sumBase, mintedBase };
+  }
+  return { ok: true, sumBase, mintedBase };
+}
+
+/**
+ * Verify that a Namada bond listing has a sane height and non-empty stake set before applying or zeroing stakers.
+ */
+export function bondGate(
+  listing: (BondListing & { height: number }) | null | undefined,
+  headHeight: number | null = null,
+): { ok: boolean; reason?: string } {
+  if (!listing || listing.sources.size === 0 || listing.totalBase <= 0n) {
+    return { ok: false, reason: 'empty bond listing' };
+  }
+  if (!Number.isInteger(listing.height) || listing.height <= 0 || listing.height > MAX_REASONABLE_HEIGHT) {
+    return { ok: false, reason: `invalid bond listing height ${listing.height}` };
+  }
+  if (headHeight != null && headHeight > 0) {
+    if (listing.height < headHeight - MAX_LISTING_HEIGHT_DRIFT) {
+      return { ok: false, reason: `stale bond listing height ${listing.height} (head is ${headHeight})` };
+    }
+    if (listing.height > headHeight + MAX_LISTING_HEIGHT_AHEAD) {
+      return { ok: false, reason: `bond listing height ${listing.height} is ahead of head ${headHeight}` };
+    }
+  }
+  return { ok: true };
+}
+
 /**
  * Read every NAM balance from the chain and reconcile the Namada holder rows with it: rows whose stored balance
  * differs (or that are new and hold NAM, or were last written by another source) are written with the listing's
@@ -293,7 +360,7 @@ export type BondLister = (opts: ReadOpts) => Promise<BondListing & { height: num
  * tick, after re-reading the listing (the diff is recomputed, so nothing is written twice or lost). Zero balances
  * the chain lists are not given rows (26,404 of 90,777 keys on 2026-10-20 held nothing).
  */
-export async function runBalanceListing(env: Env, health: SourceHealth[], now: number, read: ReadOpts, list: BalanceLister = allNamBalances, cap = LISTING_WRITE_CAP): Promise<BalanceListingRecord | null> {
+export async function runBalanceListing(env: Env, health: SourceHealth[], now: number, read: ReadOpts, list: BalanceLister = allNamBalances, cap = LISTING_WRITE_CAP, headHeight: number | null = null): Promise<BalanceListingRecord | null> {
   const name = 'Namada RPC (balance listing)';
   const prev = await kvGetJson<BalanceListingRecord>(env.DB, 'balance.listing').catch(() => null);
   const t0 = Date.now();
@@ -307,6 +374,14 @@ export async function runBalanceListing(env: Env, health: SourceHealth[], now: n
     await kvSet(env.DB, 'balance.listing', failed).catch(() => {});
     return failed;
   }
+  const gate = balanceGate(listing, headHeight);
+  if (!gate.ok) {
+    const err = `Gate refused listing: ${gate.reason}`;
+    health.push({ name, ok: false, at: now, note: `The balance listing was refused: ${gate.reason}` });
+    const refused: BalanceListingRecord = { ...(prev ?? { at: 0, completeAt: null, height: 0, provider: '', keys: 0, holders: 0, totalNam: 0, bytes: 0, written: 0, zeroed: 0, remaining: 0, ticks: 0, durationMs: 0, spansAt: null, extendedAt: null }), failedAt: now, error: err };
+    await kvSet(env.DB, 'balance.listing', refused).catch(() => {});
+    return refused;
+  }
   const ticks = (prev && prev.remaining > 0 ? prev.ticks : 0) + 1;
   const rec: BalanceListingRecord = {
     at: now, completeAt: prev?.completeAt ?? null, height: listing.height, provider: listing.provider,
@@ -317,6 +392,7 @@ export async function runBalanceListing(env: Env, health: SourceHealth[], now: n
     const stored = await pagedRows<{ address: string; balance: string; balance_num: number; updated_height: number | null; verified_src: string | null }>(
       env.DB, `SELECT address, balance, balance_num, updated_height, verified_src FROM holders WHERE chain = 'namada'`);
     const storedBy = new Map(stored.map((r) => [r.address, r]));
+    const effHeight = (h: number | null | undefined) => (h && h <= MAX_REASONABLE_HEIGHT ? h : 0);
     const toWrite: ListedBalance[] = [];
     let totalBase = 0n;
     for (const [address, balance] of listing.entries) {
@@ -325,11 +401,11 @@ export async function runBalanceListing(env: Env, health: SourceHealth[], now: n
       if (!s) { if (balance !== '0') toWrite.push({ address, balance }); continue; }
       // The block follower wrote this row from a later block than the listing's: its post-balance is newer (the
       // write guard would refuse the listing's anyway), so the row is not counted as pending.
-      if ((s.updated_height ?? 0) > listing.height) continue;
+      if (effHeight(s.updated_height) > listing.height) continue;
       if (s.verified_src !== BALANCE_LISTING_SRC || !sameBalance(s.balance, balance)) toWrite.push({ address, balance });
     }
     rec.totalNam = Number(totalBase) / 1e6;
-    const toZero = stored.filter((s) => !listing.entries.has(s.address) && s.balance_num > 0 && !INTERNAL_ADDRS.includes(s.address) && (s.updated_height ?? 0) <= listing.height).map((s) => s.address);
+    const toZero = stored.filter((s) => !listing.entries.has(s.address) && s.balance_num > 0 && !INTERNAL_ADDRS.includes(s.address) && effHeight(s.updated_height) <= listing.height).map((s) => s.address);
     toWrite.sort((a, b) => (a.address < b.address ? -1 : a.address > b.address ? 1 : 0));
     const part = toWrite.slice(0, cap);
     rec.remaining = toWrite.length - part.length;
@@ -370,7 +446,7 @@ export async function runBalanceListing(env: Env, health: SourceHealth[], now: n
  * bonded_num > 0 that the listing does not name are set to 0. Sources the listing names with no bond left (only
  * unbonds or slashes) get no new row. The sum includes bonds still in the pipeline: the coverage check says so.
  */
-export async function runBondListing(env: Env, health: SourceHealth[], now: number, epoch: number, read: ReadOpts, list: BondLister = allBonds, cap = LISTING_WRITE_CAP): Promise<BondListingRecord | null> {
+export async function runBondListing(env: Env, health: SourceHealth[], now: number, epoch: number, read: ReadOpts, list: BondLister = allBonds, cap = LISTING_WRITE_CAP, headHeight: number | null = null): Promise<BondListingRecord | null> {
   const name = 'Namada RPC (bond listing)';
   const prev = await kvGetJson<BondListingRecord>(env.DB, 'bond.listing').catch(() => null);
   const t0 = Date.now();
@@ -383,6 +459,14 @@ export async function runBondListing(env: Env, health: SourceHealth[], now: numb
     await kvSet(env.DB, 'bond.listing', failed).catch(() => {});
     return failed;
   }
+  const gate = bondGate(listing, headHeight);
+  if (!gate.ok) {
+    const err = `Gate refused listing: ${gate.reason}`;
+    health.push({ name, ok: false, at: now, note: `The bond listing was refused: ${gate.reason}` });
+    const refused: BondListingRecord = { ...(prev ?? { at: 0, completeAt: null, height: 0, epoch, provider: '', sources: 0, stakers: 0, totalNam: 0, bytes: 0, written: 0, zeroed: 0, remaining: 0, ticks: 0, durationMs: 0 }), failedAt: now, error: err };
+    await kvSet(env.DB, 'bond.listing', refused).catch(() => {});
+    return refused;
+  }
   const ticks = (prev && prev.remaining > 0 ? prev.ticks : 0) + 1;
   const rec: BondListingRecord = {
     at: now, completeAt: prev?.completeAt ?? null, height: listing.height, epoch, provider: listing.provider,
@@ -390,24 +474,26 @@ export async function runBondListing(env: Env, health: SourceHealth[], now: numb
     written: 0, zeroed: 0, remaining: 0, ticks, durationMs: 0, failedAt: null,
   };
   try {
-    const stored = await pagedRows<{ address: string; bonded_num: number | null; delegations: string | null; verified_src: string | null }>(
-      env.DB, `SELECT address, bonded_num, delegations, verified_src FROM stakes WHERE 1 = 1`);
+    const stored = await pagedRows<{ address: string; bonded_num: number | null; delegations: string | null; verified_src: string | null; verified_height?: number | null }>(
+      env.DB, `SELECT address, bonded_num, delegations, verified_src, verified_height FROM stakes WHERE 1 = 1`);
     const storedBy = new Map(stored.map((r) => [r.address, r]));
+    const effHeight = (h: number | null | undefined) => (h && h <= MAX_REASONABLE_HEIGHT ? h : 0);
     const toWrite: { address: string; bondedNam: number; delegations: { validator: string; amountNam: number }[] }[] = [];
     for (const [address, b] of listing.sources) {
       const bondedNam = Number(b.bondedBase) / 1e6;
       if (b.bondedBase > 0n) rec.stakers++;
       const s = storedBy.get(address);
       if (!s) { if (b.bondedBase > 0n) toWrite.push({ address, bondedNam, delegations: b.delegations }); continue; }
+      if (effHeight(s.verified_height) > listing.height) continue;
       if (s.verified_src !== BOND_LISTING_SRC || s.bonded_num !== bondedNam || s.delegations !== JSON.stringify(b.delegations)) toWrite.push({ address, bondedNam, delegations: b.delegations });
     }
-    const toZero = stored.filter((s) => !listing.sources.has(s.address) && (s.bonded_num ?? 0) > 0).map((s) => s.address);
+    const toZero = stored.filter((s) => !listing.sources.has(s.address) && (s.bonded_num ?? 0) > 0 && effHeight(s.verified_height) <= listing.height).map((s) => s.address);
     toWrite.sort((a, b) => (a.address < b.address ? -1 : a.address > b.address ? 1 : 0));
     const part = toWrite.slice(0, cap);
     rec.remaining = toWrite.length - part.length;
-    if (part.length) rec.written = await runBatch(env.DB, stmt.stakesVerified(part, epoch, now, BOND_LISTING_SRC));
+    if (part.length) rec.written = await runBatch(env.DB, stmt.stakesVerified(part, epoch, listing.height, now, BOND_LISTING_SRC));
     if (rec.remaining === 0) {
-      if (toZero.length) rec.zeroed = await runBatch(env.DB, stmt.stakesVerified(toZero.map((address) => ({ address, bondedNam: 0, delegations: [] })), epoch, now, BOND_LISTING_SRC));
+      if (toZero.length) rec.zeroed = await runBatch(env.DB, stmt.stakesVerified(toZero.map((address) => ({ address, bondedNam: 0, delegations: [] })), epoch, listing.height, now, BOND_LISTING_SRC));
       rec.completeAt = now;
     }
     rec.durationMs = Date.now() - t0;
@@ -796,7 +882,7 @@ export async function runCron(env: Env) {
     //     started with the tick (above); here its answer is reconciled with the rows.
     let bondRec = bondPrev;
     if (bondRead) {
-      if (epoch) bondRec = await runBondListing(env, health, now, epoch, lread, started(bondRead));
+      if (epoch) bondRec = await runBondListing(env, health, now, epoch, lread, started(bondRead), LISTING_WRITE_CAP, headHeight);
       else {
         // Without the epoch the rows cannot be stamped (verified_epoch): the answer, if any, is let go.
         await bondRead;
@@ -816,7 +902,7 @@ export async function runCron(env: Env) {
       await runBatch(env.DB, [await bondedCoverageCheck(env.DB, now, stakeNam, posNam, bondRec, sample)]).catch(() => {});
     }
     // 5d. Spendable balances: the balance listing, when it was the listing due this tick.
-    if (balRead) await runBalanceListing(env, health, now, lread, started(balRead));
+    if (balRead) await runBalanceListing(env, health, now, lread, started(balRead), LISTING_WRITE_CAP, headHeight);
 
     // 6. The Osmosis holder list, read beside everything above.
     const holderList = await holderSync;

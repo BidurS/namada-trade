@@ -52,12 +52,23 @@ export function isHeavy(url: URL, method = 'GET'): boolean {
   return /^\/api\/(export\/|search$|address\/|quote$)/.test(p) || ((p === '/api/flows' || p === '/api/holders') && !!url.searchParams.get('search'));
 }
 /**
- * Rewound reads (`?at=`, `?since=`) and metric histories: every distinct value is its own edge-cache entry, so a
- * stream of them reaches D1 each time. Limited per client address and path family, 120 a minute (REPLAY_LIMITER),
- * and only on a cache miss (cachedApi), so going back to a moment already shown costs nothing.
+ * Rewound reads (`?at=`, `?since=`), metric histories, and high-cardinality query variants (`?minNam=`, deep
+ * pagination `?page=>1`, non-standard `?limit=`, custom alert thresholds): every distinct value is its own
+ * edge-cache entry, so a stream of them reaches D1 each time. Limited per client address and path family, 120 a
+ * minute (REPLAY_LIMITER), and only on a cache miss (cachedApi), so going back to a moment already shown costs nothing.
  */
 export function isReplay(url: URL): boolean {
-  return url.pathname === '/api/metrics/history' || url.searchParams.has('at') || url.searchParams.has('since');
+  const p = url.pathname;
+  if (p === '/api/metrics/history' || url.searchParams.has('at') || url.searchParams.has('since')) return true;
+  if ((p === '/api/alerts/recent' || p === '/api/alerts/rules') && THRESHOLDS.some((k) => url.searchParams.has(k))) return true;
+  if (p === '/api/flows' || p === '/api/holders') {
+    if (url.searchParams.has('minNam')) return true;
+    const page = Number(url.searchParams.get('page') || '1');
+    if (!Number.isFinite(page) || page > 1) return true;
+    const limit = url.searchParams.get('limit');
+    if (limit != null && !['25', '50', '100'].includes(limit)) return true;
+  }
+  return false;
 }
 type Limiter = { limit(o: { key: string }): Promise<{ success: boolean }> } | undefined;
 async function limitBy(limiter: Limiter, request: Request, url: URL, message: string): Promise<Response | null> {

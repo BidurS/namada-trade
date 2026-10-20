@@ -90,7 +90,7 @@ export const stmt = {
         sql: `INSERT INTO stakes (address,bonded_num,delegations,verified_at,verified_epoch,verified_height,verified_src,updated_at) VALUES ${part.map(() => '(?,?,?,?,?,?,?,?)').join(',')}
           ON CONFLICT(address) DO UPDATE SET bonded_num=excluded.bonded_num, delegations=excluded.delegations,
             verified_at=excluded.verified_at, verified_epoch=excluded.verified_epoch, verified_height=excluded.verified_height, verified_src=excluded.verified_src, updated_at=excluded.updated_at
-          WHERE excluded.verified_height >= COALESCE(stakes.verified_height, 0)`,
+          WHERE excluded.verified_height >= CASE WHEN COALESCE(stakes.verified_height, 0) > 1000000000 THEN 0 ELSE COALESCE(stakes.verified_height, 0) END`,
         params: part.flatMap((r) => [r.address, r.bondedNam, JSON.stringify(r.delegations), at, epoch, height, src, at]),
       });
     }
