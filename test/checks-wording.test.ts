@@ -8,7 +8,13 @@ const c = (key: string, detail: Record<string, unknown>, status: Check['status']
 
 describe('cross-check wording', () => {
   it('the bridge check names the stuck Noble transfer it counts', () => {
-    expect(checkDetail(c('ibc_conservation', { driftNam: 0, stuckNam: 1614 }))).toBe('Equal, counting 1,614 NAM stuck in a transfer to Noble that was refused and never refunded (26 Jun 2026)');
+    const noble = { nam: 1614, sentAt: '2026-06-26T11:13:59Z', note: 'stuck in a transfer to Noble that was refused and never refunded' };
+    expect(checkDetail(c('ibc_conservation', { driftNam: 0, stuckNam: 1614, stuckPackets: [noble] }))).toBe('Equal, counting 1,614 NAM stuck in a transfer to Noble that was refused and never refunded (26 Jun 2026)');
+    expect(checkDetail(c('ibc_conservation', { driftNam: 250.4, stuckNam: 1614, stuckPackets: [noble] }))).toBe('250.4 NAM apart, counting 1,614 NAM stuck in a transfer to Noble that was refused and never refunded (26 Jun 2026)');
+    // the list is verified against the indexer each tick: once the packet is refunded there is nothing to count
+    expect(checkDetail(c('ibc_conservation', { driftNam: 0, stuckNam: 0, stuckPackets: [] }))).toBe('Equal');
+    expect(checkDetail(c('ibc_conservation', { driftNam: 1614 }))).toBe('1,614 NAM apart');
+    expect(checkDetail(c('ibc_conservation', { driftNam: 0, stuckNam: 1700, stuckPackets: [{ sentAt: '2026-10-01T00:00:00Z' }, noble] }))).toBe('Equal, counting 1,700 NAM stuck in 2 transfers never delivered and never refunded (since 26 Jun 2026)');
   });
   it('the staking check says what it traced and what is still being read', () => {
     expect(checkDetail(c('bonded_coverage', { coveragePct: '99.6%', stakers: 21443, pendingAddresses: 120 }))).toBe('99.6% of staked NAM traced to 21,443 addresses; 120 more addresses are still being read');

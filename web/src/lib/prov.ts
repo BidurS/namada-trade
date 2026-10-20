@@ -6,7 +6,7 @@
 // name appears only in the sheet, under "Technical name".
 import type { ReactNode } from 'react';
 import type { Check, Pressure, Provenance, SourceStatus, Sourced } from '../../../shared/types';
-import { ageOf, fmtCount, fmtNamRule, fmtPctRule, fmtUtcClock } from './format';
+import { ageOf, fmtCount, fmtDayMonthYear, fmtNamRule, fmtPctRule, fmtUtcClock } from './format';
 
 export type Status = SourceStatus;
 /** The four data states as the UI names them (the `data-status` attribute values). */
@@ -173,12 +173,20 @@ export function checkDetail(c: Check): string | null {
   const d = c.detail ?? {};
   switch (c.key) {
     case 'ibc_conservation': {
+      // `driftNam` is the difference once the packets stuck in the escrow are counted. Each packet carries its
+      // own note ("stuck in a transfer to Noble that was refused and never refunded") and send date, so the
+      // sentence names what it counts: "Equal, counting 1,614 NAM stuck in a transfer to Noble … (26 Jun 2026)".
       const x = detailNum(d.driftNam);
       if (x == null) return null;
       const stuck = detailNum(d.stuckNam) ?? 0;
       const gap = Math.abs(x) < 1 ? 'Equal' : `${fmtNamRule(Math.abs(x))} NAM apart`;
-      // The known stuck transfer is named, so a reader sees why the raw totals differ.
-      return stuck > 0 ? `${gap}, counting ${fmtNamRule(stuck)} NAM stuck in a transfer to Noble that was refused and never refunded (26 Jun 2026)` : gap;
+      if (!(stuck > 0)) return gap;
+      const packets = Array.isArray(d.stuckPackets) ? (d.stuckPackets as { sentAt?: unknown; note?: unknown }[]) : [];
+      const dates = packets.map((p) => p.sentAt).filter((v): v is string => typeof v === 'string').map((v) => Date.parse(v)).filter(Number.isFinite).sort();
+      const when = dates.length ? ` (${packets.length === 1 ? '' : 'since '}${fmtDayMonthYear(dates[0])})` : '';
+      const note = packets.length === 1 && typeof packets[0].note === 'string' ? packets[0].note : null;
+      const what = note ?? (packets.length <= 1 ? 'stuck in a transfer that was never delivered and never refunded' : `stuck in ${fmtCount(packets.length)} transfers never delivered and never refunded`);
+      return `${gap}, counting ${fmtNamRule(stuck)} NAM ${what}${when}`;
     }
     case 'bonded_coverage': {
       const x = detailNum(d.coveragePct);

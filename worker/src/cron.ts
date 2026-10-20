@@ -5,14 +5,15 @@ import { fetchNamPools, fetchNamPrice } from './sources/sqs';
 import { namBalance, namTotalSupply, namTotalStake, namadaEpoch, namadaStatusAll, delegationsAt, answeringRpcs, QUICK, RpcBreaker, allNamBalances, allBonds, type BalanceListing, type BondListing, type ReadOpts, type Rpc } from './sources/namada';
 import { fetchIntel } from './sources/intel';
 import { sendDiscordForumAlert, sendDiscordGovAlert } from './sources/discord';
-import { NAM, NAMADA, OSMOSIS, IBC_STUCK } from './config';
+import { NAM, NAMADA, OSMOSIS } from './config';
 import { fetchJson, toNam } from './util';
 import type { SourceHealth } from '../../shared/types';
 import type { Stmt } from './db';
 import { sweepAuth } from './auth';
 import { NOT_LEGACY_TWIN } from './flows-query';
 import { unbondAddresses, fetchUnbonds, buildUnbondTermStructure, cachedChainParams, type UnbondWithdrawCache } from './analytics';
-import { chainParams, indexState, NAMADA_CURSOR_MAX_LAG, NAMADA_CURSOR_STALE_MS, OSMOSIS_LIVE_STALE_MS, OSMOSIS_SWEEP_STALE_MS, timedOutSends, ibcRowOf } from './analytics';
+import { chainParams, indexState, NAMADA_CURSOR_MAX_LAG, NAMADA_CURSOR_STALE_MS, OSMOSIS_LIVE_STALE_MS, OSMOSIS_SWEEP_STALE_MS, timedOutSends, ibcRowOf, safeParseJson } from './analytics';
+import { INDEXER_IBC_STATUS, innerTxOfRow, reconcileStuckPackets, stuckTotalNam, type StuckCandidate, type StuckList } from './ibc-stuck';
 import type { LiveUnbondStatus, LiveScanStatus } from './live-hub';
 import type { AlertsSkipped } from './sources/discord';
 import {
@@ -21,6 +22,10 @@ import {
 } from './holders';
 
 const INDEXER = 'https://indexer.namada.net/api/v1';
+/** kv key of the IBC packets stuck in the escrow (ibc-stuck.ts). */
+export const STUCK_PACKETS_KV = 'ibc.stuck_packets';
+/** A Namada → Osmosis send on record on Namada only for this long is looked up as a stuck packet. */
+export const STUCK_CANDIDATE_AGE_MS = 24 * 3600000;
 
 async function syncIntelAndAlerts(env: Env) {
   try {
@@ -751,18 +756,6 @@ export async function runCron(env: Env) {
     // 4. Integrity checks. Each compares two independent sources.
     const checkStmts = [];
 
-    if (ibcEscrowNam != null && osmoSupply != null) {
-      // Namada keeps one escrow for every channel; NAM on other chains is 0 (checked 2026-10-19), and transfers
-      // known to be stuck in it (config IBC_STUCK) are counted, so only an unexplained gap needs a look.
-      const stuckNam = IBC_STUCK.reduce((a, x) => a + x.nam, 0);
-      const rawGap = ibcEscrowNam - osmoSupply;
-      const drift = rawGap - stuckNam;
-      const ibcDiff = Math.abs(drift);
-      checkStmts.push(stmt.check('ibc_conservation', ibcDiff < 100 ? 'ok' : ibcDiff < 10000 ? 'warn' : 'fail',
-        'IBC conservation: Namada escrow = Osmosis voucher supply + known stuck transfers',
-        { namadaIbcEscrow: ibcEscrowNam, osmosisSupply: osmoSupply, rawGapNam: rawGap, stuckNam, stuck: IBC_STUCK, driftNam: drift, sources: ['Namada RPC abci_query', 'Keplr Osmosis bank/supply'] }, now));
-    }
-
     const rpcDiff = validRpcs.length >= 2 ? Math.abs(validRpcs[0].height - validRpcs[1].height) : null;
     checkStmts.push(stmt.check('rpc_consensus', validRpcs.length >= 2 && (rpcDiff ?? 0) <= 3 ? 'ok' : validRpcs.length >= 1 ? 'warn' : 'fail',
       'Namada RPC agreement (5ElementsNodes vs Papadritta)', { statuses: rpcStatuses, heightDiff: rpcDiff }, now));
@@ -850,12 +843,14 @@ export async function runCron(env: Env) {
     // Every bridge crossing should be on record on both chains (14 days; the last 30 minutes are not judged).
     const from14 = now - 14 * 86400000;
     const [nb, ob, orf] = await Promise.all([
-      env.DB.prepare(`SELECT f.id, f.kind, f.ts, f.from_addr, f.to_addr, f.amount_num FROM flows f WHERE f.chain='namada' AND f.kind IN ('ibc_in','ibc_out') AND f.ts >= ?
+      env.DB.prepare(`SELECT f.id, f.kind, f.ts, f.height, f.from_addr, f.to_addr, f.amount_num, f.meta FROM flows f WHERE f.chain='namada' AND f.kind IN ('ibc_in','ibc_out') AND f.ts >= ?
                       AND (f.from_addr LIKE 'osmo1%' OR f.to_addr LIKE 'osmo1%' OR f.from_addr = ? OR f.to_addr = ?) AND (f.meta IS NULL OR f.meta NOT LIKE '%"tokenSymbol":%') AND ${NOT_LEGACY_TWIN}`)
         .bind(from14, NAMADA.internal.ibc, NAMADA.internal.ibc).all<any>().catch(() => null),
       env.DB.prepare(`SELECT id, kind, ts, from_addr, to_addr, amount_num, meta FROM flows WHERE chain='osmosis' AND kind IN ('ibc_in','ibc_out') AND ts >= ?`).bind(from14 - 15 * 60000).all<any>().catch(() => null),
       env.DB.prepare(`SELECT id, ts, from_addr, to_addr, amount_num, meta FROM flows WHERE chain='osmosis' AND kind='other' AND ts >= ? AND meta LIKE '%"ibcTimeoutRefund":true%'`).bind(from14).all<any>().catch(() => null),
     ]);
+    // Namada → Osmosis sends on record on Namada only for a day or more: candidates for the stuck-packet list.
+    const stuckCandidates: StuckCandidate[] = [];
     if (nb && ob && orf) {
       const outs = (ob.results || []).filter((r: any) => r.kind === 'ibc_out');
       const gone = timedOutSends(outs.map(ibcRowOf), (orf.results || []).map(ibcRowOf));
@@ -868,6 +863,34 @@ export async function runCron(env: Env) {
         { namadaRows: (nb.results || []).length, osmosisRows: osmo.length, onlyOnNamada: u.namadaOnly.length, onlyOnOsmosis: u.osmosisOnly.length,
           onlyOnNamadaNam: u.namadaOnly.reduce((a, r) => a + r.amount_num, 0), onlyOnOsmosisNam: u.osmosisOnly.reduce((a, r) => a + r.amount_num, 0),
           examples: { namada: sample(u.namadaOnly), osmosis: sample(u.osmosisOnly) } }, now));
+      for (const r of u.namadaOnly) {
+        if (r.kind !== 'ibc_out' || !String(r.to_addr ?? '').startsWith('osmo1') || now - r.ts < STUCK_CANDIDATE_AGE_MS) continue;
+        const innerTx = innerTxOfRow(r);
+        if (!innerTx) continue;
+        const m = typeof r.meta === 'string' ? safeParseJson(r.meta, {}) : r.meta ?? {};
+        stuckCandidates.push({ innerTx, wrapperTx: m?.wrapper ?? (m?.innerTxHash ? r.id.split(':')[1]?.toLowerCase() ?? null : null), height: r.height ?? null, sentAt: new Date(r.ts).toISOString(), nam: r.amount_num, channel: m?.channel ?? null, sequence: m?.packetSequence != null ? Number(m.packetSequence) : null, counterparty: null });
+      }
+    }
+
+    // IBC conservation: the escrow, less the packets stuck in it (ibc-stuck.ts: each one's status re-read from the
+    // indexer every tick, so a relayed acknowledgement or timeout drops it on its own), against the Osmosis supply.
+    // Namada keeps one escrow for every channel; NAM on other chains is 0 (checked 2026-10-19).
+    if (ibcEscrowNam != null && osmoSupply != null) {
+      const prevStuck = await kvGetJson<StuckList>(env.DB, STUCK_PACKETS_KV).catch(() => null);
+      const lookup = (inner: string) => fetchJson<any>(INDEXER_IBC_STATUS(inner), { timeoutMs: 6000, retries: 0, signal })
+        .then((r) => (typeof r?.status === 'string' ? { status: r.status, timeout: r.timeout != null ? new Date(Number(r.timeout) / 1e6).toISOString() : null } : null));
+      const stuck = await reconcileStuckPackets(prevStuck, stuckCandidates, lookup, now);
+      await kvSet(env.DB, STUCK_PACKETS_KV, stuck).catch(() => {});
+      const stuckNam = stuckTotalNam(stuck);
+      const rawGap = ibcEscrowNam - osmoSupply;
+      const drift = rawGap - stuckNam;
+      const ibcDiff = Math.abs(drift);
+      checkStmts.push(stmt.check('ibc_conservation', ibcDiff < 100 ? 'ok' : ibcDiff < 10000 ? 'warn' : 'fail',
+        'IBC conservation: Namada escrow = Osmosis voucher supply + packets stuck in the escrow',
+        { namadaIbcEscrow: ibcEscrowNam, osmosisSupply: osmoSupply, rawGapNam: rawGap, stuckNam, driftNam: drift,
+          stuckPackets: stuck.packets.map((p) => ({ innerTx: p.innerTx, nam: p.nam, sentAt: p.sentAt, height: p.height, channel: p.channel, sequence: p.sequence, counterparty: p.counterparty, note: p.note, status: p.status, verifiedAt: p.verifiedAt, stale: !!p.stale, timeout: p.timeout, evidence: p.evidence })),
+          stuckDropped: stuck.dropped.slice(-3),
+          sources: ['Namada RPC abci_query', 'Keplr Osmosis bank/supply', 'indexer.namada.net /ibc/{tx}/status'] }, now));
     }
 
     // SQS mid vs the last hour's executed swap price

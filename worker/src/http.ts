@@ -58,9 +58,16 @@ export function isHeavy(url: URL, method = 'GET'): boolean {
  * edge-cache entry, so a stream of them reaches D1 each time. Limited per client address and path family, 120 a
  * minute (REPLAY_LIMITER), and only on a cache miss (cachedApi), so going back to a moment already shown costs nothing.
  */
+/** The windows the pages ask for (web/src/screens/trade/data.ts rangeFetchHours; supply/parts.tsx WindowDays). */
+const ORDERFLOW_HOURS = new Set(['24', '168', '720', '2160', '8760', '28800']);
+const PRESSURE_DAYS = new Set(['1', '7', '30', '90', '365']);
 export function isReplay(url: URL): boolean {
   const p = url.pathname;
   if (p === '/api/metrics/history' || url.searchParams.has('at') || url.searchParams.has('since')) return true;
+  // Orderflow and pressure aggregate the flows table over the window asked for; the ranges the pages offer are a
+  // few cache entries each, any other value is a cache miss that reaches D1.
+  if (p === '/api/orderflow') return !ORDERFLOW_HOURS.has(url.searchParams.get('hours') ?? '720');
+  if (p === '/api/pressure') return !PRESSURE_DAYS.has(url.searchParams.get('days') ?? '7');
   if ((p === '/api/alerts/recent' || p === '/api/alerts/rules') && THRESHOLDS.some((k) => url.searchParams.has(k))) return true;
   if (p === '/api/flows' || p === '/api/holders') {
     if (url.searchParams.has('minNam')) return true;
