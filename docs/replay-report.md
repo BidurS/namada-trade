@@ -1,6 +1,6 @@
 # Replay report
 
-Generated 2026-10-20 05:57 UTC by `test/replay.test.ts` from `docs/events.json` (22 events, 104 price points) with default thresholds {"ibcInventory":25000,"unlock":100000,"bigSwap":10000,"unshield":50000,"bond":1000000}.
+Generated 2026-10-20 06:00 UTC by `test/replay.test.ts` from `docs/events.json` (22 events, 104 price points) with default thresholds {"ibcInventory":25000,"unlock":100000,"bigSwap":10000,"unshield":50000,"bond":1000000}.
 
 **Price moves flagged ahead of time: 10 / 10.** Median lead 25.0 h; range 2.0–47.4 h.
 

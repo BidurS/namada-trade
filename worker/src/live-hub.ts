@@ -497,8 +497,9 @@ export class LiveHub extends DurableObject<Env> {
         return new Response('Expected websocket upgrade', { status: 426 });
       }
       // Admission (ws-admit.ts): the hub holds every socket in memory and walks them all on each broadcast.
-      const ip = request.headers.get('cf-connecting-ip');
-      const sameIp = ip ? [...this.sessions].filter((s) => this.ips.get(s) === ip).length : 0;
+      // A request without the header (a local run, a direct origin call) shares one bucket rather than none.
+      const ip = request.headers.get('cf-connecting-ip') || 'unknown';
+      const sameIp = [...this.sessions].filter((s) => this.ips.get(s) === ip).length;
       const verdict = admitSocket(this.sessions.size, sameIp);
       if (verdict === 'full') return new Response('The live feed is full right now; try again in a minute.', { status: 503, headers: { 'retry-after': '60' } });
       if (verdict === 'ip') return new Response('Too many live connections from your address.', { status: 429, headers: { 'retry-after': '60' } });
@@ -507,7 +508,7 @@ export class LiveHub extends DurableObject<Env> {
 
       server.accept();
       this.sessions.add(server);
-      if (ip) this.ips.set(server, ip);
+      this.ips.set(server, ip);
 
       // Send initial hello
       server.send(

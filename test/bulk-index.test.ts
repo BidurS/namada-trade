@@ -6,7 +6,7 @@ import { readFileSync } from 'node:fs';
 import { parseBalanceListing, parseBondListing, base64Bytes } from '../worker/src/sources/namada';
 import { NAMADA } from '../worker/src/config';
 import {
-  runBalanceListing, runBondListing, sampleStakes, bondedCoverageCheck, listingDue,
+  runBalanceListing, runBondListing, sampleStakes, bondedCoverageCheck, listingDue, balanceGate, bondGate,
   BALANCE_LISTING_MS, BOND_LISTING_MS, LISTING_WRITE_CAP, LISTING_RETRY_MS, SAMPLE_PER_TICK, RETIRED_HEALTH,
   type BalanceListingRecord, type BondListingRecord, type StakeSampleRecord,
 } from '../worker/src/cron';
@@ -258,19 +258,19 @@ describe('the bond listing run', () => {
     const db = testD1();
     const health: SourceHealth[] = [];
     const rec = (await runBondListing(env(db), health, NOW, 2690, {}, bondLister()))!;
-    expect(rec).toMatchObject({ at: NOW, completeAt: NOW, height: 8343327, epoch: 2690, sources: 15, stakers: 13, written: 13, zeroed: 0, remaining: 0 });
+    expect(rec).toMatchObject({ at: NOW, completeAt: NOW, height: 8343327, epoch: 2690, sources: 15, stakers: 12, written: 12, zeroed: 0, remaining: 0 });
     expect(rec.totalNam).toBeCloseTo(Number(BigInt(e.totalBase)) / 1e6, 6);
-    const st = rows(db, 'SELECT address, bonded_num, delegations, verified_epoch, verified_at, verified_src FROM stakes ORDER BY address');
+    const st = rows(db, 'SELECT address, bonded_num, delegations, verified_epoch, verified_height, verified_at, verified_src FROM stakes ORDER BY address');
     expect(st.map((r) => r.address)).toEqual(stakers);
     for (const r of st) {
-      expect(r).toMatchObject({ verified_epoch: 2690, verified_at: NOW, verified_src: BOND_LISTING_SRC });
+      expect(r).toMatchObject({ verified_epoch: 2690, verified_height: 8343327, verified_at: NOW, verified_src: BOND_LISTING_SRC });
       expect(r.bonded_num).toBeCloseTo(Number(BigInt(e.perSource[r.address].bondedBase)) / 1e6, 9);
       const d = JSON.parse(r.delegations) as { validator: string; amountNam: number }[];
       expect(d.map((x) => x.validator)).toEqual([...d.map((x) => x.validator)].sort());
       expect(d.reduce((a, x) => a + x.amountNam, 0)).toBeCloseTo(r.bonded_num, 6);
     }
     expect(health[0]).toMatchObject({ name: 'Namada RPC (bond listing)', ok: true });
-    expect(health[0].note).toMatch(/^48 bond entries at height 8,343,327 \(0\.0 MB from TestNode\): 13 addresses stake 75,728,153 NAM, bonds in the pipeline included; 13 rows written$/);
+    expect(health[0].note).toMatch(/^48 bond entries at height 8,343,327 \(0\.0 MB from TestNode\): 12 addresses stake 75,564,397 NAM, bonds in the pipeline included; 12 rows written$/);
   });
 
   it('writes only what changed: a row from the old per-address read once (its source), a changed stake, and 0 for a staker the chain no longer lists', async () => {
@@ -283,7 +283,7 @@ describe('the bond listing run', () => {
     insert(db, 'stakes', [{ address: 'tnam1qestimateonly', estimated_num: 7, updated_at: NOW }]);
     const r = (await runBondListing(env(db), [], NOW + 2 * H, 2691, {}, bondLister()))!;
     expect(r).toMatchObject({ written: 2, zeroed: 1, remaining: 0 });
-    expect(db.raw.prepare("SELECT bonded_num, verified_src, verified_epoch FROM stakes WHERE address='tnam1qleft'").get()).toMatchObject({ bonded_num: 0, verified_src: BOND_LISTING_SRC, verified_epoch: 2691 });
+    expect(db.raw.prepare("SELECT bonded_num, verified_src, verified_epoch, verified_height FROM stakes WHERE address='tnam1qleft'").get()).toMatchObject({ bonded_num: 0, verified_src: BOND_LISTING_SRC, verified_epoch: 2691, verified_height: 8343327 });
     expect(db.raw.prepare("SELECT bonded_num, estimated_num FROM stakes WHERE address='tnam1qestimateonly'").get()).toMatchObject({ bonded_num: null, estimated_num: 7 });
     expect(db.raw.prepare('SELECT COUNT(*) n FROM stakes WHERE verified_src != ?').get(BOND_LISTING_SRC).n).toBe(0);
   });
@@ -291,11 +291,31 @@ describe('the bond listing run', () => {
   it('carries the rest over under the cap and keeps the pass open until it is done', async () => {
     const db = testD1();
     const r1 = (await runBondListing(env(db), [], NOW, 2690, {}, bondLister(), 10))!;
-    expect(r1).toMatchObject({ written: 10, remaining: 3, completeAt: null, ticks: 1 });
+    expect(r1).toMatchObject({ written: 10, remaining: 2, completeAt: null, ticks: 1 });
     expect(listingDue(r1, BOND_LISTING_MS, NOW + 60000)).toBe(true);
     const r2 = (await runBondListing(env(db), [], NOW + 60000, 2690, {}, bondLister(), 10))!;
-    expect(r2).toMatchObject({ written: 3, remaining: 0, completeAt: NOW + 60000, ticks: 2 });
-    expect(db.raw.prepare('SELECT COUNT(*) n FROM stakes WHERE bonded_num > 0').get().n).toBe(13);
+    expect(r2).toMatchObject({ written: 2, remaining: 0, completeAt: NOW + 60000, ticks: 2 });
+    expect(db.raw.prepare('SELECT COUNT(*) n FROM stakes WHERE bonded_num > 0').get().n).toBe(12);
+  });
+
+  it('refuses listings that fail balanceGate or bondGate and heals timestamp-poisoned heights', async () => {
+    const db = testD1();
+    await runBalanceListing(env(db), [], NOW, {}, balLister(8343304));
+    await runBondListing(env(db), [], NOW, 2690, {}, bondLister(8343327));
+    // A listing whose sum does not match minted is refused by balanceGate without zeroing holders
+    const badBal = { ...parseBalanceListing(BAL.value), minted: '999999999999999999', height: 8343400, provider: 'BadNode' };
+    const rBad = (await runBalanceListing(env(db), [], NOW + H, {}, async () => badBal))!;
+    expect(rBad.error).toMatch(/^Not applied: the balances in the listing add up to .*off the minted total/);
+    expect(db.raw.prepare("SELECT COUNT(*) n FROM holders WHERE chain='namada' AND balance_num > 0").get().n).toBe(18);
+    // Stale or future-spoofed heights are refused when headHeight is known
+    expect(balanceGate({ ...parseBalanceListing(BAL.value), height: 8340000 }, 8343400).ok).toBe(false);
+    expect(balanceGate({ ...parseBalanceListing(BAL.value), height: 8350000 }, 8343400).ok).toBe(false);
+    expect(bondGate({ ...parseBondListing(BONDS.value), height: 8340000 }, 8343400).ok).toBe(false);
+    expect(bondGate({ ...parseBondListing(BONDS.value), height: 8350000 }, 8343400).ok).toBe(false);
+    // If a row in stakes or holders had a Unix timestamp accidentally stored in verified_height / updated_height, a real height heals it
+    db.raw.prepare('UPDATE stakes SET bonded_num = 1, verified_height = ? WHERE address = ?').run(NOW, stakers[0]);
+    await runBondListing(env(db), [], NOW + 2 * H, 2691, {}, bondLister(8343500));
+    expect(db.raw.prepare('SELECT verified_height FROM stakes WHERE address = ?').get(stakers[0]).verified_height).toBe(8343500);
   });
 });
 
@@ -330,12 +350,12 @@ describe('the stake sample and the coverage check', () => {
     }));
     const health: SourceHealth[] = [];
     const rec = (await sampleStakes(env(db), health, NOW + 60000, 2690, { timeoutMs: 1000, retries: 0 }))!;
-    expect(rec).toMatchObject({ checked: 13, agreed: 12, failed: 0, cursor: '', passes: 1 });
+    expect(rec).toMatchObject({ checked: 12, agreed: 11, failed: 0, cursor: '', passes: 1 });
     expect(rec.disagreements).toEqual([{ address: odd, listingNam: stakers[2].bonded_num, chainNam: stakers[2].bonded_num + 1, epoch: 2690, at: NOW + 60000 }]);
     // the row keeps the listing's figure and source (owner decision 7)
     expect(db.raw.prepare('SELECT bonded_num, verified_src FROM stakes WHERE address=?').get(odd)).toMatchObject({ bonded_num: stakers[2].bonded_num, verified_src: BOND_LISTING_SRC });
     expect(health[0]).toMatchObject({ name: 'Namada RPC (stake sample)', ok: true });
-    expect(health[0].note).toBe('12 of 13 sampled stakes match the bond listing to the base unit, 1 differ (bonds still in the pipeline, or slashed); 1 full passes so far');
+    expect(health[0].note).toBe('11 of 12 sampled stakes match the bond listing to the base unit, 1 differ (bonds still in the pipeline, or slashed); 1 full passes so far');
     expect(SAMPLE_PER_TICK).toBe(24);
   });
 
@@ -343,13 +363,13 @@ describe('the stake sample and the coverage check', () => {
     const db = testD1();
     const bond = (await runBondListing(env(db), [], NOW, 2690, {}, bondLister()))!;
     const stakeNam = bond.totalNam / 1.003; // the listing runs 0.3% above the chain's total stake (pipeline bonds)
-    const sample: StakeSampleRecord = { at: NOW, cursor: '', checked: 13, agreed: 12, failed: 0, passes: 1, disagreements: [{ address: 'tnam1qx', listingNam: 1, chainNam: 2, epoch: 2690, at: NOW }] };
+    const sample: StakeSampleRecord = { at: NOW, cursor: '', checked: 12, agreed: 11, failed: 0, passes: 1, disagreements: [{ address: 'tnam1qx', listingNam: 1, chainNam: 2, epoch: 2690, at: NOW }] };
     const ok = await bondedCoverageCheck(db as any, NOW + 60000, stakeNam, stakeNam * 1.28, bond, sample);
     await runStmts(db, [ok]);
     const c = db.raw.prepare("SELECT status, detail FROM checks WHERE key='bonded_coverage'").get();
     expect(c.status).toBe('ok');
     const d = JSON.parse(c.detail);
-    expect(d).toMatchObject({ coveragePct: '100.3%', stakers: 13, knownAddresses: 15, pendingAddresses: 0, verifiedAddresses: 13, listingTotalNam: bond.totalNam, totalStakeNam: stakeNam, sampledDisagreements: 1, listingHeight: 8343327, listingEpoch: 2690 });
+    expect(d).toMatchObject({ coveragePct: '100.3%', stakers: 12, knownAddresses: 15, pendingAddresses: 0, verifiedAddresses: 12, listingTotalNam: bond.totalNam, totalStakeNam: stakeNam, sampledDisagreements: 1, listingHeight: 8343327, listingEpoch: 2690 });
     expect(d.storedSumNam).toBeCloseTo(bond.totalNam, 3);
     expect(d.sampled.examples).toHaveLength(1);
     // 3% apart, or rows still to write, or no listing at all: needs a look, with the reason
@@ -391,21 +411,23 @@ describe('the API and the listings', () => {
       expect(r.total).toBeGreaterThan(0);
       let liquid = 0, staked = 0;
       for (const h of r.holders) {
-        // a row with a spendable reading: confirmed by the listing half an hour ago, so live (not "2 days old")
-        if (h.verifiedAt != null) { liquid++; expect(h.verifiedAt).toBe(NOW - 30 * 60000); expect(h.status).toBe('live'); }
+        // every row (both spendable and stake-only) has its spendable reading confirmed by the balance listing half an hour ago
+        expect(h.verifiedAt).toBe(NOW - 30 * 60000);
+        expect(h.status).toBe('live');
+        if (h.balance > 0) liquid++;
         if (h.bonded != null && h.bondedVerifiedAt != null) { staked++; expect(h.bondedVerifiedAt).toBe(NOW - 20 * 60000); }
       }
       expect(liquid).toBe(18);
-      expect(staked).toBe(13);
+      expect(staked).toBe(12);
       vi.stubGlobal('fetch', vi.fn(async () => new Response('{}', { status: 500 })));
       insert(db, 'metrics', [{ ts: NOW - 60000, key: 'supply.total', value: 1147657323 }]);
       const o = (await (await app.request('/api/overview', {}, { DB: db } as any)).json()) as Overview;
       expect(o.concentration.namadaProv).toMatchObject({ at: NOW - 30 * 60000, status: 'live' });
       expect(o.namada.holders).toBe(r.total);
-      expect(o.namada.holdersUnder1Nam).toBe(BAL.expected.under1Nam);
+      expect(o.namada.holdersUnder1Nam).toBe(BAL.expected.under1Nam + 1);
       expect(db.raw.prepare(NAMADA_TOP10_SQL).get(NOW - 30 * 60000, NOW - 20 * 60000).at).toBe(NOW - 30 * 60000);
       expect(db.raw.prepare(NAMADA_TOP10_SQL).get(0, 0).at).toBe(NOW - 2 * D);
-      expect(db.raw.prepare(HOLDER_DUST_SQL).get().n).toBe(BAL.expected.under1Nam);
+      expect(db.raw.prepare(HOLDER_DUST_SQL).get().n).toBe(BAL.expected.under1Nam + 1);
     } finally {
       vi.useRealTimers();
     }

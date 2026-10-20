@@ -690,11 +690,19 @@ app.put('/api/me/settings', async (c) => {
   return c.json({ settings: publicView(next) });
 });
 
+/** One test post per wallet every 30 s: a test is an outbound Discord call the caller chooses the target of. */
+export const WEBHOOK_TEST_COOLDOWN_MS = 30_000;
+
 app.post('/api/me/settings/test', async (c) => {
   const r = await me(c); if (r instanceof Response) return r;
   const cur = await settingsOrDefault(c.env.DB, r.key, r.s!.address);
   const url = cur.channels.discord.webhookUrl;
   if (!url) return c.json({ error: 'no Discord webhook saved' }, 400);
+  const now = Date.now();
+  const coolKey = `webhook_test:${r.s!.address}`;
+  const last = Number((await kvGet(c.env.DB, coolKey)) || 0);
+  if (last > 0 && now - last < WEBHOOK_TEST_COOLDOWN_MS) return c.json({ error: 'Wait 30 seconds before sending another test alert.' }, 429);
+  await kvSet(c.env.DB, coolKey, String(now));
   return c.json({ success: await sendDiscordTestAlert(url, cur) });
 });
 

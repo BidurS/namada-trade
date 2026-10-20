@@ -12,7 +12,7 @@ import {
   createSession, issueNonce, login, loginMessage, verifyNamada, namadaImplicitAddress, createPairCode, claimPairCode, sweepAuth, ALERT_CLAIM_KEEP_MS, type Session,
 } from '../worker/src/auth';
 import { assertLoginMessage } from '../shared/login';
-import { chainOf, isRealAddress, HttpError } from '../worker/src/util';
+import { chainOf, isRealAddress, HttpError, fetchText } from '../worker/src/util';
 import { inlineSql } from '../worker/src/db';
 import { configureAlerts, buildFlowDiscordBody, sendDiscordWhaleAlert, sendDiscordForumAlert, plainMd, BACKOFF_AFTER, FANOUT_DEADLINE_MS, POST_CONCURRENCY } from '../worker/src/sources/discord';
 import { saveSettings, defaultPrefs, type StoredSettings } from '../worker/src/settings';
@@ -505,5 +505,60 @@ describe('E1/B5: only real addresses link accounts; generated SQL keeps every by
     expect(sql.split(/;\s*\n/)).toHaveLength(1);
     expect(db.raw.prepare(sql.slice(0, -1)).get().v).toBe("x';\nDROP TABLE flows;--");
     expect(inlineSql({ sql: 'SELECT ? v', params: ['plain'] })).toBe("SELECT 'plain' v;");
+  });
+});
+
+// ------------------------------------------------------------------ Audit Round 2: cache-busting, stream caps, established accounts, webhook test cooldown
+describe('Audit Round 2: high-cardinality cache-busters, stream caps, established accounts, and webhook cooldown', () => {
+  it('high-cardinality query variants (?minNam=, ?page=>1, non-standard ?limit=, custom alert thresholds) are gated by REPLAY_LIMITER on cache miss', () => {
+    expect(isReplay(new URL('https://namada.trade/api/flows?minNam=123.45'))).toBe(true);
+    expect(isReplay(new URL('https://namada.trade/api/holders?page=2'))).toBe(true);
+    expect(isReplay(new URL('https://namada.trade/api/holders?limit=17'))).toBe(true);
+    expect(isReplay(new URL('https://namada.trade/api/alerts/recent?ibcInventory=999'))).toBe(true);
+    expect(isReplay(new URL('https://namada.trade/api/alerts/rules?whale=100'))).toBe(false);
+    expect(isReplay(new URL('https://namada.trade/api/alerts/rules?unlock=100'))).toBe(true);
+    // Default landing queries are not classified as replay
+    expect(isReplay(new URL('https://namada.trade/api/flows?chain=namada&limit=50'))).toBe(false);
+    expect(isReplay(new URL('https://namada.trade/api/holders?chain=namada&page=1&limit=25'))).toBe(false);
+  });
+
+  it('Namada established accounts (tnam1q8..., discriminant 1) can sign in when their on-chain public key matches', async () => {
+    const sk = ed25519.utils.randomSecretKey();
+    const pkBorsh = new Uint8Array([0, ...ed25519.getPublicKey(sk)]);
+    // Real established address (discriminant 1) from balance_listing.json
+    const estAddr = 'tnam1q80ajrpqzv0vz9sl5ye22rprjt3k3q0cqy4lwywe';
+    const message = loginMessage(estAddr, 'c'.repeat(32));
+    const sig = '00' + hex.encode(ed25519.sign(sha256(new TextEncoder().encode(message)), sk));
+    // Without an on-chain revealed key matching pkBorsh, an established account is rejected
+    vi.stubGlobal('fetch', vi.fn(async () => new Response(JSON.stringify({ publicKey: null }), { status: 200, headers: { 'content-type': 'application/json' } })));
+    expect(await verifyNamada(estAddr, message, hex.encode(pkBorsh), sig)).toMatch(/does not belong/);
+    // When the on-chain key matches pkBorsh, sign-in succeeds
+    vi.stubGlobal('fetch', vi.fn(async () => new Response(JSON.stringify({ publicKey: hex.encode(pkBorsh) }), { status: 200, headers: { 'content-type': 'application/json' } })));
+    expect(await verifyNamada(estAddr, message, hex.encode(pkBorsh), sig)).toBeNull();
+  });
+
+  it('fetchText aborts responses that exceed maxBytes before exhausting isolate memory', async () => {
+    const big = new Uint8Array(2048);
+    vi.stubGlobal('fetch', vi.fn(async () => new Response(big, { status: 200, headers: { 'content-length': '2048' } })));
+    await expect(fetchText('https://rpc.example/abci_query', { maxBytes: 1024 })).rejects.toThrow(/response too large/);
+  });
+
+  it('POST /api/me/settings/test enforces a 30-second cooldown per address', async () => {
+    const db = testD1();
+    const key = base64.encode(new Uint8Array(32).fill(9));
+    const s = (await createSession(db as any, A, 'namada', 'namada')) as Session;
+    const auth = { Authorization: `Bearer ${s.token}` };
+    await saveSettings(db as any, key, {
+      address: A,
+      notifications: defaultPrefs(),
+      channels: { discord: { enabled: true, webhookUrl: 'https://discord.com/api/webhooks/1234567890/abcdefghijk' } },
+      createdAt: NOW,
+      updatedAt: NOW,
+    });
+    vi.stubGlobal('fetch', vi.fn(async () => new Response(null, { status: 204 })));
+    const r1 = await app.request('/api/me/settings/test', { method: 'POST', headers: auth }, env(db, { SETTINGS_KEY: key }));
+    expect(r1.status).toBe(200);
+    const r2 = await app.request('/api/me/settings/test', { method: 'POST', headers: auth }, env(db, { SETTINGS_KEY: key }));
+    expect(r2.status).toBe(429);
   });
 });

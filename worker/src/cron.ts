@@ -285,6 +285,56 @@ async function pagedRows<T extends { address: string }>(db: D1Database, select: 
 export type BalanceLister = (opts: ReadOpts) => Promise<BalanceListing & { height: number; provider: string }>;
 export type BondLister = (opts: ReadOpts) => Promise<BondListing & { height: number; provider: string }>;
 
+/** A block height past this is not a height (a Unix timestamp stored by mistake would be): such a stored value counts as 0, so a real height heals it. */
+export const MAX_REASONABLE_HEIGHT = 1_000_000_000;
+/** How far behind the tick's head a listing's node may be (about 100 minutes of blocks) and how far "ahead" (clock or node skew) before its answer is refused. */
+export const MAX_LISTING_HEIGHT_DRIFT = 1_000;
+export const MAX_LISTING_HEIGHT_AHEAD = 100;
+/** A stored height, or 0 when there is none or it is not a height (MAX_REASONABLE_HEIGHT). */
+const effHeight = (h: number | null | undefined) => (h && h <= MAX_REASONABLE_HEIGHT ? h : 0);
+
+function heightGate(what: string, height: number, headHeight: number | null): string | null {
+  if (!Number.isInteger(height) || height <= 0 || height > MAX_REASONABLE_HEIGHT) return `the ${what} came with an invalid height ${height}`;
+  if (headHeight != null && headHeight > 0) {
+    if (height < headHeight - MAX_LISTING_HEIGHT_DRIFT) return `the ${what} is from height ${height.toLocaleString('en-US')}, ${(headHeight - height).toLocaleString('en-US')} blocks behind the head (${headHeight.toLocaleString('en-US')})`;
+    if (height > headHeight + MAX_LISTING_HEIGHT_AHEAD) return `the ${what} is from height ${height.toLocaleString('en-US')}, ahead of the head (${headHeight.toLocaleString('en-US')})`;
+  }
+  return null;
+}
+
+/**
+ * Whether a balance listing may be applied: its node at the head within MAX_LISTING_HEIGHT_DRIFT blocks (a node
+ * catching up would list old balances as current and zero every holder it has not reached), and the answer whole:
+ * every balance in it (user keys and the internal accounts) adds up to the chain's minted total, which the same
+ * answer carries, within 0.5% (on 2026-10-20 they agreed to the base unit). An empty or short answer fails here,
+ * never in the rows.
+ */
+export function balanceGate(listing: (BalanceListing & { height: number }) | null | undefined, headHeight: number | null = null): { ok: boolean; reason?: string; sumBase: bigint; mintedBase: bigint } {
+  const no = (reason: string, sumBase = 0n, mintedBase = 0n) => ({ ok: false, reason, sumBase, mintedBase });
+  if (!listing || listing.entries.size === 0) return no('the balance listing is empty');
+  const h = heightGate('balance listing', listing.height, headHeight);
+  if (h) return no(h);
+  if (!listing.minted) return no('the balance listing has no minted total to check against');
+  let mintedBase = 0n;
+  try { mintedBase = BigInt(listing.minted); } catch { return no('the minted total could not be read'); }
+  if (mintedBase <= 0n) return no('the minted total is not positive', 0n, mintedBase);
+  let sumBase = 0n;
+  for (const v of listing.entries.values()) sumBase += BigInt(v);
+  for (const v of listing.internal.values()) sumBase += BigInt(v);
+  const diff = sumBase > mintedBase ? sumBase - mintedBase : mintedBase - sumBase;
+  const pct = Number((diff * 1_000_000n) / mintedBase) / 10_000;
+  if (pct > 0.5) return no(`the balances in the listing add up to ${pct.toFixed(2)}% off the minted total`, sumBase, mintedBase);
+  return { ok: true, sumBase, mintedBase };
+}
+
+/** Whether a bond listing may be applied: a node at the head within the same bounds, and a non-empty stake set. */
+export function bondGate(listing: (BondListing & { height: number }) | null | undefined, headHeight: number | null = null): { ok: boolean; reason?: string } {
+  if (!listing || listing.sources.size === 0 || listing.totalBase <= 0n) return { ok: false, reason: 'the bond listing is empty' };
+  const h = heightGate('bond listing', listing.height, headHeight);
+  if (h) return { ok: false, reason: h };
+  return { ok: true };
+}
+
 /**
  * Read every NAM balance from the chain and reconcile the Namada holder rows with it: rows whose stored balance
  * differs (or that are new and hold NAM, or were last written by another source) are written with the listing's
@@ -293,7 +343,7 @@ export type BondLister = (opts: ReadOpts) => Promise<BondListing & { height: num
  * tick, after re-reading the listing (the diff is recomputed, so nothing is written twice or lost). Zero balances
  * the chain lists are not given rows (26,404 of 90,777 keys on 2026-10-20 held nothing).
  */
-export async function runBalanceListing(env: Env, health: SourceHealth[], now: number, read: ReadOpts, list: BalanceLister = allNamBalances, cap = LISTING_WRITE_CAP): Promise<BalanceListingRecord | null> {
+export async function runBalanceListing(env: Env, health: SourceHealth[], now: number, read: ReadOpts, list: BalanceLister = allNamBalances, cap = LISTING_WRITE_CAP, headHeight: number | null = null): Promise<BalanceListingRecord | null> {
   const name = 'Namada RPC (balance listing)';
   const prev = await kvGetJson<BalanceListingRecord>(env.DB, 'balance.listing').catch(() => null);
   const t0 = Date.now();
@@ -306,6 +356,15 @@ export async function runBalanceListing(env: Env, health: SourceHealth[], now: n
     const failed: BalanceListingRecord = { ...(prev ?? { at: 0, completeAt: null, height: 0, provider: '', keys: 0, holders: 0, totalNam: 0, bytes: 0, written: 0, zeroed: 0, remaining: 0, ticks: 0, durationMs: 0, spansAt: null, extendedAt: null }), failedAt: now, error: String(e).slice(0, 160) };
     await kvSet(env.DB, 'balance.listing', failed).catch(() => {});
     return failed;
+  }
+  const gate = balanceGate(listing, headHeight);
+  if (!gate.ok) {
+    // Refused: the rows stay as they are and the pass stays where it was; the record and the sheet say why.
+    const error = `Not applied: ${gate.reason}`;
+    health.push({ name, ok: false, at: now, note: `The balance listing from ${listing.provider} was not applied: ${gate.reason}`.slice(0, 160) });
+    const refused: BalanceListingRecord = { ...(prev ?? { at: 0, completeAt: null, height: 0, provider: '', keys: 0, holders: 0, totalNam: 0, bytes: 0, written: 0, zeroed: 0, remaining: 0, ticks: 0, durationMs: 0, spansAt: null, extendedAt: null }), failedAt: now, error };
+    await kvSet(env.DB, 'balance.listing', refused).catch(() => {});
+    return refused;
   }
   const ticks = (prev && prev.remaining > 0 ? prev.ticks : 0) + 1;
   const rec: BalanceListingRecord = {
@@ -325,11 +384,11 @@ export async function runBalanceListing(env: Env, health: SourceHealth[], now: n
       if (!s) { if (balance !== '0') toWrite.push({ address, balance }); continue; }
       // The block follower wrote this row from a later block than the listing's: its post-balance is newer (the
       // write guard would refuse the listing's anyway), so the row is not counted as pending.
-      if ((s.updated_height ?? 0) > listing.height) continue;
+      if (effHeight(s.updated_height) > listing.height) continue;
       if (s.verified_src !== BALANCE_LISTING_SRC || !sameBalance(s.balance, balance)) toWrite.push({ address, balance });
     }
     rec.totalNam = Number(totalBase) / 1e6;
-    const toZero = stored.filter((s) => !listing.entries.has(s.address) && s.balance_num > 0 && !INTERNAL_ADDRS.includes(s.address) && (s.updated_height ?? 0) <= listing.height).map((s) => s.address);
+    const toZero = stored.filter((s) => !listing.entries.has(s.address) && s.balance_num > 0 && !INTERNAL_ADDRS.includes(s.address) && effHeight(s.updated_height) <= listing.height).map((s) => s.address);
     toWrite.sort((a, b) => (a.address < b.address ? -1 : a.address > b.address ? 1 : 0));
     const part = toWrite.slice(0, cap);
     rec.remaining = toWrite.length - part.length;
@@ -370,7 +429,7 @@ export async function runBalanceListing(env: Env, health: SourceHealth[], now: n
  * bonded_num > 0 that the listing does not name are set to 0. Sources the listing names with no bond left (only
  * unbonds or slashes) get no new row. The sum includes bonds still in the pipeline: the coverage check says so.
  */
-export async function runBondListing(env: Env, health: SourceHealth[], now: number, epoch: number, read: ReadOpts, list: BondLister = allBonds, cap = LISTING_WRITE_CAP): Promise<BondListingRecord | null> {
+export async function runBondListing(env: Env, health: SourceHealth[], now: number, epoch: number, read: ReadOpts, list: BondLister = allBonds, cap = LISTING_WRITE_CAP, headHeight: number | null = null): Promise<BondListingRecord | null> {
   const name = 'Namada RPC (bond listing)';
   const prev = await kvGetJson<BondListingRecord>(env.DB, 'bond.listing').catch(() => null);
   const t0 = Date.now();
@@ -383,6 +442,14 @@ export async function runBondListing(env: Env, health: SourceHealth[], now: numb
     await kvSet(env.DB, 'bond.listing', failed).catch(() => {});
     return failed;
   }
+  const gate = bondGate(listing, headHeight);
+  if (!gate.ok) {
+    const error = `Not applied: ${gate.reason}`;
+    health.push({ name, ok: false, at: now, note: `The bond listing from ${listing.provider} was not applied: ${gate.reason}`.slice(0, 160) });
+    const refused: BondListingRecord = { ...(prev ?? { at: 0, completeAt: null, height: 0, epoch, provider: '', sources: 0, stakers: 0, totalNam: 0, bytes: 0, written: 0, zeroed: 0, remaining: 0, ticks: 0, durationMs: 0 }), failedAt: now, error };
+    await kvSet(env.DB, 'bond.listing', refused).catch(() => {});
+    return refused;
+  }
   const ticks = (prev && prev.remaining > 0 ? prev.ticks : 0) + 1;
   const rec: BondListingRecord = {
     at: now, completeAt: prev?.completeAt ?? null, height: listing.height, epoch, provider: listing.provider,
@@ -390,8 +457,8 @@ export async function runBondListing(env: Env, health: SourceHealth[], now: numb
     written: 0, zeroed: 0, remaining: 0, ticks, durationMs: 0, failedAt: null,
   };
   try {
-    const stored = await pagedRows<{ address: string; bonded_num: number | null; delegations: string | null; verified_src: string | null }>(
-      env.DB, `SELECT address, bonded_num, delegations, verified_src FROM stakes WHERE 1 = 1`);
+    const stored = await pagedRows<{ address: string; bonded_num: number | null; delegations: string | null; verified_src: string | null; verified_height: number | null }>(
+      env.DB, `SELECT address, bonded_num, delegations, verified_src, verified_height FROM stakes WHERE 1 = 1`);
     const storedBy = new Map(stored.map((r) => [r.address, r]));
     const toWrite: { address: string; bondedNam: number; delegations: { validator: string; amountNam: number }[] }[] = [];
     for (const [address, b] of listing.sources) {
@@ -399,15 +466,17 @@ export async function runBondListing(env: Env, health: SourceHealth[], now: numb
       if (b.bondedBase > 0n) rec.stakers++;
       const s = storedBy.get(address);
       if (!s) { if (b.bondedBase > 0n) toWrite.push({ address, bondedNam, delegations: b.delegations }); continue; }
+      // A row from a later height than the listing's (a newer listing's) is not pending: the write guard would refuse it.
+      if (effHeight(s.verified_height) > listing.height) continue;
       if (s.verified_src !== BOND_LISTING_SRC || s.bonded_num !== bondedNam || s.delegations !== JSON.stringify(b.delegations)) toWrite.push({ address, bondedNam, delegations: b.delegations });
     }
-    const toZero = stored.filter((s) => !listing.sources.has(s.address) && (s.bonded_num ?? 0) > 0).map((s) => s.address);
+    const toZero = stored.filter((s) => !listing.sources.has(s.address) && (s.bonded_num ?? 0) > 0 && effHeight(s.verified_height) <= listing.height).map((s) => s.address);
     toWrite.sort((a, b) => (a.address < b.address ? -1 : a.address > b.address ? 1 : 0));
     const part = toWrite.slice(0, cap);
     rec.remaining = toWrite.length - part.length;
-    if (part.length) rec.written = await runBatch(env.DB, stmt.stakesVerified(part, epoch, now, BOND_LISTING_SRC));
+    if (part.length) rec.written = await runBatch(env.DB, stmt.stakesVerified(part, epoch, listing.height, now, BOND_LISTING_SRC));
     if (rec.remaining === 0) {
-      if (toZero.length) rec.zeroed = await runBatch(env.DB, stmt.stakesVerified(toZero.map((address) => ({ address, bondedNam: 0, delegations: [] })), epoch, now, BOND_LISTING_SRC));
+      if (toZero.length) rec.zeroed = await runBatch(env.DB, stmt.stakesVerified(toZero.map((address) => ({ address, bondedNam: 0, delegations: [] })), epoch, listing.height, now, BOND_LISTING_SRC));
       rec.completeAt = now;
     }
     rec.durationMs = Date.now() - t0;
@@ -796,7 +865,7 @@ export async function runCron(env: Env) {
     //     started with the tick (above); here its answer is reconciled with the rows.
     let bondRec = bondPrev;
     if (bondRead) {
-      if (epoch) bondRec = await runBondListing(env, health, now, epoch, lread, started(bondRead));
+      if (epoch) bondRec = await runBondListing(env, health, now, epoch, lread, started(bondRead), LISTING_WRITE_CAP, headHeight);
       else {
         // Without the epoch the rows cannot be stamped (verified_epoch): the answer, if any, is let go.
         await bondRead;
@@ -816,7 +885,7 @@ export async function runCron(env: Env) {
       await runBatch(env.DB, [await bondedCoverageCheck(env.DB, now, stakeNam, posNam, bondRec, sample)]).catch(() => {});
     }
     // 5d. Spendable balances: the balance listing, when it was the listing due this tick.
-    if (balRead) await runBalanceListing(env, health, now, lread, started(balRead));
+    if (balRead) await runBalanceListing(env, health, now, lread, started(balRead), LISTING_WRITE_CAP, headHeight);
 
     // 6. The Osmosis holder list, read beside everything above.
     const holderList = await holderSync;

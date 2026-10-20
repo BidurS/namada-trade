@@ -80,7 +80,8 @@ export const stmt = {
    * Stakes rows the bond listing writes: several rows a statement (8 parameters a row, 12 rows a statement: D1
    * binds at most 100). Guarded by height: a row written from a later chain height (`verified_height`, migration
    * 0006) is never overwritten by an older answer, so a slow node's listing cannot undo a newer one (as
-   * listingBalanceStmts for the balances).
+   * listingBalanceStmts for the balances). A stored value that cannot be a height (above a billion: a timestamp
+   * written by mistake) counts as 0, so a real height heals the row instead of being refused by it for good.
    */
   stakesVerified: (rows: { address: string; bondedNam: number; delegations: unknown }[], epoch: number, height: number, at: number, src: string): Stmt[] => {
     const out: Stmt[] = [];
@@ -90,7 +91,7 @@ export const stmt = {
         sql: `INSERT INTO stakes (address,bonded_num,delegations,verified_at,verified_epoch,verified_height,verified_src,updated_at) VALUES ${part.map(() => '(?,?,?,?,?,?,?,?)').join(',')}
           ON CONFLICT(address) DO UPDATE SET bonded_num=excluded.bonded_num, delegations=excluded.delegations,
             verified_at=excluded.verified_at, verified_epoch=excluded.verified_epoch, verified_height=excluded.verified_height, verified_src=excluded.verified_src, updated_at=excluded.updated_at
-          WHERE excluded.verified_height >= COALESCE(stakes.verified_height, 0)`,
+          WHERE excluded.verified_height >= CASE WHEN COALESCE(stakes.verified_height, 0) > 1000000000 THEN 0 ELSE COALESCE(stakes.verified_height, 0) END`,
         params: part.flatMap((r) => [r.address, r.bondedNam, JSON.stringify(r.delegations), at, epoch, height, src, at]),
       });
     }

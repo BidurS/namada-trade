@@ -81,6 +81,18 @@ async function revealedKey(address: string): Promise<Uint8Array | null> {
   }
 }
 
+/** The first byte of a `tnam1` address: 0 an implicit account (a key hash), 1 an established one, 2 and up internal; null when it is not an address. */
+export function namadaAddressDiscriminant(address: string): number | null {
+  try {
+    const dec = bech32m.decode(address as `${string}1${string}`, 100);
+    if (dec.prefix !== 'tnam') return null;
+    const raw = bech32m.fromWords(dec.words);
+    return raw.length === 21 ? raw[0] : null;
+  } catch {
+    return null;
+  }
+}
+
 /** Returns an error string, or null when the signature is valid for the address. */
 export async function verifyNamada(address: string, message: string, pubkeyIn: string, signatureIn: string): Promise<string | null> {
   let pk: Uint8Array;
@@ -88,9 +100,12 @@ export async function verifyNamada(address: string, message: string, pubkeyIn: s
   if (pk[0] !== 0) return 'only ed25519 keys are supported';
   const key = pk.slice(1);
 
-  // Key ↔ address binding by derivation, then the signature (both local), and only for a proven signer the chain's
-  // revealed key (an outside read): a request with a bad signature never costs an indexer call.
-  if (namadaImplicitAddress(pk) !== address) return 'public key does not belong to this address';
+  // Key ↔ address binding, then the signature. An implicit account (discriminant 0) is the hash of its key, so the
+  // binding is local; an established account (1, "tnam1q8…") has no key in its address, so its binding is the key
+  // it revealed on chain, read only for a proven signer: a request with a bad signature never costs an indexer call.
+  const disc = namadaAddressDiscriminant(address);
+  if (disc !== 0 && disc !== 1) return 'public key does not belong to this address';
+  if (disc === 0 && namadaImplicitAddress(pk) !== address) return 'public key does not belong to this address';
 
   let sig: Uint8Array;
   try {
@@ -100,11 +115,14 @@ export async function verifyNamada(address: string, message: string, pubkeyIn: s
   if (sig.length !== 64) return 'bad signature length';
 
   const msg = new TextEncoder().encode(message);
-  const ok = ed25519.verify(sig, sha256(msg), key) || ed25519.verify(sig, msg, key);
+  // Strict RFC 8032 (no ZIP-215 leniency): one canonical signature per message and key.
+  const ok = ed25519.verify(sig, sha256(msg), key, { zip215: false }) || ed25519.verify(sig, msg, key, { zip215: false });
   if (!ok) return 'signature does not verify';
 
   const revealed = await revealedKey(address);
-  if (revealed && hex.encode(revealed) !== hex.encode(pk)) return 'public key differs from the key revealed on chain';
+  if (disc === 1) {
+    if (!revealed || hex.encode(revealed) !== hex.encode(pk)) return 'public key does not belong to this address';
+  } else if (revealed && hex.encode(revealed) !== hex.encode(pk)) return 'public key differs from the key revealed on chain';
   return null;
 }
 
