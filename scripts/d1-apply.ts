@@ -10,7 +10,9 @@ import { readFileSync } from 'node:fs';
 const MAX_BYTES = 90_000;
 
 for (const file of process.argv.slice(2)) {
-  const stmts = readFileSync(file, 'utf8').split(/;\s*\n/).map((s) => s.trim()).filter(Boolean);
+  // Comment-only lines are dropped before a statement is sent: `wrangler ... --command "-- …"` would read a leading
+  // `--` as an option, and generated .sql files put every statement on one line, so no value ever starts a line with it.
+  const stmts = readFileSync(file, 'utf8').split(/;\s*\n/).map((s) => s.replace(/^\s*--.*$/gm, '').trim()).filter(Boolean);
   let batch: string[] = [], size = 0, done = 0;
   const flush = () => {
     if (!batch.length) return;
