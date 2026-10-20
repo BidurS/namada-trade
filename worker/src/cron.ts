@@ -136,6 +136,41 @@ export const SAMPLE_KEEP_MS = 24 * 3600_000;
  */
 export const LISTING_RETRY_MS = 5 * 60_000;
 /**
+ * Executed swaps the price check trusts: buys and sells of at least 50 NAM against USDC through a single pool. A routed
+ * trade is left out: its counter amount is not the price of the NAM leg (on 2026-10-20 routed buys through pools
+ * 3005 and 3368 worked out at about half the market price).
+ */
+export const SINGLE_POOL_USDC_SWAP = `chain='osmosis' AND counter_denom='USDC' AND kind IN ('buy','sell')
+       AND amount_num >= 50 AND counter_amount > 0 AND pool_id IS NOT NULL AND pool_id NOT LIKE '%,%'`;
+/** How old the last hour with such a trade may be for the price check to compare against it. */
+export const PRICE_CHECK_WINDOW_MS = 6 * 3600000;
+
+/**
+ * The price check: the quoted price against the median price of the last hour with a trusted trade.
+ * - null when the quote is not known: nothing is written, so the check goes quiet and is served as 'stale' (its source
+ *   stopped answering).
+ * - 'idle' when the quote is known but no trusted trade fell in the last 6 h: nothing to compare, which is neither a
+ *   pass nor a fault (this market can go a day without one). The time of the last trusted trade goes in the detail.
+ * - otherwise ok / warn / fail by how far apart the two prices are (under 5%, under 15%, more).
+ */
+export function priceVsExecution(
+  quoteUsd: number | null | undefined,
+  lastSwapHour: { ts: number; value: number } | null,
+  lastTradeAt: number | null,
+  now: number,
+): { status: 'ok' | 'warn' | 'fail' | 'idle'; detail: Record<string, unknown> } | null {
+  if (!quoteUsd || !(quoteUsd > 0)) return null;
+  if (lastSwapHour && lastSwapHour.value > 0 && now - lastSwapHour.ts < PRICE_CHECK_WINDOW_MS) {
+    const dev = Math.abs(quoteUsd / lastSwapHour.value - 1) * 100;
+    return {
+      status: dev < 5 ? 'ok' : dev < 15 ? 'warn' : 'fail',
+      detail: { sqsUsd: quoteUsd, executedUsd: lastSwapHour.value, executedAt: lastSwapHour.ts, deviationPct: dev.toFixed(2) },
+    };
+  }
+  return { status: 'idle', detail: { sqsUsd: quoteUsd, noTrades: true, windowHours: PRICE_CHECK_WINDOW_MS / 3600000, lastTradeAt } };
+}
+
+/**
  * One deadline for the whole tick. Cloudflare stops a scheduled run after 15 minutes and the trigger fires every
  * minute, so a tick that waits on a node that accepts requests and never answers must end well inside a minute:
  * batches are not started after this, and reads still running are aborted at it.
@@ -828,8 +863,7 @@ export async function runCron(env: Env) {
     // 3. Executed-swap price for the current hour: median of single-pool NAM/USDC swaps.
     const hour = Math.floor(now / 3600000) * 3600000;
     const swaps = await env.DB.prepare(
-      `SELECT amount_num, counter_amount FROM flows WHERE chain='osmosis' AND counter_denom='USDC' AND kind IN ('buy','sell')
-       AND amount_num >= 50 AND counter_amount > 0 AND pool_id IS NOT NULL AND pool_id NOT LIKE '%,%' AND ts >= ? AND ts < ?`,
+      `SELECT amount_num, counter_amount FROM flows WHERE ${SINGLE_POOL_USDC_SWAP} AND ts >= ? AND ts < ?`,
     ).bind(hour, hour + 3600000).all<{ amount_num: number; counter_amount: number }>().catch(() => ({ results: [] as any[] }));
     const px = (swaps.results || []).map((s) => s.counter_amount / s.amount_num).sort((a, b) => a - b);
     if (px.length) {
@@ -979,12 +1013,16 @@ export async function runCron(env: Env) {
           sources: ['Namada RPC abci_query', 'Keplr Osmosis bank/supply', 'indexer.namada.net /ibc/{tx}/status'] }, now));
     }
 
-    // SQS mid vs the last hour's executed swap price
-    const lastSwap = await env.DB.prepare(`SELECT ts, value FROM metrics WHERE key='price.swap_1h' ORDER BY ts DESC LIMIT 1`).first<{ ts: number; value: number }>().catch(() => null);
-    if (price.usd && lastSwap && now - lastSwap.ts < 6 * 3600000) {
-      const dev = Math.abs(price.usd / lastSwap.value - 1) * 100;
-      checkStmts.push(stmt.check('price_vs_execution', dev < 5 ? 'ok' : dev < 15 ? 'warn' : 'fail',
-        'SQS mid price vs executed swap price (last hour with trades)', { sqsUsd: price.usd, executedUsd: lastSwap.value, executedAt: lastSwap.ts, deviationPct: dev.toFixed(2) }, now));
+    // SQS mid vs the last hour's executed swap price. With no trusted trade in the window the check still runs and
+    // says it had nothing to compare (it used to go quiet and read "no recent result", as if a source had failed).
+    if (price.usd) {
+      const lastSwap = await env.DB.prepare(`SELECT ts, value FROM metrics WHERE key='price.swap_1h' ORDER BY ts DESC LIMIT 1`).first<{ ts: number; value: number }>().catch(() => null);
+      const fresh = lastSwap != null && now - lastSwap.ts < PRICE_CHECK_WINDOW_MS;
+      // The read can fail: a failed read leaves the time unknown (null), never a guessed one.
+      const lastTradeAt = fresh ? null
+        : (await env.DB.prepare(`SELECT MAX(ts) t FROM flows WHERE ${SINGLE_POOL_USDC_SWAP}`).first<{ t: number | null }>().catch(() => null))?.t ?? null;
+      const r = priceVsExecution(price.usd, lastSwap, lastTradeAt, now);
+      if (r) checkStmts.push(stmt.check('price_vs_execution', r.status, 'SQS mid price vs executed swap price (last hour with trades)', r.detail, now));
     }
 
     await runBatch(env.DB, checkStmts);

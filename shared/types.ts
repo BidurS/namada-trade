@@ -162,8 +162,9 @@ export interface SourceHealth {
 export interface Check {
   key: string;
   /** 'stale': the check has not run for CHECK_STALE_MS (its source stopped answering); its last result is in detail
-   *  but it is not counted as passing. */
-  status: 'ok' | 'warn' | 'fail' | 'stale';
+   *  but it is not counted as passing. 'idle': the check ran but had nothing to compare (the price check when no
+   *  trade it trusts happened in its window); neither a pass nor a fault. */
+  status: 'ok' | 'warn' | 'fail' | 'stale' | 'idle';
   title: string;
   detail: Record<string, unknown>;
   checkedAt: number;

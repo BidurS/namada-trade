@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { checkDetail, checkUi } from '../web/src/lib/prov';
 import { checkOf, CHECK_STALE_MS } from '../worker/src/api';
+import { priceVsExecution, PRICE_CHECK_WINDOW_MS } from '../worker/src/cron';
 import type { Check } from '../shared/types';
 
 // Owner feedback 2026-10-19: two "Needs a look" checks and their wording made people doubt the site.
@@ -29,5 +30,39 @@ describe('cross-check wording', () => {
     const now = 1_800_000_000_000;
     expect(checkOf({ key: 'k', status: 'ok', title: 't', detail: '{}', checked_at: now - CHECK_STALE_MS - 1 }, now).status).toBe('stale');
     expect(checkOf({ key: 'k', status: 'ok', title: 't', detail: '{}', checked_at: now - 60_000 }, now).status).toBe('ok');
+  });
+
+  // Owner report 2026-10-20: the price check read "No recent result" for hours although every source answered; the
+  // market simply had no direct NAM-to-USDC trade in the last 6 h.
+  describe('the price check with no trade to compare', () => {
+    const now = 1_792_501_200_000; // 2026-10-20 13:00 UTC
+    const H = 3_600_000;
+    it('compares the quote with the last hour of trades while that hour is inside the window', () => {
+      const r = priceVsExecution(0.001155, { ts: now - 5 * H, value: 0.001177 }, null, now);
+      expect(r?.status).toBe('ok');
+      expect(checkDetail(c('price_vs_execution', r!.detail))).toBe('1.87% apart');
+    });
+    it('past the window it still runs and says it had nothing to compare, naming the last trade', () => {
+      const lastTrade = Date.UTC(2026, 9, 20, 7, 6);
+      const r = priceVsExecution(0.001155, { ts: now - PRICE_CHECK_WINDOW_MS - 1, value: 0.001177 }, lastTrade, now);
+      expect(r?.status).toBe('idle');
+      expect(r?.detail).toMatchObject({ noTrades: true, lastTradeAt: lastTrade, windowHours: 6 });
+      expect(checkUi('idle')).toEqual({ status: 'none', word: 'Nothing to compare' });
+      expect(checkDetail(c('price_vs_execution', r!.detail, 'idle'))).toBe('Last direct NAM-to-USDC trade: 20 Oct 2026, 07:06\u00a0UTC');
+    });
+    it('with no trade ever recorded it says so, and never invents a time', () => {
+      const r = priceVsExecution(0.001155, null, null, now);
+      expect(r?.status).toBe('idle');
+      expect(checkDetail(c('price_vs_execution', r!.detail, 'idle'))).toBe('No direct NAM-to-USDC trade on record');
+    });
+    it('without a quote nothing is written, so the check goes quiet and reads "No recent result"', () => {
+      expect(priceVsExecution(null, { ts: now - H, value: 0.001177 }, null, now)).toBeNull();
+      expect(priceVsExecution(0, { ts: now - H, value: 0.001177 }, null, now)).toBeNull();
+    });
+    it('"Nothing to compare" is served while fresh and turns "No recent result" when the check stops running', () => {
+      const row = { key: 'price_vs_execution', status: 'idle', title: 't', detail: '{"noTrades":true}' };
+      expect(checkOf({ ...row, checked_at: now - 60_000 }, now).status).toBe('idle');
+      expect(checkOf({ ...row, checked_at: now - CHECK_STALE_MS - 1 }, now).status).toBe('stale');
+    });
   });
 });

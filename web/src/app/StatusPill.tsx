@@ -14,15 +14,21 @@ export interface CheckCount {
   state: 'wait' | 'none' | 'ok' | 'look';
   ok: number;
   total: number;
+  /** checks that need a look (warn, fail) or have no recent result (stale) */
+  look: number;
+  /** checks that ran with nothing to compare (idle): not a fault, so they never turn the pill amber */
+  idle: number;
 }
 
 export function useCheckCount(): CheckCount {
   const { overview, error } = useOverview();
-  if (!overview) return { state: error ? 'none' : 'wait', ok: 0, total: 0 };
+  if (!overview) return { state: error ? 'none' : 'wait', ok: 0, total: 0, look: 0, idle: 0 };
   const total = overview.checks.length;
-  if (!total) return { state: 'none', ok: 0, total: 0 };
+  if (!total) return { state: 'none', ok: 0, total: 0, look: 0, idle: 0 };
   const ok = overview.checks.filter((c) => c.status === 'ok').length;
-  return { state: ok === total ? 'ok' : 'look', ok, total };
+  const idle = overview.checks.filter((c) => c.status === 'idle').length;
+  const look = total - ok - idle;
+  return { state: look ? 'look' : 'ok', ok, total, look, idle };
 }
 
 export function StatusPill({ onOpen }: { onOpen: () => void }) {
@@ -36,7 +42,7 @@ export function StatusPill({ onOpen }: { onOpen: () => void }) {
   const label =
     c.state === 'wait' ? 'Cross-checks are being read. Where every number comes from.'
     : c.state === 'none' ? `No data: ${(rewound ? REWIND_WORDS.checks : error ?? 'No cross-checks were reported').replace(/\.$/, '')}. Where every number comes from.`
-    : `${c.ok} of ${c.total} checks pass${c.state === 'look' ? `, ${c.total - c.ok} need a look or have no recent result` : ''}.${staleWords ? ` ${staleWords}` : ''} Where every number comes from.`;
+    : `${c.ok} of ${c.total} checks pass${c.look ? `, ${c.look} need a look or have no recent result` : ''}${c.idle ? `, ${c.idle} had nothing to compare` : ''}.${staleWords ? ` ${staleWords}` : ''} Where every number comes from.`;
   // The name starts with the words on screen ("5 of 7 checks", "no data": WCAG 2.5.3, label in name).
   // The phone short form "5/7" is drawn from data-s by CSS, so it is not a second, different name.
   return (

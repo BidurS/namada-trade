@@ -48,6 +48,7 @@ export function SourcesSheet({ onClose }: { onClose: () => void }) {
   const checks = overview?.checks ?? [];
   const look = checks.filter((c) => c.status === 'warn' || c.status === 'fail');
   const quiet = checks.filter((c) => c.status === 'stale');
+  const idle = checks.filter((c) => c.status === 'idle');
   const pass = checks.filter((c) => c.status === 'ok');
   const ran = checks.length ? Math.max(...checks.map((c) => c.checkedAt)) : null;
 
@@ -57,7 +58,7 @@ export function SourcesSheet({ onClose }: { onClose: () => void }) {
     <>Checks were not recorded then. Every figure below is as of {fmtUtcLong(at)}, with its own source and age.</>
   ) : checks.length ? (
     <>
-      <b>{fmtCount(pass.length)} of {fmtCount(checks.length)}</b> cross-checks pass{look.length ? `, ${fmtCount(look.length)} need a look` : ''}{quiet.length ? `, ${fmtCount(quiet.length)} ${quiet.length === 1 ? 'has' : 'have'} no recent result` : ''}. They ran {ran != null ? fmtAgo(ran, now) : 'at an unknown time'}.
+      <b>{fmtCount(pass.length)} of {fmtCount(checks.length)}</b> cross-checks pass{look.length ? `, ${fmtCount(look.length)} need a look` : ''}{quiet.length ? `, ${fmtCount(quiet.length)} ${quiet.length === 1 ? 'has' : 'have'} no recent result` : ''}{idle.length ? `, ${fmtCount(idle.length)} had nothing to compare` : ''}. They ran {ran != null ? fmtAgo(ran, now) : 'at an unknown time'}.
     </>
   ) : (
     'No cross-checks were reported. Every figure below still shows its own source and age.'
@@ -72,9 +73,9 @@ export function SourcesSheet({ onClose }: { onClose: () => void }) {
         {checks.length ? (
           <section aria-labelledby="sh-src-chk">
             <h3 id="sh-src-chk" className="sh-h3">Cross-checks</h3>
-            <p className="sh-cap">Each one compares two sources for the same thing. It passes, needs a look, or has no recent result when one of its sources stopped answering.</p>
+            <p className="sh-cap">Each one compares two sources for the same thing. It passes, needs a look, has nothing to compare when there was no trade to check against, or has no recent result when one of its sources stopped answering.</p>
             <ul className="sh-chks">
-              {[...look, ...quiet, ...pass].map((c) => {
+              {[...look, ...quiet, ...idle, ...pass].map((c) => {
                 const ui = checkUi(c.status);
                 const detail = checkDetail(c);
                 return (

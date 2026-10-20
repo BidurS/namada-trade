@@ -6,7 +6,7 @@
 // name appears only in the sheet, under "Technical name".
 import type { ReactNode } from 'react';
 import type { Check, Pressure, Provenance, SourceStatus, Sourced } from '../../../shared/types';
-import { ageOf, fmtCount, fmtDayMonthYear, fmtNamRule, fmtPctRule, fmtUtcClock } from './format';
+import { ageOf, fmtCount, fmtDayMonthYear, fmtNamRule, fmtPctRule, fmtUtcClock, fmtUtcLong } from './format';
 
 export type Status = SourceStatus;
 /** The four data states as the UI names them (the `data-status` attribute values). */
@@ -222,6 +222,12 @@ export function checkDetail(c: Check): string | null {
       return `${fmtNamRule(Math.abs(x))} NAM apart (${src} and a Namada node)`;
     }
     case 'price_vs_execution': {
+      // Nothing to compare: no trade the check trusts (direct NAM-to-USDC, one pool) in its window.
+      if (d.noTrades === true) {
+        return typeof d.lastTradeAt === 'number' && Number.isFinite(d.lastTradeAt)
+          ? `Last direct NAM-to-USDC trade: ${fmtUtcLong(d.lastTradeAt)}`
+          : 'No direct NAM-to-USDC trade on record';
+      }
       const x = detailNum(d.deviationPct);
       return x == null ? null : `${fmtPctRule(Math.abs(x))} apart`;
     }
@@ -268,10 +274,14 @@ export function unbondingStamp(p: Pick<Pressure, 'unbondingDays' | 'unbondingPro
   return { source: 'Namada chain parameters', plain: 'Chain parameter', at: null, status: 'stale', note: 'The time this setting was read is not known.', derivedFrom };
 }
 
-/** Check status to the UI state and word: ok passes; warn and fail need a look. */
+/**
+ * Check status to the UI state and word: ok passes; warn and fail need a look; stale has no recent result (its source
+ * stopped answering); idle ran with nothing to compare (no trade in its window), which is not a fault.
+ */
 export const checkUi = (s: Check['status']): { status: UiStatus; word: string } =>
   s === 'ok' ? { status: 'fresh', word: 'Passes' }
   : s === 'stale' ? { status: 'none', word: 'No recent result' }
+  : s === 'idle' ? { status: 'none', word: 'Nothing to compare' }
   : { status: s === 'warn' ? 'old' : 'disagree', word: 'Needs a look' };
 
 /** Build a Stamp from a `Sourced<T>` (or pass a Provenance through). */

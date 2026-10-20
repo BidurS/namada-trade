@@ -133,7 +133,8 @@ function Ticket({ o, curve, curveP, quote, rewound }: ClosingProps) {
 }
 
 function Trust({ checks, rewound, failed }: { checks: Check[]; rewound: boolean; failed: boolean }) {
-  const look = checks.filter((c) => c.status !== 'ok');
+  const look = checks.filter((c) => c.status !== 'ok' && c.status !== 'idle');
+  const idle = checks.filter((c) => c.status === 'idle');
   const pass = checks.filter((c) => c.status === 'ok');
   const cs = checksStamp(checks);
   const ex = PROOF.largestWithdrawal;
@@ -151,7 +152,8 @@ function Trust({ checks, rewound, failed }: { checks: Check[]; rewound: boolean;
           {checks.length ? (
             <p>
               <b data-num="" data-status="fresh">{pass.length} of {checks.length}</b> <Term id="cross-check">cross-checks</Term> pass {rewound ? 'at that moment' : 'right now'}
-              {look.length ? <>, <b data-num="" data-status="fresh">{look.length}</b> need a look</> : null}.
+              {look.length ? <>, <b data-num="" data-status="fresh">{look.length}</b> need a look</> : null}
+              {idle.length ? <>, <b data-num="" data-status="fresh">{idle.length}</b> had nothing to compare</> : null}.
             </p>
           ) : (
             <p>{failed ? 'The cross-checks did not load.' : rewound ? `${REWIND_WORDS.checks}, so no cross-check result is shown for this moment.` : 'The cross-checks have not answered yet.'}</p>
