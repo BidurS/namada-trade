@@ -313,8 +313,10 @@ async function namada() {
       }
       lines.push(`INSERT OR IGNORE INTO flows (id,chain,height,ts,tx_hash,kind,from_addr,to_addr,amount_num,meta) VALUES (${q(f.id)},'namada',${f.height},${f.ts},${q(f.txHash)},${q(f.kind)},${q(f.from)},${q(f.to)},${f.amount},${q(JSON.stringify(f.meta))});`);
       flows++;
-      const osmo = [f.from, f.to].find((a: string) => a?.startsWith('osmo1'));
-      const nam = [f.from, f.to].find((a: string) => a?.startsWith('tnam1') && a !== MASP);
+      // A link means NAM arrived: only a receive (ibc_in, osmo1 sender -> tnam1 receiver) links the two, never a
+      // send, whose receiver is text the sender chose and whose NAM comes back on a timeout (docs/security-review.md, E1).
+      const osmo = f.kind === 'ibc_in' && f.from?.startsWith('osmo1') ? f.from : null;
+      const nam = f.kind === 'ibc_in' && f.to?.startsWith('tnam1') && f.to !== MASP ? f.to : null;
       if (osmo && nam) {
         const k = `${osmo}|${nam}`;
         const l = links.get(k) ?? { osmo, namada: nam, n: 0, vol: 0, first: ts, last: ts };

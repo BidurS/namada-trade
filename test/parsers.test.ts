@@ -65,13 +65,33 @@ describe('osmosis parser', () => {
     expect(p.flows.filter((x) => x.kind === 'transfer')).toHaveLength(0);
   });
 
-  it('parses IBC send to Namada', () => {
+  it('parses IBC send to Namada and links nothing: the NAM has not arrived', () => {
     const tx = normFromTxSearch(fx('osmo_ibc_send.json')[0], 1);
     const p = parseOsmosisTx(tx, ctx);
     const f = p.flows.find((x) => x.kind === 'ibc_out')!;
     expect(f.from).toMatch(/^osmo1/);
     expect(f.to).toMatch(/^tnam1/);
     expect(f.amount).toBeGreaterThan(0);
+    expect(p.links).toHaveLength(0);
+  });
+
+  it('a timed-out send, a send to a garbage receiver and a refused receive create no link', () => {
+    // The timeout relay: the sender gets the NAM back (an ibc_refund row) and nothing is linked.
+    const timeout = parseOsmosisTx(normFromTxSearch(fx('osmo_ibc_timeout.json'), 1), ctx);
+    expect(timeout.flows.some((f) => f.meta?.ibcTimeoutRefund)).toBe(true);
+    expect(timeout.links).toHaveLength(0);
+    // A send whose receiver is text the sender typed: the send is a flow (it happened), never a link.
+    const raw = fx('osmo_ibc_send.json')[0];
+    for (const e of raw.tx_result.events) if (e.type === 'ibc_transfer') for (const a of e.attributes) if (a.key === 'receiver') a.value = 'tnam1' + 'q'.repeat(40);
+    const garbage = parseOsmosisTx(normFromTxSearch(raw, 1), ctx);
+    expect(garbage.flows.filter((f) => f.kind === 'ibc_out')).toHaveLength(1);
+    expect(garbage.links).toHaveLength(0);
+    // A receive the chain refused (fungible_token_packet success=false): no ibc_in row, no link.
+    const refused = fx('osmo_ibc_recv.json')[0];
+    for (const e of refused.tx_result.events) if (e.type === 'fungible_token_packet') for (const a of e.attributes) if (a.key === 'success') a.value = 'false';
+    const r = parseOsmosisTx(normFromTxSearch(refused, 1), ctx);
+    expect(r.flows.filter((f) => f.kind === 'ibc_in')).toHaveLength(0);
+    expect(r.links).toHaveLength(0);
   });
 });
 
@@ -81,7 +101,7 @@ describe('namada parser', () => {
     return { height: h, ts: 1, events: [...(r.end_block_events ?? [])] };
   };
 
-  it('classifies IBC out and pairs it with the packet receiver', () => {
+  it('classifies IBC out and pairs it with the packet receiver, linking nothing: a send is not an arrival', () => {
     const p = parseNamadaBlock(block(8261880), 0.00087);
     const f = p.flows.find((x) => x.kind === 'ibc_out')!;
     expect(f.from).toBe('tnam1qr4wemkpjfycn7ts7297e8qecg2t6pf2vq2wulsa');
@@ -89,7 +109,25 @@ describe('namada parser', () => {
     expect(f.amount).toBe(1);
     const esc = p.balances.find((b) => b.address === NAMADA.internal.ibc)!;
     expect(toNam(esc.balance)).toBeGreaterThan(20_000_000);
-    expect(p.links).toHaveLength(1);
+    expect(p.links).toHaveLength(0);
+  });
+
+  it('a transparent receive links the packet sender to the receiver; the same packet to a garbage receiver links nothing', () => {
+    // Block 7153723 is a receive into the shielded pool. The same two events with a transparent receiver are a
+    // transparent receive (escrow -> account): the one record that links an osmo1 to a tnam1.
+    const osmo = 'osmo19v0z78d8gv02t4cfqvmtklppu4rmpp5ek3q9a8';
+    const recv = (receiver: string) => {
+      const b = block(7153723);
+      b.events = b.events.map((e: any) => ({ ...e, attributes: e.attributes.map((a: any) => ({ ...a, value: String(a.value).split(NAMADA.internal.masp).join(receiver) })) }));
+      return parseNamadaBlock(b, null);
+    };
+    const to = 'tnam1qr4wemkpjfycn7ts7297e8qecg2t6pf2vq2wulsa';
+    const p = recv(to);
+    const f = p.flows.find((x) => x.kind === 'ibc_in')!;
+    expect(f.from).toBe(osmo);
+    expect(f.to).toBe(to);
+    expect(p.links).toEqual([{ osmo, namada: to, amount: f.amount, ts: 1 }]);
+    expect(recv('tnam1' + 'q'.repeat(40)).links).toHaveLength(0);
   });
 
   it('classifies PoS withdraw', () => {

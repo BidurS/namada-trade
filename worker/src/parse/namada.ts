@@ -283,17 +283,17 @@ export function parseNamadaBlock(block: NamadaBlock, priceUsd: number | null): N
         usedPackets.add(pi);
         const p = packets[pi];
         if (want === 'out') {
+          // No link from a send: the receiver is text the sender chose, and a send that times out is refunded.
           flowTo = p.receiver;
           meta.escrow = I.ibc;
         } else {
           flowFrom = p.sender;
           meta.escrow = I.ibc;
-        }
-        const osmo = want === 'out' ? p.receiver : p.sender;
-        const nam = want === 'out' ? p.sender : p.receiver;
-        // A link joins two real accounts only (a packet's receiver is text the sender chose), never the shielded pool.
-        if (isRealAddress(osmo) === 'osmosis' && isRealAddress(nam) === 'namada' && nam !== I.masp) {
-          out.links.push({ osmo, namada: nam, amount, ts: block.ts });
+          // The NAM arrived here: this is the one record that links the osmo1 sender to the tnam1 receiver. Two real
+          // accounts only (the checksum), never the shielded pool.
+          if (isRealAddress(p.sender) === 'osmosis' && isRealAddress(p.receiver) === 'namada' && p.receiver !== I.masp) {
+            out.links.push({ osmo: p.sender, namada: p.receiver, amount, ts: block.ts });
+          }
         }
       }
     }

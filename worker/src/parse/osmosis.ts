@@ -227,7 +227,8 @@ export function parseOsmosisTx(tx: NormTx, ctx: OsmoCtx): OsmoParsed {
       const amount = Number(a.amount) / 10 ** NAM.decimals;
       const seq = seqFor(a.msg_index);
       out.flows.push(flow(tx, `ibc_out:${i}`, 'ibc_out', a.sender, a.receiver, amount, ctx.priceUsd, { memo: a.memo, channel: NAM.osmoChannel, ...(seq ? { packetSequence: seq } : {}) }));
-      if (isRealAddress(a.receiver) === 'namada' && isRealAddress(a.sender) === 'osmosis') out.links.push({ osmo: a.sender, namada: a.receiver, amount, ts: tx.ts });
+      // No link from a send: the receiver is text the sender chose, and a send that times out is refunded. A link is
+      // written only from the receiving chain's record (recv_packet above, 'ibc_in' in parse/namada.ts).
     } else if (e.type === 'timeout_packet') {
       const a = attrs(e);
       if (a.packet_src_channel === NAM.osmoChannel) {

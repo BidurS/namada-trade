@@ -1,6 +1,6 @@
 # Security review before going public (2026-10-19)
 
-**Verdict: the site is fit to go live with this commit.** No secret is committed or exposed, the wallet sign-in proves control of the exact address it claims, nothing lets an outsider write data or read another user's settings, and the client renders every outside string as text. What the review found was almost all abuse surface: ways to make the site do expensive work, flood its tables, swap a visitor's session through a link, stall the live block scan, or post hostile text into Discord. Every finding in the must-fix tier is fixed in this commit, with a test for each where a unit test is feasible (`test/security-review.test.ts`); the rest are listed as accepted, with the reason.
+**Verdict: the site is fit to go live with this commit.** No secret is committed or exposed, the wallet sign-in proves control of the exact address it claims, nothing lets an outsider write data or read another user's settings, and the client renders every outside string as text. What the review found was almost all abuse surface: ways to make the site do expensive work, flood its tables, swap a visitor's session through a link, stall the live block scan, or post hostile text into Discord. Every finding in the must-fix tier is fixed in this commit, with a test for each where a unit test is feasible (`test/security-review.test.ts`), and E1 in the commit that followed the same day; the rest are listed as accepted, with the reason.
 
 **Nothing needs rotating.** The Keplr key, the Discord webhook and the settings key were never committed (history and tree scanned); the only key-shaped strings in the repository are the identifier `keplr_rest` and protobuf transaction bytes in fixtures.
 
@@ -26,6 +26,7 @@ Severity is as re-rated after verification. "Where" names the code as it was bef
 | C9 | medium | The live scan's block reads waited up to 90 s on a hung node before asking the other |
 | C10 | medium | The live feed accepted every socket, without a cap, and answered any message |
 | B1 | medium | Forum posts, proposals, labels and bridge receiver strings reached Discord as live markdown, with no `allowed_mentions` |
+| E1 | medium | A bridge send linked its sender to any receiver at send time; a send with a one-second timeout to a victim's real address is refunded, yet linked the sender to the victim, each attempt with a fresh hash (fixed the same day, in the commit after the review) |
 | C1 | low | The edge cache and the heavy-request limiter could be slipped past with an `Authorization` header, `HEAD`, or a percent-encoded path |
 | A3 | low | Sign-in asked the indexer before checking the signature |
 | A4 | low | A nonce or pair code read-then-deleted let two concurrent uses both succeed |
@@ -108,6 +109,14 @@ Severity is as re-rated after verification. "Where" names the code as it was bef
 - **Fix:** every body carries `allowed_mentions: { parse: [] }`; outsiders' text goes through `plainMd` at the sink ("](" becomes "] (", so no masked link survives, and the public `/api/intel` text is untouched); address slices lose backticks and line breaks, and a party that is not an address is marked "(not an address)".
 - **Tests:** `B1/C6` block.
 
+### E1. Links from the receiving side only (fixed 2026-10-19, the commit after the review)
+
+- **Where:** `worker/src/parse/osmosis.ts` `ibc_transfer` branch (was line 230), `worker/src/parse/namada.ts` packet pairing (was lines 291-296), `scripts/backfill-history.ts` namada step (the link rule).
+- **Exploit:** An IBC send was recorded, linked and alerted when it was sent. A send to a victim's real address with a one-second timeout is refunded by the chain, yet it wrote an `address_links` row joining the sender's `osmo1` to the victim's `tnam1` (or the other way round from Namada), each attempt under a fresh hash, for the cost of a fee. The checksum guard from the review stopped garbage strings, not real addresses.
+- **Fix:** A link is created only from the receiving chain's record of a crossing, the record that exists only when NAM arrived: on Osmosis the `recv_packet` whose `fungible_token_packet` says `success`, on Namada the `ibc_in` transfer (escrow to account) paired with its `recv_packet`. Both keep the checksum guard, and the Namada side never names the shielded pool. A send still writes its `ibc_out` flow and its alert (the send did happen; the alert key dedupes the same amount within ten minutes), and no link. The history backfill's link rule counts `ibc_in` rows only. What a row now means: this `osmo1` address and this `tnam1` address are the two ends of a crossing that completed; `transfers` and `volume_num` count completed crossings.
+- **Rebuild, once, by the owner:** the existing rows counted each crossing twice (once from the send, once from the receive) and hold sender-chosen pairs. After deploying this commit, run `npm run db:apply -- scripts/rebuild-address-links.sql`: it empties `address_links` and refills it from `flows WHERE kind='ibc_in'` with the parsers' rule; it is safe to run again, and its header gives the count query to record before and after. It was not run as part of this change.
+- **Tests:** `test/parsers.test.ts`: the send fixtures (Osmosis `ibc_transfer`, Namada `ibc_out`), a timed-out send, a send to a garbage receiver and a refused receive link nothing; the receive fixtures link exactly once.
+
 ### C1. Cache and limiter bypasses
 
 - **Where:** `worker/src/http.ts:46-47, :86, :89`.
@@ -136,7 +145,6 @@ Severity is as re-rated after verification. "Where" names the code as it was bef
 
 | Id | Severity | Finding | Why accepted |
 |---|---|---|---|
-| E1 | medium | A bridge send is recorded, linked and alerted at send time; a send with a one-second timeout to a victim's real address is refunded, yet links the sender to the victim and posts a whale alert, each attempt with a fresh hash (`parse/osmosis.ts:223-229`, `parse/namada.ts:285-295`) | The real fix is to create links from the receiving side only (the record that exists only when NAM arrived), a one-line deletion in each parser plus a backfill of `address_links`; it changes what a link means and the existing rows' counts, so it is the owner's call: **recommended follow-up**. Done now: a link is created only when both parties pass the address checksum (`isRealAddress`), so garbage receiver strings never enter the table; the alert key already dedupes the same amount within ten minutes; `session.linked` is display only. |
 | A8 | medium (dormant) | The `ACCESS_AUD` middleware checks that the `Cf-Access-Jwt-Assertion` header is present, never that it is valid (`api.ts:41-48`) | Unset in production and inert when unset. Access itself is enforced at Cloudflare's edge before the Worker; the check adds nothing on hosts Access does not cover. The comments now say exactly that; never enable it as a sign-in gate. |
 | D3 | low | The `workers.dev` origin serves the whole app (no `workers_dev: false`) | Kept for previews by the owner's decision in `index.ts`; same D1, bearer tokens scoped to that origin, no HSTS there (the zone is preloaded). Set `"workers_dev": false` or redirect it when previews are no longer needed. |
 | C11 | low | The cron's quote-service reads ignore the tick deadline, and a D1 error mid-tick skips the later phases (`cron.ts:328-343`) | Bounded by the 90 s lock; a later tick repeats the work. Worth threading the tick signal into `sqsGet` in a follow-up. |
@@ -164,5 +172,5 @@ Severity is as re-rated after verification. "Where" names the code as it was bef
 
 1. `wrangler deploy` picks up the new `REPLAY_LIMITER` binding; no migration, no secret change.
 2. In the dashboard, confirm no Cache Rule marks `namada.trade/api/*` as eligible for cache (the Worker runs first and uses only its own cache), and consider one zone rate-limiting rule on `/api/*`.
-3. Decide E1 (links from the receiving side) and the user-tag precedence policy; both are one-line parser changes plus a backfill, and the owner's call.
+3. After the deploy, run the one-time `address_links` rebuild from E1 (`npm run db:apply -- scripts/rebuild-address-links.sql`). Decide the user-tag precedence policy (`E2 policy` below): a one-line change plus a backfill, the owner's call.
 4. Run the Playwright suite once before the deploy (`npm run e2e`): the pairing spec changed and was not run here.

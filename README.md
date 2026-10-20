@@ -76,7 +76,7 @@ Secrets: `.dev.vars` locally (`KEPLR_KEY`, `DISCORD_WEBHOOK_URL`), `wrangler sec
 | `holders` | current balances with `verified_at` / `verified_src` |
 | `stakes` | bonded NAM per address: `bonded_num` read from the chain (`vp/pos/delegations_at` + self-bond, ~120 addresses verified per cron tick), `estimated_num` from bond/unbond history until then |
 | `labels` | pools, modules, genesis allocations, user tags |
-| `address_links` | osmo1 ⇄ tnam1 pairs seen in IBC packets |
+| `address_links` | osmo1 ⇄ tnam1 pairs that completed a bridge crossing, written from the receiving chain's record only, never from a send |
 | `metrics` | time series: `price.usd` (SQS, 1-min), `price.swap_1h` (executed, hourly median), `supply.*`, `dex.*`, `epoch` |
 | `checks` | cross-source integrity checks |
 | `kv` | cursors, caches, `source.health`, `chain.params`, webhook configs |
