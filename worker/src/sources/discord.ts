@@ -5,14 +5,76 @@ import { EXPLORERS, NAMADA } from '../config';
 import { evaluateFlow } from '../../../shared/alerts';
 import { allDeliverable, inQuietHours, thresholdsOf, type StoredSettings } from '../settings';
 import { SITE } from '../../../shared/site';
+import { chainOf } from '../util';
+import { kvGetJson, kvSet } from '../db';
 
 /**
  * A webhook that accepts the request and never answers must not hold up its caller (the cron's tick, the live
  * stream): every post ends after this long.
  */
 export const WEBHOOK_TIMEOUT_MS = 8000;
-const postWebhook = (url: string, body: unknown) =>
-  fetch(url, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body), signal: AbortSignal.timeout(WEBHOOK_TIMEOUT_MS) });
+/**
+ * Every post names no one: a mention in text an outsider wrote (a forum post, a proposal, a label, a bridge receiver
+ * string) is shown as text, never turned into a notification.
+ */
+const postWebhook = (url: string, body: Record<string, unknown>) =>
+  fetch(url, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ ...body, allowed_mentions: { parse: [] } }), signal: AbortSignal.timeout(WEBHOOK_TIMEOUT_MS) });
+
+/** Text an outsider wrote, with Discord's masked-link syntax broken ("](" becomes "] ("): no link can hide under other words. */
+export const plainMd = (s: string) => s.replace(/\]\(/g, '] (');
+/** A value shown inside a code span: a backtick or line break could close the span (an Osmosis bridge receiver is free text). */
+const codeSafe = (s: string) => s.replace(/[`\r\n]/g, '');
+
+/** Posts for one move or post run this many at a time (the runtime allows six outgoing connections at once). */
+export const POST_CONCURRENCY = 6;
+/**
+ * Every post for one move starts within this long of the first; the rest are counted as skipped (kv `alerts.skipped`,
+ * shown by the cron health view). A slow or hostile set of webhooks can then hold up alerts, never the block scan.
+ */
+export const FANOUT_DEADLINE_MS = 15_000;
+/** A webhook that failed this many times in a row (unreachable, deleted, refused) is left alone for BACKOFF_MS. */
+export const BACKOFF_AFTER = 3;
+export const BACKOFF_MS = 10 * 60_000;
+const failing = new Map<string, { n: number; until: number }>();
+function noteResult(url: string, ok: boolean) {
+  if (ok) { failing.delete(url); return; }
+  const f = failing.get(url) ?? { n: 0, until: 0 };
+  f.n += 1;
+  if (f.n >= BACKOFF_AFTER) f.until = Date.now() + BACKOFF_MS;
+  failing.set(url, f);
+}
+
+/** kv `alerts.skipped`: posts that were not sent, in all and the last case. */
+export interface AlertsSkipped { total: number; last: { what: string; n: number; at: number } }
+
+/** One body to each webhook, a few at a time, within the deadline; what could not start is recorded, never dropped unseen. */
+async function postAll(targets: { url: string; body: Record<string, unknown> }[], db: D1Database | undefined, what: string): Promise<{ posted: number; skipped: number }> {
+  const started = Date.now();
+  const queue = [...targets];
+  let posted = 0, skipped = 0;
+  const run = async () => {
+    for (let t = queue.shift(); t; t = queue.shift()) {
+      const f = failing.get(t.url);
+      if (f && f.until > Date.now()) { skipped++; continue; }
+      if (Date.now() - started > FANOUT_DEADLINE_MS) { skipped++; continue; }
+      try {
+        const res = await postWebhook(t.url, t.body);
+        // 429 is Discord asking for a pause, not a dead hook; 401/404 (deleted) and 5xx count against the hook.
+        noteResult(t.url, res.ok || res.status === 429);
+        if (res.ok) posted++;
+      } catch { noteResult(t.url, false); }
+    }
+  };
+  await Promise.all(Array.from({ length: Math.min(POST_CONCURRENCY, queue.length) }, run));
+  if (skipped) {
+    console.error(`alerts: ${skipped} of ${targets.length} posts for ${what} not sent (deadline passed or webhook backed off)`);
+    if (db) {
+      const cur = (await kvGetJson<AlertsSkipped>(db, 'alerts.skipped').catch(() => null)) ?? { total: 0, last: { what, n: 0, at: 0 } };
+      await kvSet(db, 'alerts.skipped', { total: cur.total + skipped, last: { what, n: skipped, at: Date.now() } }).catch(() => {});
+    }
+  }
+  return { posted, skipped };
+}
 
 let settingsKey: string | undefined;
 /** The dispatcher needs the settings key; the Worker sets it once at startup (index.ts). */
@@ -67,9 +129,18 @@ export async function claimDiscordAlert(
   }
 }
 
+/** Settings are read at most once per this long per database (a saved change takes effect within it); decrypted copies live in memory only. */
+export const USERS_CACHE_MS = 15_000;
+const usersCache = new WeakMap<D1Database, { at: number; users: StoredSettings[] }>();
 async function getUsers(db?: D1Database): Promise<StoredSettings[]> {
   if (!db) return [];
-  try { return await allDeliverable(db, settingsKey); } catch { return []; }
+  const c = usersCache.get(db);
+  if (c && Date.now() - c.at < USERS_CACHE_MS) return c.users;
+  try {
+    const users = await allDeliverable(db, settingsKey);
+    usersCache.set(db, { at: Date.now(), users });
+    return users;
+  } catch { return []; }
 }
 
 export function buildFlowDiscordBody(flow: Flow, usdPrice: number | null, customTag?: string) {
@@ -138,22 +209,11 @@ export function buildFlowDiscordBody(flow: Flow, usdPrice: number | null, custom
     { name: 'Block Height', value: `#${flow.height.toLocaleString()}`, inline: true },
   ];
 
-  if (flow.from) {
-    const fromLabel = flow.fromLabel ? ` (${flow.fromLabel})` : '';
-    fields.push({
-      name: 'From',
-      value: `\`${flow.from.slice(0, 14)}...${flow.from.slice(-6)}\`${fromLabel}`,
-      inline: true,
-    });
-  }
-  if (flow.to) {
-    const toLabel = flow.toLabel ? ` (${flow.toLabel})` : '';
-    fields.push({
-      name: 'To',
-      value: `\`${flow.to.slice(0, 14)}...${flow.to.slice(-6)}\`${toLabel}`,
-      inline: true,
-    });
-  }
+  // Addresses and labels are text outsiders chose (a bridge receiver, a wallet's tag): shown, never rendered as markdown.
+  const party = (addr: string, label: string | null | undefined) =>
+    `\`${codeSafe(addr.slice(0, 14))}...${codeSafe(addr.slice(-6))}\`${label ? ` (${plainMd(codeSafe(label))})` : ''}${chainOf(addr) ? '' : ' (not an address)'}`;
+  if (flow.from) fields.push({ name: 'From', value: party(flow.from, flow.fromLabel), inline: true });
+  if (flow.to) fields.push({ name: 'To', value: party(flow.to, flow.toLabel), inline: true });
   // Owner decision 14: a move the live stream missed and the catch-up search found later says so, with the time
   // it happened (Discord renders <t:…:f> in each reader's time zone).
   if ((flow.meta as { via?: string } | undefined)?.via === 'catch-up search') {
@@ -214,31 +274,25 @@ export async function sendDiscordWhaleAlert(
     return;
   }
 
-  // 1. Dispatch to main system webhook if >= systemThreshold
-  if (webhookUrl && flow.amount >= systemThreshold) {
-    try {
-      const body = buildFlowDiscordBody(flow, usdPrice);
-      await postWebhook(webhookUrl, body);
-    } catch (err) {
-      console.error('Failed to dispatch Discord whale webhook:', err);
-    }
-  }
+  const targets: { url: string; body: Record<string, unknown> }[] = [];
+  // 1. The operator's channel, for moves at or above the whale size.
+  if (webhookUrl && flow.amount >= systemThreshold) targets.push({ url: webhookUrl, body: buildFlowDiscordBody(flow, usdPrice) });
 
-  // 2. Fan out per user: the same rules as the UI and the replay harness, with that user's thresholds.
-  const users = await getUsers(db);
-  for (const u of users) {
+  // 2. Fan out per user: the same rules as the UI and the replay harness, with that user's thresholds. One post per
+  //    webhook, whoever shares it (the first matching user's tag names it).
+  const seen = new Set<string>(webhookUrl ? [webhookUrl] : []);
+  for (const u of await getUsers(db)) {
     const url = u.channels.discord.webhookUrl!;
-    if (url === webhookUrl) continue;
+    if (seen.has(url)) continue;
     const p = u.notifications;
     if (inQuietHours(p)) continue;
     const watched = p.watchlistOn && p.watchlist.some((w) => w === flow.from || w === flow.to);
     const hits = evaluateFlow(flow, thresholdsOf(p));
     if (!watched && hits.length === 0) continue;
-    const tag = watched ? 'WATCHLIST' : hits[0].ruleId.toUpperCase();
-    try {
-      await postWebhook(url, buildFlowDiscordBody(flow, usdPrice, tag));
-    } catch {}
+    seen.add(url);
+    targets.push({ url, body: buildFlowDiscordBody(flow, usdPrice, watched ? 'WATCHLIST' : hits[0].ruleId.toUpperCase()) });
   }
+  if (targets.length) await postAll(targets, db, `move ${flow.id}`);
 }
 
 /**
@@ -253,13 +307,14 @@ export async function sendDiscordForumAlert(
   if (!allowed) return;
 
   const isNewTopic = post.isNewTopic || post.postNumber === 1;
+  // Forum text is whatever its author wrote: shown as text (plainMd), so a reply cannot hide a link under other words.
   const title = isNewTopic
-    ? `🏛️ New Namada Forum Topic: ${post.topicTitle}`
-    : `💬 New Forum Reply: ${post.topicTitle} (#${post.postNumber})`;
+    ? `🏛️ New Namada Forum Topic: ${plainMd(post.topicTitle)}`
+    : `💬 New Forum Reply: ${plainMd(post.topicTitle)} (#${post.postNumber})`;
 
   const authorDisplay = post.displayName
-    ? `${post.displayName} (@${post.username})`
-    : `@${post.username}`;
+    ? `${plainMd(post.displayName)} (@${plainMd(post.username)})`
+    : `@${plainMd(post.username)}`;
 
   const body = {
     username: 'Namada Forum & Governance Radar',
@@ -270,7 +325,7 @@ export async function sendDiscordForumAlert(
         url: post.url,
         color: isNewTopic ? 0xffff00 : 0x38bdf8,
         description: post.excerpt
-          ? `> ${post.excerpt}\n\n[Read full post on forum.namada.net ↗](${post.url})`
+          ? `> ${plainMd(post.excerpt)}\n\n[Read full post on forum.namada.net ↗](${post.url})`
           : `[View discussion on forum.namada.net ↗](${post.url})`,
         fields: [
           { name: 'Author', value: authorDisplay, inline: true },
@@ -294,14 +349,7 @@ export async function sendDiscordForumAlert(
   for (const u of await getUsers(db)) {
     if (u.notifications.forumAndGov && !inQuietHours(u.notifications)) targets.add(u.channels.discord.webhookUrl!);
   }
-
-  for (const url of targets) {
-    try {
-      await postWebhook(url, body);
-    } catch (err) {
-      console.error('Failed to dispatch Discord forum webhook:', err);
-    }
-  }
+  await postAll([...targets].map((url) => ({ url, body })), db, `forum post ${post.id}`);
 }
 
 /**
@@ -320,9 +368,10 @@ export async function sendDiscordGovAlert(
   );
   if (!allowed) return;
 
+  // Proposal text is whatever its author submitted on chain: shown as text (plainMd).
   const title = isNew
-    ? `🗳️ New On-Chain Proposal #${prop.id}: ${prop.title}`
-    : `⚖️ Proposal #${prop.id} Status → ${prop.status.toUpperCase()}: ${prop.title}`;
+    ? `🗳️ New On-Chain Proposal #${prop.id}: ${plainMd(prop.title)}`
+    : `⚖️ Proposal #${prop.id} Status → ${prop.status.toUpperCase()}: ${plainMd(prop.title)}`;
 
   const color =
     prop.status.toLowerCase().includes('pass')
@@ -343,7 +392,7 @@ export async function sendDiscordGovAlert(
         url: propUrl,
         color,
         description: prop.abstract
-          ? `${prop.abstract}\n\n[View Discussion / Proposal ↗](${propUrl})`
+          ? `${plainMd(prop.abstract)}\n\n[View Discussion / Proposal ↗](${propUrl})`
           : `[View Proposal #${prop.id} ↗](${propUrl})`,
         fields: [
           { name: 'Status', value: `\`${prop.status}\``, inline: true },
@@ -382,14 +431,7 @@ export async function sendDiscordGovAlert(
   for (const u of await getUsers(db)) {
     if (u.notifications.forumAndGov && !inQuietHours(u.notifications)) targets.add(u.channels.discord.webhookUrl!);
   }
-
-  for (const url of targets) {
-    try {
-      await postWebhook(url, body);
-    } catch (err) {
-      console.error('Failed to dispatch Discord governance webhook:', err);
-    }
-  }
+  await postAll([...targets].map((url) => ({ url, body })), db, `proposal ${prop.id} ${prop.status}`);
 }
 
 /**

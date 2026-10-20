@@ -9,6 +9,14 @@ import { cachedApi as cachedApiWith, inlineScriptHashes, pagePolicies, ENFORCE_S
 
 const cachedApi = (request: Request, env: Env, ctx: ExecutionContext) => cachedApiWith(request, env, ctx, (r, e, c) => app.fetch(r, e, c));
 
+/** The headers every page, file and text answer of the site carries. */
+function withSiteHeaders(res: Response, url: URL, h = new Headers(res.headers)): Response {
+  if (url.hostname === 'namada.trade') h.set('Strict-Transport-Security', 'max-age=31536000; includeSubDomains');
+  h.set('X-Content-Type-Options', 'nosniff');
+  h.set('Referrer-Policy', 'strict-origin-when-cross-origin');
+  return new Response(res.body, { status: res.status, statusText: res.statusText, headers: h });
+}
+
 export { LiveHub };
 
 export default {
@@ -27,8 +35,9 @@ export default {
       return Response.redirect(url.toString(), 301);
     }
 
-    // Route WebSocket requests to the LiveHub Durable Object
+    // Route WebSocket requests to the LiveHub Durable Object (only upgrades: a plain request never costs it a call)
     if (url.pathname === '/ws') {
+      if (request.headers.get('Upgrade') !== 'websocket') return new Response('Expected websocket upgrade', { status: 426 });
       const id = env.LIVE.idFromName('namada-trade-live-hub');
       const obj = env.LIVE.get(id);
       return obj.fetch(request);
@@ -36,8 +45,8 @@ export default {
 
     // API → Hono (read-only public GETs are cached at the edge for 15 s); everything else → the static UI.
     if (url.pathname.startsWith('/api/')) return cachedApi(request, env, ctx);
-    if (url.pathname === '/robots.txt') return robotsTxt();
-    if (url.pathname === '/sitemap.xml') return sitemapXml();
+    if (url.pathname === '/robots.txt') return withSiteHeaders(robotsTxt(), url);
+    if (url.pathname === '/sitemap.xml') return withSiteHeaders(sitemapXml(), url);
 
     const action = classifyPath(url.pathname);
     // 301 with the query kept, so ?at= survives every redirect
@@ -47,7 +56,7 @@ export default {
     const isHtml = (res.headers.get('content-type') || '').includes('text/html');
     if (action.kind === 'not_found' && action.asset && isHtml) {
       // a file or /assets path the static host does not have: a real 404, not the app shell
-      return new Response('Not found', { status: 404, headers: { 'content-type': 'text/plain; charset=utf-8', 'cache-control': 'public, max-age=300' } });
+      return withSiteHeaders(new Response('Not found', { status: 404, headers: { 'content-type': 'text/plain; charset=utf-8', 'cache-control': 'public, max-age=300' } }), url);
     }
     let hashes: string[] | null = null;
     if (isHtml) {
@@ -66,10 +75,7 @@ export default {
       h.set('Permissions-Policy', 'camera=(), microphone=(), geolocation=(), payment=(), usb=()');
     }
     if (url.pathname.startsWith('/assets/') && res.status === 200) h.set('Cache-Control', 'public, max-age=31536000, immutable');
-    if (url.hostname === 'namada.trade') h.set('Strict-Transport-Security', 'max-age=31536000; includeSubDomains');
-    h.set('X-Content-Type-Options', 'nosniff');
-    h.set('Referrer-Policy', 'strict-origin-when-cross-origin');
-    return new Response(res.body, { status: res.status, statusText: res.statusText, headers: h });
+    return withSiteHeaders(res, url, h);
   },
 
   async scheduled(event: ScheduledEvent, env: Env, ctx: ExecutionContext): Promise<void> {

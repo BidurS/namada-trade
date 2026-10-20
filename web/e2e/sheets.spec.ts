@@ -58,14 +58,21 @@ test.describe('sheets, every viewport', () => {
     await sheetFits(page);
   });
 
-  test('Sign in from ?pair=: fits, the code step is open with the code', async ({ page }) => {
+  test('Sign in from ?pair=: fits, the code step is open with the code, and nothing is claimed until Pair is pressed', async ({ page }) => {
     await noAuthCalls(page);
+    let claims = 0;
+    await page.route('**/api/auth/pair/claim', (route) => { claims++; return route.fallback(); });
     await gotoRoute(page, '/alerts?pair=a1b2c3d4');
     const d = page.locator('dialog.sh-si');
     await expect(d.getByRole('heading', { name: 'Sign in with your Namada wallet' })).toBeVisible();
     await expect(d.getByRole('textbox', { name: 'Pairing code' })).toHaveValue('A1B2C3D4');
-    await expect(d.locator('.notice[data-tone="danger"]')).toContainText('not valid or has expired');
+    // a link alone never signs a browser in
+    await expect(d.locator('.notice[data-tone="danger"]')).toHaveCount(0);
+    expect(claims).toBe(0);
     await sheetFits(page);
+    await d.getByRole('button', { name: 'Pair' }).click();
+    await expect(d.locator('.notice[data-tone="danger"]')).toContainText('not valid or has expired');
+    expect(claims).toBe(1);
   });
 });
 

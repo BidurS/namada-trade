@@ -16,8 +16,10 @@ const spot = d1<{ value: number; ts: number }>(`SELECT value, ts FROM metrics WH
 const onDeck = d1<{ addr: string; nam: number; first_ts: number }>(`
   SELECT to_addr addr, SUM(amount_num) nam, MIN(ts) first_ts FROM flows WHERE chain='osmosis' AND kind='ibc_in' AND ts >= ${now - 7 * D}
   AND to_addr NOT IN ('osmo1yl6hdjhmkf37639730gffanpzndzdpmhxy9ep3') GROUP BY to_addr ORDER BY nam DESC LIMIT 40`);
-const sellsAfter = onDeck.length
-  ? d1<{ addr: string; nam: number }>(`SELECT from_addr addr, SUM(amount_num) nam FROM flows WHERE chain='osmosis' AND kind='sell' AND from_addr IN (${onDeck.map((o) => `'${o.addr}'`).join(',')}) AND ts >= ${Math.min(...onDeck.map((o) => o.first_ts))} AND (meta IS NULL OR meta NOT LIKE '%"arb":true%') GROUP BY from_addr`)
+// Only real address shapes reach the SQL text: a bridge receiver is text the sender chose (worker/src/parse/osmosis.ts).
+const onDeckAddrs = onDeck.filter((o) => /^[a-z0-9]+$/.test(o.addr));
+const sellsAfter = onDeckAddrs.length
+  ? d1<{ addr: string; nam: number }>(`SELECT from_addr addr, SUM(amount_num) nam FROM flows WHERE chain='osmosis' AND kind='sell' AND from_addr IN (${onDeckAddrs.map((o) => `'${o.addr}'`).join(',')}) AND ts >= ${Math.min(...onDeckAddrs.map((o) => o.first_ts))} AND (meta IS NULL OR meta NOT LIKE '%"arb":true%') GROUP BY from_addr`)
   : [];
 const topSeller = d1<{ addr: string; nam: number; n: number }>(`SELECT from_addr addr, SUM(amount_num) nam, COUNT(*) n FROM flows WHERE chain='osmosis' AND kind='sell' AND ts >= ${now - 7 * D} AND (meta IS NULL OR meta NOT LIKE '%"arb":true%') GROUP BY from_addr ORDER BY nam DESC LIMIT 1`)[0];
 const biggestWithdraw = d1<{ to_addr: string; amount_num: number; ts: number }>(`SELECT to_addr, amount_num, ts FROM flows WHERE chain='namada' AND kind='withdraw' AND ts >= ${now - 30 * D} ORDER BY amount_num DESC LIMIT 1`)[0];

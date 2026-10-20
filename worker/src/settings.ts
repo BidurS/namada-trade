@@ -105,10 +105,14 @@ export async function deleteSettings(db: D1Database, address: string): Promise<v
   await db.prepare('DELETE FROM kv WHERE key = ? OR key = ?').bind(`user:${address}`, `webhook:user:${address}`).run();
 }
 
+/** Users read per dispatch at most (the cap is logged when reached). */
+export const DELIVERABLE_MAX = 500;
 /** Decrypted settings of every user with an enabled Discord channel — used only by the dispatcher. */
 export async function allDeliverable(db: D1Database, secret: string | undefined): Promise<StoredSettings[]> {
   if (!secret) return [];
-  const rows = await db.prepare("SELECT value FROM kv WHERE key LIKE 'user:%' LIMIT 500").all<{ value: string }>().catch(() => ({ results: [] as { value: string }[] }));
+  // A key range the primary key answers (a LIKE prefix would scan the whole table), newest settings first.
+  const rows = await db.prepare(`SELECT value FROM kv WHERE key >= 'user:' AND key < 'user;' ORDER BY updated_at DESC LIMIT ${DELIVERABLE_MAX}`).all<{ value: string }>().catch(() => ({ results: [] as { value: string }[] }));
+  if ((rows.results || []).length >= DELIVERABLE_MAX) console.warn(`allDeliverable: ${DELIVERABLE_MAX} user rows read; users beyond that are not served`);
   const out: StoredSettings[] = [];
   for (const r of rows.results || []) {
     try {

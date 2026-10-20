@@ -176,9 +176,9 @@ export const fetchLatestMoves = (asOf: number | null, minNam = 1000) => fetchFlo
 export const fetchPools = () => get<{ pools: PoolInfo[]; prov: Provenance }>('/api/pools');
 export const fetchQuote = (amount: number, side: 'buy' | 'sell') => get<{ quote: PriceQuote | null; error?: string }>(`/api/quote?amount=${amount}&side=${side}`);
 export const fetchQuoteCurve = () => get<QuoteCurveResponse>('/api/quote/curve');
-export const fetchAddressReport = (address: string) => get<AddressReport>(`/api/address/${address}`).then(withAddressReport);
+export const fetchAddressReport = (address: string) => get<AddressReport>(`/api/address/${encodeURIComponent(address)}`).then(withAddressReport);
 export const fetchIntegrity = () => get<{ checks: Check[]; sources: SourceHealth[]; at: number }>('/api/integrity');
-export const fetchIntel = (refresh = false) => get<IntelResponse>(`/api/intel${refresh ? '?refresh=true' : ''}`);
+export const fetchIntel = () => get<IntelResponse>('/api/intel');
 
 /** Address, transaction and label search. Rejects when the server does not answer: a failure is not "no match". */
 export async function searchOmni(query: string): Promise<SearchResult[]> {

@@ -3,8 +3,9 @@
 // Signing in proves an address by signing one short message: no transaction, no fee, nothing
 // moves. Three ways, each saying what will happen before you press it: Namada Keychain (a desktop
 // browser extension), Keplr (desktop extension or the Keplr app's own browser) and a pairing code
-// from a device that is already signed in. /alerts?pair=CODE opens this sheet on the code step and
-// claims the code at once when it is well formed. lib/auth.ts is used unchanged.
+// from a device that is already signed in. /alerts?pair=CODE opens this sheet on the code step with the code
+// filled in; the code is claimed only when the person presses Pair (a link alone never signs a browser in, so a
+// link someone else sends cannot swap this browser onto their account). lib/auth.ts is used unchanged.
 import { useEffect, useId, useRef, useState } from 'react';
 import { claimPairCode, hasKeplr, hasNamada, loginWithKeplr, loginWithNamada, type Session } from '../../lib/auth';
 import { useSession } from '../../app/index';
@@ -18,7 +19,7 @@ const CODE_RE = new RegExp(`^[0-9a-fA-F]{${CODE_LEN}}$`);
 type Way = 'namada' | 'keplr' | 'pair';
 
 export function SignInSheet({ code, onClose }: { code: string | null; onClose: () => void }) {
-  const { setSession } = useSession();
+  const { session, setSession } = useSession();
   const [busy, setBusy] = useState<Way | null>(null);
   const [err, setErr] = useState<string | null>(null);
   const [pairOpen, setPairOpen] = useState(!!code);
@@ -40,11 +41,6 @@ export function SignInSheet({ code, onClose }: { code: string | null; onClose: (
       setBusy(null);
     }
   };
-
-  // a well-formed code from the link is claimed straight away (the old LoginModal did the same)
-  useEffect(() => {
-    if (code && CODE_RE.test(code)) void run('pair', () => claimPairCode(code));
-  }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
   useEffect(() => {
     if (pairOpen && !code) inputRef.current?.focus();
@@ -113,6 +109,11 @@ export function SignInSheet({ code, onClose }: { code: string | null; onClose: (
               <li>This device gets the same address and settings</li>
             </ol>
             <div id={pairId} className="sh-pair" hidden={!pairOpen}>
+              {session ? (
+                <Notice tone="info" title="This browser is already signed in">
+                  It is signed in as {session.address.slice(0, 12)}…. Pairing signs it in as the address that made the code instead.
+                </Notice>
+              ) : null}
               <label className="sh-pair__l" htmlFor={`${pairId}in`}>Pairing code</label>
               <div className="sh-pair__row">
                 <input

@@ -1,4 +1,5 @@
 import { NAM, UA } from './config';
+import { bech32, bech32m } from '@scure/base';
 
 export interface Env {
   DB: D1Database;
@@ -11,13 +12,18 @@ export interface Env {
   SETTINGS_KEY?: string;
   WHALE_OSMOSIS_NAM?: string;
   WHALE_NAMADA_NAM?: string;
-  /** Workers rate limiting (wrangler.jsonc `ratelimits`) for the requests that read many rows (worker/src/http.ts) */
+  /** Workers rate limiting (wrangler.jsonc `ratelimits`) for the requests that read many rows or write for anyone (worker/src/http.ts) */
   HEAVY_LIMITER?: { limit(o: { key: string }): Promise<{ success: boolean }> };
+  /** The same for rewound reads and metric histories, which miss the edge cache by design (worker/src/http.ts) */
+  REPLAY_LIMITER?: { limit(o: { key: string }): Promise<{ success: boolean }> };
 }
 
 export class HttpError extends Error {
-  constructor(public status: number, public url: string, body: string) {
+  /** The URL with any key redacted: the whole error may be logged or serialised, not only its message. */
+  readonly url: string;
+  constructor(public status: number, url: string, body: string) {
     super(`HTTP ${status} for ${redact(url)}: ${body.slice(0, 200)}`);
+    this.url = redact(url);
   }
 }
 
@@ -135,10 +141,28 @@ export function chunk<T>(arr: T[], n: number): T[][] {
   return out;
 }
 
+/** The shape of an address (bech32 charset, bounded length: 43 and 45 characters for accounts, up to 63 for contracts). */
 export function chainOf(address: string): 'osmosis' | 'namada' | null {
-  if (/^osmo1[02-9ac-hj-np-z]{38,}$/.test(address)) return 'osmosis';
-  if (/^tnam1[02-9ac-hj-np-z]{40,}$/.test(address)) return 'namada';
+  if (/^osmo1[02-9ac-hj-np-z]{38,80}$/.test(address)) return 'osmosis';
+  if (/^tnam1[02-9ac-hj-np-z]{40,80}$/.test(address)) return 'namada';
   return null;
+}
+
+/**
+ * chainOf, and the checksum too: a string an outsider typed (an IBC packet's receiver is free text the sender chose)
+ * that only looks like an address is not one, and must never link two accounts.
+ */
+export function isRealAddress(address: string | null | undefined): 'osmosis' | 'namada' | null {
+  if (!address) return null;
+  const chain = chainOf(address);
+  if (!chain) return null;
+  try {
+    if (chain === 'namada') bech32m.decode(address as `${string}1${string}`, 100);
+    else bech32.decode(address as `${string}1${string}`, 90);
+    return chain;
+  } catch {
+    return null;
+  }
 }
 
 export const now = () => Date.now();

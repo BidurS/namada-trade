@@ -100,7 +100,8 @@ export default function SettingsScreen({ route }: ScreenProps) {
   // #delivery, #devices …: scroll there once the panels exist (the shell scrolls to the top on a new path)
   const ready = !session || !!user.settings || !!user.error;
   useEffect(() => {
-    const id = decodeURIComponent(loc.hash.slice(1));
+    let id = '';
+    try { id = decodeURIComponent(loc.hash.slice(1)); } catch { return; }
     if (!id || !ready) return;
     const el = document.getElementById(id);
     if (!el) return;

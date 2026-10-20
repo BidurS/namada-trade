@@ -37,23 +37,27 @@ interface Seg { AddressSeg?: string; StringSeg?: string }
 /** Applied inner txs that wrote to a PoS unbond key, from the block's tx/applied events. */
 export function appliedUnbonds(block: NamadaBlock): AppliedInner[] {
   const out: AppliedInner[] = [];
-  for (const e of block.events) {
-    if (e.type !== 'tx/applied') continue;
+  // Every shape check below is on data a node sent: anything unexpected is read as "no unbond here", never thrown
+  // (a throw would make the scan treat the whole block as unreadable).
+  for (const e of Array.isArray(block.events) ? block.events : []) {
+    if (e?.type !== 'tx/applied' || !Array.isArray(e.attributes)) continue;
     let wrapperHash = '';
     let batchJson = '';
-    for (const { key, value } of e.attributes) {
-      if (key === 'hash') wrapperHash = value.toUpperCase();
-      else if (key === 'batch') batchJson = value;
+    for (const a of e.attributes) {
+      if (!a || typeof a.value !== 'string') continue;
+      if (a.key === 'hash') wrapperHash = a.value.toUpperCase();
+      else if (a.key === 'batch') batchJson = a.value;
     }
     if (!batchJson) continue;
-    let batch: Record<string, any>;
+    let batch: unknown;
     try { batch = JSON.parse(batchJson); } catch { continue; }
-    for (const [innerHash, res] of Object.entries(batch)) {
+    if (!batch || typeof batch !== 'object' || Array.isArray(batch)) continue;
+    for (const [innerHash, res] of Object.entries(batch as Record<string, any>)) {
       const ok = res?.Ok;
-      if (!ok) continue; // Err or unknown shape: not applied
+      if (!ok || typeof ok !== 'object') continue; // Err or unknown shape: not applied
       const unbondKeys: AppliedInner['unbondKeys'] = [];
-      for (const ck of (ok.changed_keys ?? []) as { segments?: Seg[] }[]) {
-        const s = ck.segments ?? [];
+      for (const ck of (Array.isArray(ok.changed_keys) ? ok.changed_keys : []) as { segments?: Seg[] }[]) {
+        const s = Array.isArray(ck?.segments) ? ck.segments : [];
         if (s[0]?.AddressSeg === POS && s[1]?.StringSeg === 'unbond' && s[2]?.AddressSeg && s[3]?.AddressSeg) {
           const k = { source: s[2].AddressSeg, validator: s[3].AddressSeg };
           if (!unbondKeys.some((u) => u.source === k.source && u.validator === k.validator)) unbondKeys.push(k);

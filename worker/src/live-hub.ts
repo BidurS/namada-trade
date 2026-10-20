@@ -5,8 +5,10 @@ import { OSMOSIS, NAM, NAMADA } from './config';
 import { normFromWs, normFromTxSearch, parseOsmosisTx, type OsmoCtx } from './parse/osmosis';
 import { parseNamadaBlock } from './parse/namada';
 import { blockHasUnbond, parseNamadaUnbonds } from './parse/namada-unbond';
-import { blockMetas, blockResults, blockTxs, namadaStatus } from './sources/namada';
+import { blockMetas, blockResults, blockTxs, namadaStatusAny, RpcBreaker, LIVE_READ, type ReadOpts } from './sources/namada';
+import type { NamadaBlock } from './parse/namada';
 import { runBatch, stmt, kvGet, kvGetJson, kvSet } from './db';
+import { admitSocket } from './ws-admit';
 import { fetchNamPools, fetchNamPrice } from './sources/sqs';
 import { configureAlerts, sendDiscordWhaleAlert } from './sources/discord';
 import { fetchJson } from './util';
@@ -38,8 +40,17 @@ export interface LiveUnbondStatus {
   failures: { height: number; at: number; note: string }[];
 }
 
+/** kv `namada.scan`: blocks the live scan could not read as blocks (a shape it does not understand, or a gap it had to jump), surfaced by the cron health probe. */
+export interface LiveScanStatus {
+  failures: { height: number; at: number; note: string }[];
+}
+/** How far behind the head the scan may fall before it jumps ahead (the blocks it jumps over are recorded as not scanned). */
+export const SCAN_MAX_LAG = 50;
+
 export class LiveHub extends DurableObject<Env> {
   private sessions = new Set<WebSocket>();
+  /** The client address each socket came from (ws-admit.ts caps per address). */
+  private ips = new WeakMap<WebSocket, string>();
   private osmoWs: WebSocket | null = null;
   private isConnectingOsmo = false;
   private isPollingNamada = false;
@@ -100,8 +111,14 @@ export class LiveHub extends DurableObject<Env> {
     try {
       const wsUrl = OSMOSIS.keplrWs(this.env.KEPLR_KEY);
       const ws = new WebSocket(wsUrl);
+      // A connection that neither opens nor fails within this long is closed (its close listener reconnects), so a
+      // half-open handshake can never leave `isConnectingOsmo` set for good.
+      let opened = false;
+      const pending = setTimeout(() => { if (!opened) { try { ws.close(); } catch {} } }, 20_000);
 
       ws.addEventListener('open', () => {
+        opened = true;
+        clearTimeout(pending);
         this.osmoWs = ws;
         this.isConnectingOsmo = false;
         console.log('Connected to Osmosis WebSocket');
@@ -136,6 +153,7 @@ export class LiveHub extends DurableObject<Env> {
       });
 
       ws.addEventListener('close', () => {
+        clearTimeout(pending);
         this.osmoWs = null;
         this.isConnectingOsmo = false;
         this.osmoSince = null;
@@ -190,14 +208,14 @@ export class LiveHub extends DurableObject<Env> {
 
   /**
    * Discord alerts for whale movements (>= 10k NAM) and user watchlist/MASP webhooks. The same path serves the
-   * live stream and the catch-up search; sendDiscordWhaleAlert claims a key per flow and per transaction, so a
-   * move is never posted twice.
+   * live stream, the catch-up search and the Namada scan; sendDiscordWhaleAlert claims a key per flow and per
+   * transaction, so a move is never posted twice. `minNam`: the size from which a move is offered to the per-user
+   * rules at all (100 on Osmosis, 10 on Namada); shielded moves always are.
    */
-  private async alertFlows(flows: Flow[]) {
-    const threshold = Number(this.env.WHALE_OSMOSIS_NAM || 10000);
+  private async alertFlows(flows: Flow[], threshold = Number(this.env.WHALE_OSMOSIS_NAM || 10000), minNam = 100) {
     for (const f of flows) {
       if (f.amount >= threshold) f.whale = true;
-      if (f.amount >= 100 || f.kind === 'shield' || f.kind === 'unshield') {
+      if (f.amount >= minNam || f.kind === 'shield' || f.kind === 'unshield') {
         await sendDiscordWhaleAlert(
           this.env.DISCORD_WEBHOOK_URL,
           f,
@@ -209,6 +227,13 @@ export class LiveHub extends DurableObject<Env> {
     }
   }
 
+  /** A block the scan could not read as a block, or a gap it jumped: recorded for the health view (kv `namada.scan`). */
+  private async noteScanFailure(height: number, note: string) {
+    const status = (await kvGetJson<LiveScanStatus>(this.env.DB, 'namada.scan').catch(() => null)) ?? { failures: [] };
+    status.failures = [...status.failures, { height, at: Date.now(), note: note.slice(0, 300) }].slice(-20);
+    await kvSet(this.env.DB, 'namada.scan', status).catch(() => {});
+  }
+
   async alarm() {
     if (this.isPollingNamada) {
       await this.ctx.storage.setAlarm(Date.now() + 6000);
@@ -217,84 +242,12 @@ export class LiveHub extends DurableObject<Env> {
     this.isPollingNamada = true;
 
     try {
-      // 1. Poll Namada block head
-      const st = await namadaStatus();
-      const head = st.height;
-
-      let lastScanned = Number(await kvGet(this.env.DB, 'namada.cursor')) || head - 1;
-      if (lastScanned < head - 50) lastScanned = head - 50; // don't lag too far in alarm
-
-      if (head > lastScanned) {
-        // Real block times (max 20 per call). A block whose time cannot be fetched is not processed this tick
-        // (the cursor stays below it and the next alarm retries): rows never carry an import-time timestamp.
-        const times = new Map<number, number>();
-        for (let lo = lastScanned + 1; lo <= head; lo += 20) {
-          try { for (const m of await blockMetas(lo, Math.min(head, lo + 19))) times.set(m.height, m.ts); } catch {}
-        }
-        let done = lastScanned;
-        let retryBlock = false;
-        for (let h = lastScanned + 1; h <= head; h++) {
-          if (!times.has(h)) {
-            try { for (const m of await blockMetas(h, h)) times.set(m.height, m.ts); } catch {}
-            if (!times.has(h)) {
-              console.error(`Namada block ${h}: block time unavailable from every RPC; retrying next tick`);
-              break;
-            }
-          }
-          try {
-            const blk = await blockResults(h, times.get(h)!);
-            if (blk.events && blk.events.length > 0) {
-              const parsed = parseNamadaBlock(blk, this.lastPriceUsd);
-              // PoS unbond requests move no tokens: decode them from the block's tx bytes (only when a
-              // tx/applied result touched an unbond key, so most blocks cost no extra RPC call).
-              if (blockHasUnbond(blk)) {
-                try {
-                  parsed.flows.push(...(await this.liveUnbonds(blk)));
-                } catch (e) {
-                  // Nothing of this block has been written yet: leave the cursor below it and retry next tick.
-                  console.error(`Namada block ${h}: tx bytes unavailable, retrying next tick:`, e);
-                  retryBlock = true;
-                  break;
-                }
-              }
-              if (parsed.flows.length > 0 || parsed.balances.length > 0) {
-                const now = Date.now();
-                const stmts = [
-                  ...parsed.flows.map(stmt.flow),
-                  ...parsed.moves.map(stmt.move),
-                  ...parsed.balances.map((b) => stmt.namadaBalance(b, now)),
-                  ...parsed.links.map(stmt.link),
-                ];
-                await runBatch(this.env.DB, stmts);
-
-                // Broadcast
-                if (parsed.flows.length > 0) {
-                  this.broadcast({ type: 'flows', flows: parsed.flows });
-
-                  const threshold = Number(this.env.WHALE_NAMADA_NAM || 10000);
-                  for (const f of parsed.flows) {
-                    if (f.amount >= threshold) f.whale = true;
-                    if (f.amount >= 10 || f.kind === 'shield' || f.kind === 'unshield') {
-                      await sendDiscordWhaleAlert(
-                        this.env.DISCORD_WEBHOOK_URL,
-                        f,
-                        this.lastPriceUsd,
-                        this.env.DB,
-                        threshold,
-                      );
-                    }
-                  }
-                }
-              }
-            }
-          } catch (e) {
-            console.error(`Error processing Namada block ${h}:`, e);
-          }
-          if (retryBlock) break;
-          done = h;
-          this.namadaHeight = h;
-        }
-        if (done > lastScanned) await kvSet(this.env.DB, 'namada.cursor', String(done));
+      // 1. The Namada scan. Whatever happens to it (both nodes down, a D1 error), the Osmosis side below still runs:
+      //    one chain's outage is never the other's.
+      try {
+        await this.scanNamada();
+      } catch (err) {
+        console.error('Namada scan:', err);
       }
 
       // Check price update
@@ -329,14 +282,102 @@ export class LiveHub extends DurableObject<Env> {
   }
 
   /**
+   * One pass over the Namada blocks since the cursor. A block whose time, events or tx bytes cannot be fetched this
+   * tick, or whose rows cannot be written, is left for the next tick: the cursor never passes it. A block this parser
+   * cannot read as a block (a shape it does not know) is recorded as not scanned (kv `namada.scan`), since a retry
+   * would only stall the scan; so is a gap the scan jumps when it has fallen more than SCAN_MAX_LAG blocks behind.
+   * Alerts go out after the cursor is written, so a slow webhook can hold up alerts, never the scan.
+   */
+  private async scanNamada() {
+    // One short attempt per node, the nodes that failed this tick asked last (as the cron does).
+    const read: ReadOpts = { ...LIVE_READ, breaker: new RpcBreaker() };
+    const head = (await namadaStatusAny(read)).height;
+    let lastScanned = Number(await kvGet(this.env.DB, 'namada.cursor')) || head - 1;
+    if (lastScanned < head - SCAN_MAX_LAG) {
+      await this.noteScanFailure(lastScanned + 1, `blocks ${lastScanned + 1} to ${head - SCAN_MAX_LAG} not scanned: the scan had fallen more than ${SCAN_MAX_LAG} blocks behind`);
+      lastScanned = head - SCAN_MAX_LAG;
+    }
+    if (head <= lastScanned) return;
+
+    // Real block times (max 20 per call). A block whose time cannot be fetched is not processed this tick
+    // (the cursor stays below it and the next alarm retries): rows never carry an import-time timestamp.
+    const times = new Map<number, number>();
+    for (let lo = lastScanned + 1; lo <= head; lo += 20) {
+      try { for (const m of await blockMetas(lo, Math.min(head, lo + 19), read)) times.set(m.height, m.ts); } catch {}
+    }
+    let done = lastScanned;
+    const toAlert: Flow[] = [];
+    for (let h = lastScanned + 1; h <= head; h++) {
+      if (!times.has(h)) {
+        try { for (const m of await blockMetas(h, h, read)) times.set(m.height, m.ts); } catch {}
+        if (!times.has(h)) {
+          console.error(`Namada block ${h}: block time unavailable from every RPC; retrying next tick`);
+          break;
+        }
+      }
+      let blk: NamadaBlock;
+      try {
+        blk = await blockResults(h, times.get(h)!, read);
+      } catch (e) {
+        console.error(`Namada block ${h}: block_results unavailable from every RPC; retrying next tick:`, e);
+        break;
+      }
+      let retryBlock = false;
+      try {
+        if (blk.events && blk.events.length > 0) {
+          const parsed = parseNamadaBlock(blk, this.lastPriceUsd);
+          // PoS unbond requests move no tokens: decode them from the block's tx bytes (only when a
+          // tx/applied result touched an unbond key, so most blocks cost no extra RPC call).
+          if (blockHasUnbond(blk)) {
+            try {
+              parsed.flows.push(...(await this.liveUnbonds(blk, read)));
+            } catch (e) {
+              // Nothing of this block has been written yet: leave the cursor below it and retry next tick.
+              console.error(`Namada block ${h}: tx bytes unavailable, retrying next tick:`, e);
+              retryBlock = true;
+            }
+          }
+          if (!retryBlock && (parsed.flows.length > 0 || parsed.balances.length > 0)) {
+            const now = Date.now();
+            const stmts = [
+              ...parsed.flows.map(stmt.flow),
+              ...parsed.moves.map(stmt.move),
+              ...parsed.balances.map((b) => stmt.namadaBalance(b, now)),
+              ...parsed.links.map(stmt.link),
+            ];
+            try {
+              await runBatch(this.env.DB, stmts);
+            } catch (e) {
+              console.error(`Namada block ${h}: rows could not be written, retrying next tick:`, e);
+              retryBlock = true;
+            }
+            if (!retryBlock && parsed.flows.length > 0) {
+              this.broadcast({ type: 'flows', flows: parsed.flows });
+              toAlert.push(...parsed.flows);
+            }
+          }
+        }
+      } catch (e) {
+        console.error(`Error processing Namada block ${h}:`, e);
+        await this.noteScanFailure(h, `block ${h} not scanned: ${String(e)}`);
+      }
+      if (retryBlock) break;
+      done = h;
+      this.namadaHeight = h;
+    }
+    if (done > lastScanned) await kvSet(this.env.DB, 'namada.cursor', String(done));
+    if (toAlert.length) await this.alertFlows(toAlert, Number(this.env.WHALE_NAMADA_NAM || 10000), 10).catch((e) => console.error('Namada alerts:', e));
+  }
+
+  /**
    * Unbond flows for a block whose tx/applied results touched a PoS unbond key. Fetches the block's tx bytes and
    * decodes them; the outcome (decoded / skipped / undecoded / fetch failure) is kept in kv `namada.unbonds.live`
    * so the cron health view can show it. A failure throws so the block is logged, never silently half-written.
    */
-  private async liveUnbonds(blk: Awaited<ReturnType<typeof blockResults>>) {
+  private async liveUnbonds(blk: NamadaBlock, read: ReadOpts) {
     const status = (await kvGetJson<LiveUnbondStatus>(this.env.DB, 'namada.unbonds.live')) ?? { decoded: 0, failures: [] };
     try {
-      const txs = await blockTxs(blk.height);
+      const txs = await blockTxs(blk.height, read);
       const p = parseNamadaUnbonds(blk, txs, this.lastPriceUsd);
       status.decoded += p.flows.length;
       status.lastHeight = blk.height;
@@ -455,11 +496,18 @@ export class LiveHub extends DurableObject<Env> {
       if (request.headers.get('Upgrade') !== 'websocket') {
         return new Response('Expected websocket upgrade', { status: 426 });
       }
+      // Admission (ws-admit.ts): the hub holds every socket in memory and walks them all on each broadcast.
+      const ip = request.headers.get('cf-connecting-ip');
+      const sameIp = ip ? [...this.sessions].filter((s) => this.ips.get(s) === ip).length : 0;
+      const verdict = admitSocket(this.sessions.size, sameIp);
+      if (verdict === 'full') return new Response('The live feed is full right now; try again in a minute.', { status: 503, headers: { 'retry-after': '60' } });
+      if (verdict === 'ip') return new Response('Too many live connections from your address.', { status: 429, headers: { 'retry-after': '60' } });
       const pair = new WebSocketPair();
       const [client, server] = [pair[0], pair[1]];
 
       server.accept();
       this.sessions.add(server);
+      if (ip) this.ips.set(server, ip);
 
       // Send initial hello
       server.send(
@@ -473,10 +521,18 @@ export class LiveHub extends DurableObject<Env> {
       server.addEventListener('message', (ev) => {
         if (ev.data === 'ping') {
           server.send('pong');
+          return;
         }
+        // The feed is one way: nothing a client sends is read or relayed, and a client that sends anything else is
+        // disconnected (so a stream of large frames cannot keep the hub busy).
+        this.sessions.delete(server);
+        try { server.close(1008, 'the feed is one way'); } catch {}
       });
 
       server.addEventListener('close', () => {
+        this.sessions.delete(server);
+      });
+      server.addEventListener('error', () => {
         this.sessions.delete(server);
       });
 

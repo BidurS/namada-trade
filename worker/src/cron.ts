@@ -13,7 +13,8 @@ import { sweepAuth } from './auth';
 import { NOT_LEGACY_TWIN } from './flows-query';
 import { unbondAddresses, fetchUnbonds, type UnbondWithdrawCache } from './analytics';
 import { chainParams, indexState, NAMADA_CURSOR_MAX_LAG, NAMADA_CURSOR_STALE_MS, OSMOSIS_LIVE_STALE_MS, OSMOSIS_SWEEP_STALE_MS, timedOutSends, ibcRowOf } from './analytics';
-import type { LiveUnbondStatus } from './live-hub';
+import type { LiveUnbondStatus, LiveScanStatus } from './live-hub';
+import type { AlertsSkipped } from './sources/discord';
 import {
   LIQUID_DUE_SQL, LIQUID_PER_TICK, LIQUID_CONCURRENCY, LIQUID_TIME_BUDGET_MS, LIQUID_STALE_MS, INTERNAL_ADDRS,
   liquidReadStmt, osmosisDroppedStmt, spanStmts, pruneSpansStmt, chunks,
@@ -440,6 +441,20 @@ export async function runCron(env: Env) {
           ? `block ${lastFail.height}: ${lastFail.note}`.slice(0, 160)
           : `${unb.decoded} unbond request(s) decoded${unb.lastHeight ? `, last at block ${unb.lastHeight}` : ''}`,
       });
+    }
+
+    // Live scan (LiveHub alarm): blocks it could not read as blocks or jumped over, recorded by noteScanFailure()
+    const scan = await kvGetJson<LiveScanStatus>(env.DB, 'namada.scan');
+    if (scan?.failures.length) {
+      const last = scan.failures[scan.failures.length - 1];
+      const recent = now - last.at < 24 * 3600000;
+      health.push({ name: 'Namada RPC (live block scan)', ok: !recent, at: last.at, note: (recent ? last.note : `last unreadable block ${last.height}, more than a day ago`).slice(0, 160) });
+    }
+    // Alert posts that could not be sent (sources/discord.ts postAll: deadline passed or a webhook backed off)
+    const skipped = await kvGetJson<AlertsSkipped>(env.DB, 'alerts.skipped');
+    if (skipped?.last.at) {
+      const recent = now - skipped.last.at < 24 * 3600000;
+      health.push({ name: 'Discord alert delivery', ok: !recent, at: skipped.last.at, note: `${skipped.last.n} post(s) for ${skipped.last.what} not sent; ${skipped.total} in all`.slice(0, 160) });
     }
 
     if (idxBlock && headHeight) {

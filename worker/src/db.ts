@@ -131,5 +131,9 @@ function lit(v: unknown): string {
   if (typeof v === 'number') return Number.isFinite(v) ? String(v) : 'NULL';
   if (typeof v === 'bigint') return v.toString();
   if (typeof v === 'boolean') return v ? '1' : '0';
-  return `'${String(v).replace(/'/g, "''")}'`;
+  const s = String(v).replace(/'/g, "''");
+  if (!/[\r\n]/.test(s)) return `'${s}'`;
+  // A line break inside a literal would split the generated .sql file (scripts/d1-apply.ts splits on ";\n"), so the
+  // value is written as a concatenation SQLite evaluates to the same bytes: nothing stored is changed.
+  return `(${s.split(/(\r|\n)/).filter(Boolean).map((p) => (p === '\n' ? 'char(10)' : p === '\r' ? 'char(13)' : `'${p}'`)).join(' || ')})`;
 }
