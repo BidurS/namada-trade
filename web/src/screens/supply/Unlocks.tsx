@@ -369,7 +369,7 @@ function UnlockMaturityWallChart({
         </div>
       ) : null}
 
-      <div className="ul-wall__plot" role="img" aria-label="14-day forward unbonding maturity wall by dump hazard">
+      <div className="ul-wall__plot" role="group" aria-label="14-day forward unbonding maturity wall by dump hazard">
         {poolCapNam != null && poolCapNam <= ceilingMax ? (
           <div
             className="ul-wall__cap"
@@ -392,7 +392,7 @@ function UnlockMaturityWallChart({
                 onMouseEnter={() => setHoverIdx(i)}
                 onFocus={() => setHoverIdx(i)}
                 onMouseLeave={() => setHoverIdx(null)}
-                aria-label={`${b.dayOffset === 0 ? 'Ready now' : `Day +${b.dayOffset}`}: ${fmtNamRule(b.totalNam)} NAM (${fmtNamRule(b.highHazardNam)} high hazard)`}
+                aria-label={`${b.dayOffset === 0 ? 'Now' : `+${b.dayOffset}d`}: ${fmtNamRule(b.totalNam)} NAM${b.dayOffset === 0 ? ' ready to withdraw' : ''} (${fmtNamRule(b.highHazardNam)} NAM high hazard)`}
               >
                 <span className="ul-wall__bar-wrap">
                   {b.totalNam > 0 ? (

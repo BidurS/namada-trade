@@ -70,7 +70,7 @@ test.describe('sheets, every viewport', () => {
     await expect(d.locator('.notice[data-tone="danger"]')).toHaveCount(0);
     expect(claims).toBe(0);
     await sheetFits(page);
-    await d.getByRole('button', { name: 'Pair' }).click();
+    await d.getByRole('button', { name: 'Pair', exact: true }).click();
     await expect(d.locator('.notice[data-tone="danger"]')).toContainText('not valid or has expired');
     expect(claims).toBe(1);
   });

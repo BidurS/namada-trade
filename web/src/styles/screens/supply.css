@@ -179,7 +179,7 @@
   .ul-wall__seg { display: block; width: 100%; }
   .ul-wall__seg--high, .ul-wall__sw--high { background: var(--c-mark); }
   .ul-wall__seg--low, .ul-wall__sw--low { background: var(--c-ink-2); }
-  .ul-wall__x { font: var(--w-medium) 10px / 14px var(--font-code); color: var(--c-ink-2); }
+  .ul-wall__x { font: var(--w-medium) 11px / 14px var(--font-code); color: var(--c-ink-2); }
 
   /* ---------- Votes in progress ---------- */
   .votes { display: grid; }
