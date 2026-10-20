@@ -1,0 +1,1064 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Holders: who holds NAM?</title>
+<meta name="description" content="The biggest NAM holders with share of supply, 7-day change and when each balance was last checked.">
+<meta name="theme-color" content="#000000">
+<link rel="icon" href="data:image/svg+xml,%3Csvg%20xmlns%3D%22http%3A%2F%2Fwww.w3.org%2F2000%2Fsvg%22%20viewBox%3D%220%200%2032%2032%22%3E%3Crect%20width%3D%2232%22%20height%3D%2232%22%20fill%3D%22%23000%22%2F%3E%3Ccircle%20cx%3D%2216%22%20cy%3D%2216%22%20r%3D%2212.5%22%20fill%3D%22none%22%20stroke%3D%22%23ff0%22%20stroke-width%3D%224.5%22%2F%3E%3Cpath%20d%3D%22M16%209.2l4.7%205.8h-9.4zM16%2022.8l-4.7-5.8h9.4z%22%20fill%3D%22%23ff0%22%2F%3E%3C%2Fsvg%3E">
+<!-- Mockup only: production self-hosts Space Grotesk and JetBrains Mono (see notes.md) -->
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500&family=Space+Grotesk:wght@400;500;600;700&display=swap">
+<link rel="stylesheet" href="tokens.css">
+<style>
+/* ==========================================================================
+   NamadaTrade, Direction A "The Reading": components and layout.
+   Inlined into every page by build.mjs. Reads tokens.css only; components
+   use the --c-* ground tokens so they work on yellow, black and paper.
+   Mobile first: base rules are 375 px; 640, 1024 and 1280 add to them.
+   ========================================================================== */
+
+/* ---------- base ---------- */
+*, *::before, *::after { box-sizing: border-box; }
+html { -webkit-text-size-adjust: 100%; text-size-adjust: 100%; scroll-padding-top: calc(var(--header-h) + 8px); }
+body {
+  margin: 0; background: var(--bg); color: var(--ink);
+  font: var(--w-regular) var(--t-15) / var(--lh-15) var(--font-sans);
+  font-variant-numeric: tabular-nums; font-feature-settings: "tnum" 1;
+  -webkit-font-smoothing: antialiased; text-rendering: optimizeLegibility;
+  padding-bottom: calc(var(--tabbar-h) + env(safe-area-inset-bottom, 0px));
+  overflow-x: hidden;
+}
+h1, h2, h3, p, ul, ol, dl, dd, dt, figure, fieldset { margin: 0; padding: 0; }
+ul, ol { list-style: none; }
+fieldset { border: 0; min-width: 0; }
+a { color: inherit; }
+button { font: inherit; color: inherit; cursor: pointer; }
+svg { display: block; }
+b { font-weight: 500; }
+:focus-visible { outline: 2px solid var(--c-focus, var(--focus)); outline-offset: 2px; }
+.sr-only { position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; border: 0; }
+.skip { position: absolute; left: -999px; top: 8px; z-index: 100; background: var(--accent); color: #000; padding: 12px 16px; font-weight: 500; }
+.skip:focus { left: 8px; }
+.mono { font-family: var(--font-mono); font-size: var(--t-12); letter-spacing: 0; }
+.u { font-size: var(--t-12); line-height: 1; font-weight: 400; color: var(--c-ink-2); letter-spacing: 0; }
+.r { text-align: right; }
+.ico { width: 20px; height: 20px; fill: none; stroke: currentColor; stroke-width: 1.5; stroke-linecap: round; stroke-linejoin: round; flex: none; }
+.ico--btn { width: 18px; height: 18px; transition: transform var(--d-2) var(--ease-out); }
+.ico--inline { width: 16px; height: 16px; }
+.gly { width: 12px; height: 12px; fill: none; stroke: currentColor; stroke-width: 1.4; stroke-linecap: round; stroke-linejoin: round; flex: none; }
+.gly--lg { width: 16px; height: 16px; stroke-width: 1.2; }
+.ground-accent, .hdr, .tabbar, .g-accent-to-ink { --good: #2fbf2f; --warn: #ff9d00; --bad: #ff5c5c; }
+
+@media (min-width: 640px) { :root { --gutter: 24px; } }
+@media (min-width: 1024px) { :root { --gutter: 32px; --header-h: 64px; } body { padding-bottom: 0; } }
+
+.wrap { width: 100%; max-width: var(--max); margin-inline: auto; padding-inline: var(--gutter); }
+.band { padding-block: var(--s-7); }
+@media (min-width: 1024px) { .band { padding-block: var(--s-8); } }
+
+/* ---------- type ---------- */
+.eyebrow { font-size: var(--t-11); line-height: var(--lh-11); font-weight: var(--w-medium); letter-spacing: var(--track-caps); text-transform: uppercase; color: var(--c-ink-2); }
+.h1 { font-size: var(--t-32); line-height: var(--lh-32); font-weight: var(--w-semi); text-transform: uppercase; letter-spacing: var(--track-display); text-wrap: balance; }
+.h2 { font-size: var(--t-24); line-height: var(--lh-24); font-weight: var(--w-semi); text-transform: uppercase; letter-spacing: var(--track-display); text-wrap: balance; }
+.h3 { font-size: var(--t-15); line-height: var(--lh-15); font-weight: var(--w-semi); }
+.h3__s { font-weight: 400; color: var(--c-ink-2); font-size: var(--t-13); margin-left: var(--s-2); }
+.sub { font-size: var(--t-15); line-height: var(--lh-15); color: var(--c-ink-2); max-width: 46ch; }
+.lead { font-size: var(--t-18); line-height: var(--lh-18); max-width: 60ch; }
+.lead b { font-weight: 500; }
+.cap { font-size: var(--t-13); line-height: var(--lh-13); color: var(--c-ink-2); }
+@media (min-width: 1024px) { .h1 { font-size: var(--t-48); line-height: var(--lh-48); } }
+
+/* ---------- header ---------- */
+.hdr { position: sticky; top: 0; z-index: 30; background: var(--chrome); color: var(--chrome-ink); border-bottom: 1px solid var(--chrome-line); --c-focus: var(--accent); --c-ink-2: var(--chrome-ink-2); }
+.hdr__in { display: flex; align-items: center; gap: 0; height: var(--header-h); max-width: var(--max); margin-inline: auto; padding-inline: 8px; }
+.brand { order: 0; flex: none; display: inline-flex; align-items: center; justify-content: center; gap: 10px; min-width: 44px; height: 44px; color: var(--chrome-ink); text-decoration: none; }
+.brand__mark { width: 32px; height: 32px; color: var(--accent); flex: none; }
+.brand__word { display: none; font-size: var(--t-15); line-height: 1; font-weight: var(--w-bold); letter-spacing: var(--track-wordmark); text-transform: uppercase; white-space: nowrap; }
+.brand__word b { color: var(--accent); font-weight: var(--w-bold); }
+.tabs { display: none; order: 1; }
+.hdr__sp { order: 3; flex: 1; }
+.hprice { order: 1; flex: none; display: inline-flex; align-items: center; gap: 6px; min-height: 44px; padding: 0 4px 0 8px; background: none; border: 0; border-radius: var(--r-pill); color: var(--chrome-ink); white-space: nowrap; }
+.hprice__v { font-size: var(--t-15); line-height: 20px; font-weight: var(--w-medium); letter-spacing: -.01em; }
+.hprice__d { font: var(--w-medium) var(--t-12) / 16px var(--font-mono); color: var(--chrome-ink-2); }
+.hbtn { order: 5; flex: none; position: relative; display: inline-flex; align-items: center; gap: 8px; height: 32px; padding: 0 10px; background: none; border: 1px solid var(--chrome-line); border-radius: var(--r-pill); color: var(--chrome-ink); font: var(--w-medium) var(--t-12) / 16px var(--font-mono); white-space: nowrap; }
+.hbtn::after { content: ""; position: absolute; inset: -6px -2px; }
+.hbtn--rewind { display: none; order: 4; font-family: var(--font-sans); font-size: var(--t-13); }
+.hbtn__more { display: none; }
+.hbtn__l { display: none; }
+.ibtn { order: 6; flex: none; display: grid; place-items: center; width: 44px; height: 44px; background: none; border: 0; border-radius: 50%; color: var(--chrome-ink-2); transition: color var(--d-1) var(--ease-std), background var(--d-1) var(--ease-std); }
+.ibtn:hover { color: var(--chrome-ink); background: #1a1a1a; }
+.ibtn .ico { width: 22px; height: 22px; }
+@media (min-width: 400px) { .hbtn__s { display: none; } .hbtn__l { display: inline; } }
+@media (min-width: 640px) {
+  .hdr__in { padding-inline: var(--gutter); gap: 8px; }
+  .brand__word { display: block; }
+  .hbtn__more { display: inline; }
+  .hdr__sp { display: block; }
+}
+@media (min-width: 1024px) {
+  .tabs { display: block; margin-left: var(--s-5); }
+  .tabs ul { display: flex; }
+  .tabs a { position: relative; display: flex; align-items: center; height: var(--header-h); padding: 0 12px; color: var(--chrome-ink-2); font-size: var(--t-15); font-weight: var(--w-medium); text-decoration: none; transition: color var(--d-1) var(--ease-std); }
+  .tabs a:hover { color: var(--chrome-ink); }
+  .tabs a[aria-current="page"] { color: var(--chrome-ink); }
+  .tabs a[aria-current="page"]::after { content: ""; position: absolute; left: 12px; right: 12px; bottom: -1px; height: 2px; background: var(--accent); }
+  .hprice { order: 3; border: 1px solid var(--chrome-line); padding: 0 14px 0 12px; }
+  .hdr__sp { order: 2; }
+  .hbtn--rewind { display: inline-flex; }
+}
+/* 1024-1199: the header drops its wordmark, the Rewind label and the word "checks" so one row always fits */
+@media (min-width: 1024px) and (max-width: 1199px) {
+  .brand__word, .hbtn--rewind span, .hbtn__more { display: none; }
+  .hbtn--rewind { padding: 0 10px; }
+}
+
+/* ---------- tab bar (phones and tablets) ---------- */
+.tabbar { position: fixed; inset: auto 0 0 0; z-index: 40; background: var(--chrome); border-top: 1px solid var(--chrome-line); padding-bottom: env(safe-area-inset-bottom, 0px); --c-focus: var(--accent); }
+.tabbar ul { display: grid; grid-template-columns: repeat(6, minmax(0, 1fr)); height: var(--tabbar-h); }
+.tabbar a { position: relative; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 4px; height: 100%; color: var(--chrome-ink-2); font-size: var(--t-11); line-height: 12px; font-weight: var(--w-medium); text-decoration: none; transition: color var(--d-1) var(--ease-std); }
+.tabbar a[aria-current="page"] { color: var(--chrome-ink); }
+.tabbar a[aria-current="page"]::before { content: ""; position: absolute; top: -1px; left: 8px; right: 8px; height: 2px; background: var(--accent); }
+.tabbar a[aria-current="page"] .ico { stroke-width: 1.9; }
+@media (min-width: 1024px) { .tabbar { display: none; } }
+
+/* ---------- rulers: the instrument's measuring tape ---------- */
+.ruler { height: 14px; color: var(--c-ink); background-image: linear-gradient(90deg, currentColor 0 1px, transparent 1px), linear-gradient(90deg, currentColor 0 1px, transparent 1px); background-size: 8px 7px, 40px 14px; background-repeat: repeat-x; background-position: 0 100%, 0 100%; }
+.ruler--top { transform: scaleY(-1); }
+.ruler--scale { height: 10px; margin-top: 6px; color: var(--c-ink-3); background-size: 5% 5px, 25% 10px; border-right: 1px solid currentColor; }
+
+/* ---------- provenance chip and dot ---------- */
+.dot { display: inline-block; width: 8px; height: 8px; flex: none; border-radius: 50%; background: var(--st, #858585); }
+[data-status="fresh"] { --st: var(--good); }
+[data-status="old"] { --st: var(--warn); }
+[data-status="disagree"] { --st: var(--bad); }
+.dot[data-status="none"], .dot[data-status="age"] { background: transparent; box-shadow: inset 0 0 0 1.5px var(--c-ink-3, #858585); }
+.chip { position: relative; display: inline-flex; align-items: center; gap: 6px; max-width: 100%; height: 24px; padding: 0 10px 0 8px; background: var(--c-chip-bg); color: var(--c-chip-ink); border: 1px solid var(--c-chip-line); border-radius: var(--r-pill); font: var(--w-medium) var(--t-12) / 16px var(--font-mono); letter-spacing: 0; white-space: nowrap; vertical-align: middle; text-align: left; transition: background var(--d-1) var(--ease-std); }
+.chip::after { content: ""; position: absolute; inset: -10px -4px; }
+.chip:hover { background: var(--c-chip-line); }
+.ground-accent .chip:hover { background: #1f1f1f; }
+.chip .dot[data-status="none"], .chip .dot[data-status="age"] { box-shadow: inset 0 0 0 1.5px #858585; }
+.chip[data-status="old"] span { color: var(--c-chip-ink); }
+.ground-accent .chip .dot[data-status="age"], .ground-accent .chip .dot[data-status="none"] { box-shadow: inset 0 0 0 1.5px #a8a8a8; }
+[data-num][data-status="old"] { color: var(--c-ink-2); text-decoration: underline dotted; text-underline-offset: 4px; }
+
+/* ---------- tags ---------- */
+.tag { display: inline-flex; align-items: center; gap: 6px; width: max-content; height: 24px; padding: 0 9px 0 7px; border-radius: var(--r-1); font-size: var(--t-12); line-height: 16px; font-weight: var(--w-medium); white-space: nowrap; }
+.tag--flow { color: var(--hue); background: color-mix(in srgb, var(--hue) var(--tag-tint), transparent); }
+.tag--cat { color: var(--c-ink-2); box-shadow: inset 0 0 0 1px var(--c-line-strong); }
+.tag--ref { color: var(--c-ink); box-shadow: inset 0 0 0 1px var(--c-ink); }
+
+/* ---------- buttons, links, segmented, fields ---------- */
+.btn { display: inline-flex; align-items: center; justify-content: center; gap: 10px; min-height: 48px; padding: 0 22px; border: 2px solid transparent; border-radius: var(--r-pill); font: var(--w-medium) var(--t-15) / 20px var(--font-sans); text-decoration: none; white-space: nowrap; transition: background var(--d-1) var(--ease-std), color var(--d-1) var(--ease-std), transform var(--d-1) var(--ease-std), opacity var(--d-1) var(--ease-std); }
+.btn--primary { background: var(--c-primary-bg); color: var(--c-primary-ink); }
+.btn--secondary { background: transparent; color: var(--c-ink); border-color: var(--c-line-strong); }
+.btn:hover .ico--btn { transform: translateX(3px); }
+.btn--primary:hover { opacity: .88; }
+.btn--secondary:hover { background: var(--c-ink); color: var(--c-bg); border-color: var(--c-ink); }
+.btn:active { transform: translateY(1px); }
+.btn[disabled] { opacity: .45; cursor: not-allowed; }
+.link { display: inline-flex; align-items: center; gap: 8px; min-height: 44px; font-weight: var(--w-medium); text-decoration: underline; text-decoration-thickness: 2px; text-underline-offset: 5px; }
+.linkbtn { background: none; border: 0; padding: 0; min-height: 44px; text-decoration: underline; text-underline-offset: 4px; text-decoration-thickness: 1.5px; }
+.icon-btn { display: grid; place-items: center; width: 44px; height: 44px; margin: -8px -10px -8px 0; background: none; border: 0; border-radius: 50%; color: var(--c-ink); }
+.icon-btn:hover { background: var(--c-chip-bg); }
+
+.seg { display: grid; grid-auto-flow: column; grid-auto-columns: 1fr; gap: 2px; padding: 3px; border: 1.5px solid var(--c-line-strong); border-radius: var(--r-pill); --seg-h: 44px; --seg-pad: 0px; }
+.seg__opt { display: block; padding-block: var(--seg-pad); cursor: pointer; border-radius: var(--r-pill); }
+.seg__opt span { display: flex; align-items: center; justify-content: center; min-height: var(--seg-h); padding: 0 12px; border-radius: var(--r-pill); font-size: var(--t-13); font-weight: var(--w-medium); text-align: center; line-height: 16px; transition: background var(--d-2) var(--ease-std), color var(--d-2) var(--ease-std); }
+.seg__opt:hover span { background: color-mix(in srgb, var(--c-ink) 10%, transparent); }
+.seg--range { --seg-h: 32px; --seg-pad: 6px; width: max-content; }
+.seg--range .seg__opt span { padding: 0 18px; font-family: var(--font-mono); font-size: var(--t-12); }
+
+.field { display: grid; gap: var(--s-2); margin-top: var(--s-5); }
+.field__top { display: flex; justify-content: space-between; align-items: baseline; gap: var(--s-3); font-size: var(--t-13); line-height: 20px; }
+.field__l { font-weight: var(--w-medium); }
+.field__hint { color: var(--c-ink-2); text-align: right; }
+.field__box { display: flex; align-items: center; justify-content: space-between; height: 60px; padding: 0 var(--s-4); border: 2px solid var(--c-ink); border-radius: var(--r-1); }
+.field__v { font-size: var(--t-24); line-height: var(--lh-24); font-weight: var(--w-medium); letter-spacing: var(--track-num); }
+.field__u { font: var(--w-medium) var(--t-12) / 16px var(--font-mono); color: var(--c-ink-2); }
+.field__note { margin-top: var(--s-2); font-size: var(--t-12); line-height: 16px; color: var(--c-ink-3); }
+.presets { display: flex; gap: var(--s-2); margin: var(--s-3) calc(var(--gutter) * -1) 0; padding: 0 var(--gutter); overflow-x: auto; scrollbar-width: none; scroll-snap-type: x proximity; scroll-padding-inline: var(--gutter); -webkit-mask-image: linear-gradient(90deg, #000 calc(100% - 32px), transparent); mask-image: linear-gradient(90deg, #000 calc(100% - 32px), transparent); }
+.presets::-webkit-scrollbar { display: none; }
+.pre { flex: none; scroll-snap-align: start; display: inline-flex; align-items: center; min-height: 44px; padding: 0 16px; border: 1.5px solid var(--c-line-strong); border-radius: var(--r-pill); font-size: var(--t-13); font-weight: var(--w-medium); cursor: pointer; transition: background var(--d-2) var(--ease-std), color var(--d-2) var(--ease-std); }
+.pre:hover { background: color-mix(in srgb, var(--c-ink) 10%, transparent); }
+@media (min-width: 640px) { .presets { flex-wrap: wrap; margin-inline: 0; padding-inline: 0; overflow: visible; -webkit-mask-image: none; mask-image: none; } }
+
+/* ---------- notice and empty ---------- */
+.notice { display: grid; grid-template-columns: 20px 1fr; gap: var(--s-3); align-items: start; padding: var(--s-3) var(--s-4); border-left: 3px solid var(--notice, var(--c-ink-2)); }
+.notice[data-tone="warn"] { --notice: var(--warn); }
+.ground-accent .notice[data-tone="warn"] { --notice: #000; background: rgb(0 0 0 / .06); }
+.notice__i { width: 20px; height: 20px; margin-top: 1px; color: var(--notice); }
+.notice__t { font-weight: var(--w-semi); }
+.notice__s { margin-top: 2px; font-size: var(--t-13); line-height: 20px; color: var(--c-ink-2); }
+.notice__s .chip { margin-left: 4px; }
+.empty { display: grid; grid-template-columns: 40px 1fr; gap: var(--s-4); align-items: start; padding: var(--s-4); border: 1px dashed var(--c-line-strong); border-radius: var(--r-1); }
+.empty__ring { width: 40px; height: 40px; color: var(--c-ink-2); }
+.empty__t { font-size: var(--t-18); line-height: var(--lh-18); font-weight: var(--w-medium); }
+.empty__s { margin-top: var(--s-1); font-size: var(--t-13); line-height: 20px; color: var(--c-ink-2); }
+.empty__s .chip { margin-left: 4px; }
+
+/* ---------- bands and sections ---------- */
+.sec { display: grid; gap: var(--s-4); align-content: start; min-width: 0; }
+.sec + .sec { margin-top: var(--s-6); padding-top: var(--s-6); border-top: 1px solid var(--c-line); }
+.more { margin-top: var(--s-2); }
+.srcline { display: flex; flex-wrap: wrap; gap: var(--s-2); align-items: center; font-size: var(--t-12); line-height: 16px; color: var(--c-ink-2); }
+@media (min-width: 1024px) { .sec + .sec { margin-top: var(--s-8); padding-top: var(--s-8); } }
+
+/* ---------- Home hero ---------- */
+.hero { position: relative; padding-block: var(--s-5) 0; }
+.hero__grid { display: grid; gap: var(--s-5); grid-template-areas: "lead" "price" "actions"; }
+.hero__lead { grid-area: lead; }
+.hero .eyebrow { margin-bottom: var(--s-3); }
+.hero .sub { margin-top: var(--s-4); }
+.price { grid-area: price; }
+.actions { grid-area: actions; display: flex; flex-wrap: wrap; gap: var(--s-3); }
+.actions .btn { flex: 1 1 100%; }
+@media (min-width: 640px) { .actions .btn { flex: 0 1 auto; } }
+.price__label { font-size: var(--t-13); line-height: 20px; font-weight: var(--w-medium); color: var(--c-ink-2); }
+.price__val { margin-top: var(--s-1); font-size: var(--t-display); line-height: var(--lh-display); font-weight: var(--w-medium); letter-spacing: var(--track-num); white-space: nowrap; }
+.lz { color: var(--c-ink-2); font-weight: var(--w-regular); }   /* leading zeros: ink-2, not ink-3 (never on numbers) */
+.price__meta { display: flex; flex-wrap: wrap; align-items: center; gap: var(--s-2) var(--s-3); margin-top: var(--s-4); font-size: var(--t-13); line-height: 20px; }
+.delta { display: inline-flex; align-items: center; gap: 6px; height: 28px; padding: 0 12px 0 10px; background: var(--c-sel-bg); color: var(--c-sel-ink); border-radius: var(--r-pill); font-size: var(--t-13); font-weight: var(--w-medium); }
+.delta .gly { fill: currentColor; stroke: none; }
+.price__since { color: var(--c-ink-2); }
+.price__prov { margin-top: var(--s-3); }
+.spark { display: none; margin-top: var(--s-5); }
+.spark svg { width: 100%; height: 64px; overflow: visible; color: var(--c-ink); animation: wipe 600ms var(--ease-out) both; }
+.spark__c { margin-top: var(--s-2); font-size: var(--t-12); line-height: 16px; color: var(--c-ink-2); display: flex; flex-wrap: wrap; align-items: center; gap: 6px; }
+.hero > .wrap { padding-bottom: var(--s-6); }
+.hero .ruler--bottom { margin-top: 0; }
+
+.facts { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); margin-top: var(--s-6); border-top: 2px solid var(--c-ink); list-style: none; }
+.fact { display: grid; align-content: start; justify-items: start; gap: var(--s-1); padding: var(--s-4) var(--s-2) 0 0; min-width: 0; }
+.fact + .fact { padding-left: var(--s-3); border-left: 1px solid var(--c-line); }
+.fact__n { font-size: var(--t-24); line-height: var(--lh-24); font-weight: var(--w-medium); letter-spacing: var(--track-num); }
+.fact__l { font-size: var(--t-13); line-height: 18px; color: var(--c-ink-2); margin-bottom: var(--s-1); }
+.facts--4 { grid-template-columns: repeat(2, minmax(0, 1fr)); row-gap: var(--s-4); }
+.facts--4 .fact:nth-child(odd) { padding-left: 0; border-left: 0; }
+.facts--4 .fact:nth-child(n+3) { border-top: 1px solid var(--c-line); margin-top: 0; }
+
+@media (min-width: 640px) {
+  .spark { display: block; }
+  .fact { padding-right: var(--s-4); }
+  .fact + .fact { padding-left: var(--s-5); }
+  .facts--4 { grid-template-columns: repeat(4, minmax(0, 1fr)); }
+  .facts--4 .fact:nth-child(odd) { padding-left: var(--s-5); border-left: 1px solid var(--c-line); }
+  .facts--4 .fact:first-child { padding-left: 0; border-left: 0; }
+  .facts--4 .fact:nth-child(n+3) { border-top: 0; }
+}
+@media (min-width: 1024px) {
+  .hero { padding-block: var(--s-8) 0; }
+  .hero__grid { grid-template-columns: repeat(12, minmax(0, 1fr)); column-gap: var(--s-5); row-gap: var(--s-5); grid-template-areas: "lead lead lead lead lead lead lead price price price price price" "actions actions actions actions actions actions actions price price price price price"; align-items: end; }
+  .price { align-self: end; }
+  .actions { align-self: end; }
+  .hero .sub { font-size: var(--t-18); line-height: var(--lh-18); max-width: 44ch; }
+  .hero > .wrap { padding-bottom: var(--s-8); }
+  .facts { margin-top: var(--s-8); }
+}
+
+/* ---------- narrative (Home) ---------- */
+.narrative { padding-block: var(--s-7); }
+.narrative__grid { display: grid; gap: var(--s-7); }
+.narrative__main { min-width: 0; }
+.rail { display: none; }
+@media (min-width: 1024px) {
+  .narrative { padding-block: var(--s-9); }
+  .narrative__grid { grid-template-columns: repeat(12, minmax(0, 1fr)); column-gap: var(--s-5); }
+  .narrative__main { grid-column: 1 / span 8; }
+  .rail { display: block; grid-column: 10 / span 3; }
+  .rail__in { position: sticky; top: calc(var(--header-h) + var(--s-6)); display: grid; gap: var(--s-4); padding-top: var(--s-3); border-top: 2px solid var(--c-ink); }
+  .rail__h { font-size: var(--t-13); line-height: 20px; font-weight: var(--w-semi); }
+  .rail__list { display: grid; }
+  .rail__list > div { display: grid; gap: 2px; padding: var(--s-4) 0; border-top: 1px solid var(--c-line); justify-items: start; }
+  .rail__list dt { font-size: var(--t-13); color: var(--c-ink-2); }
+  .rail__list dd:first-of-type { font-size: var(--t-24); line-height: var(--lh-24); font-weight: var(--w-medium); letter-spacing: var(--track-num); }
+  .rail__list dd + dd { margin-top: var(--s-2); }
+}
+
+/* what changed */
+.empty + .mvgroup { margin-top: var(--s-2); }
+.mvgroup { display: grid; gap: 0; }
+.mvgroup__h { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: var(--s-2) var(--s-3); padding-bottom: var(--s-3); }
+.mvlist { display: grid; }
+.mv { display: grid; grid-template-columns: 1fr auto; align-items: center; column-gap: var(--s-3); row-gap: 2px; padding: 12px 0; min-height: 60px; border-top: 1px solid var(--c-line); }
+.mv__n { font-size: var(--t-18); line-height: var(--lh-18); font-weight: var(--w-medium); text-align: right; }
+.mv__c { grid-column: 1 / -1; font-size: var(--t-13); line-height: 20px; color: var(--c-ink-2); }
+.mv--zero .mv__n { color: var(--c-ink-2); }
+.cap--note { margin-top: var(--s-2); max-width: 60ch; }
+
+/* supply bar */
+.supply { margin-top: var(--s-3); }
+.supply__flag { position: relative; display: flex; justify-content: flex-end; height: 30px; color: var(--c-mark); font: var(--w-medium) var(--t-12) / 16px var(--font-mono); }
+.supply__flag::after { content: ""; position: absolute; right: 3px; bottom: 2px; width: 1px; height: 12px; background: currentColor; }
+.supply__bar { display: flex; gap: 2px; height: 44px; }
+.sg { display: block; min-width: 4px; }
+.supply__bar .sg { transform-origin: left center; animation: grow var(--d-3) var(--ease-out) backwards; animation-delay: calc(var(--i) * var(--stagger)); }
+.sg--pgf { background: repeating-linear-gradient(135deg, var(--c-ink-2) 0 2px, transparent 2px 6px); box-shadow: inset 0 0 0 1px var(--c-ink-2); }
+.sg--bonded { background: var(--c-ink-2); }
+.sg--shielded { background: var(--shielded-fill, #00ffff); box-shadow: inset 0 0 0 1px var(--shielded); }
+.sg--rest { background: transparent; box-shadow: inset 0 0 0 1.5px var(--c-line-strong); }
+.sg--osmosis { background: var(--c-mark); }
+.supply__scale { position: relative; display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); margin-top: 4px; font: var(--w-medium) var(--t-11) / 14px var(--font-mono); color: var(--c-ink-2); }
+.supply__scale span:nth-child(4) { grid-column: 4; grid-row: 1; }
+.supply__scale span:nth-child(5) { grid-column: 4; grid-row: 1; justify-self: end; }
+.legend { display: grid; margin-top: var(--s-4); }
+.lg { display: grid; grid-template-columns: 16px 1fr auto; column-gap: var(--s-3); row-gap: 2px; align-items: baseline; padding: 12px 0; min-height: 60px; border-top: 1px solid var(--c-line); }
+.lg__sw { grid-column: 1; grid-row: 1 / span 2; align-self: center; width: 16px; height: 16px; min-width: 0; }
+.lg__n { grid-column: 2; grid-row: 1; font-size: var(--t-15); font-weight: var(--w-medium); }
+.lg__p { grid-column: 3; grid-row: 1; font-size: var(--t-18); line-height: var(--lh-18); font-weight: var(--w-medium); text-align: right; }
+.lg__v { grid-column: 2 / -1; grid-row: 2; font-size: var(--t-13); line-height: 20px; color: var(--c-ink-2); }
+.lg--osmosis .lg__p { color: var(--c-mark); }
+@media (min-width: 640px) { .supply__bar { height: 56px; } }
+
+/* ---------- data lists: rows below 600 px of their own width, table above ---------- */
+.dl { container: dl / inline-size; display: grid; }
+.dl__head { display: none; }
+.hrow, .lrow, .prow { position: relative; }
+
+/* holder rows (phone): a rank, then a body of four flex lines */
+.hrow { display: grid; grid-template-columns: 24px minmax(0, 1fr); column-gap: var(--s-3); align-items: start; padding: 14px 0 16px; min-height: 64px; border-top: 1px solid var(--c-line); }
+.hrow__rk { grid-column: 1; grid-row: 1; font: var(--w-medium) var(--t-12) / 22px var(--font-mono); color: var(--c-ink-2); }
+.hrow__body { grid-column: 2; display: grid; gap: 4px; min-width: 0; }
+.hln { display: flex; flex-wrap: wrap; justify-content: space-between; align-items: baseline; gap: 2px var(--s-3); min-width: 0; }
+.hln3 { display: none; }
+.hln4 { align-items: center; margin-top: 2px; }
+.hrow__name { flex: 1 1 0; min-width: 0; font-size: var(--t-15); line-height: 22px; font-weight: var(--w-medium); overflow-wrap: anywhere; }
+.hrow__name.mono { font-size: var(--t-13); }
+.hrow__tot { flex: none; font-size: var(--t-18); line-height: 22px; font-weight: var(--w-medium); text-align: right; white-space: nowrap; }
+.hrow__sub { flex: 1 1 0; min-width: 0; display: flex; flex-wrap: wrap; align-items: center; gap: var(--s-1) var(--s-2); color: var(--c-ink-3); }
+.hrow__pct { flex: none; font-size: var(--t-13); line-height: 20px; color: var(--c-ink-2); text-align: right; white-space: nowrap; }
+.hrow__spend, .hrow__stake { font-size: var(--t-13); line-height: 20px; color: var(--c-ink-2); white-space: nowrap; }
+.hrow__spend::before { content: "Spendable "; }
+.hrow__stake::before { content: "Staked "; }
+.hrow__stake { text-align: right; margin-left: auto; }
+.hrow__chg { font-size: var(--t-13); line-height: 20px; color: var(--c-ink-2); display: block; min-width: 0; }
+.chg__a, .chg__b { display: inline; }
+.hrow__link { display: block; color: var(--c-ink-3); font-size: var(--t-12); line-height: 16px; }
+.hrow__prov { flex: none; margin-left: auto; }
+.hrow__bar { position: absolute; left: 36px; right: 0; bottom: 0; height: 2px; background: linear-gradient(90deg, var(--c-ink-2) var(--w), transparent var(--w)); }
+.hrow__est { display: flex; align-items: center; justify-content: flex-end; gap: 6px; font-size: var(--t-12); line-height: 16px; color: var(--c-ink-2); }
+.dl--full .hln3 { display: flex; }
+.hrow[hidden] { display: none; }
+
+/* table mode: the body and its lines vanish, every cell takes a grid cell */
+@container dl (min-width: 620px) {
+  .dl__head { color: var(--c-ink-2); font-size: var(--t-12); line-height: 16px; font-weight: var(--w-medium); padding: 0 0 var(--s-2); }
+  .dl__head > span { align-self: end; }
+  .hrow__bar { left: 44px; }
+}
+@container dl (min-width: 620px) {
+  .dl--holders:not(.dl--full) .dl__head,
+  .dl--holders:not(.dl--full) .hrow { display: grid; grid-template-columns: 28px minmax(0, 1fr) 116px 60px 76px 156px; column-gap: var(--s-3); }
+  .dl--holders:not(.dl--full) .hrow { grid-template-rows: auto auto; align-items: center; padding: 14px 0 16px; min-height: 64px; }
+  .dl--holders:not(.dl--full) :is(.hrow__body, .hln) { display: contents; }
+  .dl--holders:not(.dl--full) :is(.hrow__rk, .hrow__tot, .hrow__pct, .hrow__chg, .hrow__prov) { grid-row: 1 / span 2; align-self: center; }
+  .dl--holders:not(.dl--full) .hrow__rk { grid-column: 1; }
+  .dl--holders:not(.dl--full) .hrow__name { grid-column: 2; grid-row: 1; align-self: end; }
+  .dl--holders:not(.dl--full) .hrow__sub { grid-column: 2; grid-row: 2; align-self: start; }
+  .dl--holders:not(.dl--full) .hrow__tot { grid-column: 3; font-size: var(--t-15); justify-self: end; }
+  .dl--holders:not(.dl--full) .hrow__pct { grid-column: 4; justify-self: end; color: var(--c-ink); }
+  .dl--holders:not(.dl--full) .hrow__chg { grid-column: 5; }
+  .dl--holders:not(.dl--full) .hrow__prov { grid-column: 6; justify-self: end; }
+  .dl--holders:not(.dl--full) .hrow__pct .u, .dl--holders:not(.dl--full) .hrow__tot .u, .dl--holders:not(.dl--full) .chg__b, .dl--holders:not(.dl--full) .hrow__link { display: none; }
+  .dl--holders:not(.dl--full) .hrow__bar { grid-row: auto; }
+}
+@container dl (min-width: 930px) {
+  .dl--full .dl__head,
+  .dl--full .hrow { display: grid; grid-template-columns: 32px minmax(160px, 1.5fr) 112px 68px 104px 140px 76px 148px; column-gap: var(--s-3); }
+  .dl--full .hrow { grid-template-rows: auto auto; align-items: center; padding: 14px 0 16px; }
+  .dl--full :is(.hrow__body, .hln) { display: contents; }
+  .dl--full .hln3 { display: contents; }
+  .dl--full :is(.hrow__rk, .hrow__tot, .hrow__pct, .hrow__chg, .hrow__prov) { grid-row: 1 / span 2; align-self: center; }
+  .dl--full .hrow__rk { grid-column: 1; }
+  .dl--full .hrow__name { grid-column: 2; grid-row: 1; align-self: end; }
+  .dl--full .hrow__sub { grid-column: 2; grid-row: 2; align-self: start; }
+  .dl--full .hrow__tot { grid-column: 3; font-size: var(--t-15); justify-self: end; }
+  .dl--full .hrow__pct { grid-column: 4; justify-self: end; color: var(--c-ink); font-size: var(--t-13); }
+  .dl--full .hrow__spend { grid-column: 5; grid-row: 1 / span 2; align-self: center; justify-self: end; color: var(--c-ink); }
+  .dl--full .hrow__stake { grid-column: 6; grid-row: 1 / span 2; align-self: center; justify-self: end; color: var(--c-ink); margin-left: 0; }
+  .dl--full .hrow__spend::before, .dl--full .hrow__stake::before { content: none; }
+  .dl--full .hrow__chg { grid-column: 7; }
+  .dl--full .hrow__prov { grid-column: 8; justify-self: end; margin-left: 0; }
+  .dl--full .hrow__pct .u, .dl--full .hrow__tot .u, .dl--full .chg__b, .dl--full .hrow__link { display: none; }
+  .dl--full .hrow__bar { grid-row: auto; }
+}
+
+/* ---------- Home: path of a NAM ---------- */
+.path { padding-block: var(--s-7); }
+.path .h2 { margin-top: var(--s-2); max-width: 22ch; }
+.steps { position: relative; display: grid; gap: var(--s-6); margin-top: var(--s-6); }
+.steps::before, .steps::after { content: ""; position: absolute; left: 13px; top: 14px; bottom: 14px; width: 2px; }
+.steps::before { background: var(--c-line); }
+.steps::after { background: var(--c-ink); transform-origin: top; }
+.step { position: relative; display: grid; grid-template-columns: 28px minmax(0, 1fr); column-gap: var(--s-4); align-content: start; }
+.step__ring { width: 28px; height: 28px; background: var(--c-bg); color: var(--c-ink); }
+.step__ring svg { width: 28px; height: 28px; }
+.step__ring .r1 { transform-origin: center; transform-box: fill-box; }
+.step__body { display: grid; gap: var(--s-2); padding-bottom: var(--s-1); }
+.step__k { display: flex; align-items: baseline; gap: var(--s-3); font-size: var(--t-18); line-height: var(--lh-18); font-weight: var(--w-semi); }
+.step__i { font: var(--w-medium) var(--t-12) / 16px var(--font-mono); color: var(--c-ink-2); }
+.step__copy { font-size: var(--t-15); line-height: var(--lh-15); max-width: 34ch; }
+.step__fig { display: flex; align-items: baseline; gap: var(--s-2); margin-top: var(--s-1); }
+.step__n { font-size: var(--t-24); line-height: var(--lh-24); font-weight: var(--w-medium); letter-spacing: var(--track-num); }
+.step__u { font: var(--w-medium) var(--t-12) / 16px var(--font-mono); color: var(--c-ink-2); }
+.step__note { display: flex; flex-wrap: wrap; align-items: center; gap: var(--s-2); font-size: var(--t-13); line-height: 20px; color: var(--c-ink-2); }
+.sidenote { position: relative; margin-top: var(--s-7); padding: var(--s-4) 0 0 32px; border-top: 2px solid var(--c-ink); font-size: var(--t-15); line-height: 28px; }
+@media (min-width: 900px) { .sidenote { padding-right: 36%; } .sidenote .chip { margin-left: var(--s-3); } }
+.sidenote .gly { position: absolute; left: 0; top: calc(var(--s-4) + 6px); }
+.sidenote .chip { margin-left: var(--s-2); }
+@media (min-width: 900px) {
+  .steps { grid-template-columns: repeat(4, minmax(0, 1fr)); gap: var(--s-5); margin-top: var(--s-7); }
+  .steps::before, .steps::after { left: 0; right: 0; top: 13px; bottom: auto; width: auto; height: 2px; }
+  .steps::after { transform-origin: left; }
+  .step { grid-template-columns: 1fr; row-gap: var(--s-5); }
+  .step__ring { position: relative; }
+  .step__copy { max-width: 26ch; min-height: 66px; }
+  .path .h2 { max-width: none; }
+}
+@media (min-width: 1024px) { .path { padding-block: var(--s-9); } }
+
+/* ---------- Home: mini ticket, trust, closing ---------- */
+.closing { padding-block: var(--s-7); }
+.closing__grid { display: grid; gap: var(--s-7); }
+.mini { display: grid; border-top: 2px solid var(--c-ink); }
+.mini__row, .mini__get { display: flex; flex-wrap: wrap; justify-content: space-between; align-items: baseline; gap: var(--s-1) var(--s-3); padding: 14px 0; border-bottom: 1px solid var(--c-line); }
+.mini__k { font-size: var(--t-13); line-height: 20px; color: var(--c-ink-2); }
+.mini__amt, .mini__v { font-size: var(--t-24); line-height: var(--lh-24); font-weight: var(--w-medium); letter-spacing: var(--track-num); }
+.mini__mv { font-size: var(--t-18); line-height: var(--lh-18); font-weight: var(--w-medium); }
+.mini__chip { flex-basis: 100%; }
+.sec--ticket .notice { margin-top: var(--s-1); }
+.why { display: grid; gap: var(--s-4); counter-reset: w; }
+.why li { position: relative; padding-left: 36px; font-size: var(--t-15); line-height: var(--lh-15); counter-increment: w; max-width: 56ch; }
+.why li::before { content: counter(w); position: absolute; left: 0; top: 0; width: 24px; height: 24px; display: grid; place-items: center; border: 1.5px solid var(--c-line-strong); border-radius: 50%; font: var(--w-medium) var(--t-12) / 1 var(--font-mono); color: var(--c-ink-2); }
+.chks { display: grid; }
+.chks--page { margin-top: var(--s-2); }
+.chk { display: grid; grid-template-columns: minmax(0, 1fr) auto; column-gap: var(--s-3); row-gap: 2px; align-items: center; padding: 12px 0; border-top: 1px solid var(--c-line); }
+.chk__t { grid-column: 1 / -1; display: flex; gap: 10px; align-items: baseline; font-size: var(--t-15); line-height: 22px; font-weight: var(--w-medium); }
+.chk__t .dot { transform: translateY(-1px); }
+.chk__w { grid-column: 1; grid-row: 2; padding-left: 18px; font: var(--w-medium) var(--t-12) / 16px var(--font-mono); color: var(--c-ink-2); }
+.chk[data-status="old"] .chk__w { color: var(--c-ink); }
+.chk__d { grid-column: 1; grid-row: 3; padding-left: 18px; font-size: var(--t-13); line-height: 20px; color: var(--c-ink-2); }
+.chk__c { grid-column: 2; grid-row: 2 / span 2; justify-self: end; align-self: center; }
+@media (min-width: 1024px) {
+  .closing { padding-block: var(--s-9); }
+  .closing__grid { grid-template-columns: repeat(12, minmax(0, 1fr)); column-gap: var(--s-5); align-items: start; }
+  .closing__grid > .sec { margin: 0; padding: 0; border: 0; }
+  .sec--ticket { grid-column: 1 / span 5; }
+  .sec--trust { grid-column: 7 / span 6; }
+}
+
+/* ---------- footer ---------- */
+.foot { position: relative; padding-block: 0 var(--s-7); }
+.foot .ruler--top { margin-bottom: var(--s-6); }
+.foot__grid { display: grid; gap: var(--s-5); }
+.foot__brand { display: inline-flex; align-items: center; gap: 12px; min-height: 44px; font-size: var(--t-24); line-height: var(--lh-24); font-weight: var(--w-bold); letter-spacing: var(--track-wordmark); text-transform: uppercase; text-decoration: none; }
+.foot__brand svg { width: 40px; height: 40px; }
+.foot__snap { margin-top: var(--s-3); font: var(--t-12) / 16px var(--font-mono); color: var(--c-ink-3); max-width: 36ch; }
+.foot__legal { font-size: var(--t-13); line-height: 20px; color: var(--c-ink-2); max-width: 60ch; }
+.foot__links { display: flex; flex-wrap: wrap; gap: 0 var(--s-5); }
+.foot__links a, .foot__links .linkbtn { display: inline-flex; align-items: center; min-height: 44px; font-size: var(--t-15); font-weight: var(--w-medium); }
+@media (min-width: 1024px) {
+  .foot { padding-block: 0 var(--s-8); }
+  .foot__grid { grid-template-columns: repeat(12, minmax(0, 1fr)); column-gap: var(--s-5); align-items: start; }
+  .foot__id { grid-column: 1 / span 4; }
+  .foot__legal { grid-column: 5 / span 5; }
+  .foot__links { grid-column: 10 / span 3; display: grid; grid-template-columns: 1fr 1fr; gap: 0 var(--s-4); }
+}
+
+/* ---------- popovers and sheets ---------- */
+.sheet { position: fixed; inset: auto 0 0 0; margin: 0; width: 100%; max-width: none; max-height: calc(100dvh - 16px); padding: 0; overflow: auto; color: var(--c-ink); border: 0; border-top: 2px solid var(--accent); border-radius: var(--r-0); box-shadow: var(--shadow-overlay); background: var(--surface); }
+.sheet::backdrop { background: var(--scrim); }
+.sheet:popover-open { animation: sheet-in var(--d-3) var(--ease-out); }
+.sheet__head { display: flex; align-items: flex-start; justify-content: space-between; gap: var(--s-4); padding: var(--s-5) var(--s-4) var(--s-3); }
+.sheet__t { font-size: var(--t-18); line-height: var(--lh-18); font-weight: var(--w-semi); }
+.sheet__lead { padding: 0 var(--s-4) var(--s-3); font-size: var(--t-15); line-height: var(--lh-15); color: var(--c-ink-2); }
+.sheet__lead b { color: var(--c-ink); }
+.sheet__foot { padding: var(--s-3) var(--s-4) calc(var(--s-5) + env(safe-area-inset-bottom, 0px)); display: grid; }
+.sheet .chks { padding: 0 var(--s-4); }
+.sheet .how { margin: var(--s-4); border-top: 1px solid var(--c-line); }
+.how summary { display: flex; align-items: center; min-height: 44px; font-size: var(--t-13); font-weight: var(--w-medium); cursor: pointer; }
+.srcs { display: grid; margin-top: var(--s-2); }
+.srcs li { display: flex; justify-content: space-between; gap: var(--s-3); padding: 8px 0; border-top: 1px solid var(--c-line); color: var(--c-ink-2); }
+.kv { display: grid; grid-template-columns: auto 1fr; gap: 10px var(--s-4); padding: 0 var(--s-4) var(--s-2); font-size: var(--t-13); line-height: 20px; }
+.kv dt { color: var(--c-ink-2); }
+.kv dd { display: flex; align-items: center; gap: var(--s-2); min-width: 0; overflow-wrap: anywhere; }
+@media (min-width: 640px) {
+  .sheet { inset: 0; margin: auto; height: fit-content; width: min(460px, calc(100vw - 48px)); border: 1px solid var(--c-line-strong); border-top: 2px solid var(--accent); }
+  .sheet--lg { width: min(560px, calc(100vw - 48px)); }
+}
+
+/* ==========================================================================
+   TRADE
+   ========================================================================== */
+.split { display: block; }
+.split__a { position: relative; padding: var(--s-5) var(--gutter) var(--s-7); }
+.split__b { min-width: 0; }
+.split__b > .sec { padding: var(--s-7) var(--gutter); margin: 0; border: 0; }
+.split__b > .sec + .sec { border-top: 0; }
+.ticket { display: grid; gap: 0; max-width: 560px; }
+.ticket .eyebrow { margin-bottom: var(--s-3); }
+.ticket .sub { margin-top: var(--s-4); }
+.ticket .seg--side { margin-top: var(--s-5); }
+.only-sell, .only-buy { display: inline; }
+.only-buy { display: none; }
+.get { display: grid; margin-top: var(--s-5); padding-top: var(--s-4); border-top: 2px solid var(--c-ink); }
+.res > * + * { margin-top: var(--s-2); }
+.get__k { font-size: var(--t-13); line-height: 20px; font-weight: var(--w-medium); color: var(--c-ink-2); }
+.get__v { font-size: var(--t-48); line-height: var(--lh-48); font-weight: var(--w-medium); letter-spacing: var(--track-num); }
+.get__u { margin-left: var(--s-3); font-size: var(--t-18); line-height: 1; font-weight: var(--w-medium); letter-spacing: 0; }
+.get__s { font-size: var(--t-15); line-height: var(--lh-15); color: var(--c-ink-2); }
+.get__s [data-num] { color: var(--c-ink); }
+.pair { display: grid; grid-template-columns: 1fr 1fr; gap: var(--s-4); margin-top: var(--s-4) !important; padding-top: var(--s-3); border-top: 1px solid var(--c-line); }
+.pair dt { font-size: var(--t-13); line-height: 20px; color: var(--c-ink-2); }
+.pair dd { font-size: var(--t-18); line-height: var(--lh-18); font-weight: var(--w-medium); }
+.pair .pair__big { font-size: var(--t-24); line-height: var(--lh-24); letter-spacing: var(--track-num); }
+.get__prov { margin-top: var(--s-4); }
+.get__why { margin-top: var(--s-2); font-size: var(--t-12); line-height: 16px; color: var(--c-ink-2); }
+.notice--thin { margin-top: var(--s-5); }
+
+/* chart */
+.chartsec { gap: var(--s-4); }
+.chartsec__top { display: grid; gap: var(--s-4); }
+.rg-title { display: block; }
+.rg-title .cap { margin-top: var(--s-2); }
+.h2--chart { max-width: 24ch; }
+.readout { display: flex; flex-wrap: wrap; align-items: baseline; gap: 2px var(--s-3); min-height: 28px; font-size: var(--t-13); line-height: 20px; }
+.readout__k { color: var(--c-ink-2); }
+.readout__v { font-size: var(--t-18); line-height: var(--lh-18); }
+.readout__t { color: var(--c-ink-2); font-family: var(--font-mono); font-size: var(--t-12); }
+.rg { display: block; touch-action: pan-y; }
+.chart { width: 100%; height: auto; overflow: visible; touch-action: pan-y; }
+.chart--d { display: none; }
+.c-grid { stroke: var(--c-line); stroke-width: 1; }
+.c-tick { fill: var(--c-ink-2); font-family: var(--font-mono); font-weight: 500; }
+.c-exec { stroke: var(--c-ink); stroke-width: 2; stroke-linejoin: round; stroke-linecap: round; }
+.c-exec-dot { fill: var(--c-ink); }
+.c-quote { stroke: var(--c-ink-3); stroke-width: 2; stroke-dasharray: 5 5; }
+.c-quote-dot { fill: var(--c-bg); stroke: var(--c-ink-3); stroke-width: 1.5; }
+.c-pill rect { fill: var(--c-mark); }
+.c-pill text { fill: var(--c-mark-ink); font-family: var(--font-mono); font-weight: 500; }
+.c-cursor { stroke: var(--c-mark); stroke-width: 1.5; opacity: 0; transition: opacity var(--d-1) var(--ease-std); pointer-events: none; }
+.c-wipe { animation: wipe 600ms var(--ease-out) both; }
+.key { display: flex; flex-wrap: wrap; gap: var(--s-2) var(--s-5); font-size: var(--t-13); line-height: 20px; color: var(--c-ink-2); }
+.key__ln { display: inline-block; width: 22px; height: 0; margin-right: var(--s-2); border-top: 2px solid var(--c-ink); vertical-align: middle; }
+.key__ln--dash { border-top-style: dashed; border-top-color: var(--c-ink-3); }
+
+/* size ladder rows (phone) */
+.ladder { padding-block: var(--s-7); }
+.ladder .lead { margin-top: var(--s-3); }
+.ladder .srcline { margin-top: var(--s-4); }
+.dl--ladder { container: ladder / inline-size; margin-top: var(--s-5); }
+.lrow { display: grid; grid-template-columns: minmax(0, 1fr) auto; grid-template-areas: "size main" "val mv"; column-gap: var(--s-3); row-gap: 2px; padding: 14px 12px 17px; margin-inline: -12px; min-height: 68px; border-top: 1px solid var(--c-line); cursor: pointer; transition: background var(--d-2) var(--ease-std), color var(--d-2) var(--ease-std); }
+.lrow:hover { background: color-mix(in srgb, var(--c-ink) 6%, transparent); }
+.lrow__size { grid-area: size; font-size: var(--t-18); line-height: var(--lh-18); font-weight: var(--w-medium); }
+.lrow__sget, .lrow__bpay { grid-area: main; text-align: right; font-size: var(--t-18); line-height: var(--lh-18); font-weight: var(--w-medium); }
+.lrow__val { grid-area: val; font-size: var(--t-13); line-height: 20px; color: var(--c-ink-2); }
+.lrow__smv, .lrow__bmv { grid-area: mv; text-align: right; font-size: var(--t-13); line-height: 20px; color: var(--c-ink-2); }
+.lrow__smv::before, .lrow__bmv::before { content: "Price move "; }
+.lrow__bar { position: absolute; left: 12px; right: 12px; bottom: 0; height: 3px; background: linear-gradient(90deg, currentColor var(--w), transparent var(--w)); }
+@container ladder (min-width: 600px) {
+  .dl--ladder .dl__head, .dl--ladder .lrow { display: grid; grid-template-columns: minmax(0, 1.15fr) repeat(5, minmax(0, 1fr)); column-gap: var(--s-3); }
+  .dl--ladder .dl__head { padding: 0 12px var(--s-2); margin-inline: -12px; }
+  .dl--ladder .lrow { grid-template-areas: "size val sget smv bpay bmv"; align-items: center; padding: 12px 12px 15px; min-height: 52px; }
+  .dl--ladder .lrow > * { text-align: right; font-size: var(--t-15); line-height: 22px; font-weight: var(--w-regular); color: inherit; }
+  .dl--ladder .lrow__size { grid-area: size; } .dl--ladder .lrow__val { grid-area: val; } .dl--ladder .lrow__sget { grid-area: sget; } .dl--ladder .lrow__smv { grid-area: smv; } .dl--ladder .lrow__bpay { grid-area: bpay; } .dl--ladder .lrow__bmv { grid-area: bmv; }
+  .dl--ladder .lrow__size { text-align: left; font-weight: var(--w-medium); }
+  .dl--ladder .lrow__val { color: var(--c-ink-2); }
+  .dl--ladder .lrow__smv::before, .dl--ladder .lrow__bmv::before { content: none; }
+  .dl--ladder .lrow__sget, .dl--ladder .lrow__bpay { font-weight: var(--w-medium); }
+  .dl--ladder .dl__head > span:first-child { text-align: left; }
+}
+
+/* pools */
+.dl--pools { container: pools / inline-size; margin-top: var(--s-3); }
+.prow { display: grid; grid-template-columns: minmax(0, 1fr) auto; grid-template-areas: "pair liq" "sub share" "nam fee"; column-gap: var(--s-3); row-gap: 2px; padding: 14px 0 16px; min-height: 68px; border-top: 1px solid var(--c-line); }
+.prow__id { display: contents; }
+.prow__pair { grid-area: pair; font-size: var(--t-15); line-height: 22px; font-weight: var(--w-medium); overflow-wrap: anywhere; min-width: 0; }
+.prow__sub { grid-area: sub; display: flex; flex-wrap: wrap; align-items: center; gap: var(--s-1) var(--s-2); color: var(--c-ink-3); min-width: 0; }
+.prow__liq { grid-area: liq; text-align: right; font-size: var(--t-18); line-height: 22px; font-weight: var(--w-medium); }
+.prow__share { grid-area: share; text-align: right; font-size: var(--t-13); line-height: 20px; color: var(--c-ink-2); }
+.prow__nam { grid-area: nam; font-size: var(--t-13); line-height: 20px; color: var(--c-ink-2); }
+.prow__fee { grid-area: fee; text-align: right; font-size: var(--t-13); line-height: 20px; color: var(--c-ink-2); }
+.prow__bar { position: absolute; left: 0; right: 0; bottom: 0; height: 2px; background: linear-gradient(90deg, var(--c-ink-2) var(--w), transparent var(--w)); }
+.prow--rest { display: flex; flex-wrap: wrap; justify-content: space-between; align-items: baseline; gap: var(--s-1) var(--s-3); color: var(--c-ink-2); font-size: var(--t-13); line-height: 20px; min-height: 56px; }
+.prow--rest [data-num] { color: var(--c-ink); }
+@container pools (min-width: 600px) {
+  .dl--pools .dl__head, .dl--pools .prow:not(.prow--rest) { display: grid; grid-template-columns: minmax(0, 2.2fr) minmax(0, 1fr) minmax(0, 1.1fr) minmax(0, 1.3fr) minmax(0, .8fr); column-gap: var(--s-3); }
+  .dl--pools .prow:not(.prow--rest) { grid-template-areas: "id liq share nam fee"; align-items: center; padding: 12px 0 14px; min-height: 56px; }
+  .dl--pools .prow__id { grid-area: id; display: grid; gap: 4px; justify-items: start; min-width: 0; }
+  .dl--pools .prow__pair, .dl--pools .prow__sub { grid-area: auto; }
+  .dl--pools .prow__liq, .dl--pools .prow__share, .dl--pools .prow__nam, .dl--pools .prow__fee { font-size: var(--t-13); text-align: right; color: var(--c-ink); }
+  .dl--pools .prow__liq { font-size: var(--t-15); }
+  .dl--pools .u { display: none; }
+}
+
+@media (min-width: 640px) {
+  .chart--p { display: none; }
+  .chart--d { display: block; }
+}
+@media (min-width: 1024px) {
+  .split { display: grid; grid-template-columns: minmax(440px, 5fr) 7fr; align-items: stretch; }
+  .split__a { padding: var(--s-7) var(--s-6) var(--s-8) max(var(--gutter), calc((100vw - var(--max)) / 2 + var(--gutter))); }
+  .split__a::after { content: ""; position: absolute; top: 0; right: 0; bottom: 0; width: 14px; color: #000; background-image: linear-gradient(0deg, currentColor 0 1px, transparent 1px), linear-gradient(0deg, currentColor 0 1px, transparent 1px); background-size: 7px 8px, 14px 40px; background-repeat: repeat-y; background-position: 100% 0, 100% 0; pointer-events: none; }
+  .split__stick { position: sticky; top: calc(var(--header-h) + var(--s-6)); }
+  .split__b > section.sec, .split__b > section.ladder { padding-inline: var(--s-6) max(var(--gutter), calc((100vw - var(--max)) / 2 + var(--gutter))); }
+  .split__b > .sec { padding-block: var(--s-8); }
+  .split__b > .sec + .sec, .split__b > .ladder { border-top: 1px solid var(--c-line); }
+  .ladder { padding-block: var(--s-8); }
+  .ladder > .wrap { padding-inline: 0; max-width: none; margin: 0; }
+}
+
+/* ==========================================================================
+   HOLDERS
+   ========================================================================== */
+.hhero { padding-block: var(--s-5) 0; position: relative; }
+.hhero > .wrap { padding-bottom: var(--s-6); }
+.hhero .eyebrow { margin-bottom: var(--s-3); }
+.hhero .sub { margin-top: var(--s-4); }
+.hhero .h1 { max-width: 14ch; }
+.hhero .ruler--bottom { margin-top: 0; }
+.hl-band { padding-block: var(--s-5) var(--s-7); }
+.hl__bar { display: flex; align-items: center; justify-content: space-between; gap: var(--s-3); border-bottom: 1px solid var(--c-line); }
+.utabs { display: flex; gap: var(--s-5); }
+.utabs a { display: flex; align-items: center; min-height: 52px; margin-bottom: -1px; border-bottom: 2px solid transparent; color: var(--c-ink-2); font-weight: var(--w-medium); text-decoration: none; }
+.utabs a[aria-current="page"] { color: var(--c-ink); border-bottom-color: var(--accent); }
+.filterbtn { min-height: 44px; padding: 0 16px; }
+.badge { display: inline-grid; place-items: center; min-width: 20px; height: 20px; padding: 0 5px; margin-left: 2px; border-radius: 10px; background: var(--c-ink); color: var(--c-bg); font: var(--w-medium) var(--t-12) / 1 var(--font-mono); }
+.badge[hidden] { display: none; }
+.hl__count { margin: var(--s-4) 0 var(--s-2); font-size: var(--t-13); line-height: 20px; color: var(--c-ink-2); }
+.hl__count [data-num] { color: var(--c-ink); }
+.filters__body { display: grid; gap: var(--s-5); padding: var(--s-2) var(--s-4) var(--s-4); }
+.fset__l { margin-bottom: var(--s-3); font-size: var(--t-13); line-height: 20px; font-weight: var(--w-medium); color: var(--c-ink-2); }
+.chipsel { display: flex; flex-wrap: wrap; gap: var(--s-2); }
+.chipsel__o { cursor: pointer; border-radius: var(--r-pill); }
+.chipsel__o > span { display: inline-flex; align-items: center; gap: var(--s-2); min-height: 44px; padding: 0 16px; border: 1.5px solid var(--c-line-strong); border-radius: var(--r-pill); font-size: var(--t-13); font-weight: var(--w-medium); transition: background var(--d-2) var(--ease-std), color var(--d-2) var(--ease-std); }
+.chipsel__o:hover > span { background: color-mix(in srgb, var(--c-ink) 10%, transparent); }
+.chipsel__n { font: var(--w-medium) var(--t-12) / 1 var(--font-mono); color: inherit; opacity: .7; }
+.empty--filter, .empty--osmosis { display: none; }
+.more--load { display: grid; gap: var(--s-3); justify-items: start; margin-top: var(--s-6); }
+@media (min-width: 640px) { .hhero { padding-block: var(--s-7) 0; } }
+@media (min-width: 1024px) {
+  .hhero { padding-block: var(--s-8) 0; }
+  .hhero > .wrap { padding-bottom: var(--s-7); }
+  .hhero .h1 { max-width: 16ch; }
+  .hhero .sub { font-size: var(--t-18); line-height: var(--lh-18); max-width: 56ch; }
+  .hl-band { padding-block: var(--s-6) var(--s-8); }
+  .filterbtn { display: none; }
+  .filters { position: static; inset: auto; display: flex; flex-wrap: wrap; align-items: end; gap: var(--s-5) var(--s-7); width: auto; max-height: none; margin: var(--s-5) 0 0; padding: 0; overflow: visible; border: 0; box-shadow: none; background: transparent; }
+  .filters .sheet__head, .filters .sheet__foot { display: none; }
+  .filters__body { display: flex; flex-wrap: wrap; gap: var(--s-5) var(--s-7); padding: 0; }
+  .filters .fset__l { margin-bottom: var(--s-2); }
+  .filters .seg { width: 260px; }
+  .filters .seg__opt span { min-height: 38px; }
+  .hl__count { margin-top: var(--s-6); }
+}
+
+/* ==========================================================================
+   MOTION: geometry only, never a number. All of it off under reduced motion.
+   ========================================================================== */
+@keyframes grow { from { transform: scaleX(0); } }
+@keyframes wipe { from { clip-path: inset(0 100% 0 0); } to { clip-path: inset(0 0 0 0); } }
+@keyframes sheet-in { from { transform: translateY(16px); opacity: 0; } }
+@keyframes rise { from { opacity: 0; transform: translateY(8px); } }
+@keyframes rail-y { from { transform: scaleY(0); } to { transform: scaleY(1); } }
+@keyframes rail-x { from { transform: scaleX(0); } to { transform: scaleX(1); } }
+@keyframes step-in { from { opacity: .3; } to { opacity: 1; } }
+@keyframes dot-in { from { transform: scale(0); } to { transform: scale(1); } }
+@supports (animation-timeline: view()) {
+  .sec { animation: rise linear both; animation-timeline: view(); animation-range: entry 0% entry 20%; }
+  .steps::after { animation: rail-y linear both; animation-timeline: view(); animation-range: entry 25% exit 75%; }
+  .step { animation: step-in linear both; animation-timeline: view(); animation-range: entry 5% entry 55%; }
+  .step__ring .r1 { animation: dot-in linear both; animation-timeline: view(); animation-range: entry 15% entry 70%; }
+  @media (min-width: 900px) {
+    .steps::after { animation-name: rail-x; animation-range: entry 20% cover 55%; }
+    .step { animation-range: entry 0% entry 90%; animation-delay: 0s; }
+    .step:nth-child(2) { animation-range: entry 6% entry 96%; }
+    .step:nth-child(3) { animation-range: entry 12% entry 102%; }
+    .step:nth-child(4) { animation-range: entry 18% entry 108%; }
+  }
+}
+html.static .sec, html.static .steps::after, html.static .step, html.static .step__ring .r1 { animation: none !important; }
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after { animation: none !important; transition: none !important; scroll-behavior: auto !important; }
+}
+
+.hl:has(#ct-all:checked) label.chipsel__o[for="ct-all"] span{background:var(--c-sel-bg);color:var(--c-sel-ink);border-color:var(--c-sel-bg)}
+.hl:has(#ct-all:focus-visible) label[for="ct-all"]{outline:2px solid var(--c-focus);outline-offset:2px}
+.hl:has(#ct-foundation:checked) .hrow:not([data-cat="foundation"]){display:none}
+.hl:has(#ct-foundation:checked) label.chipsel__o[for="ct-foundation"] span{background:var(--c-sel-bg);color:var(--c-sel-ink);border-color:var(--c-sel-bg)}
+.hl:has(#ct-foundation:focus-visible) label[for="ct-foundation"]{outline:2px solid var(--c-focus);outline-offset:2px}
+.hl:has(#ct-genesis:checked) .hrow:not([data-cat="genesis"]){display:none}
+.hl:has(#ct-genesis:checked) label.chipsel__o[for="ct-genesis"] span{background:var(--c-sel-bg);color:var(--c-sel-ink);border-color:var(--c-sel-bg)}
+.hl:has(#ct-genesis:focus-visible) label[for="ct-genesis"]{outline:2px solid var(--c-focus);outline-offset:2px}
+.hl:has(#ct-backer:checked) .hrow:not([data-cat="backer"]){display:none}
+.hl:has(#ct-backer:checked) label.chipsel__o[for="ct-backer"] span{background:var(--c-sel-bg);color:var(--c-sel-ink);border-color:var(--c-sel-bg)}
+.hl:has(#ct-backer:focus-visible) label[for="ct-backer"]{outline:2px solid var(--c-focus);outline-offset:2px}
+.hl:has(#ct-none:checked) .hrow:not([data-cat="none"]){display:none}
+.hl:has(#ct-none:checked) label.chipsel__o[for="ct-none"] span{background:var(--c-sel-bg);color:var(--c-sel-ink);border-color:var(--c-sel-bg)}
+.hl:has(#ct-none:focus-visible) label[for="ct-none"]{outline:2px solid var(--c-focus);outline-offset:2px}
+.hl:has(#ch-namada:checked) label.seg__opt[for="ch-namada"] span{background:var(--c-sel-bg);color:var(--c-sel-ink)}
+.hl:has(#ch-namada:focus-visible) label[for="ch-namada"]{outline:2px solid var(--c-focus);outline-offset:2px}
+.hl:has(#ch-osmosis:checked) label.seg__opt[for="ch-osmosis"] span{background:var(--c-sel-bg);color:var(--c-sel-ink)}
+.hl:has(#ch-osmosis:focus-visible) label[for="ch-osmosis"]{outline:2px solid var(--c-focus);outline-offset:2px}
+.hl:has(#ch-osmosis:checked) :is(.dl,.hl__count,.more--load,#empty-filter){display:none !important}.hl:has(#ch-osmosis:checked) #empty-osmosis{display:grid}
+</style>
+</head>
+<body>
+<svg width="0" height="0" style="position:absolute" aria-hidden="true" focusable="false"><defs>
+<symbol id="i-home" viewBox="0 0 24 24"><path d="M4 11 12 4l8 7v8.5a.5.5 0 0 1-.5.5H15v-6H9v6H4.5a.5.5 0 0 1-.5-.5z"/></symbol>
+<symbol id="i-trade" viewBox="0 0 24 24"><path d="M7 20V5M7 5 3.5 8.5M7 5l3.5 3.5M17 4v15M17 19l-3.5-3.5M17 19l3.5-3.5"/></symbol>
+<symbol id="i-supply" viewBox="0 0 24 24"><path d="m12 4-9 4.5 9 4.5 9-4.5zM3 12.5l9 4.5 9-4.5M3 16.5l9 4.5 9-4.5"/></symbol>
+<symbol id="i-shielded" viewBox="0 0 24 24"><path d="M12 3 4.5 6v5.5c0 4.4 3.1 7.8 7.5 9.5 4.4-1.7 7.5-5.1 7.5-9.5V6z"/></symbol>
+<symbol id="i-activity" viewBox="0 0 24 24"><path d="M3 12h4l2.5-6 4 12 2.5-6H21"/></symbol>
+<symbol id="i-alerts" viewBox="0 0 24 24"><path d="M6 16v-5a6 6 0 0 1 12 0v5l1.5 2h-15zM10 20.5a2 2 0 0 0 4 0"/></symbol>
+<symbol id="i-search" viewBox="0 0 24 24"><circle cx="11" cy="11" r="6.5"/><path d="m16 16 4.5 4.5"/></symbol>
+<symbol id="i-account" viewBox="0 0 24 24"><circle cx="12" cy="8.5" r="3.8"/><path d="M4.5 20c.8-3.6 3.8-5.5 7.5-5.5s6.7 1.9 7.5 5.5"/></symbol>
+<symbol id="i-rewind" viewBox="0 0 24 24"><path d="M4 12a8 8 0 1 0 2.6-5.9M4 4.5v4h4M12 8v4.5l3 1.8"/></symbol>
+<symbol id="i-arrow" viewBox="0 0 24 24"><path d="M4 12h15M13.5 6.5 19 12l-5.5 5.5"/></symbol>
+<symbol id="i-close" viewBox="0 0 24 24"><path d="m6 6 12 12M18 6 6 18"/></symbol>
+<symbol id="i-filter" viewBox="0 0 24 24"><path d="M4 7h10M18 7h2M4 17h2M10 17h10"/><circle cx="16" cy="7" r="2"/><circle cx="8" cy="17" r="2"/></symbol>
+<symbol id="i-info" viewBox="0 0 24 24"><circle cx="12" cy="12" r="8.5"/><path d="M12 11v5.5M12 7.8v.4"/></symbol>
+<symbol id="i-warn" viewBox="0 0 24 24"><path d="M12 4 2.8 19.5h18.4zM12 10v4.5M12 16.8v.4"/></symbol>
+<symbol id="i-check" viewBox="0 0 24 24"><path d="m5 12.5 4.5 4.5L19 7.5"/></symbol>
+<symbol id="g-buy" viewBox="0 0 12 12"><path d="M3 9l6-6M4 3h5v5"/></symbol>
+<symbol id="g-sell" viewBox="0 0 12 12"><path d="M3 3l6 6M9 4v5H4"/></symbol>
+<symbol id="g-shield" viewBox="0 0 12 12"><path d="M6 1.2 2.2 2.7v3c0 2.4 1.6 4 3.8 4.9 2.2-.9 3.8-2.5 3.8-4.9v-3z"/></symbol>
+<symbol id="g-lock" viewBox="0 0 12 12"><rect x="2.5" y="5.5" width="7" height="5" rx=".5"/><path d="M4 5.5V4a2 2 0 0 1 4 0v1.5"/></symbol>
+<symbol id="g-ring" viewBox="0 0 12 12"><circle cx="6" cy="6" r="3.6"/></symbol>
+<symbol id="mark" viewBox="0 0 32 32"><circle cx="16" cy="16" r="12.5" fill="none" stroke="currentColor" stroke-width="4.5"/><path d="M16 9.2l4.7 5.8h-9.4zM16 22.8l-4.7-5.8h9.4z" fill="currentColor"/></symbol>
+</defs></svg>
+<a class="skip" href="#main">Skip to content</a>
+<header class="hdr"><div class="hdr__in">
+  <a class="brand" href="home.html" aria-label="Namada Trade, home"><svg class="brand__mark" viewBox="0 0 32 32" aria-hidden="true"><use href="#mark"/></svg><span class="brand__word">Namada <b>Trade</b></span></a>
+  <nav class="tabs" aria-label="Primary"><ul><li><a href="home.html">Home</a></li><li><a href="trade.html">Trade</a></li><li><a href="#">Supply</a></li><li><a href="#">Shielded</a></li><li><a href="holders.html" aria-current="page">Activity</a></li><li><a href="#">Alerts</a></li></ul></nav>
+  <span class="hdr__sp"></span>
+  <button type="button" class="hprice" popovertarget="pv12" aria-label="NAM price $0.001025, +0.87% since this time yesterday. Show source.">
+    <i class="dot" data-status="fresh"></i><span class="hprice__v" data-num>$0.001025</span><span class="hprice__d">+0.9%</span></button>
+  <button type="button" class="hbtn hbtn--rewind" aria-label="Rewind to a date"><svg class="ico" aria-hidden="true" focusable="false"><use href="#i-rewind"/></svg><span>Rewind</span></button>
+  <button type="button" class="hbtn hbtn--status" popovertarget="sources" aria-label="5 of 7 checks pass. Where every number comes from."><i class="dot" data-status="old"></i><span><span class="hbtn__s">5/7</span><span class="hbtn__l">5 of 7</span><span class="hbtn__more"> checks</span></span></button>
+  <button type="button" class="ibtn" aria-label="Search"><svg class="ico" aria-hidden="true" focusable="false"><use href="#i-search"/></svg></button>
+  <button type="button" class="ibtn" aria-label="Account"><svg class="ico" aria-hidden="true" focusable="false"><use href="#i-account"/></svg></button>
+</div></header>
+<main id="main">
+<section class="band ground-accent hhero" aria-labelledby="h1"><div class="wrap">
+    <p class="eyebrow">Activity · Holders</p>
+    <h1 id="h1" class="h1">Who holds NAM?</h1>
+    <p class="sub">The biggest holders, with when each balance was last checked. Protocol accounts are excluded. Shielded NAM cannot be attributed to anyone.</p>
+    <ul class="facts facts--4"><li class="fact"><span class="fact__n" data-num>2,209</span><span class="fact__l">holders on Namada</span><button type="button" class="chip " data-status="fresh" popovertarget="pv1" aria-label="Namada indexer: fresh, 9 s. Show source."><i class="dot" data-status="fresh"></i><span>9 s</span></button></li><li class="fact"><span class="fact__n" data-num>22.5%</span><span class="fact__l">owned by the top 10</span><button type="button" class="chip " data-status="fresh" popovertarget="pv1" aria-label="Namada indexer: fresh, 9 s. Show source."><i class="dot" data-status="fresh"></i><span>9 s</span></button></li><li class="fact"><span class="fact__n" data-num>1,332</span><span class="fact__l">holders on Osmosis</span><button type="button" class="chip " data-status="fresh" popovertarget="pv2" aria-label="Osmosis pools: fresh, just now. Show source."><i class="dot" data-status="fresh"></i><span>now</span></button></li><li class="fact"><span class="fact__n" data-num>50.5%</span><span class="fact__l">owned by the top 10 there</span><button type="button" class="chip " data-status="fresh" popovertarget="pv2" aria-label="Osmosis pools: fresh, just now. Show source."><i class="dot" data-status="fresh"></i><span>now</span></button></li></ul>
+  </div><div class="ruler ruler--bottom" aria-hidden="true"></div></section><div class="band ground-ink hl-band"><div class="wrap">
+  <div class="hl">
+    <input class="sr-only" type="radio" name="chain" id="ch-namada" checked><input class="sr-only" type="radio" name="chain" id="ch-osmosis">
+    <input class="sr-only" type="radio" name="cat" id="ct-all" checked><input class="sr-only" type="radio" name="cat" id="ct-foundation"><input class="sr-only" type="radio" name="cat" id="ct-genesis"><input class="sr-only" type="radio" name="cat" id="ct-backer"><input class="sr-only" type="radio" name="cat" id="ct-none">
+    <div class="hl__bar">
+      <nav class="utabs" aria-label="Activity views"><a href="#">Transactions</a><a href="holders.html" aria-current="page">Holders</a></nav>
+      <button type="button" class="btn btn--secondary filterbtn" popovertarget="filters"><svg class="ico ico--btn" aria-hidden="true" focusable="false"><use href="#i-filter"/></svg>Filter<span class="badge" hidden>0</span></button>
+    </div>
+    <div id="filters" popover class="sheet ground-ink filters" aria-label="Filter holders">
+      <div class="sheet__head"><h2 class="sheet__t">Filter holders</h2><button class="icon-btn" popovertarget="filters" popovertargetaction="hide" aria-label="Close"><svg class="ico" aria-hidden="true" focusable="false"><use href="#i-close"/></svg></button></div>
+      <div class="filters__body"><fieldset class="fset"><legend class="fset__l">Chain</legend><div class="seg seg--2" role="radiogroup">
+      <label class="seg__opt" for="ch-namada"><span>Namada</span></label><label class="seg__opt" for="ch-osmosis"><span>Osmosis</span></label></div></fieldset>
+    <fieldset class="fset"><legend class="fset__l">What</legend><div class="chipsel" role="radiogroup">
+      <label class="chipsel__o" for="ct-all"><span>All<span class="chipsel__n" data-num>10</span></span></label><label class="chipsel__o" for="ct-foundation"><span>Foundation<span class="chipsel__n" data-num>7</span></span></label><label class="chipsel__o" for="ct-genesis"><span>Genesis<span class="chipsel__n" data-num>1</span></span></label><label class="chipsel__o" for="ct-backer"><span>Backer<span class="chipsel__n" data-num>1</span></span></label><label class="chipsel__o" for="ct-none"><span>No label<span class="chipsel__n" data-num>1</span></span></label></div></fieldset></div>
+      <div class="sheet__foot"><button class="btn btn--primary" popovertarget="filters" popovertargetaction="hide">Show holders</button></div>
+    </div>
+    <p class="hl__count" aria-live="polite"><span data-num class="hl__n">10</span> of <span data-num>2,209</span> holders captured in this snapshot, biggest first.</p>
+    <div class="dl dl--holders dl--full" role="table" aria-label="Holders of NAM on Namada">
+      <div class="dl__head" role="row"><span role="columnheader">#</span><span role="columnheader">Holder</span><span role="columnheader" class="r">Total NAM</span><span role="columnheader" class="r">Share</span><span role="columnheader" class="r">Spendable</span><span role="columnheader" class="r">Staked</span><span role="columnheader">7 days</span><span role="columnheader" class="r">Checked</span></div>
+      <div class="hrow" role="row" data-cat="genesis">
+    <span class="hrow__rk" role="cell">1</span>
+    <div class="hrow__body">
+      <div class="hln hln1"><span class="hrow__name" role="cell">Genesis: public allocations completed</span>
+        <span class="hrow__tot" role="cell" data-num>55,117,423<span class="u"> NAM</span></span></div>
+      <div class="hln hln2"><span class="hrow__sub" role="cell"><span class="mono">tnam1qqscx…027zh</span><span class="tag tag--cat"><svg class="gly" viewBox="0 0 12 12" aria-hidden="true" focusable="false"><use href="#g-ring"/></svg>Genesis</span></span>
+        <span class="hrow__pct" role="cell" data-num>4.80%<span class="u"> of supply</span></span></div>
+      <div class="hln hln3"><span class="hrow__spend" role="cell" data-num>40,455,316</span>
+        <span class="hrow__stake" role="cell" data-num>14,662,107<span class="hrow__est" title="Verified on chain 14,662,107 NAM; the flow estimate is 14,562,107 NAM"><i class="dot" data-status="disagree"></i>estimate 14,562,107</span></span></div>
+      <div class="hln hln4"><span class="hrow__chg" role="cell"><span class="chg__a">no change</span><span class="chg__b"> in 7 days</span><span class="hrow__link">2 linked Osmosis addresses</span></span>
+        <span class="hrow__prov" role="cell"><button type="button" class="chip " data-status="disagree" popovertarget="pv3" aria-label="Balance check: sources disagree, 2.3 days. Show source."><i class="dot" data-status="disagree"></i><span>disagree · 2.3 days</span></button></span></div>
+    </div>
+    <i class="hrow__bar" style="--w:100.00%" aria-hidden="true"></i>
+  </div><div class="hrow" role="row" data-cat="foundation">
+    <span class="hrow__rk" role="cell">2</span>
+    <div class="hrow__body">
+      <div class="hln hln1"><span class="hrow__name" role="cell">Anoma Foundation</span>
+        <span class="hrow__tot" role="cell" data-num>50,000,000<span class="u"> NAM</span></span></div>
+      <div class="hln hln2"><span class="hrow__sub" role="cell"><span class="mono">tnam1q8nm4…fs6lm</span><span class="tag tag--cat"><svg class="gly" viewBox="0 0 12 12" aria-hidden="true" focusable="false"><use href="#g-ring"/></svg>Foundation</span></span>
+        <span class="hrow__pct" role="cell" data-num>4.36%<span class="u"> of supply</span></span></div>
+      <div class="hln hln3"><span class="hrow__spend" role="cell" data-num>22</span>
+        <span class="hrow__stake" role="cell" data-num>49,999,978</span></div>
+      <div class="hln hln4"><span class="hrow__chg" role="cell"><span class="chg__a">no change</span><span class="chg__b"> in 7 days</span></span>
+        <span class="hrow__prov" role="cell"><button type="button" class="chip " data-status="age" popovertarget="pv4" aria-label="Balance check: age only, 2.3 days. Show source."><i class="dot" data-status="age"></i><span>checked 2.3 days</span></button></span></div>
+    </div>
+    <i class="hrow__bar" style="--w:90.72%" aria-hidden="true"></i>
+  </div><div class="hrow" role="row" data-cat="none">
+    <span class="hrow__rk" role="cell">3</span>
+    <div class="hrow__body">
+      <div class="hln hln1"><span class="hrow__name mono" role="cell">tnam1qqzg5…pf0pa</span>
+        <span class="hrow__tot" role="cell" data-num>24,219,272<span class="u"> NAM</span></span></div>
+      <div class="hln hln2"><span class="hrow__sub" role="cell"><span class="mono">no label</span></span>
+        <span class="hrow__pct" role="cell" data-num>2.11%<span class="u"> of supply</span></span></div>
+      <div class="hln hln3"><span class="hrow__spend" role="cell" data-num>24,219,272</span>
+        <span class="hrow__stake" role="cell" data-num>0</span></div>
+      <div class="hln hln4"><span class="hrow__chg" role="cell"><span class="chg__a">no change</span><span class="chg__b"> in 7 days</span></span>
+        <span class="hrow__prov" role="cell"><button type="button" class="chip " data-status="age" popovertarget="pv5" aria-label="Balance check: age only, 2.3 days. Show source."><i class="dot" data-status="age"></i><span>checked 2.3 days</span></button></span></div>
+    </div>
+    <i class="hrow__bar" style="--w:43.94%" aria-hidden="true"></i>
+  </div><div class="hrow" role="row" data-cat="foundation">
+    <span class="hrow__rk" role="cell">4</span>
+    <div class="hrow__body">
+      <div class="hln hln1"><span class="hrow__name" role="cell">Anoma Foundation</span>
+        <span class="hrow__tot" role="cell" data-num>21,846,650<span class="u"> NAM</span></span></div>
+      <div class="hln hln2"><span class="hrow__sub" role="cell"><span class="mono">tnam1qxt7u…gm5kj</span><span class="tag tag--cat"><svg class="gly" viewBox="0 0 12 12" aria-hidden="true" focusable="false"><use href="#g-ring"/></svg>Foundation</span></span>
+        <span class="hrow__pct" role="cell" data-num>1.90%<span class="u"> of supply</span></span></div>
+      <div class="hln hln3"><span class="hrow__spend" role="cell" data-num>21,846,650</span>
+        <span class="hrow__stake" role="cell" data-num>0</span></div>
+      <div class="hln hln4"><span class="hrow__chg" role="cell"><span class="chg__a">no change</span><span class="chg__b"> in 7 days</span></span>
+        <span class="hrow__prov" role="cell"><button type="button" class="chip " data-status="age" popovertarget="pv6" aria-label="Balance check: age only, 2.3 days. Show source."><i class="dot" data-status="age"></i><span>checked 2.3 days</span></button></span></div>
+    </div>
+    <i class="hrow__bar" style="--w:39.64%" aria-hidden="true"></i>
+  </div><div class="hrow" role="row" data-cat="foundation">
+    <span class="hrow__rk" role="cell">5</span>
+    <div class="hrow__body">
+      <div class="hln hln1"><span class="hrow__name" role="cell">Anoma Foundation</span>
+        <span class="hrow__tot" role="cell" data-num>20,000,000<span class="u"> NAM</span></span></div>
+      <div class="hln hln2"><span class="hrow__sub" role="cell"><span class="mono">tnam1qrgzn…yahzz</span><span class="tag tag--cat"><svg class="gly" viewBox="0 0 12 12" aria-hidden="true" focusable="false"><use href="#g-ring"/></svg>Foundation</span></span>
+        <span class="hrow__pct" role="cell" data-num>1.74%<span class="u"> of supply</span></span></div>
+      <div class="hln hln3"><span class="hrow__spend" role="cell" data-num>20,000,000</span>
+        <span class="hrow__stake" role="cell" data-num>0</span></div>
+      <div class="hln hln4"><span class="hrow__chg" role="cell"><span class="chg__a">no change</span><span class="chg__b"> in 7 days</span></span>
+        <span class="hrow__prov" role="cell"><button type="button" class="chip " data-status="age" popovertarget="pv7" aria-label="Balance check: age only, 2.3 days. Show source."><i class="dot" data-status="age"></i><span>checked 2.3 days</span></button></span></div>
+    </div>
+    <i class="hrow__bar" style="--w:36.29%" aria-hidden="true"></i>
+  </div><div class="hrow" role="row" data-cat="backer">
+    <span class="hrow__rk" role="cell">6</span>
+    <div class="hrow__body">
+      <div class="hln hln1"><span class="hrow__name" role="cell">Genesis: af backers</span>
+        <span class="hrow__tot" role="cell" data-num>18,749,990<span class="u"> NAM</span></span></div>
+      <div class="hln hln2"><span class="hrow__sub" role="cell"><span class="mono">tnam1qq5rt…jxjj5</span><span class="tag tag--cat"><svg class="gly" viewBox="0 0 12 12" aria-hidden="true" focusable="false"><use href="#g-ring"/></svg>Backer</span></span>
+        <span class="hrow__pct" role="cell" data-num>1.63%<span class="u"> of supply</span></span></div>
+      <div class="hln hln3"><span class="hrow__spend" role="cell" data-num>18,749,990</span>
+        <span class="hrow__stake" role="cell" data-num>0</span></div>
+      <div class="hln hln4"><span class="hrow__chg" role="cell"><span class="chg__a">no change</span><span class="chg__b"> in 7 days</span></span>
+        <span class="hrow__prov" role="cell"><button type="button" class="chip " data-status="age" popovertarget="pv8" aria-label="Balance check: age only, 2.3 days. Show source."><i class="dot" data-status="age"></i><span>checked 2.3 days</span></button></span></div>
+    </div>
+    <i class="hrow__bar" style="--w:34.02%" aria-hidden="true"></i>
+  </div><div class="hrow" role="row" data-cat="foundation">
+    <span class="hrow__rk" role="cell">7</span>
+    <div class="hrow__body">
+      <div class="hln hln1"><span class="hrow__name" role="cell">Anoma Foundation</span>
+        <span class="hrow__tot" role="cell" data-num>18,423,337<span class="u"> NAM</span></span></div>
+      <div class="hln hln2"><span class="hrow__sub" role="cell"><span class="mono">tnam1qqp69…69f4j</span><span class="tag tag--cat"><svg class="gly" viewBox="0 0 12 12" aria-hidden="true" focusable="false"><use href="#g-ring"/></svg>Foundation</span></span>
+        <span class="hrow__pct" role="cell" data-num>1.61%<span class="u"> of supply</span></span></div>
+      <div class="hln hln3"><span class="hrow__spend" role="cell" data-num>18,423,337</span>
+        <span class="hrow__stake" role="cell" data-num>0</span></div>
+      <div class="hln hln4"><span class="hrow__chg" role="cell"><span class="chg__a">no change</span><span class="chg__b"> in 7 days</span></span>
+        <span class="hrow__prov" role="cell"><button type="button" class="chip " data-status="age" popovertarget="pv9" aria-label="Balance check: age only, 2.3 days. Show source."><i class="dot" data-status="age"></i><span>checked 2.3 days</span></button></span></div>
+    </div>
+    <i class="hrow__bar" style="--w:33.43%" aria-hidden="true"></i>
+  </div><div class="hrow" role="row" data-cat="foundation">
+    <span class="hrow__rk" role="cell">8</span>
+    <div class="hrow__body">
+      <div class="hln hln1"><span class="hrow__name" role="cell">Heliax</span>
+        <span class="hrow__tot" role="cell" data-num>16,666,667<span class="u"> NAM</span></span></div>
+      <div class="hln hln2"><span class="hrow__sub" role="cell"><span class="mono">tnam1qxpxt…wchvr</span><span class="tag tag--cat"><svg class="gly" viewBox="0 0 12 12" aria-hidden="true" focusable="false"><use href="#g-ring"/></svg>Foundation</span></span>
+        <span class="hrow__pct" role="cell" data-num>1.45%<span class="u"> of supply</span></span></div>
+      <div class="hln hln3"><span class="hrow__spend" role="cell" data-num>16,666,667</span>
+        <span class="hrow__stake" role="cell" data-num>0</span></div>
+      <div class="hln hln4"><span class="hrow__chg" role="cell"><span class="chg__a">no change</span><span class="chg__b"> in 7 days</span></span>
+        <span class="hrow__prov" role="cell"><button type="button" class="chip " data-status="age" popovertarget="pv6" aria-label="Balance check: age only, 2.3 days. Show source."><i class="dot" data-status="age"></i><span>checked 2.3 days</span></button></span></div>
+    </div>
+    <i class="hrow__bar" style="--w:30.24%" aria-hidden="true"></i>
+  </div><div class="hrow" role="row" data-cat="foundation">
+    <span class="hrow__rk" role="cell">9</span>
+    <div class="hrow__body">
+      <div class="hln hln1"><span class="hrow__name" role="cell">Heliax</span>
+        <span class="hrow__tot" role="cell" data-num>16,666,667<span class="u"> NAM</span></span></div>
+      <div class="hln hln2"><span class="hrow__sub" role="cell"><span class="mono">tnam1q8vsa…k0547</span><span class="tag tag--cat"><svg class="gly" viewBox="0 0 12 12" aria-hidden="true" focusable="false"><use href="#g-ring"/></svg>Foundation</span></span>
+        <span class="hrow__pct" role="cell" data-num>1.45%<span class="u"> of supply</span></span></div>
+      <div class="hln hln3"><span class="hrow__spend" role="cell" data-num>16,666,667</span>
+        <span class="hrow__stake" role="cell" data-num>0</span></div>
+      <div class="hln hln4"><span class="hrow__chg" role="cell"><span class="chg__a">no change</span><span class="chg__b"> in 7 days</span></span>
+        <span class="hrow__prov" role="cell"><button type="button" class="chip " data-status="age" popovertarget="pv10" aria-label="Balance check: age only, 2.3 days. Show source."><i class="dot" data-status="age"></i><span>checked 2.3 days</span></button></span></div>
+    </div>
+    <i class="hrow__bar" style="--w:30.24%" aria-hidden="true"></i>
+  </div><div class="hrow" role="row" data-cat="foundation">
+    <span class="hrow__rk" role="cell">10</span>
+    <div class="hrow__body">
+      <div class="hln hln1"><span class="hrow__name" role="cell">Anoma Foundation</span>
+        <span class="hrow__tot" role="cell" data-num>16,666,667<span class="u"> NAM</span></span></div>
+      <div class="hln hln2"><span class="hrow__sub" role="cell"><span class="mono">tnam1qrucg…ng8yq</span><span class="tag tag--cat"><svg class="gly" viewBox="0 0 12 12" aria-hidden="true" focusable="false"><use href="#g-ring"/></svg>Foundation</span></span>
+        <span class="hrow__pct" role="cell" data-num>1.45%<span class="u"> of supply</span></span></div>
+      <div class="hln hln3"><span class="hrow__spend" role="cell" data-num>16,666,667</span>
+        <span class="hrow__stake" role="cell" data-num>0</span></div>
+      <div class="hln hln4"><span class="hrow__chg" role="cell"><span class="chg__a">no change</span><span class="chg__b"> in 7 days</span></span>
+        <span class="hrow__prov" role="cell"><button type="button" class="chip " data-status="age" popovertarget="pv11" aria-label="Balance check: age only, 2.3 days. Show source."><i class="dot" data-status="age"></i><span>checked 2.3 days</span></button></span></div>
+    </div>
+    <i class="hrow__bar" style="--w:30.24%" aria-hidden="true"></i>
+  </div>
+    </div>
+    <div class="empty empty--filter" id="empty-filter"><svg class="empty__ring" viewBox="0 0 40 40" aria-hidden="true"><circle cx="20" cy="20" r="14" fill="none" stroke="currentColor" stroke-width="2" stroke-dasharray="3 5"/></svg>
+      <div><p class="empty__t">No holder in this snapshot matches.</p><p class="empty__s">Only the top 10 holders were captured. Clear the filter to see them.</p></div></div>
+    <div class="empty empty--osmosis" id="empty-osmosis"><svg class="empty__ring" viewBox="0 0 40 40" aria-hidden="true"><circle cx="20" cy="20" r="14" fill="none" stroke="currentColor" stroke-width="2" stroke-dasharray="3 5"/></svg>
+      <div><p class="empty__t">The Osmosis list was not captured.</p>
+      <p class="empty__s"><span data-num>1,332</span> addresses hold NAM on Osmosis and the top 10 own <span data-num>50.5%</span> of it <button type="button" class="chip " data-status="fresh" popovertarget="pv2" aria-label="Osmosis pools: fresh, just now. Show source."><i class="dot" data-status="fresh"></i><span>now</span></button>. Choose Namada to see the rows.</p></div></div>
+    <div class="more more--load"><button class="btn btn--secondary" type="button" disabled>Load more holders</button><p class="cap">The snapshot holds the first 10 rows only.</p></div>
+  </div>
+  </div></div><footer class="band ground-accent foot">
+  <div class="ruler ruler--top" aria-hidden="true"></div>
+  <div class="wrap foot__grid">
+    <div class="foot__id">
+      <a class="foot__brand" href="home.html"><svg viewBox="0 0 32 32" aria-hidden="true"><use href="#mark"/></svg><span>Namada Trade</span></a>
+      <p class="foot__snap">Snapshot of 17 Oct 2026, 11:24 UTC. Ages are measured from that moment.</p>
+    </div>
+    <p class="foot__legal">Every number shows its source and age. Data: Osmosis router, Namada nodes, indexer.namada.net; records current as of 32 min. Not investment advice. Not affiliated with Namada or the Anoma Foundation.</p>
+    <ul class="foot__links"><li><button type="button" class="linkbtn" popovertarget="sources">How we know</button></li><li><a href="#">Settings</a></li><li><a href="#">API</a></li><li><a href="#">Source code</a></li></ul>
+  </div>
+</footer>
+</main>
+<nav class="tabbar" aria-label="Primary"><ul><li><a href="home.html"><svg class="ico" aria-hidden="true" focusable="false"><use href="#i-home"/></svg><span>Home</span></a></li><li><a href="trade.html"><svg class="ico" aria-hidden="true" focusable="false"><use href="#i-trade"/></svg><span>Trade</span></a></li><li><a href="#"><svg class="ico" aria-hidden="true" focusable="false"><use href="#i-supply"/></svg><span>Supply</span></a></li><li><a href="#"><svg class="ico" aria-hidden="true" focusable="false"><use href="#i-shielded"/></svg><span>Shielded</span></a></li><li><a href="holders.html" aria-current="page"><svg class="ico" aria-hidden="true" focusable="false"><use href="#i-activity"/></svg><span>Activity</span></a></li><li><a href="#"><svg class="ico" aria-hidden="true" focusable="false"><use href="#i-alerts"/></svg><span>Alerts</span></a></li></ul></nav>
+<div id="sources" popover class="sheet sheet--lg ground-ink" aria-label="Where every number comes from">
+  <div class="sheet__head"><h2 class="sheet__t">Where every number comes from</h2>
+    <button class="icon-btn" popovertarget="sources" popovertargetaction="hide" aria-label="Close"><svg class="ico" aria-hidden="true" focusable="false"><use href="#i-close"/></svg></button></div>
+  <p class="sheet__lead"><b>5 of 7</b> cross-checks pass, 2 need a look. This page is a snapshot taken 17 Oct 2026, 11:24 UTC; every age is measured from that moment.</p>
+  <ul class="chks"><li class="chk" data-key="ibc_conservation" data-status="old"><span class="chk__t"><i class="dot" data-status="old"></i>NAM held at the bridge matches NAM on Osmosis</span>
+    <span class="chk__w">Needs a look</span><span class="chk__d">1,614 NAM apart</span>
+    <span class="chk__c"><button type="button" class="chip " data-status="fresh" popovertarget="pv13" aria-label="NAM held at the bridge matches NAM on Osmosis: fresh, 10 s. Show source."><i class="dot" data-status="fresh"></i><span>10 s</span></button></span></li><li class="chk" data-key="rpc_consensus" data-status="fresh"><span class="chk__t"><i class="dot" data-status="fresh"></i>Two Namada nodes agree on the latest block</span>
+    <span class="chk__w">Passes</span><span class="chk__d">0 blocks apart</span>
+    <span class="chk__c"><button type="button" class="chip " data-status="fresh" popovertarget="pv14" aria-label="Two Namada nodes agree on the latest block: fresh, 10 s. Show source."><i class="dot" data-status="fresh"></i><span>10 s</span></button></span></li><li class="chk" data-key="supply_integrity" data-status="fresh"><span class="chk__t"><i class="dot" data-status="fresh"></i>Staked and escrowed NAM never exceed what exists</span>
+    <span class="chk__w">Passes</span><span class="chk__d">43.74% of NAM is locked or escrowed</span>
+    <span class="chk__c"><button type="button" class="chip " data-status="fresh" popovertarget="pv15" aria-label="Staked and escrowed NAM never exceed what exists: fresh, 10 s. Show source."><i class="dot" data-status="fresh"></i><span>10 s</span></button></span></li><li class="chk" data-key="indexer_lag" data-status="fresh"><span class="chk__t"><i class="dot" data-status="fresh"></i>The indexer keeps up with the chain</span>
+    <span class="chk__w">Passes</span><span class="chk__d">0 blocks behind</span>
+    <span class="chk__c"><button type="button" class="chip " data-status="fresh" popovertarget="pv16" aria-label="The indexer keeps up with the chain: fresh, 10 s. Show source."><i class="dot" data-status="fresh"></i><span>10 s</span></button></span></li><li class="chk" data-key="supply_cross_source" data-status="fresh"><span class="chk__t"><i class="dot" data-status="fresh"></i>Total supply is the same in two sources</span>
+    <span class="chk__w">Passes</span><span class="chk__d">0 NAM apart</span>
+    <span class="chk__c"><button type="button" class="chip " data-status="fresh" popovertarget="pv17" aria-label="Total supply is the same in two sources: fresh, 10 s. Show source."><i class="dot" data-status="fresh"></i><span>10 s</span></button></span></li><li class="chk" data-key="price_vs_execution" data-status="fresh"><span class="chk__t"><i class="dot" data-status="fresh"></i>The quoted price matches what trades paid</span>
+    <span class="chk__w">Passes</span><span class="chk__d">1.33% apart</span>
+    <span class="chk__c"><button type="button" class="chip " data-status="fresh" popovertarget="pv18" aria-label="The quoted price matches what trades paid: fresh, 10 s. Show source."><i class="dot" data-status="fresh"></i><span>10 s</span></button></span></li><li class="chk" data-key="bonded_coverage" data-status="old"><span class="chk__t"><i class="dot" data-status="old"></i>Staked NAM adds up address by address</span>
+    <span class="chk__w">Needs a look</span><span class="chk__d">68.2% of staked NAM matched to addresses</span>
+    <span class="chk__c"><button type="button" class="chip " data-status="fresh" popovertarget="pv19" aria-label="Staked NAM adds up address by address: fresh, 10 s. Show source."><i class="dot" data-status="fresh"></i><span>10 s</span></button></span></li></ul>
+  <details class="how"><summary>How it is computed</summary>
+    <p class="cap">14 of 14 data sources answered at the snapshot. Last answer, oldest first:</p>
+    <ul class="srcs"><li><span class="mono">Keplr Osmosis REST (holders)</span><span class="mono">ok · 4 min</span></li><li><span class="mono">Namada RPC (stake verification)</span><span class="mono">ok · 10 s</span></li><li><span class="mono">Namada RPC 5ElementsNodes</span><span class="mono">ok · 10 s</span></li><li><span class="mono">Namada RPC Papadritta</span><span class="mono">ok · 10 s</span></li><li><span class="mono">Osmosis SQS (pools)</span><span class="mono">ok · 10 s</span></li><li><span class="mono">Osmosis SQS (price)</span><span class="mono">ok · 10 s</span></li><li><span class="mono">Keplr Osmosis REST (supply)</span><span class="mono">ok · 10 s</span></li><li><span class="mono">Namada RPC (epoch)</span><span class="mono">ok · 10 s</span></li><li><span class="mono">Namada RPC (PGF balance)</span><span class="mono">ok · 10 s</span></li><li><span class="mono">Namada RPC (PoS balance)</span><span class="mono">ok · 10 s</span></li><li><span class="mono">Namada RPC (IBC escrow)</span><span class="mono">ok · 10 s</span></li><li><span class="mono">Namada RPC (MASP balance)</span><span class="mono">ok · 10 s</span></li><li><span class="mono">Namada RPC (minted supply)</span><span class="mono">ok · 10 s</span></li><li><span class="mono">Namada indexer (indexer.namada.net)</span><span class="mono">ok · 9 s</span></li></ul>
+  </details>
+</div>
+<div id="pv1" popover class="sheet ground-ink" aria-label="Namada indexer">
+  <div class="sheet__head"><h2 class="sheet__t">Namada indexer</h2>
+    <button class="icon-btn" popovertarget="pv1" popovertargetaction="hide" aria-label="Close"><svg class="ico"><use href="#i-close"/></svg></button></div>
+  <dl class="kv"><dt>Status</dt><dd><span class="dot" data-status="fresh"></span>fresh</dd><dt>As of</dt><dd>17 Oct 2026, 11:24 UTC</dd><dt>Age</dt><dd>9 s</dd><dt>Source</dt><dd>Namada indexer</dd><dt>Technical name</dt><dd><span class="mono">Namada indexer (indexer.namada.net)</span></dd></dl>
+  <div class="sheet__foot"><a class="btn btn--secondary" href="#">Rewind to this time</a></div>
+</div>
+<div id="pv2" popover class="sheet ground-ink" aria-label="Osmosis pools">
+  <div class="sheet__head"><h2 class="sheet__t">Osmosis pools</h2>
+    <button class="icon-btn" popovertarget="pv2" popovertargetaction="hide" aria-label="Close"><svg class="ico"><use href="#i-close"/></svg></button></div>
+  <dl class="kv"><dt>Status</dt><dd><span class="dot" data-status="fresh"></span>fresh</dd><dt>As of</dt><dd>17 Oct 2026, 11:24 UTC</dd><dt>Age</dt><dd>just now</dd><dt>Source</dt><dd>Osmosis pools</dd><dt>Technical name</dt><dd><span class="mono">Osmosis SQS pools</span></dd></dl>
+  <div class="sheet__foot"><a class="btn btn--secondary" href="#">Rewind to this time</a></div>
+</div>
+<div id="pv3" popover class="sheet ground-ink" aria-label="Balance check">
+  <div class="sheet__head"><h2 class="sheet__t">Balance check</h2>
+    <button class="icon-btn" popovertarget="pv3" popovertargetaction="hide" aria-label="Close"><svg class="ico"><use href="#i-close"/></svg></button></div>
+  <dl class="kv"><dt>Status</dt><dd><span class="dot" data-status="disagree"></span>sources disagree</dd><dt>As of</dt><dd>15 Oct 2026, 03:59 UTC</dd><dt>Age</dt><dd>2.3 days</dd><dt>Source</dt><dd>Namada indexer</dd><dt>Balance checked</dt><dd>15 Oct 2026, 03:59 UTC</dd><dt>Staked checked</dt><dd>17 Oct 2026, 11:14 UTC</dd><dt>Staked, verified</dt><dd>14,662,107 NAM</dd><dt>Staked, flow estimate</dt><dd>14,562,107 NAM (100,000 apart)</dd><dt>Linked Osmosis addresses</dt><dd>2</dd><dt>Technical name</dt><dd><span class="mono">Namada indexer (indexer.namada.net)</span></dd></dl>
+  <div class="sheet__foot"><a class="btn btn--secondary" href="#">Rewind to this time</a></div>
+</div>
+<div id="pv4" popover class="sheet ground-ink" aria-label="Balance check">
+  <div class="sheet__head"><h2 class="sheet__t">Balance check</h2>
+    <button class="icon-btn" popovertarget="pv4" popovertargetaction="hide" aria-label="Close"><svg class="ico"><use href="#i-close"/></svg></button></div>
+  <dl class="kv"><dt>Status</dt><dd><span class="dot" data-status="age"></span>age only</dd><dt>As of</dt><dd>15 Oct 2026, 03:59 UTC</dd><dt>Age</dt><dd>2.3 days</dd><dt>Source</dt><dd>Namada indexer</dd><dt>Balance checked</dt><dd>15 Oct 2026, 03:59 UTC</dd><dt>Staked checked</dt><dd>17 Oct 2026, 11:14 UTC</dd><dt>Technical name</dt><dd><span class="mono">Namada indexer (indexer.namada.net)</span></dd></dl>
+  <div class="sheet__foot"><a class="btn btn--secondary" href="#">Rewind to this time</a></div>
+</div>
+<div id="pv5" popover class="sheet ground-ink" aria-label="Balance check">
+  <div class="sheet__head"><h2 class="sheet__t">Balance check</h2>
+    <button class="icon-btn" popovertarget="pv5" popovertargetaction="hide" aria-label="Close"><svg class="ico"><use href="#i-close"/></svg></button></div>
+  <dl class="kv"><dt>Status</dt><dd><span class="dot" data-status="age"></span>age only</dd><dt>As of</dt><dd>15 Oct 2026, 03:59 UTC</dd><dt>Age</dt><dd>2.3 days</dd><dt>Source</dt><dd>Namada indexer</dd><dt>Balance checked</dt><dd>15 Oct 2026, 03:59 UTC</dd><dt>Staked checked</dt><dd>17 Oct 2026, 11:13 UTC</dd><dt>Technical name</dt><dd><span class="mono">Namada indexer (indexer.namada.net)</span></dd></dl>
+  <div class="sheet__foot"><a class="btn btn--secondary" href="#">Rewind to this time</a></div>
+</div>
+<div id="pv6" popover class="sheet ground-ink" aria-label="Balance check">
+  <div class="sheet__head"><h2 class="sheet__t">Balance check</h2>
+    <button class="icon-btn" popovertarget="pv6" popovertargetaction="hide" aria-label="Close"><svg class="ico"><use href="#i-close"/></svg></button></div>
+  <dl class="kv"><dt>Status</dt><dd><span class="dot" data-status="age"></span>age only</dd><dt>As of</dt><dd>15 Oct 2026, 03:59 UTC</dd><dt>Age</dt><dd>2.3 days</dd><dt>Source</dt><dd>Namada indexer</dd><dt>Balance checked</dt><dd>15 Oct 2026, 03:59 UTC</dd><dt>Staked checked</dt><dd>17 Oct 2026, 11:18 UTC</dd><dt>Technical name</dt><dd><span class="mono">Namada indexer (indexer.namada.net)</span></dd></dl>
+  <div class="sheet__foot"><a class="btn btn--secondary" href="#">Rewind to this time</a></div>
+</div>
+<div id="pv7" popover class="sheet ground-ink" aria-label="Balance check">
+  <div class="sheet__head"><h2 class="sheet__t">Balance check</h2>
+    <button class="icon-btn" popovertarget="pv7" popovertargetaction="hide" aria-label="Close"><svg class="ico"><use href="#i-close"/></svg></button></div>
+  <dl class="kv"><dt>Status</dt><dd><span class="dot" data-status="age"></span>age only</dd><dt>As of</dt><dd>15 Oct 2026, 03:59 UTC</dd><dt>Age</dt><dd>2.3 days</dd><dt>Source</dt><dd>Namada indexer</dd><dt>Balance checked</dt><dd>15 Oct 2026, 03:59 UTC</dd><dt>Staked checked</dt><dd>17 Oct 2026, 11:11 UTC</dd><dt>Technical name</dt><dd><span class="mono">Namada indexer (indexer.namada.net)</span></dd></dl>
+  <div class="sheet__foot"><a class="btn btn--secondary" href="#">Rewind to this time</a></div>
+</div>
+<div id="pv8" popover class="sheet ground-ink" aria-label="Balance check">
+  <div class="sheet__head"><h2 class="sheet__t">Balance check</h2>
+    <button class="icon-btn" popovertarget="pv8" popovertargetaction="hide" aria-label="Close"><svg class="ico"><use href="#i-close"/></svg></button></div>
+  <dl class="kv"><dt>Status</dt><dd><span class="dot" data-status="age"></span>age only</dd><dt>As of</dt><dd>15 Oct 2026, 03:59 UTC</dd><dt>Age</dt><dd>2.3 days</dd><dt>Source</dt><dd>Namada indexer</dd><dt>Balance checked</dt><dd>15 Oct 2026, 03:59 UTC</dd><dt>Staked checked</dt><dd>17 Oct 2026, 11:10 UTC</dd><dt>Technical name</dt><dd><span class="mono">Namada indexer (indexer.namada.net)</span></dd></dl>
+  <div class="sheet__foot"><a class="btn btn--secondary" href="#">Rewind to this time</a></div>
+</div>
+<div id="pv9" popover class="sheet ground-ink" aria-label="Balance check">
+  <div class="sheet__head"><h2 class="sheet__t">Balance check</h2>
+    <button class="icon-btn" popovertarget="pv9" popovertargetaction="hide" aria-label="Close"><svg class="ico"><use href="#i-close"/></svg></button></div>
+  <dl class="kv"><dt>Status</dt><dd><span class="dot" data-status="age"></span>age only</dd><dt>As of</dt><dd>15 Oct 2026, 03:59 UTC</dd><dt>Age</dt><dd>2.3 days</dd><dt>Source</dt><dd>Namada indexer</dd><dt>Balance checked</dt><dd>15 Oct 2026, 03:59 UTC</dd><dt>Staked checked</dt><dd>17 Oct 2026, 11:12 UTC</dd><dt>Technical name</dt><dd><span class="mono">Namada indexer (indexer.namada.net)</span></dd></dl>
+  <div class="sheet__foot"><a class="btn btn--secondary" href="#">Rewind to this time</a></div>
+</div>
+<div id="pv10" popover class="sheet ground-ink" aria-label="Balance check">
+  <div class="sheet__head"><h2 class="sheet__t">Balance check</h2>
+    <button class="icon-btn" popovertarget="pv10" popovertargetaction="hide" aria-label="Close"><svg class="ico"><use href="#i-close"/></svg></button></div>
+  <dl class="kv"><dt>Status</dt><dd><span class="dot" data-status="age"></span>age only</dd><dt>As of</dt><dd>15 Oct 2026, 03:59 UTC</dd><dt>Age</dt><dd>2.3 days</dd><dt>Source</dt><dd>Namada indexer</dd><dt>Balance checked</dt><dd>15 Oct 2026, 03:59 UTC</dd><dt>Staked checked</dt><dd>17 Oct 2026, 11:24 UTC</dd><dt>Technical name</dt><dd><span class="mono">Namada indexer (indexer.namada.net)</span></dd></dl>
+  <div class="sheet__foot"><a class="btn btn--secondary" href="#">Rewind to this time</a></div>
+</div>
+<div id="pv11" popover class="sheet ground-ink" aria-label="Balance check">
+  <div class="sheet__head"><h2 class="sheet__t">Balance check</h2>
+    <button class="icon-btn" popovertarget="pv11" popovertargetaction="hide" aria-label="Close"><svg class="ico"><use href="#i-close"/></svg></button></div>
+  <dl class="kv"><dt>Status</dt><dd><span class="dot" data-status="age"></span>age only</dd><dt>As of</dt><dd>15 Oct 2026, 03:59 UTC</dd><dt>Age</dt><dd>2.3 days</dd><dt>Source</dt><dd>Namada indexer</dd><dt>Balance checked</dt><dd>15 Oct 2026, 03:59 UTC</dd><dt>Staked checked</dt><dd>17 Oct 2026, 11:17 UTC</dd><dt>Technical name</dt><dd><span class="mono">Namada indexer (indexer.namada.net)</span></dd></dl>
+  <div class="sheet__foot"><a class="btn btn--secondary" href="#">Rewind to this time</a></div>
+</div>
+<div id="pv12" popover class="sheet ground-ink" aria-label="NAM price">
+  <div class="sheet__head"><h2 class="sheet__t">NAM price</h2>
+    <button class="icon-btn" popovertarget="pv12" popovertargetaction="hide" aria-label="Close"><svg class="ico"><use href="#i-close"/></svg></button></div>
+  <dl class="kv"><dt>Status</dt><dd><span class="dot" data-status="fresh"></span>fresh</dd><dt>As of</dt><dd>17 Oct 2026, 11:24 UTC</dd><dt>Age</dt><dd>just now</dd><dt>Source</dt><dd>Osmosis quote</dd><dt>Technical name</dt><dd><span class="mono">Osmosis SQS</span></dd></dl>
+  <div class="sheet__foot"><a class="btn btn--secondary" href="#">Rewind to this time</a></div>
+</div>
+<div id="pv13" popover class="sheet ground-ink" aria-label="NAM held at the bridge matches NAM on Osmosis">
+  <div class="sheet__head"><h2 class="sheet__t">NAM held at the bridge matches NAM on Osmosis</h2>
+    <button class="icon-btn" popovertarget="pv13" popovertargetaction="hide" aria-label="Close"><svg class="ico"><use href="#i-close"/></svg></button></div>
+  <dl class="kv"><dt>Status</dt><dd><span class="dot" data-status="fresh"></span>fresh</dd><dt>As of</dt><dd>17 Oct 2026, 11:24 UTC</dd><dt>Age</dt><dd>10 s</dd><dt>Source</dt><dd>Cross-check</dd><dt>Technical name</dt><dd><span class="mono">cross-check</span></dd></dl>
+  <div class="sheet__foot"><a class="btn btn--secondary" href="#">Rewind to this time</a></div>
+</div>
+<div id="pv14" popover class="sheet ground-ink" aria-label="Two Namada nodes agree on the latest block">
+  <div class="sheet__head"><h2 class="sheet__t">Two Namada nodes agree on the latest block</h2>
+    <button class="icon-btn" popovertarget="pv14" popovertargetaction="hide" aria-label="Close"><svg class="ico"><use href="#i-close"/></svg></button></div>
+  <dl class="kv"><dt>Status</dt><dd><span class="dot" data-status="fresh"></span>fresh</dd><dt>As of</dt><dd>17 Oct 2026, 11:24 UTC</dd><dt>Age</dt><dd>10 s</dd><dt>Source</dt><dd>Cross-check</dd><dt>Technical name</dt><dd><span class="mono">cross-check</span></dd></dl>
+  <div class="sheet__foot"><a class="btn btn--secondary" href="#">Rewind to this time</a></div>
+</div>
+<div id="pv15" popover class="sheet ground-ink" aria-label="Staked and escrowed NAM never exceed what exists">
+  <div class="sheet__head"><h2 class="sheet__t">Staked and escrowed NAM never exceed what exists</h2>
+    <button class="icon-btn" popovertarget="pv15" popovertargetaction="hide" aria-label="Close"><svg class="ico"><use href="#i-close"/></svg></button></div>
+  <dl class="kv"><dt>Status</dt><dd><span class="dot" data-status="fresh"></span>fresh</dd><dt>As of</dt><dd>17 Oct 2026, 11:24 UTC</dd><dt>Age</dt><dd>10 s</dd><dt>Source</dt><dd>Cross-check</dd><dt>Technical name</dt><dd><span class="mono">cross-check</span></dd></dl>
+  <div class="sheet__foot"><a class="btn btn--secondary" href="#">Rewind to this time</a></div>
+</div>
+<div id="pv16" popover class="sheet ground-ink" aria-label="The indexer keeps up with the chain">
+  <div class="sheet__head"><h2 class="sheet__t">The indexer keeps up with the chain</h2>
+    <button class="icon-btn" popovertarget="pv16" popovertargetaction="hide" aria-label="Close"><svg class="ico"><use href="#i-close"/></svg></button></div>
+  <dl class="kv"><dt>Status</dt><dd><span class="dot" data-status="fresh"></span>fresh</dd><dt>As of</dt><dd>17 Oct 2026, 11:24 UTC</dd><dt>Age</dt><dd>10 s</dd><dt>Source</dt><dd>Cross-check</dd><dt>Technical name</dt><dd><span class="mono">cross-check</span></dd></dl>
+  <div class="sheet__foot"><a class="btn btn--secondary" href="#">Rewind to this time</a></div>
+</div>
+<div id="pv17" popover class="sheet ground-ink" aria-label="Total supply is the same in two sources">
+  <div class="sheet__head"><h2 class="sheet__t">Total supply is the same in two sources</h2>
+    <button class="icon-btn" popovertarget="pv17" popovertargetaction="hide" aria-label="Close"><svg class="ico"><use href="#i-close"/></svg></button></div>
+  <dl class="kv"><dt>Status</dt><dd><span class="dot" data-status="fresh"></span>fresh</dd><dt>As of</dt><dd>17 Oct 2026, 11:24 UTC</dd><dt>Age</dt><dd>10 s</dd><dt>Source</dt><dd>Cross-check</dd><dt>Technical name</dt><dd><span class="mono">cross-check</span></dd></dl>
+  <div class="sheet__foot"><a class="btn btn--secondary" href="#">Rewind to this time</a></div>
+</div>
+<div id="pv18" popover class="sheet ground-ink" aria-label="The quoted price matches what trades paid">
+  <div class="sheet__head"><h2 class="sheet__t">The quoted price matches what trades paid</h2>
+    <button class="icon-btn" popovertarget="pv18" popovertargetaction="hide" aria-label="Close"><svg class="ico"><use href="#i-close"/></svg></button></div>
+  <dl class="kv"><dt>Status</dt><dd><span class="dot" data-status="fresh"></span>fresh</dd><dt>As of</dt><dd>17 Oct 2026, 11:24 UTC</dd><dt>Age</dt><dd>10 s</dd><dt>Source</dt><dd>Cross-check</dd><dt>Technical name</dt><dd><span class="mono">cross-check</span></dd></dl>
+  <div class="sheet__foot"><a class="btn btn--secondary" href="#">Rewind to this time</a></div>
+</div>
+<div id="pv19" popover class="sheet ground-ink" aria-label="Staked NAM adds up address by address">
+  <div class="sheet__head"><h2 class="sheet__t">Staked NAM adds up address by address</h2>
+    <button class="icon-btn" popovertarget="pv19" popovertargetaction="hide" aria-label="Close"><svg class="ico"><use href="#i-close"/></svg></button></div>
+  <dl class="kv"><dt>Status</dt><dd><span class="dot" data-status="fresh"></span>fresh</dd><dt>As of</dt><dd>17 Oct 2026, 11:24 UTC</dd><dt>Age</dt><dd>10 s</dd><dt>Source</dt><dd>Cross-check</dd><dt>Technical name</dt><dd><span class="mono">cross-check</span></dd></dl>
+  <div class="sheet__foot"><a class="btn btn--secondary" href="#">Rewind to this time</a></div>
+</div>
+<script>
+(function(){var hl=document.querySelector('.hl'),b=hl.querySelector('.badge'),n=hl.querySelector('.hl__n'),go=hl.querySelector('.filters .btn--primary');function upd(){var c=0;if(hl.querySelector('#ch-osmosis').checked)c++;var all=hl.querySelector('#ct-all');if(!all.checked)c++;b.hidden=!c;b.textContent=c;var v=hl.querySelectorAll('.hrow'),k=0;v.forEach(function(r){if(r.offsetParent!==null)k++});n.textContent=k;if(go)go.textContent='Show '+k+' holder'+(k===1?'':'s')}
+hl.addEventListener('change',upd);upd()})();
+</script>
+</body>
+</html>

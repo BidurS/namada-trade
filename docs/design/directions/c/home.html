@@ -1,0 +1,1234 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>namada.trade — NAM, with receipts.</title>
+<meta name="description" content="The price of NAM, who holds it, who might sell it and how much is shielded. Every figure shows its source and age.">
+<meta name="color-scheme" content="light dark">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@400;500;600&family=JetBrains+Mono:wght@400;500;600;700&display=swap">
+<link rel="stylesheet" href="tokens.css">
+<style>
+/* ==========================================================================
+   Direction C: Paper and receipts. Components. Inlined into every page by build.mjs.
+   Mobile first: base rules are the 375 px layout; 640 / 1024 widen it.
+   Radius is 0 everywhere. No card nests inside another.
+   ========================================================================== */
+
+*, *::before, *::after { box-sizing: border-box; }
+html { -webkit-text-size-adjust: 100%; text-size-adjust: 100%; scroll-padding-top: calc(var(--header-h) + 12px); }
+body {
+  margin: 0; background: var(--bg); color: var(--ink);
+  font: 400 var(--t-15)/var(--lh-15) var(--font-sans);
+  -webkit-font-smoothing: antialiased; text-rendering: optimizeLegibility;
+  padding-bottom: calc(var(--tabbar-h) + env(safe-area-inset-bottom));
+}
+h1, h2, h3, p, dl, dd, ul, ol, figure { margin: 0; padding: 0; }
+ul, ol { list-style: none; }
+a { color: inherit; }
+button { font: inherit; color: inherit; cursor: pointer; }
+svg { display: block; }
+[hidden] { display: none !important; }
+:focus-visible { outline: 2px solid var(--focus); outline-offset: 2px; }
+.skip { position: absolute; left: -999px; top: 0; z-index: 100; background: var(--accent); color: var(--accent-ink); padding: 12px 16px; font: 600 var(--t-13)/20px var(--font-mono); }
+.skip:focus { left: 8px; top: 8px; }
+.sr-only { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; }
+.wrap { width: 100%; max-width: var(--max); margin-inline: auto; padding-inline: var(--gutter); }
+.g { width: 12px; height: 12px; flex: none; }
+.ico { width: 20px; height: 20px; flex: none; }
+.arr { width: 14px; height: 14px; flex: none; }
+.u { font: 400 var(--t-12)/var(--lh-12) var(--font-mono); color: var(--ink-2); margin-left: 4px; }
+.addr { font-family: var(--font-mono); font-size: var(--t-13); overflow-wrap: anywhere; }
+
+/* ---- Provenance: ambient. The underline is the freshness. ------------------ */
+.n { position: relative; font-family: var(--font-mono); font-variant-numeric: tabular-nums; font-feature-settings: "tnum" 1;
+     text-decoration-line: underline; text-decoration-style: solid; text-decoration-thickness: 1px; text-underline-offset: .26em; text-decoration-color: var(--u-fresh);
+     cursor: help; }
+.n[data-s="old"] { text-decoration-style: dotted; text-decoration-thickness: 1.5px; text-decoration-color: var(--u-old); color: var(--ink-2); }
+.n[data-s="conflict"] { text-decoration-style: wavy; text-decoration-thickness: 1px; text-decoration-color: var(--u-conflict); text-underline-offset: .3em; }
+.n[data-s="none"] { text-decoration-style: dashed; text-decoration-color: var(--u-none); color: var(--ink-2); }
+.n .age, .age { font: 400 var(--t-12)/var(--lh-12) var(--font-mono); color: var(--ink-2); margin-left: 4px; }
+.n:focus-visible { outline-offset: 3px; }
+.nokey { cursor: default; }
+
+/* The tap receipt: source, state, time, age. Fixed above the tab bar on phones, anchored on desktop. */
+.n[data-prov]:is(:focus, :hover)::after, .px[data-prov]:is(:focus-visible)::after {
+  content: attr(data-prov);
+  position: fixed; left: 16px; right: 16px; bottom: calc(var(--tabbar-h) + env(safe-area-inset-bottom) + 8px); z-index: 70;
+  background: var(--ink); color: var(--bg); padding: 10px 12px; text-decoration: none; white-space: normal;
+  font: 400 var(--t-12)/var(--lh-12) var(--font-mono); letter-spacing: 0; font-weight: 400; text-align: left;
+  border-left: 4px solid var(--accent); box-shadow: var(--elev-pop);
+  animation: rise var(--d-2) var(--ease-out) both;
+}
+@media (hover: none) { .n:hover:not(:focus)::after { content: none; } }
+
+.stub { display: flex; flex-wrap: wrap; align-items: baseline; gap: 2px 8px; margin-top: var(--s-4); padding-top: var(--s-2);
+        border-top: 1px dashed var(--line-strong); font: 400 var(--t-12)/var(--lh-12) var(--font-mono); color: var(--ink-2); }
+.stub .g { align-self: center; color: var(--ink); }
+.stub[data-s="old"] .g { color: var(--warn); }
+.stub[data-s="conflict"] .g { color: var(--bad); }
+.stub-k { font-weight: 600; color: var(--ink); }
+.stub-t i { font-style: normal; color: var(--ink-3); padding: 0 2px; }
+.stub-s { font-weight: 600; color: var(--ink); }
+.stub-s::before { content: "\00b7"; margin: 0 6px 0 4px; color: var(--ink-3); font-weight: 400; }
+.stub[data-s="old"] .stub-s { color: var(--warn); }
+.stub[data-s="conflict"] .stub-s { color: var(--bad); }
+
+/* ---- Header --------------------------------------------------------------- */
+.hdr { position: sticky; top: 0; z-index: 40; background: var(--bg); border-bottom: 1px solid var(--ink); }
+.hdr-in { display: flex; align-items: center; gap: 12px; height: var(--header-h); }
+.brand { display: flex; align-items: center; gap: 8px; text-decoration: none; color: var(--ink); font: 700 var(--t-12)/16px var(--font-mono); letter-spacing: -.01em; min-height: 44px; }
+.brand i { font-style: normal; font-weight: 500; color: var(--ink-2); }
+.brand-t { white-space: nowrap; }
+.mark { width: 28px; height: 28px; flex: none; color: var(--ink); overflow: visible; }
+.mk-hl { fill: var(--accent); }
+.hdr-r { margin-left: auto; display: flex; align-items: center; gap: 4px; min-width: 0; }
+.px { display: flex; align-items: baseline; gap: 6px; text-decoration: none; white-space: nowrap; font: 600 var(--t-13)/20px var(--font-mono); min-height: 44px; align-items: center; padding: 0 4px; }
+.px-l { display: none; font-weight: 400; color: var(--ink-2); }
+.px-n { text-decoration: underline solid var(--u-fresh) 1px; text-underline-offset: .26em; font-variant-numeric: tabular-nums; }
+.px[data-s="old"] .px-n { text-decoration: underline dotted var(--u-old) 1.5px; }
+.px[data-s="conflict"] .px-n { text-decoration: underline wavy var(--u-conflict) 1px; }
+.px-d { font-weight: 500; }
+.chk { display: none; align-items: center; gap: 6px; min-height: 44px; padding: 0 8px; font: 500 var(--t-12)/16px var(--font-mono); color: var(--ink-2); text-decoration: none; }
+.chk .g { color: var(--ink); }
+.ibtn { display: grid; place-items: center; width: 44px; height: 44px; color: var(--ink); text-decoration: none; background: none; border: 0; }
+.topnav { display: none; }
+
+/* ---- Tab bar (phones and tablets) ------------------------------------------ */
+.tabbar { position: fixed; left: 0; right: 0; bottom: 0; z-index: 45; display: grid; grid-template-columns: repeat(5, 1fr);
+          height: calc(var(--tabbar-h) + env(safe-area-inset-bottom)); padding-bottom: env(safe-area-inset-bottom);
+          background: var(--bg); border-top: 1px solid var(--ink); }
+.tb { display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 2px; min-height: var(--tabbar-h); color: var(--ink-2); text-decoration: none; font: 500 var(--t-11)/var(--lh-11) var(--font-mono); }
+.tb span { padding: 0 3px; }
+.tb[aria-current="page"] { color: var(--ink); }
+.tb[aria-current="page"] span { background: var(--marker); font-weight: 700; }
+
+.sheet { position: fixed; inset: 0; z-index: 60; display: none; }
+.sheet:target { display: block; }
+.sheet-scrim { position: absolute; inset: 0; background: var(--scrim); animation: fade var(--d-2) var(--ease-out) both; }
+.sheet-body { position: absolute; left: 0; right: 0; bottom: 0; max-height: calc(100dvh - 16px); overflow: auto; overscroll-behavior: contain;
+              background: var(--bg); border-top: 2px solid var(--ink); box-shadow: var(--elev-sheet); padding-bottom: env(safe-area-inset-bottom);
+              animation: rise16 var(--d-3) var(--ease-out) both; }
+.sheet-h { display: flex; align-items: center; justify-content: space-between; padding: 0 var(--s-2) 0 var(--gutter); min-height: 52px; border-bottom: 1px solid var(--line); }
+.sheet-t { font: 700 var(--t-13)/20px var(--font-mono); }
+.mi { display: grid; gap: 2px; padding: 12px var(--gutter); min-height: 56px; text-decoration: none; border-bottom: 1px solid var(--line); }
+.mi-t { font: 600 var(--t-15)/22px var(--font-mono); letter-spacing: -.01em; }
+.mi-d { font-size: var(--t-13); line-height: 18px; color: var(--ink-2); }
+.mi:hover { background: var(--surface-2); }
+.sheet-f { padding: 12px var(--gutter) 16px; font: 400 var(--t-12)/16px var(--font-mono); color: var(--ink-2); }
+
+/* ---- Sections and type ------------------------------------------------------ */
+.sec { padding-block: var(--sec-gap); border-top: 1px solid var(--ink); }
+.sec:first-child { border-top: 0; }
+h2 { font: 600 var(--t-20)/var(--lh-20) var(--font-mono); letter-spacing: var(--tr-20); margin-bottom: var(--s-3); text-wrap: balance; }
+.h3, h3 { font: 600 var(--t-15)/var(--lh-15) var(--font-mono); letter-spacing: -.01em; }
+.h3 { margin: var(--s-5) 0 var(--s-2); }
+.lead { color: var(--ink-2); max-width: 62ch; margin-bottom: var(--s-5); }
+.lead .n, .sub .n { color: var(--ink); }
+.lead .n[data-s="old"] { color: var(--ink-2); }
+.fine { font-size: var(--t-13); line-height: 18px; color: var(--ink-2); margin-top: var(--s-3); max-width: 70ch; }
+.more-l { margin-top: var(--s-3); }
+.more-l a, .slip-more { display: inline-flex; align-items: center; gap: 6px; min-height: 44px; font: 600 var(--t-13)/20px var(--font-mono); color: var(--ink); text-decoration: underline; text-underline-offset: .3em; text-decoration-thickness: 1px; }
+.hl { background: var(--marker); padding: 0 .08em; margin: 0 -.08em; -webkit-box-decoration-break: clone; box-decoration-break: clone; }
+
+/* ---- Buttons, segmented, chips, fields -------------------------------------- */
+.btn { display: inline-flex; align-items: center; justify-content: center; gap: 8px; min-height: 48px; padding: 0 12px; background: transparent; color: var(--ink);
+       border: 1px solid var(--ink); font: 600 var(--t-13)/20px var(--font-mono); text-decoration: none; transition: background var(--d-1) var(--ease-std), color var(--d-1) var(--ease-std); }
+.btn:hover { background: var(--ink); color: var(--bg); }
+.btn-primary { background: var(--accent); color: var(--accent-ink); }
+.btn-primary:hover { background: var(--ink); color: var(--accent); }
+.btn:active { transform: translateY(1px); }
+.btn[disabled] { color: var(--ink-3); border-color: var(--line-strong); border-style: dashed; cursor: not-allowed; background: transparent; }
+.seg { display: grid; grid-template-columns: 1fr 1fr; border: 1px solid var(--ink); }
+.seg-b { min-height: 48px; padding: 0 20px; background: transparent; border: 0; color: var(--ink); font: 600 var(--t-13)/20px var(--font-mono); transition: background var(--d-1) var(--ease-std), color var(--d-1) var(--ease-std); }
+.seg-b + .seg-b { border-left: 1px solid var(--ink); }
+.seg-b[aria-pressed="true"] { background: var(--ink); color: var(--bg); }
+.seg--sm { display: inline-grid; grid-template-columns: auto auto; align-self: start; }
+.seg--sm .seg-b { min-height: 44px; }
+.chips { display: flex; gap: 8px; overflow-x: auto; scrollbar-width: none; padding: 2px 24px 2px 0; -webkit-mask-image: linear-gradient(90deg, #000 calc(100% - 28px), transparent); mask-image: linear-gradient(90deg, #000 calc(100% - 28px), transparent); }
+.chips::-webkit-scrollbar { display: none; }
+.chip { flex: none; min-height: 44px; min-width: 44px; padding: 0 14px; display: inline-flex; align-items: center; gap: 6px; background: transparent; border: 1px solid var(--line-strong); color: var(--ink); font: 500 var(--t-13)/20px var(--font-mono); transition: background var(--d-1) var(--ease-std), color var(--d-1) var(--ease-std); }
+.chip:hover { border-color: var(--ink); }
+.chip.on, .chip[aria-pressed="true"] { background: var(--ink); border-color: var(--ink); color: var(--bg); }
+.chip .cn { font-weight: 400; color: inherit; opacity: .75; }
+.field label { display: block; font: 500 var(--t-12)/var(--lh-12) var(--font-mono); color: var(--ink-2); margin-bottom: 6px; }
+.field-in { display: flex; align-items: center; border: 1px solid var(--ink); background: var(--surface); }
+.field-in:focus-within { outline: 2px solid var(--focus); outline-offset: 2px; }
+.inp { flex: 1; min-width: 0; height: 56px; padding: 0 16px; border: 0; background: transparent; color: var(--ink); font: 600 var(--t-24)/30px var(--font-mono); letter-spacing: -.02em; font-variant-numeric: tabular-nums; }
+.inp:focus { outline: none; }
+.field-u { padding-right: 16px; font: 400 var(--t-13)/20px var(--font-mono); color: var(--ink-2); }
+.field-h { font-size: var(--t-13); line-height: 18px; color: var(--ink-2); margin-top: 6px; }
+
+.rwrap { position: relative; }
+.range { -webkit-appearance: none; appearance: none; position: relative; z-index: 1; display: block; width: 100%; height: 44px; margin: 0; background: transparent; }
+.range::-webkit-slider-runnable-track { height: 2px; background: var(--ink); }
+.range::-moz-range-track { height: 2px; background: var(--ink); }
+.range::-webkit-slider-thumb { -webkit-appearance: none; width: 22px; height: 32px; margin-top: -15px; background: var(--accent); border: 2px solid var(--ink); border-radius: 0; }
+.range::-moz-range-thumb { width: 18px; height: 28px; background: var(--accent); border: 2px solid var(--ink); border-radius: 0; }
+.range:focus-visible { outline: none; }
+.range:focus-visible::-webkit-slider-thumb { outline: 2px solid var(--focus); outline-offset: 2px; }
+.rticks { position: absolute; left: 11px; right: 11px; top: 0; bottom: 0; pointer-events: none; }
+.rticks i { position: absolute; top: 50%; width: 1px; height: 12px; margin: -6px 0 0 -.5px; background: var(--ink); }
+
+/* ---- Tags: glyph + word, colour is secondary ----------------------------------- */
+.tag { --tc: var(--ink-2); display: inline-flex; align-items: center; gap: 5px; height: 22px; padding: 0 7px 0 6px; border: 1px solid currentColor; color: var(--tc); background: transparent; white-space: nowrap;
+       font: 500 var(--t-12)/16px var(--font-mono); }
+.tag .g { width: 10px; height: 10px; }
+.tag[data-k="buy"] { --tc: var(--buy); }
+.tag[data-k="sell"] { --tc: var(--sell); }
+.tag[data-k="bridged"] { --tc: var(--ibc); }
+.tag[data-k="shieldout"], .tag[data-k="shieldin"] { --tc: var(--shield); }
+.tag[data-k="staked"], .tag[data-k="unstaking"], .tag[data-k="unlocked"] { --tc: var(--pos); }
+.kind { display: inline-block; padding: 1px 6px; border: 1px solid var(--line-strong); font: 400 var(--t-12)/16px var(--font-mono); color: var(--ink-2); white-space: nowrap; }
+.kindw { font: 400 var(--t-14, 14px)/20px var(--font-sans); }
+
+/* ---- Notices --------------------------------------------------------------------- */
+.note { display: flex; gap: 10px; align-items: flex-start; padding: 12px 14px; border-left: 3px solid var(--line-strong); background: var(--surface-2); font-size: var(--t-13); line-height: 19px; margin-top: var(--s-4); }
+.note .g { margin-top: 4px; }
+.note b { font-weight: 600; }
+.note[data-tone="warn"] { border-left-color: var(--warn); }
+.note[data-tone="warn"] .g { color: var(--warn); }
+.note .n { color: var(--ink); }
+
+/* ---- Home hero --------------------------------------------------------------------- */
+.hero { display: grid; gap: var(--s-6); padding-block: var(--s-6) var(--s-6); }
+.eyebrow { font: 500 var(--t-11)/var(--lh-11) var(--font-mono); letter-spacing: var(--tr-eyebrow); text-transform: uppercase; color: var(--ink-2); margin-bottom: var(--s-4); }
+h1 { font: 700 var(--t-32)/var(--lh-32) var(--font-mono); letter-spacing: var(--tr-32); margin-bottom: var(--s-4); text-wrap: balance; }
+.sub { color: var(--ink-2); max-width: 48ch; }
+.hero .sub { margin-bottom: var(--s-6); }
+.price-blk { margin-bottom: var(--s-5); }
+.lbl { font: 400 var(--t-12)/var(--lh-12) var(--font-mono); color: var(--ink-2); margin-bottom: var(--s-1); }
+.price { font: 700 var(--t-display)/1 var(--font-mono); letter-spacing: var(--tr-display); white-space: nowrap; margin-left: -.04em; }
+.price .n.big { text-decoration-thickness: max(2px, .035em); text-underline-offset: .12em; cursor: help; }
+.price .n.big[data-s="old"] { text-decoration-thickness: max(2px, .035em); }
+.pmeta { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 12px; margin-top: var(--s-3); font: 400 var(--t-13)/20px var(--font-mono); }
+.chg { font-weight: 700; }
+.stamp { display: inline-flex; align-items: center; gap: 6px; padding: 2px 8px; border: 1px solid var(--ink); font: 400 var(--t-12)/16px var(--font-mono); transform: rotate(-1.2deg); transform-origin: left center; }
+.stamp .g { color: var(--ink); }
+.actions { display: grid; grid-template-columns: 1fr auto; gap: var(--s-2); margin-bottom: var(--s-6); }
+.facts { display: grid; grid-template-columns: auto auto auto; justify-content: space-between; border-top: 1px solid var(--ink); }
+.facts > div { display: flex; flex-direction: column-reverse; padding: var(--s-3) 0 0; white-space: nowrap; }
+.facts > div + div { padding-left: var(--s-3); border-left: 1px solid var(--line); }
+.facts dd { font: 600 var(--t-18)/var(--lh-18) var(--font-mono); letter-spacing: -.02em; }
+.facts dt { font: 400 var(--t-12)/var(--lh-12) var(--font-mono); color: var(--ink-2); }
+
+/* ---- The slip: receipts only. One lifted object per screen region. ------------------- */
+.slip { position: relative; margin-bottom: 12px; padding: var(--s-4) var(--s-4) var(--s-3); background: var(--surface); border: 1px solid var(--line); border-top: 2px solid var(--ink); border-bottom: 0; box-shadow: var(--elev-slip); }
+.slip::after { content: ""; position: absolute; left: -1px; right: -1px; top: 100%; height: 8px; margin-top: -1px; background: var(--zig) repeat-x left top / 14px 8px; }
+.slip-h { display: flex; flex-wrap: wrap; align-items: baseline; justify-content: space-between; gap: 2px 12px; margin-bottom: var(--s-2); }
+.slip-t { font: 700 var(--t-15)/var(--lh-15) var(--font-mono); letter-spacing: -.01em; margin: 0; }
+.slip-s { font: 400 var(--t-12)/var(--lh-12) var(--font-mono); color: var(--ink-2); }
+.rcpts { counter-reset: rc; }
+.rc { display: grid; grid-template-columns: 22px minmax(0, 1fr) auto; grid-template-areas: "no tag amt" "no who who"; column-gap: 10px; row-gap: 4px; align-items: center;
+      padding: 10px 0; min-height: var(--row-h); border-top: 1px dashed var(--line-strong); animation: print var(--d-3) var(--ease-print) both; animation-delay: calc(var(--i) * var(--d-print)); }
+.rc:first-child { border-top: 0; }
+.rc-no { grid-area: no; align-self: start; padding-top: 4px; font: 400 var(--t-11)/var(--lh-11) var(--font-mono); color: var(--ink-3); }
+.rc-tag { grid-area: tag; justify-self: start; }
+.rc-amt { grid-area: amt; text-align: right; white-space: nowrap; font: 600 var(--t-15)/20px var(--font-mono); letter-spacing: -.01em; }
+.rc-who { grid-area: who; min-width: 0; font-size: var(--t-13); line-height: 18px; color: var(--ink-2); }
+.rc-who .a-i { font: 400 var(--t-12)/16px var(--font-mono); }
+.rc-d { font-size: var(--t-13); }
+.rc-age { display: none; grid-area: age; text-align: right; white-space: nowrap; font: 400 var(--t-12)/var(--lh-12) var(--font-mono); color: var(--ink-2); }
+.rc-lg { display: none; }
+.slip .stub { margin-top: var(--s-2); }
+.slip .slip-more { margin-top: var(--s-1); }
+
+/* ---- Leaders: dotted rows, like a till receipt ----------------------------------------- */
+.lr { display: flex; flex-wrap: wrap; align-items: baseline; gap: 2px 8px; min-height: 40px; padding: 8px 0; }
+.lr dt { display: flex; align-items: center; gap: 8px; flex: 0 0 auto; font-size: var(--t-15); line-height: 22px; }
+.lr dd { flex: 1 1 auto; display: flex; align-items: baseline; justify-content: flex-end; gap: 4px; min-width: 0; white-space: nowrap; font: 600 var(--t-15)/22px var(--font-mono); letter-spacing: -.01em; }
+.lr .dots { flex: 1 1 12px; min-width: 12px; align-self: flex-end; margin-bottom: 6px; border-bottom: 1px dotted var(--line-strong); }
+.lr dd .u { margin-left: 0; }
+.tally .lr + .lr, .rules .lr + .lr { border-top: 0; }
+.cnt { font-size: var(--t-13); color: var(--ink-2); }
+.cnt .n { color: var(--ink); }
+.tally dt { gap: 10px; }
+.rules .lr { min-height: 32px; padding: 4px 0; }
+.rules dt { font-size: var(--t-13); }
+.rules dd { font-size: var(--t-13); }
+.empty { border: 1px dashed var(--line-strong); padding: var(--s-4); margin-bottom: var(--s-5); }
+.empty-t { display: flex; gap: 8px; align-items: flex-start; font: 600 var(--t-15)/22px var(--font-mono); letter-spacing: -.01em; margin-bottom: var(--s-2); }
+.empty-t .g { margin-top: 5px; }
+.empty-s { font-size: var(--t-13); line-height: 19px; color: var(--ink-2); margin-bottom: var(--s-2); }
+
+/* ---- Supply bar ---------------------------------------------------------------------------- */
+.sbar { display: flex; height: 32px; margin: var(--s-4) 0; border: 1px solid var(--ink); background: var(--surface-2); }
+.seg-s { flex: 0 1 var(--w); min-width: 4px; border-right: 1px solid var(--ink); transform-origin: left center; animation: grow var(--d-3) var(--ease-out) both; animation-delay: calc(var(--i) * 80ms); }
+.seg-s:last-child { border-right: 0; }
+.seg-s[data-k="staked"], .sw[data-k="staked"] { background: var(--ink); }
+.seg-s[data-k="pgf"], .sw[data-k="pgf"] { background: repeating-linear-gradient(135deg, var(--ink) 0 1px, var(--bg) 1px 5px); }
+.seg-s[data-k="shielded"], .sw[data-k="shielded"] { background: var(--shielded-fill); }
+.seg-s[data-k="osmosis"], .sw[data-k="osmosis"] { background: var(--accent); }
+.seg-s[data-k="rest"], .sw[data-k="rest"] { background: var(--surface-2); }
+.legend { margin-top: var(--s-2); }
+.lg { display: grid; grid-template-columns: 14px minmax(0, 1fr) auto; grid-template-areas: "sw l p" ". sub sub"; column-gap: 10px; row-gap: 1px; align-items: baseline; padding: 10px 0; border-top: 1px dotted var(--line-strong); }
+.sw { grid-area: sw; width: 14px; height: 14px; border: 1px solid var(--ink); align-self: center; }
+.sw-none { border-style: dashed; border-color: var(--line-strong); }
+.lg-l { grid-area: l; font: 600 var(--t-15)/20px var(--font-sans); }
+.lg-p { grid-area: p; text-align: right; white-space: nowrap; font: 700 var(--t-15)/20px var(--font-mono); }
+.lg-sub { grid-area: sub; font: 500 var(--t-13)/20px var(--font-mono); }
+.lg-n { font: 400 var(--t-12)/var(--lh-12) var(--font-mono); color: var(--ink-2); }
+.lg-tot { border-top: 1px solid var(--ink); margin-top: 4px; }
+.lg-tot .lg-sub, .lg-tot .lg-l { font-weight: 700; }
+
+/* ---- Lists made of grid rows (role=table). Two-line rows on phones, columns from 640. ------ */
+.dl-head { display: none; }
+.dl-row, .hr { position: relative; border-top: 1px solid var(--line); }
+.dl details { border-top: 1px solid var(--line); }
+.dl details > summary { display: flex; align-items: center; justify-content: space-between; text-align: left; gap: 8px; min-height: 48px; cursor: pointer; list-style: none; font: 600 var(--t-13)/20px var(--font-mono); }
+.dl details > summary::-webkit-details-marker { display: none; }
+.dl details > summary .arr { transition: transform var(--d-2) var(--ease-std); }
+.dl details[open] > summary .arr { transform: rotate(90deg); }
+.dl details > summary .n { color: var(--ink); }
+
+.holders .hr { display: grid; grid-template-columns: 24px minmax(0, 1fr) auto; grid-template-areas: "rank who total" "rank who pct" ". meta meta"; column-gap: 12px; row-gap: 2px; align-items: baseline; padding: 12px 0 14px; min-height: var(--row-h); animation: fadeup var(--d-2) var(--ease-out) both; animation-delay: calc(var(--i) * 40ms); }
+.hr .c-rank { grid-area: rank; font: 500 var(--t-12)/20px var(--font-mono); color: var(--ink-2); }
+.hr .c-who { grid-area: who; min-width: 0; display: flex; flex-direction: column; gap: 1px; }
+.hr .nm { font: 600 var(--t-15)/20px var(--font-sans); overflow-wrap: anywhere; }
+.hr .c-who .addr { font-size: var(--t-12); color: var(--ink-2); line-height: 16px; }
+.hr .lk { font: 400 var(--t-12)/16px var(--font-mono); color: var(--ink-2); }
+.hr .c-total { grid-area: total; text-align: right; white-space: nowrap; font: 700 var(--t-15)/20px var(--font-mono); letter-spacing: -.02em; }
+.hr .c-pct { grid-area: pct; text-align: right; white-space: nowrap; font: 500 var(--t-12)/16px var(--font-mono); color: var(--ink-2); }
+.hr .c-pct .n { color: var(--ink); }
+.hr .c-pct::after { content: " of all NAM"; }
+.hr .c-meta { grid-area: meta; display: flex; flex-wrap: wrap; align-items: center; gap: 4px 10px; margin-top: 6px; font: 400 var(--t-12)/16px var(--font-mono); color: var(--ink-2); }
+.hr .c-meta .n { color: var(--ink); }
+.hr .c-meta .n[data-s="old"] { color: var(--ink); }
+.hr .c-stake::before { content: "staked "; color: var(--ink-2); }
+.hr .c-stake .nil { display: none; }
+.hr .c-stake:has(.nil) { display: none; }
+.hr .c-spend { display: none; }
+.hr .c-d7 .flat { display: none; }
+.hr .c-d7:has(.flat) { display: none; }
+.hr .c-pct .bar { display: none; }
+.hr::after { content: ""; position: absolute; left: 36px; bottom: -1px; height: 2px; width: calc((100% - 36px) * var(--sf)); background: var(--ink); transform-origin: left; animation: grow var(--d-3) var(--ease-out) both; animation-delay: calc(var(--i) * 40ms + 120ms); }
+.hr .flat { color: var(--ink-2); }
+.holders .hr:first-of-type { border-top: 1px solid var(--ink); }
+
+.lad { display: grid; grid-template-columns: minmax(0, 1fr) auto; grid-template-areas: "size worth" "get mv"; column-gap: 12px; row-gap: 2px; align-items: baseline; padding: 11px 0 12px; min-height: var(--row-h); cursor: pointer; }
+.lad:hover { background: var(--surface-2); }
+.l-size { grid-area: size; font: 700 var(--t-15)/22px var(--font-mono); letter-spacing: -.02em; }
+.l-worth { grid-area: worth; font: 400 var(--t-13)/20px var(--font-mono); color: var(--ink-2); text-align: right; }
+.l-get { grid-area: get; font: 500 var(--t-13)/20px var(--font-mono); }
+.l-mv { grid-area: mv; text-align: right; font: 500 var(--t-13)/20px var(--font-mono); }
+.lad em { font-style: normal; font: 400 var(--t-12)/16px var(--font-mono); color: var(--ink-2); margin-right: 6px; }
+.lad .l-mv em { display: none; }
+.s-buy { display: none; }
+main[data-side="buy"] .lad .s-buy { display: block; }
+main[data-side="buy"] .lad .s-sell { display: none; }
+.lad.is-on { background: var(--surface-2); }
+.lad.is-on .l-size { background: var(--marker); align-self: start; justify-self: start; padding: 0 4px; margin-left: -4px; }
+.lad:focus-visible { outline-offset: -2px; }
+.dl.ladder { border-top: 1px solid var(--ink); }
+
+.pl { display: grid; grid-template-columns: minmax(0, 1fr) auto auto; grid-template-areas: "pair pair liq" "type fee nam"; column-gap: 12px; row-gap: 2px; align-items: baseline; padding: 11px 0 12px; min-height: var(--row-h); }
+.p-pair { grid-area: pair; font-size: var(--t-15); line-height: 22px; }
+.p-pair b { font-family: var(--font-mono); font-weight: 600; letter-spacing: -.02em; overflow-wrap: anywhere; }
+.p-liq { grid-area: liq; text-align: right; font: 700 var(--t-15)/22px var(--font-mono); }
+.p-type { grid-area: type; font: 400 var(--t-12)/16px var(--font-mono); color: var(--ink-2); }
+.p-type .pid { color: var(--ink-2); }
+.p-fee { grid-area: fee; font: 400 var(--t-12)/16px var(--font-mono); color: var(--ink-2); }
+.p-nam { grid-area: nam; text-align: right; font: 400 var(--t-12)/16px var(--font-mono); color: var(--ink-2); }
+.pools { border-top: 1px solid var(--ink); }
+.pools .p-liq .n, .pools .p-nam .n, .pools .p-fee .n { color: var(--ink); }
+
+/* ---- Explainer plot (curve) and price chart -------------------------------------------------- */
+.drag { margin-top: var(--s-7); padding-top: var(--s-4); border-top: 2px solid var(--ink); }
+.drag-s { font-size: var(--t-13); line-height: 19px; color: var(--ink-2); margin: 4px 0 var(--s-4); max-width: 60ch; }
+.plot { display: grid; grid-template-columns: 40px minmax(0, 1fr); grid-template-rows: 200px 24px; }
+.plot--time { grid-template-rows: 240px 24px; }
+.plot-y { position: relative; }
+.plot-y span { position: absolute; right: 8px; transform: translateY(-50%); font: 500 var(--t-11)/var(--lh-11) var(--font-mono); color: var(--ink-2); white-space: nowrap; }
+.plot-area { position: relative; border-left: 1px solid var(--ink); border-bottom: 1px solid var(--ink); }
+.plot-area svg { position: absolute; inset: 0; width: 100%; height: 100%; overflow: visible; }
+.plot-x { grid-column: 2; position: relative; }
+.plot-x span { position: absolute; top: 6px; transform: translateX(-50%); font: 500 var(--t-11)/var(--lh-11) var(--font-mono); color: var(--ink-2); white-space: nowrap; }
+.plot-x span.first { transform: none; }
+.plot-x span.last { transform: translateX(-100%); }
+.gl { stroke: var(--line); stroke-width: 1; vector-effect: non-scaling-stroke; }
+.ln { fill: none; vector-effect: non-scaling-stroke; stroke-linejoin: miter; }
+.ln-sell { stroke: var(--ink); stroke-width: 2; }
+.ln-buy { stroke: var(--ink-3); stroke-width: 1.5; stroke-dasharray: 5 4; }
+.pd { position: absolute; width: 8px; height: 8px; margin: -4px 0 0 -4px; background: var(--bg); border: 1.5px solid var(--ink); z-index: 2; }
+.pd-buy { border-color: var(--ink-3); }
+.cursor { position: absolute; top: 0; bottom: 0; width: 10px; margin-left: -5px; background: color-mix(in srgb, var(--accent) 80%, transparent); z-index: 1; pointer-events: none; }
+.cursor::before { content: ""; position: absolute; left: 4.5px; top: 0; bottom: 0; width: 1px; background: var(--ink); }
+.cur-dot { position: absolute; left: 50%; width: 12px; height: 12px; margin: -6px 0 0 -6px; background: var(--ink); border: 2px solid var(--accent); z-index: 3; }
+.plot-area .ln-ex { stroke: var(--ink-2); stroke-width: 1.25; }
+.plot-area .ln-q { stroke: var(--ink-3); stroke-width: 1.5; stroke-dasharray: 4 3; }
+.pd-ex { width: 5px; height: 5px; margin: -2.5px 0 0 -2.5px; background: var(--ink); border: 0; }
+.pd-q { border-color: var(--ink-3); }
+.pill { position: absolute; right: 0; margin-top: -30px; z-index: 4; padding: 2px 6px; background: var(--accent); color: var(--accent-ink); border: 1px solid var(--ink); font: 700 var(--t-12)/16px var(--font-mono); }
+.rl { display: flex; justify-content: space-between; align-items: baseline; margin: var(--s-3) 0 0 0; font: 500 var(--t-12)/var(--lh-12) var(--font-mono); color: var(--ink-2); }
+.rl-o { font: 700 var(--t-18)/var(--lh-18) var(--font-mono); letter-spacing: -.02em; color: var(--ink); }
+.drag .rwrap { margin-left: 29px; margin-right: -11px; }
+.readout { display: grid; grid-template-columns: repeat(3, 1fr); margin-top: var(--s-2); border-top: 1px solid var(--ink); }
+.readout > div { display: flex; flex-direction: column-reverse; padding: var(--s-3) var(--s-2) 0 0; }
+.readout > div + div { padding-left: var(--s-3); border-left: 1px solid var(--line); }
+.readout dt { font: 400 var(--t-12)/var(--lh-12) var(--font-mono); color: var(--ink-2); }
+.readout dd { font: 700 var(--t-18)/var(--lh-18) var(--font-mono); letter-spacing: -.02em; }
+.readout .em dd .n { background: var(--marker); }
+.readout dd .u { font-size: var(--t-12); }
+.how { display: flex; gap: 8px; align-items: baseline; margin-top: var(--s-3); font-size: var(--t-13); line-height: 19px; color: var(--ink-2); min-height: 38px; }
+.est { flex: none; padding: 0 6px; border: 1px dashed var(--ink); color: var(--ink); font: 600 var(--t-12)/18px var(--font-mono); }
+.key-l { display: inline-flex; gap: 10px; align-items: center; margin-left: 4px; white-space: nowrap; font-family: var(--font-mono); font-size: var(--t-12); }
+.ln-k { display: inline-block; width: 18px; border-top: 2px solid var(--ink); vertical-align: middle; margin-right: 4px; }
+.ln-k-buy { border-top: 2px dashed var(--ink-3); }
+
+.chart .ch-t { font: 500 var(--t-18)/var(--lh-18) var(--font-sans); letter-spacing: -.01em; text-wrap: balance; }
+.chart .ch-s { font-size: var(--t-13); line-height: 19px; color: var(--ink-2); margin: 4px 0 var(--s-4); max-width: 62ch; }
+.cstats { display: grid; grid-template-columns: repeat(2, 1fr); gap: 0; margin: var(--s-4) 0 0; border-top: 1px solid var(--ink); }
+.cstats > div { display: flex; flex-direction: column-reverse; padding: var(--s-3) var(--s-2) var(--s-3) 0; border-bottom: 1px solid var(--line); }
+.cstats > div:nth-child(even) { padding-left: var(--s-3); border-left: 1px solid var(--line); }
+.cstats dt { font: 400 var(--t-12)/var(--lh-12) var(--font-mono); color: var(--ink-2); }
+.cstats dd { font: 700 var(--t-15)/20px var(--font-mono); letter-spacing: -.02em; }
+.keyrow { display: flex; flex-wrap: wrap; gap: 4px 16px; margin: 6px 0 0 40px; font: 400 var(--t-12)/var(--lh-12) var(--font-mono); color: var(--ink-2); }
+.k { display: inline-block; width: 18px; border-top: 2px solid var(--ink-2); vertical-align: middle; margin-right: 6px; }
+.k-q { border-top: 2px dashed var(--ink-3); }
+.short { display: flex; gap: 6px; align-items: flex-start; margin-top: var(--s-2); font: 400 var(--t-12)/var(--lh-12) var(--font-mono); color: var(--ink-2); }
+.short .g { margin-top: 2px; color: var(--warn); }
+
+/* ---- Home narrative ---------------------------------------------------------------------------- */
+.body-grid { display: block; }
+.rail { display: none; }
+.path li { display: grid; grid-template-columns: 24px minmax(0, 1fr); grid-template-areas: "n b" ". v"; gap: 6px 12px; padding: 14px 0; border-top: 1px solid var(--line); }
+.path li:first-child { border-top: 1px solid var(--ink); }
+.pn { grid-area: n; display: grid; place-items: center; width: 24px; height: 24px; border: 1px solid var(--ink); font: 700 var(--t-12)/16px var(--font-mono); }
+.pb { grid-area: b; }
+.pb h3 { margin-bottom: 2px; }
+.pb p { font-size: var(--t-13); line-height: 19px; color: var(--ink-2); }
+.pb .n { color: var(--ink); }
+.pv { grid-area: v; font: 700 var(--t-15)/20px var(--font-mono); letter-spacing: -.02em; }
+.pv .u { font-weight: 400; }
+.side { margin-top: var(--s-3); padding: 12px 14px; border-left: 3px solid var(--shielded-text); background: var(--surface-2); font-size: var(--t-13); line-height: 19px; }
+.side b { font-weight: 600; color: var(--shielded-text); }
+.ticket-mini { margin-top: var(--s-4); }
+.ticket-mini .lr dd { font-size: var(--t-18); }
+.ticket-mini .v { font: 700 var(--t-18)/22px var(--font-mono); }
+.ticket-mini .btn { width: 100%; margin: var(--s-4) 0; }
+.fallback { font-size: var(--t-13); line-height: 19px; color: var(--ink-2); margin-top: var(--s-3); }
+.fallback .n { color: var(--ink); }
+
+.why { display: grid; gap: var(--s-5); counter-reset: why; }
+.why > li { counter-increment: why; padding-top: var(--s-4); border-top: 1px solid var(--line); }
+.why > li:first-child { border-top: 1px solid var(--ink); }
+.why h3 { font: 500 var(--t-18)/var(--lh-18) var(--font-sans); letter-spacing: -.01em; margin-bottom: 6px; text-wrap: balance; }
+.why h3::before { content: counter(why, decimal-leading-zero); display: block; font: 400 var(--t-11)/var(--lh-11) var(--font-mono); color: var(--ink-3); margin-bottom: 2px; }
+.why p { color: var(--ink-2); max-width: 64ch; }
+.why .lnk a { display: inline-flex; align-items: center; gap: 6px; min-height: 44px; color: var(--ink); font: 600 var(--t-13)/20px var(--font-mono); text-decoration: underline; text-underline-offset: .3em; }
+.why h3 .n { color: var(--ink); }
+.checks { margin-top: var(--s-3); }
+.ck { display: grid; grid-template-columns: 16px minmax(0, 1fr) auto; grid-template-areas: "g t s" ". d d"; gap: 2px 10px; align-items: baseline; padding: 10px 0; border-top: 1px dotted var(--line-strong); }
+.ck .g { grid-area: g; align-self: start; margin-top: 5px; width: 14px; height: 14px; }
+.ck[data-ok="true"] .g { color: var(--good); }
+.ck[data-ok="false"] .g { color: var(--warn); }
+.ck-t { grid-area: t; font-size: var(--t-15); line-height: 20px; font-weight: 500; }
+.ck-d { grid-area: d; font: 400 var(--t-12)/var(--lh-12) var(--font-mono); color: var(--ink-2); }
+.ck-s { grid-area: s; font: 500 var(--t-12)/16px var(--font-mono); }
+.ck[data-ok="false"] .ck-s { color: var(--warn); }
+.why .static { margin-top: 0; padding: var(--s-4); border: 1px dashed var(--line-strong); background: transparent; }
+.why .static .stub { margin-top: var(--s-3); }
+
+/* ---- Footer -------------------------------------------------------------------------------------- */
+.foot { margin-top: var(--s-6); padding: var(--s-6) 0 var(--s-7); border-top: 1px solid var(--ink); }
+.foot .wrap { display: grid; gap: var(--s-6); }
+.foot-h { font: 600 var(--t-13)/20px var(--font-mono); margin-bottom: var(--s-3); }
+.key { display: grid; gap: 8px; font: 400 var(--t-13)/20px var(--font-mono); }
+.key li { display: flex; align-items: baseline; gap: 14px; }
+.key li .n { min-width: 52px; text-align: left; color: var(--ink); }
+.key li .n[data-s="old"] { color: var(--ink-2); }
+.key li span:last-child { color: var(--ink-2); font-size: var(--t-12); }
+.foot-s { font: 400 var(--t-12)/var(--lh-12) var(--font-mono); color: var(--ink-2); margin-top: var(--s-3); }
+.foot-copy p { font-size: var(--t-13); line-height: 19px; color: var(--ink-2); max-width: 64ch; }
+.foot-l { display: flex; flex-wrap: wrap; gap: 0 20px; margin-top: var(--s-3); }
+.foot-l a { display: inline-flex; align-items: center; justify-content: center; min-width: 44px; min-height: 44px; font: 600 var(--t-13)/20px var(--font-mono); color: var(--ink); text-underline-offset: .3em; }
+.foot-t { font: 400 var(--t-12)/var(--lh-12) var(--font-mono) !important; margin-top: var(--s-2); }
+
+/* ---- Trade ------------------------------------------------------------------------------------------ */
+.pg-h { padding: var(--s-5) 0 var(--s-4); }
+.h1-in { font: 700 var(--t-24)/var(--lh-24) var(--font-mono); letter-spacing: var(--tr-24); margin-bottom: var(--s-2); text-wrap: balance; }
+.trade-grid { display: grid; grid-template-columns: minmax(0, 1fr); gap: var(--s-5); padding-bottom: var(--s-4); }
+.ticket { display: grid; grid-template-columns: minmax(0, 1fr); gap: var(--s-4); }
+.ticket .rwrap { margin-top: -8px; }
+.ticket .chips { margin-top: -4px; }
+.get { border-top: 2px solid var(--ink); padding-top: var(--s-4); }
+.get-l { font: 500 var(--t-12)/var(--lh-12) var(--font-mono); color: var(--ink-2); }
+.get-n { font: 700 var(--t-48)/var(--lh-48) var(--font-mono); letter-spacing: var(--tr-48); margin: 2px 0 var(--s-3) -.04em; white-space: nowrap; }
+.get-n .n { text-decoration-thickness: 2px; text-underline-offset: .1em; }
+.get-n .u { font-size: var(--t-15); margin-left: 8px; letter-spacing: 0; }
+.get.is-oor .get-n, .get.is-oor .get-m { opacity: .5; }
+.get-m { display: grid; grid-template-columns: repeat(3, auto); justify-content: space-between; gap: var(--s-3); padding-top: var(--s-3); border-top: 1px solid var(--line); }
+.get-m > div { display: flex; flex-direction: column-reverse; gap: 2px; }
+.get-m dt { font: 400 var(--t-12)/var(--lh-12) var(--font-mono); color: var(--ink-2); }
+.get-m dd { font: 700 var(--t-15)/20px var(--font-mono); letter-spacing: -.02em; }
+.get-m .em dd .n { background: var(--marker); }
+.oor { margin-top: var(--s-3); padding: 8px 10px; border: 1px dashed var(--ink); font: 400 var(--t-12)/16px var(--font-mono); }
+.lower .sec:first-child { border-top: 1px solid var(--ink); }
+.chart { margin-top: var(--s-2); }
+
+/* ---- Holders page ---------------------------------------------------------------------------------- */
+.pg-h--feed { padding-bottom: var(--s-3); }
+.tabs { display: flex; margin-bottom: var(--s-5); border-bottom: 1px solid var(--ink); }
+.tab { display: flex; align-items: center; min-height: 44px; padding: 0 20px 0 0; margin-right: 4px; font: 600 var(--t-13)/20px var(--font-mono); color: var(--ink-2); text-decoration: none; }
+.tab[aria-current="page"] { color: var(--ink); box-shadow: inset 0 -4px 0 var(--accent); padding-right: 12px; }
+.hsum { margin: var(--s-3) 0 var(--s-5); }
+.hsum-b { height: 12px; border: 1px solid var(--ink); background: var(--bg); }
+.hs-fill { display: block; height: 100%; width: var(--w); background: var(--ink); transform-origin: left; animation: grow var(--d-3) var(--ease-out) both; }
+.hsum-d { display: grid; grid-template-columns: auto auto auto; justify-content: space-between; margin-top: var(--s-2); }
+.hsum-d > div { display: flex; flex-direction: column-reverse; padding: var(--s-2) 0 0; white-space: nowrap; }
+.hsum-d > div + div { padding-left: var(--s-3); border-left: 1px solid var(--line); }
+.hsum-d dd { font: 700 var(--t-18)/var(--lh-18) var(--font-mono); letter-spacing: -.02em; }
+.hsum-d dt { font: 400 var(--t-12)/var(--lh-12) var(--font-mono); color: var(--ink-2); }
+.filters { display: grid; gap: var(--s-3); margin-bottom: var(--s-2); }
+.fchips { display: grid; gap: var(--s-2); min-width: 0; }
+.fcount { font: 400 var(--t-12)/var(--lh-12) var(--font-mono); color: var(--ink-2); }
+.fcount .n { color: var(--ink); }
+.empty--filter, .empty--nodata { margin-top: var(--s-4); }
+.loadmore { margin-top: var(--s-4); display: grid; gap: var(--s-2); justify-items: start; }
+
+/* ---- Motion: geometry only. Numbers never animate through intermediate values. ----------------------- */
+@keyframes print { from { clip-path: inset(0 0 100% 0); transform: translateY(-4px); } to { clip-path: inset(0 0 0 0); transform: none; } }
+@keyframes grow { from { transform: scaleX(0); } to { transform: scaleX(1); } }
+@keyframes fade { from { opacity: 0; } to { opacity: 1; } }
+@keyframes fadeup { from { opacity: 0; transform: translateY(4px); } to { opacity: 1; transform: none; } }
+@keyframes rise { from { opacity: 0; transform: translateY(6px); } to { opacity: 1; transform: none; } }
+@keyframes rise16 { from { opacity: 0; transform: translateY(16px); } to { opacity: 1; transform: none; } }
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after { animation: none !important; transition: none !important; }
+  .sheet-body { animation: none; }
+}
+
+/* ======================================================================================================
+   640 and up: tables return, gutters widen
+   ====================================================================================================== */
+@media (min-width: 640px) {
+  .px-l { display: inline; }
+  .brand { font-size: var(--t-13); }
+  .btn { padding: 0 16px; }
+  .actions { grid-template-columns: auto auto; justify-content: start; }
+
+  .dl-head { position: sticky; top: calc(var(--header-h) - 1px); z-index: 5; background: var(--bg); display: grid; align-items: end; padding: 12px 0 8px; border-bottom: 1px solid var(--ink); font: 500 var(--t-12)/var(--lh-12) var(--font-mono); color: var(--ink-2); }
+  .dl-head span:not(:first-child) { text-align: right; }
+  .holders .dl-head span.c-who { text-align: left; }
+  .holders .dl-head, .holders .hr { grid-template-columns: 32px minmax(0, 2.4fr) minmax(0, 1.7fr) minmax(0, 1fr) minmax(0, 1.4fr); column-gap: 16px; }
+  .holders .hr { grid-template-areas: none; align-items: center; padding: 8px 0; min-height: 56px; }
+  .holders .hr > *, .holders .hr .c-meta > * { grid-area: auto; }
+  .hr .c-meta { display: contents; }
+  .hr .c-pct::after, .hr .c-stake::before { content: none; }
+  .hr .c-meta { margin-top: 0; }
+  .hr .c-total, .hr .c-pct, .hr .c-spend, .hr .c-stake, .hr .c-d7, .hr .c-chk { text-align: right; white-space: nowrap; }
+  .hr .c-total { font-size: var(--t-15); color: var(--ink); }
+  .hr .c-kind { text-align: right; }
+  .hr .c-spend, .hr .c-stake, .hr .c-pct, .hr .c-d7, .hr .c-chk { font: 400 var(--t-13)/20px var(--font-mono); color: var(--ink); }
+  .hr .c-d7 .flat, .hr .c-stake .nil { display: inline; color: var(--ink-2); }
+  .hr .c-chk { color: var(--ink-2); font-size: var(--t-12); }
+  .hr .c-pct { position: relative; }
+  .hr .c-pct .bar { display: block; height: 3px; margin: 5px 0 0 auto; width: calc(var(--sf) * 100%); background: var(--ink); transform-origin: right; }
+  .hr::after { display: none; }
+  .holders .hr:hover { background: var(--surface-2); }
+  /* tablet: rank, holder, total, share, checked. The rest return at 1024. */
+  .hr .c-kind, .hr .c-spend, .hr .c-stake, .hr .c-d7, .dl-head .c-kind, .dl-head .c-spend, .dl-head .c-stake, .dl-head .c-d7 { display: none !important; }
+  .hr .c-chk { display: block; }
+
+  .dl.ladder .dl-head, .dl.ladder .lad { grid-template-columns: minmax(0, 1.2fr) repeat(5, minmax(0, 1fr)); column-gap: 16px; }
+  .lad { grid-template-areas: none; align-items: center; padding: 8px 0; min-height: 44px; }
+  .lad > * { grid-area: auto; text-align: right; }
+  .lad > .l-size { text-align: left; }
+  .lad em { display: none; }
+  .s-buy, main[data-side="buy"] .lad .s-sell { display: block; }
+  .lad .l-get.s-buy, .lad .l-get.s-sell, .lad .l-mv { font-size: var(--t-13); }
+  .lad.is-on .l-size { justify-self: start; }
+  .dl-head .s-buy, .dl-head .s-sell { display: block !important; }
+  main[data-side="buy"] .lad .s-sell { display: block; }
+
+  .dl.pools .dl-head, .dl.pools .pl { grid-template-columns: minmax(0, 2fr) minmax(0, 1.4fr) minmax(0, 1fr) minmax(0, 1.4fr) minmax(0, .9fr); column-gap: 16px; }
+  .pl { grid-template-areas: none; align-items: center; padding: 8px 0; min-height: 44px; }
+  .pl > * { grid-area: auto; text-align: right; }
+  .pl > .p-pair, .pl > .p-type { text-align: left; }
+  .pl > .p-type { font-size: var(--t-12); }
+  .pl .p-nam, .pl .p-fee { font-size: var(--t-13); color: var(--ink); }
+  .pl .p-fee .n, .pl .p-nam .n { color: var(--ink); }
+  .dl.pools .dl-head span:nth-child(2) { text-align: left; }
+
+  .path li { grid-template-columns: 24px minmax(0, 1fr) 180px; grid-template-areas: "n b v"; align-items: baseline; }
+  .pv { text-align: right; }
+  .foot .wrap { grid-template-columns: 1fr 1.4fr; }
+  .why { grid-template-columns: repeat(2, minmax(0, 1fr)); column-gap: var(--s-6); align-items: start; }
+  .why > li { grid-column: 1; }
+  .why > li:nth-child(2) { grid-column: 2; grid-row: 1 / span 3; }
+}
+
+/* Tablet only: the tape is wide enough for one-line receipts. At 1024 it sits in a 5-column slot and keeps the phone rows. */
+@media (min-width: 640px) and (max-width: 1023px) {
+  .rc { grid-template-columns: 28px 128px minmax(0, 1fr) auto 96px; grid-template-areas: "no tag who amt age"; padding: 8px 0; min-height: var(--row-h); }
+  .rc-age { display: block; }
+  .rc-who .a-i { display: none; }
+}
+
+/* 768: sections breathe */
+@media (min-width: 768px) {
+  .drag-s { font-size: var(--t-15); line-height: 22px; }
+  .plot { grid-template-rows: 240px 24px; }
+}
+
+/* ======================================================================================================
+   1024 and up: top navigation replaces the tab bar; the hero splits; the rail appears
+   ====================================================================================================== */
+@media (min-width: 1024px) {
+  body { padding-bottom: 0; }
+  .holders:not(.dl--home) .hr .c-kind, .holders:not(.dl--home) .hr .c-spend, .holders:not(.dl--home) .hr .c-stake, .holders:not(.dl--home) .hr .c-d7,
+  .holders:not(.dl--home) .dl-head .c-kind, .holders:not(.dl--home) .dl-head .c-spend, .holders:not(.dl--home) .dl-head .c-stake, .holders:not(.dl--home) .dl-head .c-d7 { display: block !important; }
+  .holders:not(.dl--home) .dl-head, .holders:not(.dl--home) .hr { grid-template-columns: 36px minmax(0, 2fr) minmax(0, 1.4fr) minmax(0, 1fr) minmax(0, 1fr) minmax(0, 1.2fr) minmax(0, 1.4fr) minmax(0, 1fr) minmax(0, 1.3fr); column-gap: 12px; }
+  .dl--home .hr .c-d7, .dl--home .dl-head .c-d7 { display: block !important; }
+  .dl--home .dl-head, .dl--home .hr { grid-template-columns: 36px minmax(0, 2.2fr) minmax(0, 1.5fr) minmax(0, 1fr) minmax(0, 1.1fr) minmax(0, 1.7fr); column-gap: 12px; }
+
+  .tabbar, .sheet { display: none !important; }
+  .chk { display: inline-flex; }
+  .hdr-in { gap: 24px; }
+  .brand { font-size: var(--t-13); }
+  .brand i { font-weight: 500; }
+  .topnav { display: flex; align-self: stretch; gap: 2px; margin-left: 8px; }
+  .tn { position: relative; display: flex; align-items: center; gap: 6px; height: 100%; padding: 0 14px; font: 500 var(--t-13)/20px var(--font-mono); color: var(--ink-2); text-decoration: none; cursor: pointer; list-style: none; }
+  .tn:hover { color: var(--ink); }
+  .tn[aria-current="page"] { color: var(--ink); font-weight: 700; }
+  .tn[aria-current="page"]::after, .more-d[open] > summary::after { content: ""; position: absolute; left: 14px; right: 14px; bottom: -1px; height: 4px; background: var(--accent); }
+  .more-d { position: relative; display: flex; }
+  .more-d > summary::-webkit-details-marker { display: none; }
+  .more-d .caret { width: 12px; height: 12px; transform: rotate(90deg); transition: transform var(--d-2) var(--ease-std); }
+  .more-d[open] .caret { transform: rotate(-90deg); }
+  .more-pop { position: absolute; top: 100%; left: 0; width: 360px; margin-top: 1px; background: var(--bg); border: 1px solid var(--ink); box-shadow: var(--elev-pop); z-index: 50; animation: rise var(--d-2) var(--ease-out) both; }
+  .more-pop .mi { padding: 10px 16px; min-height: 52px; }
+  .more-pop .mi:last-child { border-bottom: 0; }
+  .px { padding: 0 8px; }
+  .n[data-prov]:is(:focus, :hover)::after, .px[data-prov]:is(:focus-visible)::after { position: absolute; left: 0; right: auto; bottom: calc(100% + 8px); width: max-content; max-width: 340px; }
+  .px[data-prov]:is(:focus-visible)::after { top: calc(100% + 4px); bottom: auto; left: auto; right: 0; }
+  .hdr-r { gap: 8px; }
+
+  h2 { font-size: var(--t-24); line-height: var(--lh-24); letter-spacing: var(--tr-24); }
+  h1 { font-size: var(--t-48); line-height: var(--lh-48); letter-spacing: var(--tr-48); }
+  .h1-in { font-size: var(--t-32); line-height: var(--lh-32); letter-spacing: var(--tr-32); }
+  .sub { font-size: var(--t-18); line-height: var(--lh-18); max-width: 44ch; }
+  .lead { font-size: var(--t-18); line-height: var(--lh-18); }
+  .hero { grid-template-columns: minmax(0, 7fr) minmax(0, 5fr); column-gap: var(--s-8); align-items: start; padding-block: var(--s-8) var(--s-7); }
+  .hero-tape { padding-top: 6px; }
+  .rc-lg { display: grid; }
+  .eyebrow { margin-bottom: var(--s-5); }
+  .hero .sub { margin-bottom: var(--s-7); }
+  .price-blk { margin-bottom: var(--s-6); }
+  .actions { margin-bottom: var(--s-7); }
+  .facts dd { font-size: var(--t-24); line-height: var(--lh-24); }
+  .body-grid { display: grid; grid-template-columns: minmax(0, 8fr) minmax(0, 4fr); column-gap: var(--s-8); align-items: start; }
+  .rail { display: block; position: sticky; top: calc(var(--header-h) + 24px); margin-top: var(--sec-gap); }
+  .rail-in { padding-top: var(--s-4); border-top: 2px solid var(--ink); }
+  .rail-t { font: 700 var(--t-13)/20px var(--font-mono); margin-bottom: var(--s-2); }
+  .rn > div { display: flex; flex-wrap: wrap; justify-content: space-between; align-items: baseline; gap: 2px 8px; padding: 10px 0; border-top: 1px dotted var(--line-strong); }
+  .rn dt { font-size: var(--t-13); color: var(--ink-2); }
+  .rn dd { font: 700 var(--t-15)/20px var(--font-mono); letter-spacing: -.02em; white-space: nowrap; }
+  .plot { grid-template-rows: 260px 24px; }
+  .plot--time { grid-template-rows: 340px 24px; }
+  .sec { padding-block: var(--sec-gap); }
+  .lg { grid-template-columns: 14px 230px minmax(0, 1fr) 64px; grid-template-areas: "sw l sub p"; padding: 12px 0; align-items: baseline; }
+  .lg-sub { font-size: var(--t-15); }
+  .sbar { height: 40px; }
+  .trade-grid { grid-template-columns: minmax(0, 5fr) minmax(0, 7fr); column-gap: var(--s-8); align-items: start; padding-bottom: var(--s-7); }
+  .tk-col { position: sticky; top: calc(var(--header-h) + 8px); }
+  .pg-h { padding: var(--s-7) 0 var(--s-5); }
+  .chart { margin-top: var(--s-7); }
+  .chips { flex-wrap: wrap; overflow: visible; padding-right: 0; gap: 6px; -webkit-mask-image: none; mask-image: none; }
+  .ticket .chip { padding: 0 10px; }
+  .cstats { grid-template-columns: repeat(4, 1fr); }
+  .cstats > div:nth-child(even) { border-left: 1px solid var(--line); padding-left: var(--s-3); }
+  .cstats > div:nth-child(odd):not(:first-child) { border-left: 1px solid var(--line); padding-left: var(--s-3); }
+  .cstats > div + div { padding-left: var(--s-3); border-left: 1px solid var(--line); }
+  .filters { grid-template-columns: auto 1fr auto; align-items: center; column-gap: var(--s-5); }
+  .fchips { display: flex; flex-wrap: wrap; gap: var(--s-2) var(--s-5); }
+  .hsum { display: grid; grid-template-columns: 1fr 1fr; column-gap: var(--s-8); align-items: end; }
+  .hsum-b { height: 16px; }
+  .ticket-mini { max-width: 520px; }
+}
+
+@media (min-width: 1280px) {
+  .why { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+}
+
+</style>
+</head>
+<body>
+<svg width="0" height="0" style="position:absolute" aria-hidden="true" focusable="false"><defs>
+<symbol id="g-buy" viewBox="0 0 10 10"><path d="M5 9V2M2 5l3-3 3 3" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="square"/></symbol>
+<symbol id="g-sell" viewBox="0 0 10 10"><path d="M5 1v7M2 5l3 3 3-3" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="square"/></symbol>
+<symbol id="g-bridge" viewBox="0 0 10 10"><path d="M1 5h6M4.5 2.5L7 5 4.5 7.5M9 1.5v7" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="square"/></symbol>
+<symbol id="g-shield" viewBox="0 0 10 10"><path d="M6 1.5H1.5v7H6M4 5h5M7 3l2 2-2 2" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="square"/></symbol>
+<symbol id="g-shield-in" viewBox="0 0 10 10"><path d="M4 1.5h4.5v7H4M1 5h5.5M4.5 3L6.5 5 4.5 7" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="square"/></symbol>
+<symbol id="g-stake" viewBox="0 0 10 10"><path d="M2 4.5h6v4H2zM3.5 4.5V3a1.5 1.5 0 013 0v1.5" fill="none" stroke="currentColor" stroke-width="1.5"/></symbol>
+<symbol id="g-unstake" viewBox="0 0 10 10"><path d="M2 1.5h6M2 8.5h6M2.5 1.5L5 5 2.5 8.5M7.5 1.5L5 5l2.5 3.5" fill="none" stroke="currentColor" stroke-width="1.4"/></symbol>
+<symbol id="g-unlock" viewBox="0 0 10 10"><path d="M2 4.5h6v4H2zM6.5 4.5V3A1.5 1.5 0 003.5 3" fill="none" stroke="currentColor" stroke-width="1.5"/></symbol>
+<symbol id="i-home" viewBox="0 0 20 20"><path d="M3 9.5L10 3l7 6.5M5 8v9h10V8" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="square" stroke-linejoin="miter"/></symbol>
+<symbol id="i-trade" viewBox="0 0 20 20"><path d="M3 7h13M12 3l4 4-4 4M17 13H4M8 9l-4 4 4 4" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="square" stroke-linejoin="miter"/></symbol>
+<symbol id="i-movers" viewBox="0 0 20 20"><path d="M3 5h14M3 10h10M3 15h6" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="butt"/></symbol>
+<symbol id="i-feed" viewBox="0 0 20 20"><path d="M3 5h2M7 5h10M3 10h2M7 10h10M3 15h2M7 15h10" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="square"/></symbol>
+<symbol id="i-more" viewBox="0 0 20 20"><path d="M3 8.5h3v3H3zM8.5 8.5h3v3h-3zM14 8.5h3v3h-3z" fill="none" stroke="currentColor" stroke-width="1.5"/></symbol>
+<symbol id="i-search" viewBox="0 0 20 20"><circle cx="8.5" cy="8.5" r="5" fill="none" stroke="currentColor" stroke-width="1.5"/><path d="M12.5 12.5L17 17" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="square"/></symbol>
+<symbol id="i-arrow" viewBox="0 0 16 16"><path d="M2 8h11M9 4l4 4-4 4" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="square" stroke-linejoin="miter"/></symbol>
+<symbol id="i-x" viewBox="0 0 16 16"><path d="M3 3l10 10M13 3L3 13" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="square"/></symbol>
+<symbol id="i-tick" viewBox="0 0 12 12"><path d="M1.5 6.5l3 3 6-7" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="square"/></symbol>
+<symbol id="i-clock" viewBox="0 0 12 12"><rect x="1.5" y="1.5" width="9" height="9" fill="none" stroke="currentColor" stroke-width="1.25" stroke-dasharray="1.6 1.6"/><path d="M6 3.5V6l2 1" fill="none" stroke="currentColor" stroke-width="1.25"/></symbol>
+<symbol id="i-warn" viewBox="0 0 12 12"><path d="M6 1.5L11 10.5H1z" fill="none" stroke="currentColor" stroke-width="1.25" stroke-linejoin="miter"/><path d="M6 5v2.5M6 9v.01" stroke="currentColor" stroke-width="1.25"/></symbol>
+<symbol id="i-dash" viewBox="0 0 12 12"><path d="M2 6h8" fill="none" stroke="currentColor" stroke-width="1.5" stroke-dasharray="2 1.5"/></symbol>
+</defs></svg>
+<a class="skip" href="#main">Skip to content</a>
+<header class="hdr">
+<div class="wrap hdr-in">
+  <a class="brand" href="home.html" aria-label="namada.trade, home"><svg class="mark" viewBox="0 0 28 28" aria-hidden="true"><defs><clipPath id="mk-c"><rect x="4.5" y="3.5" width="19" height="21"/></clipPath></defs><g clip-path="url(#mk-c)"><path class="mk-hl" d="M1 5H11L27 23H17z"/><path d="M4 2.75L24 25.25" fill="none" stroke="currentColor" stroke-width="3"/></g><path d="M12 5H6V23H12M16 5H22V23H16" fill="none" stroke="currentColor" stroke-width="3" stroke-linejoin="miter"/></svg><span class="brand-t">namada<i>.trade</i></span></a>
+  <nav class="topnav" aria-label="Primary"><a class="tn" href="home.html" aria-current="page">Home</a><a class="tn" href="trade.html">Trade</a><a class="tn" href="#movers">Movers</a><a class="tn" href="holders.html">Feed</a><details class="more-d"><summary class="tn">More <svg class="caret" aria-hidden="true"><use href="#i-arrow"/></svg></summary><div class="more-pop"><a class="mi" href="#shielded"><span class="mi-t">Shielded</span><span class="mi-d">How much NAM can’t be seen</span></a><a class="mi" href="#alerts"><span class="mi-t">Alerts</span><span class="mi-d">What should wake me up</span></a><a class="mi" href="holders.html"><span class="mi-t">Holders</span><span class="mi-d">Who holds NAM, a view of Feed</span></a><a class="mi" href="#rewind"><span class="mi-t">Rewind</span><span class="mi-d">See every number as it was on a past date</span></a><a class="mi" href="home.html#trust"><span class="mi-t">Where every number comes from</span><span class="mi-d">5 of 7 cross-checks pass</span></a><a class="mi" href="#glossary"><span class="mi-t">Glossary</span><span class="mi-d">Staked, bridged, shielded: plain words first</span></a><a class="mi" href="#settings"><span class="mi-t">Settings</span><span class="mi-d">Alert rules, where alerts go, your data</span></a></div></details></nav>
+  <div class="hdr-r">
+    <a class="px" data-s="fresh" href="trade.html" data-prov="Osmosis quotes (Osmosis SQS) · fresh · 11:24:45 UTC · 0 s old"><span class="px-l">NAM</span><span class="px-n">$0.001025</span><span class="px-d">+0.87%</span></a>
+    <a class="chk" href="home.html#trust" title="Cross-checks that pass right now"><svg class="g" aria-hidden="true"><use href="#i-tick"/></svg>5 of 7 checks</a>
+    <a class="ibtn" href="#search" aria-label="Search"><svg class="ico" aria-hidden="true"><use href="#i-search"/></svg></a>
+  </div>
+</div>
+</header>
+<main id="main" data-page="home">
+
+<section class="hero wrap" aria-labelledby="h1">
+  <div class="hero-main">
+    <p class="eyebrow">Namada Trade · NAM on Osmosis</p>
+    <h1 id="h1">NAM,<br><span class="hl">with receipts.</span></h1>
+    <p class="sub">The price of NAM, the coin of the Namada network, who holds it, who might sell it and how much is shielded. Every figure is stamped with its source and how old it is.</p>
+    <div class="price-blk">
+      <p class="lbl">NAM price, in US dollars</p>
+      <p class="price"><span class="n big" data-s="fresh" tabindex="0" data-prov="Osmosis quotes (Osmosis SQS) · fresh · 11:24:45 UTC · 0 s old">$0.001025</span></p>
+      <p class="pmeta"><b class="chg">+0.87%</b><span> since this time yesterday</span><span class="stamp"><svg class="g" aria-hidden="true"><use href="#i-tick"/></svg>Osmosis quotes · 0 s old</span></p>
+    </div>
+    <div class="actions"><a class="btn btn-primary" href="trade.html">See what a trade costs <svg class="arr" aria-hidden="true"><use href="#i-arrow"/></svg></a><a class="btn" href="#trust">How we know</a></div>
+    <dl class="facts">
+      <div><dt>holders on Namada</dt><dd><span class="n" data-s="old" tabindex="0" data-prov="Namada indexer (holder count) · old · 03:59:44 UTC · 2.3 d old">2,209</span></dd></div>
+      <div><dt>shielded</dt><dd><span class="n" data-s="fresh" tabindex="0" data-prov="Namada nodes (Namada RPC (MASP balance)) · fresh · 11:24:34 UTC · 10 s old">4.4%</span></dd></div>
+      <div><dt>on Osmosis</dt><dd><span class="n" data-s="conflict" tabindex="0" data-prov="Osmosis supply record (Keplr Osmosis bank/supply) · sources disagree · 11:24:34 UTC · 10 s old · escrow and Osmosis supply differ by 1,614 NAM">1.7%</span></dd></div>
+    </dl>
+  </div>
+  <div class="hero-tape"><section class="slip tape" aria-labelledby="tape-h">
+  <div class="slip-h"><h2 id="tape-h" class="slip-t">Latest receipts</h2><p class="slip-s">Moves of 1,000 NAM or more, newest first</p></div>
+  <ol class="rcpts">
+<li class="rc" style="--i:0">
+  <span class="rc-no">01</span>
+  <span class="rc-tag"><span class="tag" data-k="buy" title="Buy: bought NAM on Osmosis"><svg class="g" aria-hidden="true"><use href="#g-buy"/></svg>Buy</span></span>
+  <span class="rc-amt"><span class="n" data-s="old" tabindex="0" data-prov="flow index (D1 flow index) · old · 08:14:17 UTC · 3.2 h old · last Osmosis flow 32 min ago, last Namada flow 3.2 h ago">+17,124.41</span><span class="u">NAM</span></span>
+  <span class="rc-age">32 min ago</span>
+  <span class="rc-who"><span class="a-i">32 min ago · </span><span class="addr">osmo1vkyae…lrl4</span><span class="rc-d"> · net of 24 h · 136 buys, 0 sells</span></span>
+</li>
+<li class="rc" style="--i:1">
+  <span class="rc-no">02</span>
+  <span class="rc-tag"><span class="tag" data-k="sell" title="Sell: sold NAM on Osmosis"><svg class="g" aria-hidden="true"><use href="#g-sell"/></svg>Sell</span></span>
+  <span class="rc-amt"><span class="n" data-s="old" tabindex="0" data-prov="flow index (D1 flow index) · old · 08:14:17 UTC · 3.2 h old · last Osmosis flow 32 min ago, last Namada flow 3.2 h ago">−10,967.62</span><span class="u">NAM</span></span>
+  <span class="rc-age">12.7 h ago</span>
+  <span class="rc-who"><span class="a-i">12.7 h ago · </span><span class="addr">osmo1f56eq…eral</span><span class="rc-d"> · net of 24 h · 16 buys, 20 sells</span></span>
+</li>
+<li class="rc" style="--i:2">
+  <span class="rc-no">03</span>
+  <span class="rc-tag"><span class="tag" data-k="shieldout" title="Shielded out (unshield): NAM left the shielded set for a public address"><svg class="g" aria-hidden="true"><use href="#g-shield"/></svg>Shielded out</span></span>
+  <span class="rc-amt"><span class="n" data-s="old" tabindex="0" data-prov="flow index (D1 flow index) · old · 08:14:17 UTC · 3.2 h old · last Osmosis flow 32 min ago, last Namada flow 3.2 h ago">20,000.14</span><span class="u">NAM</span></span>
+  <span class="rc-age">19.7 h ago</span>
+  <span class="rc-who"><span class="a-i">19.7 h ago · </span><span class="addr">to tnam1qq6wu…3flp</span></span>
+</li>
+<li class="rc" style="--i:3">
+  <span class="rc-no">04</span>
+  <span class="rc-tag"><span class="tag" data-k="shieldout" title="Shielded out (unshield): NAM left the shielded set for a public address"><svg class="g" aria-hidden="true"><use href="#g-shield"/></svg>Shielded out</span></span>
+  <span class="rc-amt"><span class="n" data-s="old" tabindex="0" data-prov="flow index (D1 flow index) · old · 08:14:17 UTC · 3.2 h old · last Osmosis flow 32 min ago, last Namada flow 3.2 h ago">20,000.14</span><span class="u">NAM</span></span>
+  <span class="rc-age">21.1 h ago</span>
+  <span class="rc-who"><span class="a-i">21.1 h ago · </span><span class="addr">to tnam1qq6wu…3flp</span></span>
+</li>
+<li class="rc" style="--i:4">
+  <span class="rc-no">05</span>
+  <span class="rc-tag"><span class="tag" data-k="shieldout" title="Shielded out (unshield): NAM left the shielded set for a public address"><svg class="g" aria-hidden="true"><use href="#g-shield"/></svg>Shielded out</span></span>
+  <span class="rc-amt"><span class="n" data-s="old" tabindex="0" data-prov="flow index (D1 flow index) · old · 08:14:17 UTC · 3.2 h old · last Osmosis flow 32 min ago, last Namada flow 3.2 h ago">10,000.06</span><span class="u">NAM</span></span>
+  <span class="rc-age">21.8 h ago</span>
+  <span class="rc-who"><span class="a-i">21.8 h ago · </span><span class="addr">to tnam1qq6wu…3flp</span></span>
+</li>
+<li class="rc" style="--i:5">
+  <span class="rc-no">06</span>
+  <span class="rc-tag"><span class="tag" data-k="shieldout" title="Shielded out (unshield): NAM left the shielded set for a public address"><svg class="g" aria-hidden="true"><use href="#g-shield"/></svg>Shielded out</span></span>
+  <span class="rc-amt"><span class="n" data-s="old" tabindex="0" data-prov="flow index (D1 flow index) · old · 08:14:17 UTC · 3.2 h old · last Osmosis flow 32 min ago, last Namada flow 3.2 h ago">10,000.14</span><span class="u">NAM</span></span>
+  <span class="rc-age">27.3 h ago</span>
+  <span class="rc-who"><span class="a-i">27.3 h ago · </span><span class="addr">to tnam1qq69h…rshv</span></span>
+</li>
+<li class="rc rc-lg" style="--i:6">
+  <span class="rc-no">07</span>
+  <span class="rc-tag"><span class="tag" data-k="shieldout" title="Shielded out (unshield): NAM left the shielded set for a public address"><svg class="g" aria-hidden="true"><use href="#g-shield"/></svg>Shielded out</span></span>
+  <span class="rc-amt"><span class="n" data-s="old" tabindex="0" data-prov="flow index (D1 flow index) · old · 08:14:17 UTC · 3.2 h old · last Osmosis flow 32 min ago, last Namada flow 3.2 h ago">40,000.14</span><span class="u">NAM</span></span>
+  <span class="rc-age">38.5 h ago</span>
+  <span class="rc-who"><span class="a-i">38.5 h ago · </span><span class="addr">to tnam1qpvan…ny6t</span></span>
+</li>
+<li class="rc rc-lg" style="--i:7">
+  <span class="rc-no">08</span>
+  <span class="rc-tag"><span class="tag" data-k="shieldout" title="Shielded out (unshield): NAM left the shielded set for a public address"><svg class="g" aria-hidden="true"><use href="#g-shield"/></svg>Shielded out</span></span>
+  <span class="rc-amt"><span class="n" data-s="old" tabindex="0" data-prov="flow index (D1 flow index) · old · 08:14:17 UTC · 3.2 h old · last Osmosis flow 32 min ago, last Namada flow 3.2 h ago">40,000.00</span><span class="u">NAM</span></span>
+  <span class="rc-age">38.5 h ago</span>
+  <span class="rc-who"><span class="a-i">38.5 h ago · </span><span class="addr">to tnam1qq6wu…3flp</span></span>
+</li>
+  </ol>
+  <p class="stub" data-s="old"><svg class="g" aria-hidden="true"><use href="#i-clock"/></svg><span class="stub-k">Source</span><span class="stub-t">flow index · 08:14 · 3.2 h old · last Osmosis flow 32 min ago, last Namada flow 3.2 h ago<span class="stub-s">old</span></span></p>
+  <a class="slip-more" href="holders.html">All receipts in Feed <svg class="arr" aria-hidden="true"><use href="#i-arrow"/></svg></a>
+</section></div>
+</section>
+<div class="wrap body-grid">
+  <div class="narr">
+    <section class="sec" id="changed" aria-labelledby="changed-h">
+  <h2 id="changed-h">What changed in 24 hours</h2>
+  <p class="lead">Alert sizes are small on purpose: at today’s price 10,000 NAM is <span class="n" data-s="fresh" tabindex="0" data-prov="Osmosis quotes (Osmosis SQS) · fresh · 11:24:45 UTC · 0 s old">$10.25</span>.</p>
+  <div class="empty">
+    <p class="empty-t"><svg class="g" aria-hidden="true"><use href="#i-tick"/></svg> Nothing crossed an alert size in the last 24 hours.</p>
+    <p class="empty-s">The window runs from 16 Oct, 11:24 to 17 Oct, 11:24 UTC. No alert has fired in the record we hold, so there is no earlier one to rewind to. An alert would list here, newest first:</p>
+    <dl class="leaders rules">
+      <div class="lr"><dt>NAM bridged to Osmosis</dt><dd><span class="dots"></span><span class="n" data-s="fresh" tabindex="0" data-prov="Alert rules · fresh · 11:24:46 UTC · 0 s old">25,000</span><span class="u">NAM</span></dd></div>
+      <div class="lr"><dt>NAM unstaked</dt><dd><span class="dots"></span><span class="n" data-s="fresh" tabindex="0" data-prov="Alert rules · fresh · 11:24:46 UTC · 0 s old">100,000</span><span class="u">NAM</span></dd></div>
+      <div class="lr"><dt>Large trade</dt><dd><span class="dots"></span><span class="n" data-s="fresh" tabindex="0" data-prov="Alert rules · fresh · 11:24:46 UTC · 0 s old">10,000</span><span class="u">NAM</span></dd></div>
+      <div class="lr"><dt>NAM left the shielded set</dt><dd><span class="dots"></span><span class="n" data-s="fresh" tabindex="0" data-prov="Alert rules · fresh · 11:24:46 UTC · 0 s old">50,000</span><span class="u">NAM</span></dd></div>
+      <div class="lr"><dt>Large amount staked</dt><dd><span class="dots"></span><span class="n" data-s="fresh" tabindex="0" data-prov="Alert rules · fresh · 11:24:46 UTC · 0 s old">1,000,000</span><span class="u">NAM</span></dd></div>
+    </dl>
+  </div>
+  <h3 class="h3">The day’s tally</h3>
+  <dl class="leaders tally">
+    <div class="lr"><dt><span class="tag" data-k="buy" title="Buy: bought NAM on Osmosis"><svg class="g" aria-hidden="true"><use href="#g-buy"/></svg>Buy</span><span class="cnt"><span class="n" data-s="old" tabindex="0" data-prov="flow index (D1 flow index) · old · 10:52:30 UTC · 32 min old · last Osmosis flow 32 min ago, last Namada flow 32 min ago">43</span> buys on Osmosis</span></dt><dd><span class="dots"></span><span class="n" data-s="old" tabindex="0" data-prov="flow index (D1 flow index) · old · 10:52:30 UTC · 32 min old · last Osmosis flow 32 min ago, last Namada flow 32 min ago">17,970.00</span><span class="u">NAM</span></dd></div>
+    <div class="lr"><dt><span class="tag" data-k="sell" title="Sell: sold NAM on Osmosis"><svg class="g" aria-hidden="true"><use href="#g-sell"/></svg>Sell</span><span class="cnt"><span class="n" data-s="old" tabindex="0" data-prov="flow index (D1 flow index) · old · 10:52:30 UTC · 32 min old · last Osmosis flow 32 min ago, last Namada flow 32 min ago">3</span> sells on Osmosis</span></dt><dd><span class="dots"></span><span class="n" data-s="old" tabindex="0" data-prov="flow index (D1 flow index) · old · 10:52:30 UTC · 32 min old · last Osmosis flow 32 min ago, last Namada flow 32 min ago">10,967.62</span><span class="u">NAM</span></dd></div>
+    <div class="lr"><dt><span class="tag" data-k="staked" title="Staked (bond): locked with a validator, cannot be sold"><svg class="g" aria-hidden="true"><use href="#g-stake"/></svg>Staked</span></dt><dd><span class="dots"></span><span class="n" data-s="old" tabindex="0" data-prov="flow index (D1 flow index) · old · 08:14:17 UTC · 3.2 h old · last Osmosis flow 3.2 h ago, last Namada flow 3.2 h ago">41,000</span><span class="u">NAM</span></dd></div>
+    <div class="lr"><dt><span class="tag" data-k="unlocked" title="Unlocked (withdraw): finished unstaking, can be bridged and sold"><svg class="g" aria-hidden="true"><use href="#g-unlock"/></svg>Unlocked</span></dt><dd><span class="dots"></span><span class="n" data-s="old" tabindex="0" data-prov="flow index (D1 flow index) · old · 08:14:17 UTC · 3.2 h old · last Osmosis flow 3.2 h ago, last Namada flow 3.2 h ago">0</span><span class="u">NAM</span></dd></div>
+    <div class="lr"><dt><span class="tag" data-k="shieldin" title="Shielded in (shield): NAM moved from a public address into the shielded set"><svg class="g" aria-hidden="true"><use href="#g-shield-in"/></svg>Shielded in</span></dt><dd><span class="dots"></span><span class="n" data-s="old" tabindex="0" data-prov="flow index (D1 flow index) · old · 08:14:17 UTC · 3.2 h old · last Osmosis flow 3.2 h ago, last Namada flow 3.2 h ago">60,000</span><span class="u">NAM</span></dd></div>
+    <div class="lr"><dt><span class="tag" data-k="shieldout" title="Shielded out (unshield): NAM left the shielded set for a public address"><svg class="g" aria-hidden="true"><use href="#g-shield"/></svg>Shielded out</span></dt><dd><span class="dots"></span><span class="n" data-s="old" tabindex="0" data-prov="flow index (D1 flow index) · old · 08:14:17 UTC · 3.2 h old · last Osmosis flow 3.2 h ago, last Namada flow 3.2 h ago">50,000.43</span><span class="u">NAM</span></dd></div>
+  </dl>
+  <p class="stub" data-s="old"><svg class="g" aria-hidden="true"><use href="#i-clock"/></svg><span class="stub-k">Source</span><span class="stub-t">flow index · 10:52 · 32 min old · last Osmosis flow 32 min ago, last Namada flow 32 min ago <i>/</i> flow index · 08:14 · 3.2 h old · last Osmosis flow 3.2 h ago, last Namada flow 3.2 h ago<span class="stub-s">old</span></span></p>
+  <p class="more-l"><a href="#alerts">The 5 alert rules <svg class="arr" aria-hidden="true"><use href="#i-arrow"/></svg></a></p>
+</section>
+    <section class="sec" id="where" aria-labelledby="where-h">
+  <h2 id="where-h">Where is all the NAM?</h2>
+  <p class="lead">Only <span class="n" data-s="conflict" tabindex="0" data-prov="Osmosis supply record (Keplr Osmosis bank/supply) · sources disagree · 11:24:34 UTC · 10 s old · escrow and Osmosis supply differ by 1,614 NAM">1.7%</span> of NAM, <span class="n" data-s="conflict" tabindex="0" data-prov="Osmosis supply record (Keplr Osmosis bank/supply) · sources disagree · 11:24:34 UTC · 10 s old · escrow and Osmosis supply differ by 1,614 NAM">19,988,602</span> NAM, is on Osmosis, the one place it can be sold. The pools there hold <span class="n" data-s="fresh" tabindex="0" data-prov="Osmosis pools (Osmosis SQS pools) · fresh · 11:24:45 UTC · 0 s old">$1,819</span>.</p>
+  <div class="sbar" role="img" aria-label="Staked with validators 29.8%, Public funding 7.8%, Shielded 4.4%, On Osmosis 1.7%, Everything else spendable 56.3%"><span class="seg-s" data-k="staked" style="--w:29.8004%;--i:0"></span><span class="seg-s" data-k="pgf" style="--w:7.7824%;--i:1"></span><span class="seg-s" data-k="shielded" style="--w:4.4187%;--i:2"></span><span class="seg-s" data-k="osmosis" style="--w:1.7420%;--i:3"></span><span class="seg-s" data-k="rest" style="--w:56.2565%;--i:4"></span></div>
+  <ul class="legend">
+<li class="lg"><span class="sw" data-k="staked"></span><b class="lg-l">Staked with validators</b><span class="lg-p"><span class="n" data-s="fresh" tabindex="0" data-prov="Namada nodes (Namada RPC abci_query) · fresh · 11:24:34 UTC · 10 s old">29.8%</span></span><span class="lg-sub"><span class="n" data-s="fresh" tabindex="0" data-prov="Namada nodes (Namada RPC abci_query) · fresh · 11:24:34 UTC · 10 s old">341,947,228</span><span class="u">NAM</span><span class="lg-n"> · cannot be sold</span></span></li>
+<li class="lg"><span class="sw" data-k="pgf"></span><b class="lg-l">Public funding</b><span class="lg-p"><span class="n" data-s="fresh" tabindex="0" data-prov="Namada nodes (Namada RPC abci_query) · fresh · 11:24:34 UTC · 10 s old">7.8%</span></span><span class="lg-sub"><span class="n" data-s="fresh" tabindex="0" data-prov="Namada nodes (Namada RPC abci_query) · fresh · 11:24:34 UTC · 10 s old">89,299,375</span><span class="u">NAM</span><span class="lg-n"> · held for the network</span></span></li>
+<li class="lg"><span class="sw" data-k="shielded"></span><b class="lg-l">Shielded</b><span class="lg-p"><span class="n" data-s="fresh" tabindex="0" data-prov="Namada nodes (Namada RPC abci_query) · fresh · 11:24:34 UTC · 10 s old">4.4%</span></span><span class="lg-sub"><span class="n" data-s="fresh" tabindex="0" data-prov="Namada nodes (Namada RPC abci_query) · fresh · 11:24:34 UTC · 10 s old">50,702,670</span><span class="u">NAM</span><span class="lg-n"> · owners are hidden</span></span></li>
+<li class="lg"><span class="sw" data-k="osmosis"></span><b class="lg-l">On Osmosis</b><span class="lg-p"><span class="n" data-s="conflict" tabindex="0" data-prov="Osmosis supply record (Keplr Osmosis bank/supply) · sources disagree · 11:24:34 UTC · 10 s old · escrow and Osmosis supply differ by 1,614 NAM">1.7%</span></span><span class="lg-sub"><span class="n" data-s="conflict" tabindex="0" data-prov="Osmosis supply record (Keplr Osmosis bank/supply) · sources disagree · 11:24:34 UTC · 10 s old · escrow and Osmosis supply differ by 1,614 NAM">19,988,602</span><span class="u">NAM</span><span class="lg-n"> · the one place it can be sold</span></span></li>
+<li class="lg"><span class="sw" data-k="rest"></span><b class="lg-l">Everything else spendable</b><span class="lg-p"><span class="n" data-s="fresh" tabindex="0" data-prov="Namada nodes (Namada RPC abci_query) · fresh · 11:24:34 UTC · 10 s old">56.3%</span></span><span class="lg-sub"><span class="n" data-s="fresh" tabindex="0" data-prov="Namada nodes (Namada RPC abci_query) · fresh · 11:24:34 UTC · 10 s old">645,520,116</span><span class="u">NAM</span><span class="lg-n"> · public wallets</span></span></li>
+    <li class="lg lg-tot"><span class="sw sw-none"></span><b class="lg-l">All NAM</b><span class="lg-p"><span class="n" data-s="fresh" tabindex="0" data-prov="Namada nodes (Namada RPC abci_query) · fresh · 11:24:34 UTC · 10 s old">100%</span></span><span class="lg-sub"><span class="n tot" data-s="fresh" tabindex="0" data-prov="Namada nodes (Namada RPC abci_query) · fresh · 11:24:34 UTC · 10 s old">1,147,457,992</span><span class="u">NAM</span><span class="lg-n"> · minted so far</span></span></li>
+  </ul>
+  <p class="note" data-tone="warn"><svg class="g" aria-hidden="true"><use href="#i-warn"/></svg><span>Namada holds <span class="n" data-s="fresh" tabindex="0" data-prov="Namada nodes (Namada RPC abci_query) · fresh · 11:24:34 UTC · 10 s old">19,988,602</span> NAM in escrow for Osmosis, while Osmosis counts <span class="n" data-s="conflict" tabindex="0" data-prov="Osmosis supply record (Keplr Osmosis bank/supply) · sources disagree · 11:24:34 UTC · 10 s old · escrow and Osmosis supply differ by 1,614 NAM">19,986,988</span>. They are <span class="n" data-s="conflict" tabindex="0" data-prov="Osmosis supply record (Keplr Osmosis bank/supply) · sources disagree · 11:24:34 UTC · 10 s old · escrow and Osmosis supply differ by 1,614 NAM">1,614</span> NAM apart, so the Osmosis figure carries a wavy underline.</span></p>
+  <p class="stub" data-s="fresh"><svg class="g" aria-hidden="true"><use href="#i-tick"/></svg><span class="stub-k">Source</span><span class="stub-t">Namada nodes · 11:24 · 10 s old <i>/</i> Osmosis supply record · 11:24 · 10 s old<span class="stub-s">fresh</span></span></p>
+</section>
+    <section class="sec" id="holders" aria-labelledby="holders-h">
+  <h2 id="holders-h">Who holds NAM</h2>
+  <p class="lead">The 10 biggest holders own <span class="n" data-s="old" tabindex="0" data-prov="Namada indexer (holder count) · old · 03:59:44 UTC · 2.3 d old">22.5%</span> of NAM on Namada. Protocol accounts are excluded. Shielded NAM cannot be attributed to anyone.</p>
+  <div class="dl holders dl--home" role="table" aria-label="Biggest NAM holders on Namada">
+  <div class="dl-head" role="row"><span role="columnheader" class="c-rank">Rank</span><span role="columnheader" class="c-who">Holder</span><span role="columnheader" class="c-total">Total</span><span role="columnheader" class="c-pct">Share</span><span role="columnheader" class="c-kind">What</span><span role="columnheader" class="c-spend">Spendable</span><span role="columnheader" class="c-stake">Staked</span><span role="columnheader" class="c-d7">7 days</span><span role="columnheader" class="c-chk">Checked</span></div>
+<div class="hr" role="row" data-cat="genesis" data-total="55117423.445884" style="--i:0;--sf:1.0000">
+  <span class="c-rank" role="cell">01</span>
+  <span class="c-who" role="cell"><b class="nm">Genesis · public allocations completed</b><span class="addr" title="tnam1qqscx40lsm80mgv0e32gtv9wwwhh95x6yuq027zh">tnam1qqscx…27zh</span><span class="lk" title="osmo169hpcstyc9qal5t2hu2y6xlqjjvc303crwa8sz, osmo1s7cw0y6hq9meq6nkyz4me7uf2ac4r9k9x48ltt">+2 linked on Osmosis</span></span>
+  <span class="c-total" role="cell"><span class="n" data-s="old" tabindex="0" data-prov="Namada indexer and nodes (balance, stake) · old · 03:59:44 UTC · 2.3 d old">55,117,423</span><span class="u">NAM</span></span>
+  <span class="c-pct" role="cell"><span class="n" data-s="old" tabindex="0" data-prov="Namada indexer and nodes (balance, stake) · old · 03:59:44 UTC · 2.3 d old">4.80%</span><i class="bar"></i></span>
+  <span class="c-meta">
+    <span class="c-kind" role="cell"><span class="kind">Genesis</span></span>
+    <span class="c-spend" role="cell"><span class="n" data-s="old" tabindex="0" data-prov="Namada indexer (balance) · old · 03:59:44 UTC · 2.3 d old">40,455,316</span><span class="u">NAM</span></span>
+    <span class="c-stake" role="cell"><span class="n" data-s="conflict" tabindex="0" data-prov="Namada nodes (stake check) · sources disagree · 11:14:34 UTC · 10 min old · chain check 14,662,107, estimate 14,562,107: 100,000 NAM apart">14,662,107</span><span class="u">NAM</span></span>
+    <span class="c-d7" role="cell"><span class="flat">no change</span></span>
+    <span class="c-chk" role="cell">checked 2.3 d ago</span>
+  </span>
+</div>
+<div class="hr" role="row" data-cat="foundation" data-total="50000000" style="--i:1;--sf:0.9072">
+  <span class="c-rank" role="cell">02</span>
+  <span class="c-who" role="cell"><b class="nm">Anoma Foundation</b><span class="addr" title="tnam1q8nm4ar7aua8035du0m8x6amfe4407uzvqtfs6lm">tnam1q8nm4…s6lm</span></span>
+  <span class="c-total" role="cell"><span class="n" data-s="old" tabindex="0" data-prov="Namada indexer and nodes (balance, stake) · old · 03:59:44 UTC · 2.3 d old">50,000,000</span><span class="u">NAM</span></span>
+  <span class="c-pct" role="cell"><span class="n" data-s="old" tabindex="0" data-prov="Namada indexer and nodes (balance, stake) · old · 03:59:44 UTC · 2.3 d old">4.36%</span><i class="bar"></i></span>
+  <span class="c-meta">
+    <span class="c-kind" role="cell"><span class="kind">Foundation</span></span>
+    <span class="c-spend" role="cell"><span class="n" data-s="old" tabindex="0" data-prov="Namada indexer (balance) · old · 03:59:44 UTC · 2.3 d old">22</span><span class="u">NAM</span></span>
+    <span class="c-stake" role="cell"><span class="n" data-s="old" tabindex="0" data-prov="Namada nodes (stake check) · old · 11:14:34 UTC · 10 min old">49,999,978</span><span class="u">NAM</span></span>
+    <span class="c-d7" role="cell"><span class="flat">no change</span></span>
+    <span class="c-chk" role="cell">checked 2.3 d ago</span>
+  </span>
+</div>
+<div class="hr" role="row" data-cat="none" data-total="24219272" style="--i:2;--sf:0.4394">
+  <span class="c-rank" role="cell">03</span>
+  <span class="c-who" role="cell"><b class="nm">Unlabelled address</b><span class="addr" title="tnam1qqzg5xzdmf9wykn7zm4y4dfzl3w9xfljrvspf0pa">tnam1qqzg5…f0pa</span></span>
+  <span class="c-total" role="cell"><span class="n" data-s="old" tabindex="0" data-prov="Namada indexer and nodes (balance, stake) · old · 03:59:44 UTC · 2.3 d old">24,219,272</span><span class="u">NAM</span></span>
+  <span class="c-pct" role="cell"><span class="n" data-s="old" tabindex="0" data-prov="Namada indexer and nodes (balance, stake) · old · 03:59:44 UTC · 2.3 d old">2.11%</span><i class="bar"></i></span>
+  <span class="c-meta">
+    <span class="c-kind" role="cell"><span class="kind">Unlabelled</span></span>
+    <span class="c-spend" role="cell"><span class="n" data-s="old" tabindex="0" data-prov="Namada indexer (balance) · old · 03:59:44 UTC · 2.3 d old">24,219,272</span><span class="u">NAM</span></span>
+    <span class="c-stake" role="cell"><span class="nil">none</span></span>
+    <span class="c-d7" role="cell"><span class="flat">no change</span></span>
+    <span class="c-chk" role="cell">checked 2.3 d ago</span>
+  </span>
+</div>
+<div class="hr" role="row" data-cat="foundation" data-total="21846649.523594" style="--i:3;--sf:0.3964">
+  <span class="c-rank" role="cell">04</span>
+  <span class="c-who" role="cell"><b class="nm">Anoma Foundation</b><span class="addr" title="tnam1qxt7uxhj9r00mfm4u870e7ghz6j20jrdz58gm5kj">tnam1qxt7u…m5kj</span></span>
+  <span class="c-total" role="cell"><span class="n" data-s="old" tabindex="0" data-prov="Namada indexer and nodes (balance, stake) · old · 03:59:44 UTC · 2.3 d old">21,846,650</span><span class="u">NAM</span></span>
+  <span class="c-pct" role="cell"><span class="n" data-s="old" tabindex="0" data-prov="Namada indexer and nodes (balance, stake) · old · 03:59:44 UTC · 2.3 d old">1.90%</span><i class="bar"></i></span>
+  <span class="c-meta">
+    <span class="c-kind" role="cell"><span class="kind">Foundation</span></span>
+    <span class="c-spend" role="cell"><span class="n" data-s="old" tabindex="0" data-prov="Namada indexer (balance) · old · 03:59:44 UTC · 2.3 d old">21,846,650</span><span class="u">NAM</span></span>
+    <span class="c-stake" role="cell"><span class="nil">none</span></span>
+    <span class="c-d7" role="cell"><span class="flat">no change</span></span>
+    <span class="c-chk" role="cell">checked 2.3 d ago</span>
+  </span>
+</div>
+<div class="hr" role="row" data-cat="foundation" data-total="20000000.1" style="--i:4;--sf:0.3629">
+  <span class="c-rank" role="cell">05</span>
+  <span class="c-who" role="cell"><b class="nm">Anoma Foundation</b><span class="addr" title="tnam1qrgzn9q7n6yew78dxykczau5vdp0fxlc3gkyahzz">tnam1qrgzn…ahzz</span></span>
+  <span class="c-total" role="cell"><span class="n" data-s="old" tabindex="0" data-prov="Namada indexer and nodes (balance, stake) · old · 03:59:44 UTC · 2.3 d old">20,000,000</span><span class="u">NAM</span></span>
+  <span class="c-pct" role="cell"><span class="n" data-s="old" tabindex="0" data-prov="Namada indexer and nodes (balance, stake) · old · 03:59:44 UTC · 2.3 d old">1.74%</span><i class="bar"></i></span>
+  <span class="c-meta">
+    <span class="c-kind" role="cell"><span class="kind">Foundation</span></span>
+    <span class="c-spend" role="cell"><span class="n" data-s="old" tabindex="0" data-prov="Namada indexer (balance) · old · 03:59:44 UTC · 2.3 d old">20,000,000</span><span class="u">NAM</span></span>
+    <span class="c-stake" role="cell"><span class="nil">none</span></span>
+    <span class="c-d7" role="cell"><span class="flat">no change</span></span>
+    <span class="c-chk" role="cell">checked 2.3 d ago</span>
+  </span>
+</div>
+<div class="hr" role="row" data-cat="backer" data-total="18749989.875" style="--i:5;--sf:0.3402">
+  <span class="c-rank" role="cell">06</span>
+  <span class="c-who" role="cell"><b class="nm">Genesis · af backers</b><span class="addr" title="tnam1qq5rtyhdmj4fnkstlvsj5zd0u79t84xwugfjxjj5">tnam1qq5rt…xjj5</span></span>
+  <span class="c-total" role="cell"><span class="n" data-s="old" tabindex="0" data-prov="Namada indexer and nodes (balance, stake) · old · 03:59:44 UTC · 2.3 d old">18,749,990</span><span class="u">NAM</span></span>
+  <span class="c-pct" role="cell"><span class="n" data-s="old" tabindex="0" data-prov="Namada indexer and nodes (balance, stake) · old · 03:59:44 UTC · 2.3 d old">1.63%</span><i class="bar"></i></span>
+  <span class="c-meta">
+    <span class="c-kind" role="cell"><span class="kind">Backer</span></span>
+    <span class="c-spend" role="cell"><span class="n" data-s="old" tabindex="0" data-prov="Namada indexer (balance) · old · 03:59:44 UTC · 2.3 d old">18,749,990</span><span class="u">NAM</span></span>
+    <span class="c-stake" role="cell"><span class="nil">none</span></span>
+    <span class="c-d7" role="cell"><span class="flat">no change</span></span>
+    <span class="c-chk" role="cell">checked 2.3 d ago</span>
+  </span>
+</div>
+<div class="hr" role="row" data-cat="foundation" data-total="18423337.261796" style="--i:6;--sf:0.3343">
+  <span class="c-rank" role="cell">07</span>
+  <span class="c-who" role="cell"><b class="nm">Anoma Foundation</b><span class="addr" title="tnam1qqp69rzwsgnqdm0d4qfhw4qa4s6v3tlzm5069f4j">tnam1qqp69…9f4j</span></span>
+  <span class="c-total" role="cell"><span class="n" data-s="old" tabindex="0" data-prov="Namada indexer and nodes (balance, stake) · old · 03:59:44 UTC · 2.3 d old">18,423,337</span><span class="u">NAM</span></span>
+  <span class="c-pct" role="cell"><span class="n" data-s="old" tabindex="0" data-prov="Namada indexer and nodes (balance, stake) · old · 03:59:44 UTC · 2.3 d old">1.61%</span><i class="bar"></i></span>
+  <span class="c-meta">
+    <span class="c-kind" role="cell"><span class="kind">Foundation</span></span>
+    <span class="c-spend" role="cell"><span class="n" data-s="old" tabindex="0" data-prov="Namada indexer (balance) · old · 03:59:44 UTC · 2.3 d old">18,423,337</span><span class="u">NAM</span></span>
+    <span class="c-stake" role="cell"><span class="nil">none</span></span>
+    <span class="c-d7" role="cell"><span class="flat">no change</span></span>
+    <span class="c-chk" role="cell">checked 2.3 d ago</span>
+  </span>
+</div>
+<div class="hr" role="row" data-cat="foundation" data-total="16666666.666675" style="--i:7;--sf:0.3024">
+  <span class="c-rank" role="cell">08</span>
+  <span class="c-who" role="cell"><b class="nm">Heliax</b><span class="addr" title="tnam1qxpxtw4cu4ht96fu999ya7mzuhapaly7mywwchvr">tnam1qxpxt…chvr</span></span>
+  <span class="c-total" role="cell"><span class="n" data-s="old" tabindex="0" data-prov="Namada indexer and nodes (balance, stake) · old · 03:59:44 UTC · 2.3 d old">16,666,667</span><span class="u">NAM</span></span>
+  <span class="c-pct" role="cell"><span class="n" data-s="old" tabindex="0" data-prov="Namada indexer and nodes (balance, stake) · old · 03:59:44 UTC · 2.3 d old">1.45%</span><i class="bar"></i></span>
+  <span class="c-meta">
+    <span class="c-kind" role="cell"><span class="kind">Foundation</span></span>
+    <span class="c-spend" role="cell"><span class="n" data-s="old" tabindex="0" data-prov="Namada indexer (balance) · old · 03:59:44 UTC · 2.3 d old">16,666,667</span><span class="u">NAM</span></span>
+    <span class="c-stake" role="cell"><span class="nil">none</span></span>
+    <span class="c-d7" role="cell"><span class="flat">no change</span></span>
+    <span class="c-chk" role="cell">checked 2.3 d ago</span>
+  </span>
+</div>
+<div class="hr" role="row" data-cat="foundation" data-total="16666666.666666" style="--i:8;--sf:0.3024">
+  <span class="c-rank" role="cell">09</span>
+  <span class="c-who" role="cell"><b class="nm">Heliax</b><span class="addr" title="tnam1q8vsay36r3u50yd4773nal0dz7duyw3fhujk0547">tnam1q8vsa…0547</span></span>
+  <span class="c-total" role="cell"><span class="n" data-s="old" tabindex="0" data-prov="Namada indexer and nodes (balance, stake) · old · 03:59:44 UTC · 2.3 d old">16,666,667</span><span class="u">NAM</span></span>
+  <span class="c-pct" role="cell"><span class="n" data-s="old" tabindex="0" data-prov="Namada indexer and nodes (balance, stake) · old · 03:59:44 UTC · 2.3 d old">1.45%</span><i class="bar"></i></span>
+  <span class="c-meta">
+    <span class="c-kind" role="cell"><span class="kind">Foundation</span></span>
+    <span class="c-spend" role="cell"><span class="n" data-s="old" tabindex="0" data-prov="Namada indexer (balance) · old · 03:59:44 UTC · 2.3 d old">16,666,667</span><span class="u">NAM</span></span>
+    <span class="c-stake" role="cell"><span class="nil">none</span></span>
+    <span class="c-d7" role="cell"><span class="flat">no change</span></span>
+    <span class="c-chk" role="cell">checked 2.3 d ago</span>
+  </span>
+</div>
+<div class="hr" role="row" data-cat="foundation" data-total="16666666.666666" style="--i:9;--sf:0.3024">
+  <span class="c-rank" role="cell">10</span>
+  <span class="c-who" role="cell"><b class="nm">Anoma Foundation</b><span class="addr" title="tnam1qrucghh3hw2zq8xtqzdj44nh5nrmnkn0usqng8yq">tnam1qrucg…g8yq</span></span>
+  <span class="c-total" role="cell"><span class="n" data-s="old" tabindex="0" data-prov="Namada indexer and nodes (balance, stake) · old · 03:59:44 UTC · 2.3 d old">16,666,667</span><span class="u">NAM</span></span>
+  <span class="c-pct" role="cell"><span class="n" data-s="old" tabindex="0" data-prov="Namada indexer and nodes (balance, stake) · old · 03:59:44 UTC · 2.3 d old">1.45%</span><i class="bar"></i></span>
+  <span class="c-meta">
+    <span class="c-kind" role="cell"><span class="kind">Foundation</span></span>
+    <span class="c-spend" role="cell"><span class="n" data-s="old" tabindex="0" data-prov="Namada indexer (balance) · old · 03:59:44 UTC · 2.3 d old">16,666,667</span><span class="u">NAM</span></span>
+    <span class="c-stake" role="cell"><span class="nil">none</span></span>
+    <span class="c-d7" role="cell"><span class="flat">no change</span></span>
+    <span class="c-chk" role="cell">checked 2.3 d ago</span>
+  </span>
+</div>
+</div>
+  <p class="stub" data-s="old"><svg class="g" aria-hidden="true"><use href="#i-clock"/></svg><span class="stub-k">Source</span><span class="stub-t">Namada indexer and nodes (balance, stake) · 03:59 · 2.3 d old · stake checks as recent as 10 s ago<span class="stub-s">old</span></span></p>
+  <p class="more-l"><a href="holders.html">All <span class="n" data-s="old" tabindex="0" data-prov="Namada indexer (holder count) · old · 03:59:44 UTC · 2.3 d old">2,209</span> holders <svg class="arr" aria-hidden="true"><use href="#i-arrow"/></svg></a></p>
+</section>
+    <section class="sec" id="reach" aria-labelledby="reach-h">
+  <h2 id="reach-h">How NAM gets from a wallet to a sale</h2>
+  <ol class="path">
+    <li><span class="pn">1</span><div class="pb"><h3>Staked</h3><p>Most NAM is staked with validators. Staked NAM can’t be sold.</p></div><p class="pv"><span class="n" data-s="fresh" tabindex="0" data-prov="Namada nodes (Namada RPC abci_query) · fresh · 11:24:34 UTC · 10 s old">341,947,228</span><span class="u">NAM</span></p></li>
+    <li><span class="pn">2</span><div class="pb"><h3>Unlocked</h3><p>Asking to unstake starts a wait of about <span class="n" data-s="fresh" tabindex="0" data-prov="Chain parameter · fresh · 11:24:45 UTC · 0 s old">13.75</span> days.</p></div><p class="pv"><span class="n" data-s="fresh" tabindex="0" data-prov="Chain parameter · fresh · 11:24:45 UTC · 0 s old">13.75</span><span class="u">days</span></p></li>
+    <li><span class="pn">3</span><div class="pb"><h3>Bridged</h3><p>To be sold, NAM crosses to Osmosis. Crossings usually come before sales.</p></div><p class="pv"><span class="n" data-s="old" tabindex="0" data-prov="flow index (D1 flow index) · old · 08:14:17 UTC · 3.2 h old · last Osmosis flow 32 min ago, last Namada flow 3.2 h ago">19,924</span><span class="u">NAM in 7 days</span></p></li>
+    <li><span class="pn">4</span><div class="pb"><h3>Sold</h3><p>On Osmosis, NAM trades in small pools. An order of 10,000 NAM moves the price <span class="n" data-s="fresh" tabindex="0" data-prov="Osmosis quotes (Osmosis SQS) · fresh · 11:24:46 UTC · 0 s old">2.75%</span>.</p></div><p class="pv"><span class="n" data-s="fresh" tabindex="0" data-prov="Osmosis pools (Osmosis SQS pools) · fresh · 11:24:45 UTC · 0 s old">$1,819</span><span class="u">in all pools</span></p></li>
+  </ol>
+  <p class="side"><b>Shielded NAM</b> sits in a pool whose total is public and whose owners are not: <span class="n" data-s="fresh" tabindex="0" data-prov="Namada nodes (Namada RPC (MASP balance)) · fresh · 11:24:34 UTC · 10 s old">4.4%</span> of all NAM.</p>
+  <div class="drag" data-explainer>
+  <h3 class="h3">Drag an order size</h3>
+  <p class="drag-s">Sell NAM on Osmosis and watch the price move against the pools. Everything on this chart is a quote from the pools at 11:24.</p>
+  <div class="plot plot--curve" data-ymax="35">
+    <div class="plot-y" aria-hidden="true"><span style="top:100%">0%</span><span style="top:71.42857142857143%">10%</span><span style="top:42.85714285714286%">20%</span><span style="top:14.285714285714292%">30%</span></div>
+    <div class="plot-area">
+      <svg viewBox="0 0 100 100" preserveAspectRatio="none" aria-hidden="true"><line x1="0" x2="100" y1="100" y2="100" class="gl"/><line x1="0" x2="100" y1="71.42857142857143" y2="71.42857142857143" class="gl"/><line x1="0" x2="100" y1="42.85714285714286" y2="42.85714285714286" class="gl"/><line x1="0" x2="100" y1="14.285714285714292" y2="14.285714285714292" class="gl"/><polyline class="ln ln-buy" points="0.00,91.02 34.95,84.01 50.00,73.98 69.90,41.46 84.95,19.58 100.00,6.32"/><polyline class="ln ln-sell" points="0.00,98.68 34.95,95.74 50.00,92.15 69.90,81.90 84.95,64.74 100.00,24.93"/></svg>
+      <i class="pd pd-sell" style="left:0.00%;top:98.68%" title="1,000 NAM: 0.46% when selling"></i><i class="pd pd-buy" style="left:0.00%;top:91.02%" title="1,000 NAM: 3.14% when buying"></i><i class="pd pd-sell" style="left:34.95%;top:95.74%" title="5,000 NAM: 1.49% when selling"></i><i class="pd pd-buy" style="left:34.95%;top:84.01%" title="5,000 NAM: 5.60% when buying"></i><i class="pd pd-sell" style="left:50.00%;top:92.15%" title="10,000 NAM: 2.75% when selling"></i><i class="pd pd-buy" style="left:50.00%;top:73.98%" title="10,000 NAM: 9.11% when buying"></i><i class="pd pd-sell" style="left:69.90%;top:81.90%" title="25,000 NAM: 6.34% when selling"></i><i class="pd pd-buy" style="left:69.90%;top:41.46%" title="25,000 NAM: 20.49% when buying"></i><i class="pd pd-sell" style="left:84.95%;top:64.74%" title="50,000 NAM: 12.34% when selling"></i><i class="pd pd-buy" style="left:84.95%;top:19.58%" title="50,000 NAM: 28.15% when buying"></i><i class="pd pd-sell" style="left:100.00%;top:24.93%" title="100,000 NAM: 26.27% when selling"></i><i class="pd pd-buy" style="left:100.00%;top:6.32%" title="100,000 NAM: 32.79% when buying"></i>
+      <i class="cursor" data-cursor><b class="cur-dot" data-cursor-dot></b></i>
+    </div>
+    <div class="plot-x" aria-hidden="true"><span class="first" style="left:0.00%">1k</span><span class="" style="left:34.95%">5k</span><span class="" style="left:50.00%">10k</span><span class="" style="left:69.90%">25k</span><span class="" style="left:84.95%">50k</span><span class="last" style="left:100.00%">100k</span></div>
+  </div>
+  <label class="rl" for="size-r"><span>Order size</span><output class="rl-o" data-o="size">10,000 NAM</output></label>
+  <div class="rwrap"><input id="size-r" class="range" type="range" min="0" max="1000" step="1" value="500" data-range aria-describedby="drag-note">
+    <div class="rticks" aria-hidden="true"><i style="left:0.00%"></i><i style="left:34.95%"></i><i style="left:50.00%"></i><i style="left:69.90%"></i><i style="left:84.95%"></i><i style="left:100.00%"></i></div></div>
+  <dl class="readout">
+    <div><dt>Worth</dt><dd data-o="worth"><span class="n" data-s="fresh" tabindex="0" data-prov="Osmosis quotes (Osmosis SQS) · fresh · 11:24:46 UTC · 0 s old">$10.25</span></dd></div>
+    <div><dt>You get</dt><dd data-o="get"><span class="n" data-s="fresh" tabindex="0" data-prov="Osmosis quotes (Osmosis SQS) · fresh · 11:24:46 UTC · 0 s old">9.96</span><span class="u">USDC</span></dd></div>
+    <div class="em"><dt>Price moves</dt><dd data-o="move"><span class="n" data-s="fresh" tabindex="0" data-prov="Osmosis quotes (Osmosis SQS) · fresh · 11:24:46 UTC · 0 s old">−2.75%</span></dd></div>
+  </dl>
+  <p class="how" id="drag-note" data-o="how"><span class="est" data-est hidden>Estimate</span><span data-o="how-t">This is a real quote: the pools were asked about 10,000 NAM.</span></p>
+  <p class="fine">The dots are the 6 sizes the pools were asked about (1,000 to 100,000 NAM). Between two dots the page draws a straight line between the two real quotes, so treat it as an estimate. Outside the dots it shows nothing. The scale is logarithmic, so equal steps are equal multiples. <span class="key-l"><i class="ln-k ln-k-sell"></i>selling <i class="ln-k ln-k-buy"></i>buying</span></p>
+  <p class="stub" data-s="fresh"><svg class="g" aria-hidden="true"><use href="#i-tick"/></svg><span class="stub-k">Source</span><span class="stub-t">Osmosis quotes · 11:24 · 0 s old<span class="stub-s">fresh</span></span></p>
+</div>
+</section>
+    <section class="sec" id="quote" aria-labelledby="quote-h">
+  <h2 id="quote-h">What would you get right now?</h2>
+  <div class="slip ticket-mini">
+    <div class="slip-h"><p class="slip-t">Quote, as a snapshot</p><p class="slip-s">Static: taken 17 Oct 2026, 11:24 UTC</p></div>
+    <dl class="leaders">
+      <div class="lr"><dt>Amount</dt><dd><span class="dots"></span><span class="v">5,000</span><span class="u">NAM</span></dd></div>
+      <div class="lr"><dt>You get</dt><dd><span class="dots"></span><span class="n" data-s="none" tabindex="0" data-prov="no data">—</span><span class="u">no live quote</span></dd></div>
+      <div class="lr"><dt>Price move</dt><dd><span class="dots"></span><span class="n" data-s="none" tabindex="0" data-prov="no data">—</span><span class="u">no live quote</span></dd></div>
+    </dl>
+    <p class="note" data-tone="warn"><svg class="g" aria-hidden="true"><use href="#i-warn"/></svg><span><b>No live quote.</b> The Osmosis quote service is not answering. Last quoted price: <span class="n" data-s="fresh" tabindex="0" data-prov="Osmosis quotes (Osmosis SQS) · fresh · 11:24:45 UTC · 0 s old">$0.001025</span>, just now.</span></p>
+    <p class="fallback">The size ladder, asked at 11:24, has this size: sell 5,000 NAM, get <span class="n" data-s="fresh" tabindex="0" data-prov="Osmosis quotes (Osmosis SQS) · fresh · 11:24:46 UTC · 0 s old">5.05</span> USDC, price moves <span class="n" data-s="fresh" tabindex="0" data-prov="Osmosis quotes (Osmosis SQS) · fresh · 11:24:46 UTC · 0 s old">−1.49%</span>.</p>
+    <p class="stub" data-s="fresh"><svg class="g" aria-hidden="true"><use href="#i-tick"/></svg><span class="stub-k">Source</span><span class="stub-t">Osmosis quotes · 11:24 · 0 s old<span class="stub-s">fresh</span></span></p>
+    <a class="btn btn-primary" href="trade.html">Full quote <svg class="arr" aria-hidden="true"><use href="#i-arrow"/></svg></a>
+  </div>
+</section>
+  </div>
+  <aside class="rail" aria-label="Right now">
+    <div class="rail-in">
+      <h2 class="rail-t">Right now</h2>
+      <dl class="rn">
+        <div><dt>NAM price</dt><dd><span class="n" data-s="fresh" tabindex="0" data-prov="Osmosis quotes (Osmosis SQS) · fresh · 11:24:45 UTC · 0 s old">$0.001025</span></dd></div>
+        <div><dt>Depth of all 28 pools</dt><dd><span class="n" data-s="fresh" tabindex="0" data-prov="Osmosis pools (Osmosis SQS pools) · fresh · 11:24:45 UTC · 0 s old">$1,819</span></dd></div>
+        <div><dt>NAM on Osmosis</dt><dd><span class="n" data-s="conflict" tabindex="0" data-prov="Osmosis supply record (Keplr Osmosis bank/supply) · sources disagree · 11:24:34 UTC · 10 s old · escrow and Osmosis supply differ by 1,614 NAM">19,988,602</span><span class="u">NAM</span></dd></div>
+        <div><dt>Unstaking takes</dt><dd><span class="n" data-s="fresh" tabindex="0" data-prov="Chain parameter · fresh · 11:24:45 UTC · 0 s old">13.75</span><span class="u">days</span></dd></div>
+      </dl>
+      <p class="stub" data-s="fresh"><svg class="g" aria-hidden="true"><use href="#i-tick"/></svg><span class="stub-k">Source</span><span class="stub-t">Osmosis quotes · 11:24 · 0 s old <i>/</i> Osmosis pools · 11:24 · 0 s old<span class="stub-s">fresh</span></span></p>
+    </div>
+  </aside>
+</div>
+<div class="wrap"><section class="sec" id="trust" aria-labelledby="trust-h">
+  <h2 id="trust-h">Why you can trust these numbers</h2>
+  <ol class="why">
+    <li><h3>Every number shows its source and age.</h3><p>Tap one to see them. The underline says how fresh it is: solid, dotted, wavy or dashed. The key is in the footer.</p></li>
+    <li><h3><span class="n" data-s="fresh" tabindex="0" data-prov="Cross-checks · fresh · 11:24:34 UTC · 10 s old">5</span> of <span class="n" data-s="fresh" tabindex="0" data-prov="Cross-checks · fresh · 11:24:34 UTC · 10 s old">7</span> cross-checks pass right now, 2 need a look.</h3>
+      <ul class="checks">
+<li class="ck" data-ok="false" style="--i:0"><svg class="g" aria-hidden="true"><use href="#i-warn"/></svg><span class="ck-t">NAM held for Osmosis matches NAM issued there</span><span class="ck-d">Namada holds 19,988,602 NAM, Osmosis counts 19,986,988: 1,614 NAM apart</span><span class="ck-s">needs a look</span></li>
+<li class="ck" data-ok="true" style="--i:1"><svg class="g" aria-hidden="true"><use href="#i-tick"/></svg><span class="ck-t">Two independent Namada nodes agree</span><span class="ck-d">2 nodes at block 8,310,298, 0 blocks apart</span><span class="ck-s">passes</span></li>
+<li class="ck" data-ok="true" style="--i:2"><svg class="g" aria-hidden="true"><use href="#i-tick"/></svg><span class="ck-t">Locked and escrowed NAM never exceed what exists</span><span class="ck-d">43.74% of NAM is locked or allocated</span><span class="ck-s">passes</span></li>
+<li class="ck" data-ok="true" style="--i:3"><svg class="g" aria-hidden="true"><use href="#i-tick"/></svg><span class="ck-t">The Namada explorer keeps up with the chain</span><span class="ck-d">0 blocks behind</span><span class="ck-s">passes</span></li>
+<li class="ck" data-ok="true" style="--i:4"><svg class="g" aria-hidden="true"><use href="#i-tick"/></svg><span class="ck-t">Total supply is the same in two sources</span><span class="ck-d">0 NAM apart</span><span class="ck-s">passes</span></li>
+<li class="ck" data-ok="true" style="--i:5"><svg class="g" aria-hidden="true"><use href="#i-tick"/></svg><span class="ck-t">The quoted price is close to what trades paid</span><span class="ck-d">1.33% apart</span><span class="ck-s">passes</span></li>
+<li class="ck" data-ok="false" style="--i:6"><svg class="g" aria-hidden="true"><use href="#i-warn"/></svg><span class="ck-t">Per-address stakes add up to the chain’s total stake</span><span class="ck-d">68.2% of staked NAM traced to addresses</span><span class="ck-s">needs a look</span></li>
+      </ul>
+      <p class="stub" data-s="fresh"><svg class="g" aria-hidden="true"><use href="#i-tick"/></svg><span class="stub-k">Source</span><span class="stub-t">Cross-checks · 11:24 · 10 s old<span class="stub-s">fresh</span></span></p>
+    </li>
+    <li><h3>Rewind: see the site as it was.</h3><p>Try 30 Aug 2026, 19:05 UTC, the first alert before 331 million NAM were withdrawn from staking.</p><p class="lnk"><a href="movers.html?at=1788116700000">Rewind to that time <svg class="arr" aria-hidden="true"><use href="#i-arrow"/></svg></a></p></li>
+    <li class="static"><h3>Tested on 26 past events.</h3><p>Report of 17 Oct 2026, 11:57 UTC: each of the 10 biggest price moves had an alert-size flow in the prior 48 hours, a median of 25 hours ahead. But such flows precede 90% of all hours, so this shows the alerts are not blind, not that they predict direction.</p>
+      <p class="stub" data-s="old"><svg class="g" aria-hidden="true"><use href="#i-clock"/></svg><span class="stub-k">Static</span><span class="stub-t">Dated record, not live · generated 17 Oct 2026, 11:57 UTC</span></p></li>
+  </ol>
+</section></div>
+<script type="application/json" id="curve-data">{"points":[{"n":1000,"worth":1.025414637150394,"so":1.019668,"si":0.4608817048719251,"sa":0.001019668,"bo":1.025415,"bi":3.1430107128913676,"ba":0.0010433914653053791},{"n":5000,"worth":5.12707318575197,"so":5.045588,"si":1.4908027317757044,"sa":0.0010091176000000001,"bo":5.127073,"bi":5.595868643454495,"ba":0.001070500972083934},{"n":10000,"worth":10.25414637150394,"so":9.962327,"si":2.748615652570429,"sa":0.0009962327,"bo":10.254146,"bi":9.10870439765382,"ba":0.00111366659297591},{"n":25000,"worth":25.63536592875985,"so":23.986977,"si":6.3364726108687615,"sa":0.00095947908,"bo":25.635366,"bi":20.488145014776297,"ba":0.001274987813002675},{"n":50000,"worth":51.2707318575197,"so":44.898364,"si":12.341201931340052,"sa":0.00089796728,"bo":51.270732,"bi":28.14729618796894,"ba":0.0014197525273275515},{"n":100000,"worth":102.5414637150394,"so":75.524291,"si":26.2738328945826,"sa":0.0007552429100000001,"bo":102.541464,"bi":32.78823408040147,"ba":0.0015224630372264797}],"spot":0.001025414637150394,"at":1792236286872}</script>
+</main>
+<footer class="foot" id="footer"><div class="wrap">
+  <div class="foot-key">
+    <p class="foot-h">How to read the underlines</p>
+    <ul class="key">
+      <li><span class="n nokey" data-s="fresh">1,819</span><span>solid: fresh</span></li>
+      <li><span class="n nokey" data-s="old">1,819</span><span>dotted: old, with its age</span></li>
+      <li><span class="n nokey" data-s="conflict">1,819</span><span>wavy: sources disagree</span></li>
+      <li><span class="n nokey" data-s="none">—</span><span>dashed: no data, reason shown</span></li>
+    </ul>
+    <p class="foot-s">Tap or focus any number to see its source and time.</p>
+  </div>
+  <div class="foot-copy">
+    <p>Every number shows its source and age. Data: Osmosis router, Namada nodes, indexer.namada.net; records current as of 3.2 h ago. Not investment advice. Not affiliated with Namada or the Anoma Foundation.</p>
+    <p class="foot-l"><a href="home.html#trust">How we know</a><a href="#settings">Settings</a><a href="#api">API</a><a href="#source">Source code</a></p>
+    <p class="foot-t">This page is a frozen frame: snapshot taken 17 Oct 2026, 11:24 UTC. All times UTC.</p>
+  </div>
+</div></footer>
+<nav class="tabbar" aria-label="Primary"><a class="tb" href="home.html" aria-current="page"><svg class="ico" aria-hidden="true"><use href="#i-home"/></svg><span>Home</span></a><a class="tb" href="trade.html"><svg class="ico" aria-hidden="true"><use href="#i-trade"/></svg><span>Trade</span></a><a class="tb" href="#movers"><svg class="ico" aria-hidden="true"><use href="#i-movers"/></svg><span>Movers</span></a><a class="tb" href="holders.html"><svg class="ico" aria-hidden="true"><use href="#i-feed"/></svg><span>Feed</span></a><a class="tb" href="#more" aria-haspopup="dialog"><svg class="ico" aria-hidden="true"><use href="#i-more"/></svg><span>More</span></a></nav>
+<div id="more" class="sheet" role="dialog" aria-label="More">
+  <a class="sheet-scrim" href="#" aria-label="Close"></a>
+  <div class="sheet-body"><div class="sheet-h"><p class="sheet-t">More</p><a class="ibtn" href="#" aria-label="Close"><svg class="ico" aria-hidden="true"><use href="#i-x"/></svg></a></div><a class="mi" href="#shielded"><span class="mi-t">Shielded</span><span class="mi-d">How much NAM can’t be seen</span></a><a class="mi" href="#alerts"><span class="mi-t">Alerts</span><span class="mi-d">What should wake me up</span></a><a class="mi" href="holders.html"><span class="mi-t">Holders</span><span class="mi-d">Who holds NAM, a view of Feed</span></a><a class="mi" href="#rewind"><span class="mi-t">Rewind</span><span class="mi-d">See every number as it was on a past date</span></a><a class="mi" href="home.html#trust"><span class="mi-t">Where every number comes from</span><span class="mi-d">5 of 7 cross-checks pass</span></a><a class="mi" href="#glossary"><span class="mi-t">Glossary</span><span class="mi-d">Staked, bridged, shielded: plain words first</span></a><a class="mi" href="#settings"><span class="mi-t">Settings</span><span class="mi-d">Alert rules, where alerts go, your data</span></a>
+  <p class="sheet-f">All times UTC. Snapshot taken 17 Oct 2026, 11:24.</p></div>
+</div>
+<script>
+/* Tiny progressive bits. The pages are complete without this file; it only makes
+   three things interactive: the order-size explainer (Home), the quote ticket
+   (Trade) and the holder filters (Holders). It never invents a number: between two
+   quoted sizes it draws a straight line between the two real quotes and says so. */
+(function () {
+  'use strict';
+  var $ = function (s, r) { return (r || document).querySelector(s); };
+  var $$ = function (s, r) { return Array.prototype.slice.call((r || document).querySelectorAll(s)); };
+  var MINUS = '−';
+
+  /* ---------- formatting (mirrors build.mjs) ---------- */
+  function nf(n, d) { d = d || 0; return n.toLocaleString('en-US', { minimumFractionDigits: d, maximumFractionDigits: d }); }
+  function usd(v) {
+    var a = Math.abs(v);
+    if (a >= 1000) return '$' + nf(v, 0);
+    if (a >= 0.1) return '$' + nf(v, a >= 1 ? 2 : 2);
+    return '$' + Number(v.toPrecision(4)).toFixed(Math.min(8, Math.max(2, 3 - Math.floor(Math.log10(a)))));
+  }
+  function sgn(v, d) { return (v > 0 ? '+' : v < 0 ? MINUS : '') + nf(Math.abs(v), d == null ? 2 : d) + '%'; }
+  function price6(v) { return '$' + v.toFixed(6); }
+  /* write into the inner .n span so the underline and tap-receipt stay on the number */
+  function setN(el, text) { if (!el) return; var n = $('.n', el); if (n) n.textContent = text; else el.textContent = text; }
+
+  /* ---------- the curve ---------- */
+  var dataEl = $('#curve-data');
+  var D = dataEl ? JSON.parse(dataEl.textContent) : null;
+  var P = D ? D.points : null;
+
+  function logPos(n, lo, hi) { return (Math.log(n) - Math.log(lo)) / (Math.log(hi) - Math.log(lo)); }
+  function fromSlider(s) {
+    var lo = P[0].n, hi = P[P.length - 1].n;
+    var amount = Math.exp(Math.log(lo) + (s / 1000) * (Math.log(hi) - Math.log(lo)));
+    // snap to a real quoted size when the handle is close, so the dots are reachable
+    for (var i = 0; i < P.length; i++) { if (Math.abs(s - logPos(P[i].n, lo, hi) * 1000) < 9) return P[i].n; }
+    return Math.round(amount / 10) * 10;
+  }
+  function toSlider(n) { return Math.round(logPos(n, P[0].n, P[P.length - 1].n) * 1000); }
+  function lerp(a, b, t) { return a + (b - a) * t; }
+  function quote(n) {
+    var lo = P[0].n, hi = P[P.length - 1].n;
+    if (n < lo || n > hi) return null;
+    for (var i = 0; i < P.length; i++) {
+      if (P[i].n === n) return { exact: true, a: P[i], b: P[i], t: 0, v: P[i] };
+      if (i < P.length - 1 && n > P[i].n && n < P[i + 1].n) {
+        var t = (n - P[i].n) / (P[i + 1].n - P[i].n), a = P[i], b = P[i + 1], v = { n: n };
+        ['worth', 'so', 'si', 'bo', 'bi'].forEach(function (k) { v[k] = lerp(a[k], b[k], t); });
+        v.sa = v.so / n; v.ba = v.bo / n;
+        return { exact: false, a: a, b: b, t: t, v: v };
+      }
+    }
+    return null;
+  }
+  function howText(q, n, side) {
+    if (q.exact) return 'A real quote: the pools were asked about ' + nf(n) + ' NAM.';
+    return 'A straight line between the real ' + nf(q.a.n) + ' and ' + nf(q.b.n) + ' NAM quotes. The pools were not asked about ' + nf(n) + ' NAM.';
+  }
+
+  /* ---------- Home: the explainer ---------- */
+  var ex = $('[data-explainer]');
+  if (ex && P) {
+    var range = $('[data-range]', ex), plot = $('.plot--curve', ex), yMax = +plot.getAttribute('data-ymax');
+    var cursor = $('[data-cursor]', ex), cdot = $('[data-cursor-dot]', ex);
+    var paint = function () {
+      var n = fromSlider(+range.value), q = quote(n), v = q.v, x = logPos(n, P[0].n, P[P.length - 1].n) * 100;
+      cursor.style.left = x + '%';
+      cdot.style.top = (100 - (v.si / yMax) * 100) + '%';
+      $('[data-o="size"]', ex).textContent = nf(n) + ' NAM';
+      setN($('[data-o="worth"]', ex), usd(v.worth));
+      setN($('[data-o="get"]', ex), nf(v.so, 2));
+      setN($('[data-o="move"]', ex), sgn(-v.si));
+      $('[data-o="how-t"]', ex).textContent = howText(q, n);
+      $('[data-est]', ex).hidden = q.exact;
+    };
+    range.addEventListener('input', paint);
+    paint();
+  }
+
+  /* ---------- Trade: the ticket ---------- */
+  var tk = $('[data-ticket]');
+  if (tk && P) {
+    var side = 'sell', n0 = 5000;
+    var amt = $('[data-amt]', tk), r2 = $('[data-range]', tk), oor = $('[data-oor]', tk);
+    var main = document.getElementById('main');
+    var h1t = $('[data-h1-t]');
+    var set = function (n, from) {
+      var q = quote(n);
+      var bad = !q;
+      oor.hidden = !bad;
+      $('.get', tk).classList.toggle('is-oor', bad);
+      if (from !== 'input') amt.value = nf(n);
+      if (from !== 'range' && !bad) r2.value = toSlider(n);
+      $$('[data-preset]', tk).forEach(function (b) { var on = +b.getAttribute('data-preset') === n; b.classList.toggle('on', on); b.setAttribute('aria-pressed', on); });
+      $$('[data-amt]', document).forEach(function (row) { if (row.classList.contains('lad')) row.classList.toggle('is-on', +row.getAttribute('data-amt') === n); });
+      if (bad) {
+        ['get-n', 'move', 'avg', 'worth'].forEach(function (k) { setN($('[data-o="' + k + '"]', tk), '—'); });
+        return;
+      }
+      var v = q.v, buying = side === 'buy';
+      setN($('[data-o="worth"]', tk), usd(v.worth));
+      setN($('[data-o="get-n"]', tk), nf(buying ? v.bo : v.so, 2));
+      setN($('[data-o="move"]', tk), buying ? sgn(v.bi) : sgn(-v.si));
+      setN($('[data-o="avg"]', tk), price6(buying ? v.ba : v.sa));
+      $('[data-o="how-t"]', tk).textContent = howText(q, n);
+      $('[data-est]', tk).hidden = q.exact;
+    };
+    var cur = n0;
+    var go = function (n, from) { cur = n; set(n, from); };
+    amt.addEventListener('input', function () {
+      var raw = amt.value.replace(/[^0-9]/g, ''); var n = raw ? +raw : 0;
+      cur = n; set(n, 'input');
+    });
+    amt.addEventListener('blur', function () { if (quote(cur)) amt.value = nf(cur); });
+    r2.addEventListener('input', function () { go(fromSlider(+r2.value), 'range'); });
+    $$('[data-preset]', tk).forEach(function (b) { b.addEventListener('click', function () { go(+b.getAttribute('data-preset')); }); });
+    $$('.lad').forEach(function (row) {
+      var pick = function () { go(+row.getAttribute('data-amt')); window.scrollTo({ top: tk.getBoundingClientRect().top + window.scrollY - 70, behavior: 'smooth' }); };
+      row.addEventListener('click', pick);
+      row.addEventListener('keydown', function (e) { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); pick(); } });
+    });
+    $$('[data-side-b]', tk).forEach(function (b) {
+      b.addEventListener('click', function () {
+        side = b.getAttribute('data-side-b');
+        $$('[data-side-b]', tk).forEach(function (x) { x.setAttribute('aria-pressed', x === b); });
+        tk.setAttribute('data-side', side); main.setAttribute('data-side', side);
+        $('[data-o="get-l"]', tk).textContent = side === 'buy' ? 'You pay' : 'You get';
+        $('.get-n .u', tk).textContent = 'USDC';
+        h1t.textContent = side === 'buy' ? 'What would I pay to buy NAM now?' : 'What would I get if I sold NAM now?';
+        set(cur, 'side');
+      });
+    });
+    main.setAttribute('data-side', 'sell');
+    set(n0);
+  }
+
+  /* ---------- Holders: filters ---------- */
+  var fl = $('[data-filters]');
+  if (fl) {
+    var rows = $$('.hr'), shown = $('[data-shown]'), empty = $('[data-empty]');
+    var state = { f: 'all', sz: 0 };
+    var apply = function () {
+      var n = 0;
+      rows.forEach(function (r) {
+        var show = (state.f === 'all' || r.getAttribute('data-cat') === state.f) && +r.getAttribute('data-total') >= state.sz;
+        r.hidden = !show; if (show) n++;
+      });
+      shown.textContent = n; empty.hidden = n !== 0;
+      $$('[data-f]', fl).forEach(function (c) { var on = c.getAttribute('data-f') === state.f; c.classList.toggle('on', on); c.setAttribute('aria-pressed', on); });
+      $$('[data-sz]', fl).forEach(function (c) { var on = +c.getAttribute('data-sz') === state.sz; c.classList.toggle('on', on); c.setAttribute('aria-pressed', on); });
+    };
+    $$('[data-f]', fl).forEach(function (c) { c.addEventListener('click', function () { state.f = c.getAttribute('data-f'); apply(); }); });
+    $$('[data-sz]', fl).forEach(function (c) { c.addEventListener('click', function () { state.sz = +c.getAttribute('data-sz'); apply(); }); });
+    $$('[data-chain]', fl).forEach(function (b) {
+      b.addEventListener('click', function () {
+        var ch = b.getAttribute('data-chain');
+        $$('[data-chain]', fl).forEach(function (x) { x.setAttribute('aria-pressed', x === b); });
+        $$('[data-panel]').forEach(function (p) { p.hidden = p.getAttribute('data-panel') !== ch; });
+        $('.fchips', fl).hidden = ch !== 'namada';
+        $('.fcount', fl).hidden = ch !== 'namada';
+      });
+    });
+    if (location.hash === '#osmosis') { var ob = $('[data-chain="osmosis"]', fl); if (ob) ob.click(); }
+  }
+})();
+
+</script>
+</body>
+</html>

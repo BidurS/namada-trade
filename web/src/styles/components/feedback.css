@@ -1,0 +1,46 @@
+/* ==========================================================================
+   Feedback (F3): Notice, EmptyState, Skeleton. Ported from final/site.css
+   "notice and empty"; the skeleton is new (system.md 8): row-shaped blocks at
+   final heights, one shimmer loop of 1.2 s, static under reduced motion.
+   ========================================================================== */
+@layer components {
+  /* ---------- notice: left 3 px rule, 20 px icon, title 600, sub 13 px ---------- */
+  .notice { display: grid; grid-template-columns: 20px minmax(0, 1fr); gap: var(--s-3); align-items: start; padding: var(--s-3) var(--s-4); border-left: 3px solid var(--notice, var(--c-ink-2)); }
+  .notice[data-tone="info"] { --notice: var(--c-ink-2); }
+  .notice[data-tone="success"] { --notice: var(--c-good); }
+  .notice[data-tone="warning"], .notice[data-tone="warn"] { --notice: var(--c-warn); }
+  .notice[data-tone="danger"] { --notice: var(--c-bad); }
+  .ground-accent .notice, .g-accent-to-ink .notice { --notice: #000; background: rgb(0 0 0 / .06); }
+  @media (min-width: 1024px) {
+    .g-accent-to-ink .notice { background: none; }
+    .g-accent-to-ink .notice[data-tone="info"] { --notice: var(--c-ink-2); }
+    .g-accent-to-ink .notice[data-tone="success"] { --notice: var(--c-good); }
+    .g-accent-to-ink .notice[data-tone="warning"] { --notice: var(--c-warn); }
+    .g-accent-to-ink .notice[data-tone="danger"] { --notice: var(--c-bad); }
+  }
+  .notice__i { width: 20px; height: 20px; margin-top: 1px; color: var(--notice); }
+  .notice__t { font-weight: var(--w-semi); }
+  .notice__s { margin-top: 2px; font-size: var(--t-13); line-height: 20px; color: var(--c-ink-2); }
+  .notice__s [data-num] { color: var(--c-ink); }
+  .notice__s [data-num][data-status="none"], .notice__s [data-num][data-status="old"] { color: var(--c-ink-2); }
+  .notice__a { margin-top: var(--s-1); }
+
+  /* ---------- empty state: dashed ring, one title, one sentence, the last one and a rewind link ---------- */
+  .empty { display: grid; grid-template-columns: 40px minmax(0, 1fr); gap: var(--s-4); align-items: start; padding: var(--s-4); border: 1px dashed var(--c-line-strong); border-radius: var(--r-1); }
+  .empty__ring { width: 40px; height: 40px; color: var(--c-ink-2); }
+  .empty__t { font-size: var(--t-18); line-height: var(--lh-18); font-weight: var(--w-medium); }
+  .empty__s { margin-top: var(--s-1); font-size: var(--t-13); line-height: 20px; color: var(--c-ink-2); }
+  .empty__s a { color: var(--c-ink); font-weight: var(--w-medium); text-underline-offset: 3px; }
+  .empty__last { display: flex; flex-wrap: wrap; align-items: center; gap: var(--s-2); margin-top: var(--s-3); font-size: var(--t-13); line-height: 20px; }
+  .empty__a { margin-top: var(--s-2); }
+
+  /* ---------- skeleton: blocks at the final heights; footers hidden until data ---------- */
+  .skel { display: grid; }
+  .skel__row { display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: center; gap: var(--s-2) var(--s-4); padding: 12px 0; border-top: 1px solid var(--c-line); }
+  .skel__b { display: block; height: 14px; border-radius: var(--r-1); background: linear-gradient(90deg, var(--c-hover) 0 40%, color-mix(in srgb, var(--c-ink) 18%, transparent) 50%, var(--c-hover) 60% 100%) 0 0 / 300% 100%; animation: nt-shimmer 1.2s linear infinite; }
+  .skel__b--w60 { width: 60%; } .skel__b--w40 { width: 40%; } .skel__b--w30 { width: 30%; } .skel__b--n { width: 72px; height: 18px; }
+  .skel__b--sm { height: 10px; }
+  .skel__chip { display: inline-block; width: 140px; height: 24px; border-radius: var(--r-pill); }
+  .skel__block { display: block; width: 100%; }
+  @keyframes nt-shimmer { from { background-position: 100% 0; } to { background-position: 0 0; } }
+}

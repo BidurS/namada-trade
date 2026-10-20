@@ -1,0 +1,12 @@
+node_modules/
+web/dist/
+.wrangler/
+.dev.vars
+scripts/out/
+*.log
+.DS_Store
+.claude/settings.local.json
+.claude/worktrees/
+
+# Personal data that never goes public (the owner's own trades and their reports)
+private/

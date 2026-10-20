@@ -1,0 +1,390 @@
+/* ==========================================================================
+   NamadaTrade design tokens, v1.0 (2026-10-17). Source of truth for colour,
+   type, space, radius, elevation, motion and the base resets. No component
+   styles live here (components are written in @layer components against
+   these variables; see system.md and build-plan.md).
+
+   CONCEPT, IN ONE LINE: "The Reading". A yellow field and a black ink,
+   issued by the same house as namada.net. Every large surface carries one
+   reading: a figure, a stamp (dot and age) and, where it measures something,
+   a scale. Yellow states the question and the reading; black shows the
+   evidence. We borrow Namada Yellow, black, Space Grotesk and the nouns
+   "shielded" and "shielded set"; the instrument surface, tabular numbers with
+   provenance, question headlines and the dial mark are ours.
+
+   HOW TO USE
+   - Import this file FIRST in web/src/index.css. It declares the layer order,
+     so a utility class can never lose to a component by accident (defect 7 in
+     the brief: unlayered primitives beat Tailwind utilities).
+   - Components read the --c-* "ground" tokens (ink on the current band), not
+     --ink/--bg directly, so one component works on black, on yellow and on
+     paper. Put .ground-ink, .ground-accent or .g-accent-to-ink on a band.
+   - Theme: <html data-theme="dark|light">. Unset means dark. "Match my
+     device" is a boot script that resolves to dark or light before first
+     paint; there is no third token set.
+   - Names that Tailwind v4 also defines (--font-sans, --font-mono, --ease-out,
+     --radius-*, --shadow-*) are NOT used here, so Tailwind's theme layer can
+     never overwrite a token while old views still use it.
+
+   CONTRAST. WCAG 2.1 relative-luminance ratios, recomputed independently by
+   script (docs/design/system.md section 4 has the full matrix). Floors:
+   4.5:1 text, 3:1 at 24 px or 18.66 px bold, 3:1 for control borders, chart
+   marks and focus rings. --ink-3 is for 12 px and up and never for numbers.
+   ========================================================================== */
+
+@layer reset, tokens, base, components, utilities;
+
+/* ==========================================================================
+   TOKENS
+   ========================================================================== */
+@layer tokens {
+
+  /* :where() keeps this block at the specificity of :root, so the responsive :root rules below
+     (--gutter, --header-h, --t-display) also win when data-theme="dark" is set. */
+  :root,
+  :where(:root[data-theme="dark"]) {
+    color-scheme: dark;
+
+    /* ---------- Colour, dark (default). Ratios on bg / surface / surface-2 ---------- */
+    --bg:            #000000;   /* black bands                                          */
+    --surface:       #0d0d0d;   /* sheets, popovers, inset panels. ink on it 17.8       */
+    --surface-2:     #171717;   /* chips, inset fields. ink on it 16.4                  */
+    --line:          #242424;   /* hairline between rows. decorative only (not a boundary) */
+    --line-strong:   #666666;   /* control borders, 3:1+: 3.66 / 3.38 / 3.12             */
+
+    --ink:           #f5f5f5;   /* 19.3 / 17.8 / 16.4                                   */
+    --ink-2:         #a8a8a8;   /*  8.8 /  8.2 /  7.5  secondary text, dimmed (old) numbers */
+    --ink-3:         #858585;   /*  5.7 /  5.3 /  4.9  12 px and up; NEVER on a number     */
+
+    --accent:        #ffff00;   /* Namada Yellow: field, mark, focus, active underline   */
+    --accent-ink:    #000000;   /* on --accent 19.6                                      */
+    --accent-text:   #ffff00;   /* yellow used as text or a mark on black: 19.6          */
+    --focus:         #ffff00;   /* 2 px ring + 2 px offset: 19.6 on bg                   */
+
+    --shielded:      #00ffff;   /* shielded module only, always with words. 16.8 on bg   */
+    --shielded-fill: #00ffff;   /* fill twin: unchanged in light                         */
+
+    /* Flow tags: hue as text on a 6% tint of the ground. Only inside a Tag, always with
+       a glyph and a word. Tag text on bg / surface: buy 5.5/5.1, sell 5.2/4.8, ibc 5.9/5.4,
+       shield 6.4/5.9, pos 5.1/4.7 (tags sit on --bg or --surface only) */
+    --buy:           #3987e5;
+    --sell:          #d95926;
+    --ibc:           #199e70;
+    --shield:        #9085e9;
+    --pos:           #d55181;
+    --tag-tint:      6%;
+    --buy-bg:        color-mix(in srgb, var(--buy) 24%, transparent);    /* tick flash only (price or net-flow value changed), fades to transparent in 320 ms */
+    --sell-bg:       color-mix(in srgb, var(--sell) 24%, transparent);
+
+    /* Status. Only for fresh / old / no data / sources disagree, always beside a word */
+    --good:          #2fbf2f;   /* fresh.    8.6 on bg                                   */
+    --warn:          #ff9d00;   /* old.      10.1                                        */
+    --bad:           #ff5c5c;   /* disagree. 6.9                                         */
+
+    --scrim:         rgb(0 0 0 / .6);
+
+    /* Primary button: the high-contrast pill of the ground it sits on */
+    --btn-primary-bg:  #ffff00;
+    --btn-primary-ink: #000000;
+
+    /* Supply bar fills (the "rest" segment is a solid tone, never an empty outline) */
+    --fill-staked:   #a8a8a8;   /* = ink-2 */
+    --fill-rest:     #3a3a3a;   /* ink on it 10.4 (in-bar label); black on --fill-staked 8.8 */
+
+    /* Bezel: header and tab bar are black in BOTH themes (the instrument's frame) */
+    --chrome:        #000000;
+    --chrome-line:   #2a2a2a;
+    --chrome-ink:    #f5f5f5;   /* 19.3 */
+    --chrome-ink-2:  #a8a8a8;   /*  8.8 */
+
+    /* Yellow ground. Black type only; tints are black at alpha. */
+    --accent-ink-2:  #3d3d00;   /* secondary text on yellow  10.5 */
+    --accent-ink-3:  #616100;   /* 12 px captions on yellow   6.1 */
+    --accent-line:   #b8b800;   /* hairline on yellow, decorative */
+    --accent-wash:   #e6e600;   /* inset hover on yellow */
+    --accent-chip-ink: #f5f5f5; /* text on a black chip: 19.3 */
+
+    /* ---------- Typography ---------- */
+    --font-text: "Space Grotesk Variable", "Space Grotesk", ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+    --font-code: "JetBrains Mono", ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+
+    /* size / line-height pairs in rem (1rem = 16 px). Real contrast between neighbours:
+       11 12 13 15 18 24 32 48 80. One large moment per screen; everything else 24 px or less. */
+    --t-11: .6875rem;   --lh-11: 1rem;       /* 11 px: eyebrow (caps +0.08em), tab labels, chart ticks. Nothing else */
+    --t-12: .75rem;     --lh-12: 1rem;       /* 12 px: provenance, ages, column heads, units. mono 400-500            */
+    --t-13: .8125rem;   --lh-13: 1.25rem;    /* 13 px: captions, controls, chips, row detail                          */
+    --t-15: .9375rem;   --lh-15: 1.375rem;   /* 15 px: body                                                            */
+    --t-18: 1.125rem;   --lh-18: 1.625rem;   /* 18 px: lead sentence, row numbers, list titles                         */
+    --t-24: 1.5rem;     --lh-24: 1.75rem;    /* 24 px: H2, panel numbers (tnum)                                        */
+    --t-32: 2rem;       --lh-32: 2.125rem;   /* 32 px: H1 on phones (caps), hero numbers on phones                    */
+    --t-48: 3rem;       --lh-48: 3rem;       /* 48 px: H1 from 1024 (caps), the Trade "You get" number                 */
+    --t-display: clamp(3rem, 17vw, 5rem);    /* Home price only: 64 px at 375, 80 px from 471 px; see 1024 rule below   */
+    --lh-display: 1;
+
+    --w-regular: 400;  --w-medium: 500;  --w-semi: 600;  --w-bold: 700;
+    --track-caps: .08em;        /* eyebrows                       */
+    --track-display: -.015em;   /* H1 (caps)                      */
+    --track-h2: -.01em;         /* H2 (sentence case, 600)        */
+    --track-num: -.02em;        /* big numbers                    */
+    --track-wordmark: .06em;
+
+    /* ---------- Spacing: 4 8 12 16 24 32 48 64 96 (rem) ---------- */
+    --s-1: .25rem;  --s-2: .5rem;   --s-3: .75rem;  --s-4: 1rem;    --s-5: 1.5rem;
+    --s-6: 2rem;    --s-7: 3rem;    --s-8: 4rem;    --s-9: 6rem;
+
+    --gutter: 1rem;             /* 16 phone; 24 from 640, 32 from 1024 (rules below) */
+    --max: 75rem;               /* content max width 1200 */
+    --max-wide: 85rem;          /* Activity 1360 */
+    --header-h: 3.25rem;        /* 52 phone; 64 from 1024 */
+    --tabbar-h: 3.5rem;         /* 56 plus env(safe-area-inset-bottom) */
+    --banner-h: 3.25rem;        /* rewind banner, sticky under the header on phones: 52 px, a 44 px button with 4 px above and below */
+    --tap: 2.75rem;             /* 44 px minimum target */
+    --hit: 2.75rem;
+
+    /* ---------- Radius: three values only ---------- */
+    --r-0: 0;                   /* bands, lists, tables, sheets (sheets carry a 2 px yellow top rule) */
+    --r-1: 2px;                 /* tags, inputs, insets */
+    --r-pill: 999px;            /* buttons, chips, segmented controls, delta pill */
+
+    /* ---------- Elevation: tone plus hairline; one shadow for overlays ---------- */
+    --shadow-overlay: 0 24px 48px -12px rgb(0 0 0 / .6);
+    --shadow-1: none;
+    --shadow-2: none;
+
+    /* ---------- Motion ---------- */
+    --d-1: 120ms;  --d-2: 200ms;  --d-3: 320ms;  --d-chart: 600ms;
+    --ease-enter: cubic-bezier(.16, 1, .3, 1);   /* entering */
+    --ease-state: cubic-bezier(.4, 0, .2, 1);    /* state change; exits run at 0.75x the enter time */
+    --stagger: 80ms;
+
+    /* ---------- Layers ---------- */
+    --z-header: 30;  --z-banner: 35;  --z-tabbar: 40;   /* sheets and popovers use the top layer */
+
+    /* ---------- Focus ---------- */
+    --ring-w: 2px;   --ring-o: 2px;
+  }
+
+  /* ---------- Light theme: <html data-theme="light"> ---------- */
+  :root[data-theme="light"] {
+    color-scheme: light;
+    --bg:            #f4f4f2;
+    --surface:       #ffffff;
+    --surface-2:     #ececea;
+    --line:          #dcdcd8;
+    --line-strong:   #767676;   /* 4.1 on bg, 4.5 on surface, 3.8 on surface-2 */
+
+    --ink:           #000000;   /* 19.1 on bg, 21.0 on surface */
+    --ink-2:         #4d4d4d;   /*  7.7 / 8.5 / 7.2 */
+    --ink-3:         #6b6b6b;   /*  4.8 / 5.3 / 4.5 */
+    --accent-text:   #5c5100;   /* yellow's text twin on paper: 7.2 on bg */
+    --focus:         #000000;
+    --shielded:      #006b6b;   /* text 5.8 on bg; #00ffff stays as the fill */
+
+    --buy:  #1f5fb0;            /* tag text on tint over bg / surface: 5.4/5.9 */
+    --sell: #b8431a;            /* 4.6/5.1 */
+    --ibc:  #0f7a55;            /* 4.5/5.0 */
+    --shield: #6250d6;          /* 4.9/5.4 */
+    --pos:  #b02f63;            /* 5.2/5.7 */
+    --tag-tint: 5%;
+
+    --good: #0a7a0a;            /* 5.0 / 5.5 / 4.7 */
+    --warn: #a84a07;            /* darkened from the brief's #b45309 (4.25 on surface-2): 5.2 / 5.8 / 4.9 */
+    --bad:  #b42323;            /* 6.0 / 6.6 / 5.5 */
+    --scrim: rgb(0 0 0 / .4);
+
+    --btn-primary-bg:  #000000; /* yellow on black 19.6; yellow on paper would be 1.03 */
+    --btn-primary-ink: #ffff00;
+
+    --fill-staked: #4d4d4d;
+    --fill-rest:   #d6d6d2;     /* black on it 14.4; white on --fill-staked 8.5 */
+
+    --shadow-1: 0 1px 2px rgb(0 0 0 / .06);
+    --shadow-2: 0 4px 12px rgb(0 0 0 / .08);
+    --shadow-overlay: 0 24px 48px -12px rgb(0 0 0 / .18);
+  }
+
+  /* ---------- Responsive token values (breakpoints: 360 min, 640, 768, 1024, 1280) ---------- */
+  @media (min-width: 640px)  { :root { --gutter: 1.5rem; } }
+  @media (min-width: 1024px) {
+    :root {
+      --gutter: 2rem;
+      --header-h: 4rem;
+      --t-display: clamp(4rem, 6.4vw, 5rem);   /* never outgrows its five columns */
+    }
+  }
+
+  /* ==========================================================================
+     GROUNDS. A band picks a ground; every component reads --c-* only, so one
+     component works on black, on yellow and on paper (the light theme's black
+     ground). The default ground is ink.
+     ========================================================================== */
+  :root,
+  .ground-ink {
+    --c-bg: var(--bg);
+    --c-ink: var(--ink);
+    --c-ink-2: var(--ink-2);
+    --c-ink-3: var(--ink-3);
+    --c-line: var(--line);
+    --c-line-strong: var(--line-strong);
+    --c-focus: var(--focus);
+    --c-primary-bg: var(--btn-primary-bg);
+    --c-primary-ink: var(--btn-primary-ink);
+    --c-chip-bg: var(--surface-2);
+    --c-chip-ink: var(--ink);
+    --c-chip-line: var(--line-strong);   /* 3.66 on black: the chip boundary meets 1.4.11 */
+    --c-sel-bg: var(--ink);              /* selected segmented option, preset, ladder row */
+    --c-sel-ink: var(--bg);
+    --c-mark: var(--accent-text);        /* the one yellow moment on black: Osmosis slice, last-value pill */
+    --c-mark-ink: var(--accent-ink);
+    --c-hover: color-mix(in srgb, var(--ink) 10%, transparent);
+    --c-good: var(--good);               /* status hues as seen on this ground */
+    --c-warn: var(--warn);
+    --c-bad: var(--bad);
+  }
+  .ground-ink { background: var(--c-bg); color: var(--c-ink); }
+  :root[data-theme="light"] { --c-mark: #000000; --c-mark-ink: #ffff00; }
+  :root[data-theme="light"] .ground-ink { --c-mark: #000000; --c-mark-ink: #ffff00; }
+
+  .ground-accent {
+    --c-bg: var(--accent);
+    --c-ink: #000000;                 /* 19.6 */
+    --c-ink-2: var(--accent-ink-2);   /* 10.5 */
+    --c-ink-3: var(--accent-ink-3);   /*  6.1 */
+    --c-line: var(--accent-line);
+    --c-line-strong: #000000;
+    --c-focus: #000000;
+    --c-primary-bg: #000000;          /* yellow on black 19.6 */
+    --c-primary-ink: var(--accent);
+    --c-chip-bg: #000000;             /* chips are black pills on yellow: status dots keep their dark-theme colours */
+    --c-chip-ink: var(--accent-chip-ink);
+    --c-chip-line: #000000;
+    --c-sel-bg: #000000;
+    --c-sel-ink: var(--accent);
+    --c-mark: #000000;
+    --c-mark-ink: var(--accent);
+    --c-hover: rgb(0 0 0 / .1);
+    --c-good: #2fbf2f; --c-warn: #ff9d00; --c-bad: #ff5c5c;   /* dark-theme status hues, used inside black chips on yellow */
+    background: var(--c-bg);
+    color: var(--c-ink);
+  }
+
+  /* Yellow on phones, black from 1024 px (Trade size block: stacked it sits on a yellow band, beside the sticky ticket it sits on black) */
+  .g-accent-to-ink {
+    --c-bg: var(--accent);
+    --c-ink: #000000;
+    --c-ink-2: var(--accent-ink-2);
+    --c-ink-3: var(--accent-ink-3);
+    --c-line: var(--accent-line);
+    --c-line-strong: #000000;
+    --c-focus: #000000;
+    --c-primary-bg: #000000;
+    --c-primary-ink: var(--accent);
+    --c-chip-bg: #000000;
+    --c-chip-ink: var(--accent-chip-ink);
+    --c-chip-line: #000000;
+    --c-sel-bg: #000000;
+    --c-sel-ink: var(--accent);
+    --c-mark: #000000;
+    --c-mark-ink: var(--accent);
+    --c-hover: rgb(0 0 0 / .1);
+    --c-good: #2fbf2f; --c-warn: #ff9d00; --c-bad: #ff5c5c;
+    background: var(--c-bg);
+    color: var(--c-ink);
+  }
+  @media (min-width: 1024px) {
+    .g-accent-to-ink {
+      --c-bg: var(--bg);
+      --c-ink: var(--ink);
+      --c-ink-2: var(--ink-2);
+      --c-ink-3: var(--ink-3);
+      --c-line: var(--line);
+      --c-line-strong: var(--line-strong);
+      --c-focus: var(--focus);
+      --c-primary-bg: var(--btn-primary-bg);
+      --c-primary-ink: var(--btn-primary-ink);
+      --c-chip-bg: var(--surface-2);
+      --c-chip-ink: var(--ink);
+      --c-chip-line: var(--line-strong);
+      --c-sel-bg: var(--ink);
+      --c-sel-ink: var(--bg);
+      --c-mark: var(--accent-text);
+      --c-mark-ink: var(--accent-ink);
+      --c-hover: color-mix(in srgb, var(--ink) 10%, transparent);
+      --c-good: var(--good); --c-warn: var(--warn); --c-bad: var(--bad);
+    }
+  }
+
+  /* The bezel (header, tab bar): black in both themes */
+  .ground-chrome {
+    --c-bg: var(--chrome);
+    --c-ink: var(--chrome-ink);
+    --c-ink-2: var(--chrome-ink-2);
+    --c-ink-3: #858585;
+    --c-line: var(--chrome-line);
+    --c-line-strong: #666666;
+    --c-focus: var(--accent);
+    --c-chip-bg: #171717;
+    --c-chip-ink: #f5f5f5;
+    --c-chip-line: #666666;
+    --c-hover: rgb(255 255 255 / .1);
+    --c-good: #2fbf2f; --c-warn: #ff9d00; --c-bad: #ff5c5c;
+    background: var(--c-bg);
+    color: var(--c-ink);
+  }
+}
+
+/* ==========================================================================
+   RESET
+   ========================================================================== */
+@layer reset {
+  *, *::before, *::after { box-sizing: border-box; }
+  html { -webkit-text-size-adjust: 100%; text-size-adjust: 100%; }
+  h1, h2, h3, h4, p, ul, ol, dl, dd, dt, figure, fieldset, blockquote { margin: 0; padding: 0; }
+  ul, ol { list-style: none; }
+  fieldset { border: 0; min-width: 0; }
+  a { color: inherit; }
+  button, input, select, textarea { font: inherit; color: inherit; }
+  button { cursor: pointer; }
+  svg { display: block; }
+  img, video { max-width: 100%; height: auto; }
+  table { border-collapse: collapse; }
+  [hidden] { display: none !important; }
+}
+
+/* ==========================================================================
+   BASE
+   ========================================================================== */
+@layer base {
+  html {
+    /* anchor and focus jumps clear the sticky header and the fixed tab bar (WCAG 2.4.11) */
+    scroll-padding-top: calc(var(--header-h) + var(--s-2));
+    scroll-padding-bottom: calc(var(--tabbar-h) + env(safe-area-inset-bottom, 0px) + var(--s-4));
+  }
+  body {
+    margin: 0;
+    background: var(--bg);
+    color: var(--ink);
+    font: var(--w-regular) var(--t-15) / var(--lh-15) var(--font-text);
+    font-variant-numeric: tabular-nums;
+    font-feature-settings: "tnum" 1;
+    -webkit-font-smoothing: antialiased;
+    text-rendering: optimizeLegibility;
+    padding-bottom: calc(var(--tabbar-h) + env(safe-area-inset-bottom, 0px));
+    overflow-x: clip;   /* a safety net; layouts must not rely on it (the overflow gate checks scrollWidth) */
+  }
+  @media (min-width: 1024px) { body { padding-bottom: 0; } }
+
+  b, strong { font-weight: var(--w-medium); }
+  :focus-visible { outline: var(--ring-w) solid var(--c-focus, var(--focus)); outline-offset: var(--ring-o); }
+  ::selection { background: var(--accent); color: #000; }
+
+  .sr-only { position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; border: 0; }
+  .skip { position: absolute; left: -999px; top: var(--s-2); z-index: 100; background: var(--accent); color: #000; padding: var(--s-3) var(--s-4); font-weight: var(--w-medium); }
+  .skip:focus { left: var(--s-2); }
+
+  /* Reduced motion: nothing animates or transitions; every final state is the first state.
+     Test: document.getAnimations().length === 0 after load. */
+  @media (prefers-reduced-motion: reduce) {
+    *, *::before, *::after { animation: none !important; transition: none !important; scroll-behavior: auto !important; }
+  }
+}

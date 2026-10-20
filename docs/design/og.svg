@@ -1,0 +1,46 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="630" viewBox="0 0 1200 630">
+  <!--
+    NamadaTrade Open Graph image (system.md 8, owner decision 1): the yellow field, the black dial
+    and wordmark top left, the tagline in caps 600, the scale on the bottom edge. No live numbers:
+    a static image must not carry a price.
+    Source of web/public/og.png: open this file in headless Chrome (Playwright, a 1200 x 630
+    viewport, device scale 1, not mobile) and take a screenshot. The @font-face rules below resolve
+    from this folder to the fontsource packages in node_modules, so the real fonts render.
+    Line breaks are measured: "WHAT MOVED, WHO MOVED IT," is 1,036 px wide at 76 px (1,040 px fit).
+  -->
+  <title>NamadaTrade: what moved, who moved it, and what it costs to trade NAM</title>
+  <style>
+    @font-face { font-family: "Space Grotesk Variable"; font-weight: 300 700; src: url("../../node_modules/@fontsource-variable/space-grotesk/files/space-grotesk-latin-wght-normal.woff2") format("woff2"); }
+    @font-face { font-family: "JetBrains Mono"; font-weight: 500; src: url("../../node_modules/@fontsource/jetbrains-mono/files/jetbrains-mono-latin-500-normal.woff2") format("woff2"); }
+    .t { font-family: "Space Grotesk Variable", "Space Grotesk", Arial, Helvetica, sans-serif; fill: #000; }
+    .m { font-family: "JetBrains Mono", Menlo, "Courier New", monospace; font-weight: 500; font-size: 24px; }
+  </style>
+  <defs>
+    <pattern id="minor" x="0" y="0" width="8" height="630" patternUnits="userSpaceOnUse"><rect x="0" y="623" width="1" height="7" fill="#000"/></pattern>
+    <pattern id="major" x="0" y="0" width="40" height="630" patternUnits="userSpaceOnUse"><rect x="0" y="616" width="1" height="14" fill="#000"/></pattern>
+  </defs>
+
+  <rect width="1200" height="630" fill="#ffff00"/>
+
+  <!-- the dial (32 unit grid, scaled to 64 px) and the wordmark -->
+  <g transform="translate(80 80) scale(2)">
+    <path d="M16 3.5a12.5 12.5 0 1 0 12.5 12.5" fill="none" stroke="#000" stroke-width="4.5"/>
+    <path d="M16 16 25 7" fill="none" stroke="#000" stroke-width="3.2"/>
+    <circle cx="16" cy="16" r="2.6" fill="#000"/>
+  </g>
+  <text class="t" x="164" y="123" font-size="32" font-weight="700" letter-spacing="1.92">NAMADA TRADE</text>
+
+  <!-- the tagline (SITE.tagline), caps 600 -->
+  <text class="t" font-size="76" font-weight="600" letter-spacing="-1.14">
+    <tspan x="76" y="304">WHAT MOVED, WHO MOVED IT,</tspan>
+    <tspan x="76" y="380">AND WHAT IT COSTS</tspan>
+    <tspan x="76" y="456">TO TRADE NAM.</tspan>
+  </text>
+
+  <text class="m" x="80" y="566" fill="#3d3d00">Every number shows its source and age.</text>
+  <text class="m" x="1120" y="566" fill="#000" text-anchor="end">namada.trade</text>
+
+  <!-- the scale on the bottom edge: a tick every 8 px, a long tick every 40 px -->
+  <rect x="0" y="0" width="1200" height="630" fill="url(#minor)"/>
+  <rect x="0" y="0" width="1200" height="630" fill="url(#major)"/>
+</svg>

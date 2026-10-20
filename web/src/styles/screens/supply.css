@@ -1,0 +1,156 @@
+/* ==========================================================================
+   Supply (S3) and the inner-page frame it shares with Shielded (S4).
+   The frame is ported from final/site.css (.hhero, .hero, .sec, .facts), the
+   rows follow the DataList grammar of data.css (rows below a container width,
+   a table above it, no <table>, cells direct children of their row, 44 px hit
+   areas through ::after). Reads --c-* ground tokens only.
+   The inner-page frame (.ipg-*) and the list pieces (.xaddr, .xrec, .xmore) are in
+   components/page.css.
+   ========================================================================== */
+@layer components {
+  .seg__n { margin-left: 6px; font: var(--w-medium) var(--t-12) / 16px var(--font-code); }
+  /* net buying and selling: the flow hue on the signed figure (system.md 9.3) */
+  .xlist .is-buy { color: var(--buy); }
+  .xlist .is-sell { color: var(--sell); }
+  .xhead { color: var(--c-ink-2); font-size: var(--t-12); line-height: 16px; font-weight: var(--w-medium); }
+  @media (min-width: 1024px) {
+    .rts__head, .mvr__head, .ulr__head { position: sticky; top: var(--header-h); z-index: 2; background: var(--c-bg); padding-top: var(--s-2) !important; }
+  }
+
+  /* ---------- Supply hero: Ready to sell ---------- */
+  .sp-hero__n .hero-n__sub { display: grid; gap: var(--s-2); max-width: 40ch; }
+  .sp-hero__usd { display: flex; flex-wrap: wrap; align-items: center; gap: 2px var(--s-3); color: var(--c-ink); }
+  .sp-hero__def { color: var(--c-ink-2); }
+  .sp-hero__skel { display: grid; gap: 6px; }
+  .sp-hero__skel .hero-n__top { min-height: 24px; }
+  .sp-hero__win { width: 100%; max-width: 26rem; }
+
+  /* ---------- the band's six figures: Osmosis in the first row, staking in the second (3 columns);
+     2 x 3 on phones. Hairlines between columns, a hairline above every row after the first. ---------- */
+  .sp-facts .facts { grid-template-columns: repeat(2, minmax(0, 1fr)); row-gap: var(--s-4); }
+  .sp-facts .fact:nth-child(odd) { padding-left: 0; border-left: 0; }
+  .sp-facts .fact:nth-child(n+3) { border-top: 1px solid var(--c-line); }
+  @media (min-width: 640px) {
+    .sp-facts .facts { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+    .sp-facts .fact:nth-child(odd) { padding-left: var(--s-5); border-left: 1px solid var(--c-line); }
+    .sp-facts .fact:nth-child(3n+1) { padding-left: 0; border-left: 0; }
+    .sp-facts .fact:nth-child(n+3) { border-top: 0; }
+    .sp-facts .fact:nth-child(n+4) { border-top: 1px solid var(--c-line); }
+  }
+  /* a fact label that opens its list: underlined, a 44 px hit area through ::after (a 16 to 18 px line + 28) */
+  .sp-factlink { position: relative; color: inherit; text-decoration: underline; text-decoration-thickness: 1px; text-underline-offset: 3px; }
+  .sp-factlink::after { content: ""; position: absolute; inset: -14px -4px; }
+  .sp-factlink:hover { color: var(--c-ink); }
+  /* the size of the requests a staking figure counts, on its own line under the label */
+  .sp-fact__size { display: block; margin-top: 2px; }
+  /* the band links here: clear of the sticky header */
+  .ul-sec { scroll-margin-top: calc(var(--header-h) + var(--s-4)); }
+  .ul-order { color: var(--c-ink-2); max-width: 64ch; }
+
+  /* ---------- Ready to sell on Osmosis: rows, a six-column table from 640 px ---------- */
+  /* the summary list shares the section's right edge with the table below it (no ragged number column) */
+  .ipg-col--7 .ipg-kv { max-width: none; }
+  /* addresses with nothing left: a sentence, then one address per item, 56 px apart, so their 44 px
+     tap areas never meet (8 + 18 + 2 + 20 + 8) */
+  .rts-gone { display: grid; gap: var(--s-1); color: var(--c-ink-2); max-width: 64ch; }
+  .rts-gone__list { display: grid; margin: 0; padding: 0; list-style: none; }
+  .rts-gone__i { display: grid; gap: 2px; padding: var(--s-2) 0; min-width: 0; }
+  .rts-gone__n { line-height: 18px; min-width: 0; }
+  .rts-gone__how { font-size: var(--t-13); line-height: 20px; }
+  .rts { container: rts / inline-size; display: grid; min-width: 0; }
+  .rts__head { display: none; }
+  .rts__row { position: relative; display: grid; grid-template-columns: minmax(0, 1fr) auto; grid-template-areas: "id left" "how how"; column-gap: var(--s-3); row-gap: var(--s-2); padding: 14px 0 16px; min-height: 72px; border-top: 1px solid var(--c-line); }
+  .rts__id { grid-area: id; display: grid; gap: 2px; align-content: start; min-width: 0; }
+  .rts__name { font-size: var(--t-15); line-height: 22px; font-weight: var(--w-medium); min-width: 0; }
+  .rts__sub { display: flex; flex-wrap: wrap; align-items: baseline; gap: 2px var(--s-2); font-size: var(--t-12); line-height: 18px; color: var(--c-ink-2); min-width: 0; }
+  /* Two addresses stacked 2 px apart (the receiver, then "from" its Namada address). The usual
+     symmetric 44 px area (inset -13px) would let the second cover the lower half of the first, and a
+     tap on the receiver would open the other address. Each keeps 44 px, split at the gap instead: the
+     receiver's area reaches up into the row's top padding (22 + 21 + 1), the second's down over the
+     lines under it, which hold no control (18 + 1 + 25). */
+  .rts__name .xaddr::after { top: -21px; bottom: -1px; }
+  .rts__sub .xaddr::after { top: -1px; bottom: -25px; }
+  .rts__link { display: inline; min-width: 0; }
+  .rts__tags { display: flex; flex-wrap: wrap; align-items: center; gap: var(--s-1) var(--s-2); margin-top: var(--s-2); }
+  .rts__left { grid-area: left; display: grid; justify-items: end; align-content: start; text-align: right; font-size: var(--t-18); line-height: 22px; font-weight: var(--w-medium); white-space: nowrap; }
+  .rts__usd { font-size: var(--t-13); line-height: 20px; font-weight: var(--w-regular); color: var(--c-ink-2); }
+  .rts__how { grid-area: how; font-size: var(--t-13); line-height: 20px; color: var(--c-ink-2); }
+  .rts__c { display: none; }
+  @container rts (min-width: 640px) {
+    .rts__head, .rts__row { grid-template-columns: minmax(0, 2fr) repeat(3, minmax(0, .9fr)) minmax(0, 1.1fr) minmax(0, .9fr); column-gap: var(--s-3); }
+    .rts__head { display: grid; padding: 0 0 var(--s-2); color: var(--c-ink-2); font-size: var(--t-12); line-height: 16px; font-weight: var(--w-medium); }
+    .rts__head > span { align-self: end; }
+    .rts__row { grid-template-areas: "id in sold out left last"; min-height: 64px; }
+    .rts__how { display: none; }
+    .rts__c { display: block; text-align: right; font-size: var(--t-13); line-height: 22px; color: var(--c-ink-2); }
+    .rts__c--in { grid-area: in; }
+    .rts__c--sold { grid-area: sold; }
+    .rts__c--out { grid-area: out; }
+    .rts__c--last { grid-area: last; }
+    .rts__left { font-size: var(--t-15); }
+  }
+
+  /* ---------- Who is moving the price: rows, a five-column table from 560 px ---------- */
+  .mvr { container: mvr / inline-size; display: grid; min-width: 0; }
+  .mvr__head { display: none; }
+  .mvr__row { display: grid; grid-template-columns: minmax(0, 1fr) auto; grid-template-areas: "id net" "cap cap"; column-gap: var(--s-3); row-gap: var(--s-1); padding: 14px 0 16px; min-height: 72px; border-top: 1px solid var(--c-line); }
+  .mvr__id { grid-area: id; display: grid; gap: 2px; align-content: start; min-width: 0; }
+  .mvr__name { font-size: var(--t-15); line-height: 22px; font-weight: var(--w-medium); min-width: 0; }
+  .mvr__sub { display: flex; flex-wrap: wrap; align-items: center; gap: var(--s-1) var(--s-2); font-size: var(--t-12); line-height: 18px; color: var(--c-ink-2); }
+  .mvr__net { grid-area: net; text-align: right; font-size: var(--t-18); line-height: 22px; font-weight: var(--w-medium); white-space: nowrap; }
+  .mvr__cap { grid-area: cap; font-size: var(--t-13); line-height: 20px; color: var(--c-ink-2); }
+  .mvr__c { display: none; }
+  @container mvr (min-width: 560px) {
+    .mvr__head, .mvr__row { grid-template-columns: minmax(0, 1.6fr) repeat(2, minmax(0, 1fr)) minmax(0, 1.2fr) minmax(0, .8fr); column-gap: var(--s-3); }
+    .mvr__head { display: grid; padding: 0 0 var(--s-2); color: var(--c-ink-2); font-size: var(--t-12); line-height: 16px; font-weight: var(--w-medium); }
+    .mvr__head > span { align-self: end; }
+    .mvr__row { grid-template-areas: "id net day n last"; align-items: center; min-height: 56px; }
+    .mvr__cap { display: none; }
+    .mvr__c { display: block; text-align: right; font-size: var(--t-13); line-height: 20px; color: var(--c-ink-2); }
+    .xlist .mvr__c.is-buy { color: var(--buy); }
+    .xlist .mvr__c.is-sell { color: var(--sell); }
+    .mvr__c--day { grid-area: day; }
+    .mvr__c--n { grid-area: n; }
+    .mvr__c--last { grid-area: last; }
+    .mvr__net { font-size: var(--t-15); }
+  }
+
+  /* ---------- Unstaking and restaking: four-line rows, a six-column table from 760 px ---------- */
+  .ul-filter { max-width: 30rem; }
+  .ulr { container: ulr / inline-size; display: grid; min-width: 0; }
+  .ulr__head { display: none; }
+  .ulr__row { display: grid; grid-template-columns: minmax(0, 1fr) auto; grid-template-areas: "kind amt" "who who" "then then" "when rec"; column-gap: var(--s-3); row-gap: var(--s-1); align-items: center; padding: 14px 0 0; border-top: 1px solid var(--c-line); }
+  .ulr__kind { grid-area: kind; min-width: 0; }
+  .ulr__amt { grid-area: amt; text-align: right; font-size: var(--t-18); line-height: 22px; font-weight: var(--w-medium); white-space: nowrap; }
+  .ulr__who { grid-area: who; display: flex; flex-wrap: wrap; align-items: baseline; gap: 2px var(--s-2); min-width: 0; font-size: var(--t-15); line-height: 22px; font-weight: var(--w-medium); }
+  .ulr__addr { color: var(--c-ink-2); font-weight: var(--w-regular); }
+  .ulr__then { grid-area: then; display: flex; flex-wrap: wrap; align-items: center; gap: var(--s-1) var(--s-2); min-width: 0; padding-top: var(--s-1); }
+  .ulr__detail { font-size: var(--t-13); line-height: 20px; color: var(--c-ink-2); }
+  .ulr__detail--bond { display: none; }
+  .ulr__when { grid-area: when; font: var(--w-regular) var(--t-12) / 16px var(--font-code); color: var(--c-ink-2); }
+  .ulr__rec { grid-area: rec; justify-self: end; }
+  @container ulr (min-width: 760px) {
+    .ulr__head, .ulr__row { grid-template-columns: 128px 116px minmax(0, 1fr) minmax(0, 1.3fr) minmax(0, 2fr) 76px; column-gap: var(--s-4); }
+    .ulr__head { display: grid; padding: 0 0 var(--s-2); color: var(--c-ink-2); font-size: var(--t-12); line-height: 16px; font-weight: var(--w-medium); }
+    .ulr__head > span { align-self: end; }
+    .ulr__row { grid-template-areas: "when kind amt who then rec"; padding: 6px 0; min-height: 56px; }
+    .ulr__amt { font-size: var(--t-15); }
+    .ulr__who { display: grid; gap: 0; font-size: var(--t-13); line-height: 20px; }
+    .ulr__then { padding-top: 0; }
+    .ulr__detail--bond { display: inline; }
+  }
+  .ul-chart { margin-top: var(--s-4); padding-top: var(--s-5); border-top: 1px solid var(--c-line); max-width: 48rem; }
+  .ul-chart .chartsec__h { font-size: var(--t-18); line-height: var(--lh-18); max-width: none; }
+
+  /* ---------- Votes in progress ---------- */
+  .votes { display: grid; }
+  .vote { display: grid; gap: var(--s-2); padding: 14px 0 16px; border-top: 1px solid var(--c-line); }
+  .vote__top { display: flex; justify-content: space-between; align-items: flex-start; gap: var(--s-3); }
+  .vote__t { font-size: var(--t-15); line-height: 22px; font-weight: var(--w-medium); min-width: 0; overflow-wrap: anywhere; padding-top: 11px; }
+  .vote__s, .vote__n { font-size: var(--t-13); line-height: 20px; color: var(--c-ink-2); }
+  .vote__bar { display: flex; gap: 2px; height: 8px; }
+  .vote__bar i { display: block; min-width: 0; flex-basis: 0; }
+  .vote__yes { background: var(--c-ink); }
+  .vote__no { background: repeating-linear-gradient(135deg, var(--c-ink-2) 0 2px, transparent 2px 5px); box-shadow: inset 0 0 0 1px var(--c-ink-2); }
+  .vote__abs { background: var(--c-line-strong); }
+}

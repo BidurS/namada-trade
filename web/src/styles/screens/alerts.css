@@ -1,0 +1,77 @@
+/* ==========================================================================
+   Alerts (/alerts), S6. system.md 9.6. Every class is prefixed al- so this
+   file never collides with another screen's (all screen files load globally).
+   Yellow reading band (H1, lead, the count of alerts in the window, the window
+   control, the ruler edge), then black: the hits or the empty state, the rules
+   as Switch rows, where alerts go. Desktop: hits 7 columns beside rules 5.
+   ========================================================================== */
+@layer components {
+  /* ---------- the yellow reading band ---------- */
+  .al-hero { padding-block: var(--s-5) 0; }
+  /* a figure, its stamp and the full stop that ends the sentence stay on one line (a reason may still wrap) */
+  .al-nowrap { white-space: nowrap; }
+  .al-nowrap .num__x--why { white-space: normal; }
+  .al-hero__in { display: grid; grid-template-columns: minmax(0, 1fr); gap: var(--s-6); padding-bottom: var(--s-6); }
+  .al-hero .eyebrow { margin-bottom: var(--s-3); }
+  .al-hero .h1 { max-width: 14ch; }
+  .al-hero .sub { margin-top: var(--s-4); max-width: 52ch; }
+  .al-read { display: grid; grid-template-columns: minmax(0, 1fr); gap: var(--s-4); align-content: start; padding-top: var(--s-4); border-top: 2px solid var(--c-ink); min-width: 0; }
+  .al-read .hero-n__v { min-height: var(--lh-48); }
+  .al-read .hero-n__sub { min-height: var(--lh-15); max-width: none; }
+  .al-win { width: 100%; }
+  .al-wait { display: inline-block; width: 16em; max-width: 100%; height: 12px; border-radius: var(--r-1); background: var(--c-hover); vertical-align: middle; }
+
+  /* ---------- the black body ---------- */
+  .al-body { padding-block: var(--s-6) var(--s-7); }
+  .al-grid { display: grid; gap: var(--s-7); min-width: 0; }
+  .al-sec { display: grid; grid-template-columns: minmax(0, 1fr); gap: var(--s-4); align-content: start; min-width: 0; }
+  .al-sec > .h2 { margin-bottom: var(--s-1); }
+  .al-lead { font-size: var(--t-15); line-height: var(--lh-15); color: var(--c-ink-2); max-width: 56ch; }
+
+  /* hits: two lines per row (title and age; tag, who, transaction), 64 px and up */
+  .al-list { display: grid; }
+  .al-hit { display: grid; grid-template-columns: minmax(0, 1fr) auto; grid-template-areas: "t age" "l2 l2"; column-gap: var(--s-3); row-gap: 2px; align-items: baseline; padding: 12px 0 4px; min-height: 64px; border-top: 1px solid var(--c-line); }
+  .al-hit:last-child { border-bottom: 1px solid var(--c-line); }
+  .al-hit__t { grid-area: t; font-size: var(--t-15); line-height: var(--lh-15); font-weight: var(--w-medium); overflow-wrap: anywhere; }
+  .al-hit__age { grid-area: age; font: var(--w-medium) var(--t-12) / 16px var(--font-code); color: var(--c-ink-2); white-space: nowrap; }
+  .al-hit__l2 { grid-area: l2; display: flex; flex-wrap: wrap; align-items: center; gap: 0 var(--s-3); min-width: 0; }
+  .al-hit__who { display: inline-flex; align-items: center; min-height: 44px; max-width: 100%; padding: 0; background: none; border: 0; color: var(--c-ink-2); font: var(--w-regular) var(--t-12) / 16px var(--font-code); text-align: left; text-decoration: underline; text-decoration-thickness: 1px; text-underline-offset: 3px; overflow-wrap: anywhere; cursor: pointer; }
+  .al-hit__who:hover { color: var(--c-ink); }
+  .al-hit__who--text { text-decoration: none; cursor: default; }
+  .al-hit__tx { display: inline-flex; align-items: center; gap: 4px; min-height: 44px; color: var(--c-ink); font-size: var(--t-13); line-height: 20px; font-weight: var(--w-medium); text-decoration: underline; text-decoration-thickness: 1.5px; text-underline-offset: 4px; }
+  .al-hit__tx .ico { width: 14px; height: 14px; }
+  .al-more { margin-top: var(--s-2); }
+
+  /* the empty state's sentence keeps its numbers on one line where it can */
+  .al-hits .empty__s [data-num] { white-space: nowrap; }
+
+  /* rules */
+  .al-rules__scope { gap: var(--s-3); }
+  .al-rules__list { display: grid; }
+  .al-rules__list .swrow:last-child { border-bottom: 1px solid var(--c-line); }
+  .al-rules__list .swrow__d [data-num] { color: var(--c-ink); white-space: nowrap; }
+  .al-rules__list.is-old .swrow__d [data-num], .is-old .al-rules__list .swrow__d [data-num] { color: var(--c-ink-2); }
+  .al-mine { color: var(--c-ink); }
+
+  /* where alerts go: one line, one action */
+  .al-deliv__line { font-size: var(--t-15); line-height: var(--lh-15); max-width: 52ch; }
+  .al-deliv > .btn, .al-deliv > .link { justify-self: start; }
+
+  @media (min-width: 640px) {
+    .al-hero { padding-block: var(--s-7) 0; }
+    .al-win { width: max-content; min-width: 360px; }
+  }
+  @media (min-width: 1024px) {
+    .al-hero__in { grid-template-columns: repeat(12, minmax(0, 1fr)); column-gap: var(--s-5); align-items: end; }
+    .al-hero__head { grid-column: 1 / span 7; }
+    .al-hero .h1 { max-width: 16ch; }
+    .al-hero .sub { font-size: var(--t-18); line-height: var(--lh-18); }
+    .al-read { grid-column: 8 / span 5; }
+    .al-win { width: 100%; min-width: 0; }
+    .al-body { padding-block: var(--s-8); }
+    .al-grid { grid-template-columns: minmax(0, 7fr) minmax(0, 5fr); grid-template-areas: "hits rules" "deliv rules"; grid-template-rows: auto 1fr; column-gap: var(--s-8); row-gap: var(--s-7); align-items: start; }
+    .al-hits { grid-area: hits; }
+    .al-rules { grid-area: rules; }
+    .al-deliv { grid-area: deliv; }
+  }
+}

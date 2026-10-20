@@ -1,0 +1,966 @@
+<!doctype html>
+<html lang="en" data-theme="dark">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>What would I get if I sold NAM now? · Namada Trade</title>
+<meta name="description" content="An Osmosis quote for NAM at six order sizes, with the price move, the pools behind it and the price history. This site never trades for you.">
+<meta name="color-scheme" content="dark light">
+<meta name="theme-color" content="#000000">
+<!-- Mockup only: fonts load from Google Fonts. The production build self-hosts them (see notes.md). -->
+<link rel="preconnect" href="https://fonts.googleapis.com"><link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500&family=Newsreader:ital,opsz,wght@0,6..72,300..600;1,6..72,300..600&family=Space+Grotesk:wght@400..700&display=swap">
+<link rel="stylesheet" href="tokens.css">
+<style>
+/* NamadaTrade, Direction B: component CSS. Source for the <style> block build.mjs inlines into every page.
+   Mobile first (375). Breakpoints: 640 (tables, two columns), 1024 (top-bar nav, rail, ticket beside chart).
+   Only tokens from tokens.css are used for colour, size, space, radius and time. */
+
+*, *::before, *::after { box-sizing: border-box; }
+html { -webkit-text-size-adjust: 100%; text-size-adjust: 100%; scroll-padding-top: calc(var(--bar-h) + var(--s-4)); }
+body {
+  margin: 0; background: var(--bg); color: var(--ink);
+  font: 400 var(--fs-15)/var(--lh-15) var(--font-ui);
+  -webkit-font-smoothing: antialiased; -moz-osx-font-smoothing: grayscale; text-rendering: optimizeLegibility;
+  overflow-wrap: break-word;
+}
+h1, h2, h3, h4, p, ol, ul, dl, dd, figure, fieldset { margin: 0; padding: 0; }
+ol, ul { list-style: none; }
+fieldset { border: 0; min-width: 0; }
+a { color: inherit; text-decoration-thickness: 1px; text-underline-offset: .2em; text-decoration-color: var(--line-strong); }
+a:hover { text-decoration-color: currentColor; }
+button { font: inherit; color: inherit; background: none; border: 0; padding: 0; cursor: pointer; text-align: inherit; }
+svg { display: block; flex: none; }
+:focus-visible { outline: 2px solid var(--focus); outline-offset: 2px; border-radius: var(--r-1); }
+.vh { position: absolute !important; width: 1px; height: 1px; margin: -1px; padding: 0; overflow: hidden; clip: rect(0 0 0 0); clip-path: inset(50%); white-space: nowrap; border: 0; }
+::selection { background: var(--accent); color: var(--accent-ink); }
+.skip { position: absolute; left: var(--s-2); top: -64px; z-index: 50; background: var(--accent); color: var(--accent-ink); padding: var(--s-3) var(--s-4); border-radius: var(--r-1); }
+.skip:focus { top: var(--s-2); }
+
+.mono { font-family: var(--font-mono); font-variant-numeric: tabular-nums slashed-zero; font-feature-settings: "zero" 0; }
+.serif { font-family: var(--font-serif); }
+.ink-2 { color: var(--ink-2); }
+.ink-3 { color: var(--ink-3); }
+.ico { width: 20px; height: 20px; }
+.ico--s { width: 16px; height: 16px; }
+
+/* ---------- Top bar ---------------------------------------------------------------- */
+.bar { position: sticky; top: 0; z-index: 20; height: var(--bar-h); background: var(--bg); border-bottom: 1px solid var(--line); }
+.bar__in { max-width: var(--maxw); height: 100%; margin: 0 auto; padding: 0 var(--gutter); display: flex; align-items: center; gap: var(--s-3); }
+.wm { margin-right: auto; font: 500 var(--fs-21)/var(--lh-21) var(--font-serif); letter-spacing: -.012em; text-decoration: none; white-space: nowrap; display: inline-flex; align-items: baseline; min-height: var(--tap); align-self: center; padding-top: 11px; }
+.wm i { font-style: italic; font-weight: 400; margin-left: .22em; }
+.wm b { width: .27em; height: .27em; margin-left: .1em; border-radius: 50%; background: var(--accent); align-self: baseline; }
+.bar__nav { display: none; }
+.bar__price { display: inline-flex; align-items: center; gap: var(--s-2); min-height: var(--tap); padding: 0 var(--s-1); font: 500 var(--fs-13)/1 var(--font-mono); font-variant-numeric: tabular-nums; white-space: nowrap; }
+.bar__price .chg { color: var(--ink-2); font-weight: 400; }
+.bar__menu { width: var(--tap); height: var(--tap); display: grid; place-items: center; border: 1px solid var(--line-strong); border-radius: var(--r-1); transition: background var(--d-1) var(--ease-std); }
+.bar__menu:hover { background: var(--surface-2); }
+.chg { display: inline-flex; align-items: center; gap: 4px; }
+.chg svg { width: 8px; height: 8px; }
+
+/* ---------- Popovers: menu sheet and provenance sheet ------------------------------------ */
+[popover] { transition: opacity var(--d-2) var(--ease-out), transform var(--d-2) var(--ease-out), display var(--d-2) allow-discrete, overlay var(--d-2) allow-discrete; opacity: 0; }
+[popover]:popover-open { opacity: 1; transform: none; }
+@starting-style { [popover]:popover-open { opacity: 0; } }
+[popover]::backdrop { background: var(--scrim); opacity: 0; transition: opacity var(--d-2) var(--ease-std), display var(--d-2) allow-discrete, overlay var(--d-2) allow-discrete; }
+[popover]:popover-open::backdrop { opacity: 1; }
+@starting-style { [popover]:popover-open::backdrop { opacity: 0; } }
+
+.menu { inset: 0 0 auto 0; margin: 0; width: 100%; max-width: none; max-height: calc(100dvh - var(--s-4)); overflow: auto; padding: 0; border: 0; border-bottom: 1px solid var(--line); border-radius: 0 0 var(--r-2) var(--r-2); background: var(--surface); color: var(--ink); box-shadow: var(--elev-sheet); transform: translateY(-16px); }
+.menu__top { height: var(--bar-h); display: flex; align-items: center; justify-content: space-between; padding: 0 var(--gutter); border-bottom: 1px solid var(--line); }
+.menu__top span { font: 400 var(--fs-13)/1 var(--font-ui); color: var(--ink-2); }
+.menu__list li + li { border-top: 1px solid var(--line); }
+.menu__list a { display: grid; grid-template-columns: 28px 1fr; column-gap: var(--s-2); align-items: baseline; padding: var(--s-4) var(--gutter); text-decoration: none; position: relative; min-height: 72px; }
+.menu__list a:active { background: var(--surface-2); }
+.menu__no { font: 400 var(--fs-12)/1 var(--font-mono); color: var(--ink-3); }
+.menu__name { font: 400 var(--fs-28)/var(--lh-28) var(--font-serif); letter-spacing: var(--tr-h); }
+.menu__gloss { grid-column: 2; font: 400 var(--fs-13)/var(--lh-13) var(--font-ui); color: var(--ink-2); margin-top: 2px; }
+.menu__list a[aria-current="page"]::before { content: ""; position: absolute; left: 0; top: var(--s-3); bottom: var(--s-3); width: 2px; background: var(--accent); }
+.menu__foot { padding: var(--s-4) var(--gutter) var(--s-5); border-top: 1px solid var(--line); font: 400 var(--fs-13)/var(--lh-13) var(--font-ui); color: var(--ink-2); }
+.menu__foot .mono { font-size: var(--fs-12); color: var(--ink); }
+.menu__foot a { color: var(--ink); }
+.icon-btn { width: var(--tap); height: var(--tap); display: grid; place-items: center; border-radius: var(--r-1); }
+.icon-btn:hover { background: var(--surface-2); }
+
+.sheet { position: fixed; inset: auto 0 0 0; margin: 0; width: 100%; max-width: none; max-height: calc(100dvh - var(--s-4)); overflow: auto; padding: var(--s-3) var(--panel) calc(var(--panel) + env(safe-area-inset-bottom, 0px)); border: 1px solid var(--line); border-bottom: 0; border-radius: var(--r-2) var(--r-2) 0 0; background: var(--surface); color: var(--ink); box-shadow: var(--elev-sheet); transform: translateY(16px); }
+.sheet__handle { width: 36px; height: 4px; border-radius: var(--r-pill); background: var(--line-strong); margin: 0 auto var(--s-3); }
+.sheet__h { display: flex; justify-content: space-between; align-items: flex-start; gap: var(--s-3); margin-bottom: var(--s-3); }
+.sheet__h h3 { font: 400 var(--fs-22)/var(--lh-22) var(--font-serif); letter-spacing: var(--tr-h); }
+.sheet__h p { font: 400 var(--fs-13)/var(--lh-13) var(--font-ui); color: var(--ink-2); margin-top: 2px; }
+.sheet dl { display: grid; grid-template-columns: auto 1fr; border-top: 1px solid var(--line); }
+.sheet dt, .sheet dd { padding: var(--s-3) 0; border-bottom: 1px solid var(--line); font: 400 var(--fs-13)/var(--lh-13) var(--font-ui); }
+.sheet dt { color: var(--ink-2); padding-right: var(--s-4); }
+.sheet dd { font-family: var(--font-mono); font-size: var(--fs-12); line-height: 18px; text-align: right; font-variant-numeric: tabular-nums; }
+.sheet dd .st { margin-right: 6px; }
+.sheet__act { display: flex; gap: var(--s-3); margin-top: var(--s-4); align-items: center; flex-wrap: wrap; }
+@media (min-width: 640px) {
+  .sheet { inset: auto var(--s-5) var(--s-5) auto; width: 400px; border: 1px solid var(--line); border-radius: var(--r-2); }
+}
+
+/* ---------- Status marks and provenance controls ---------------------------------------- */
+.st { display: inline-block; width: 8px; height: 8px; flex: none; vertical-align: middle; }
+.st--fresh { background: var(--good); border-radius: 50%; }
+.st--old { border-radius: 50%; box-shadow: inset 0 0 0 1.5px var(--warn); background: linear-gradient(90deg, var(--warn) 50%, transparent 50%); }
+.st--none { border-radius: 50%; box-shadow: inset 0 0 0 1.5px var(--none); }
+.st--bad { background: var(--bad); transform: rotate(45deg) scale(.82); }
+
+.chip { display: inline-flex; align-items: center; min-height: var(--tap); background: none; border: 0; padding: 0; color: var(--ink-2); }
+.chip__p { display: inline-flex; align-items: center; gap: 6px; min-height: 28px; padding: 0 var(--s-3) 0 10px; border: 1px solid var(--line-strong); border-radius: var(--r-pill); font: 400 var(--fs-12)/16px var(--font-mono); white-space: nowrap; transition: border-color var(--d-1) var(--ease-std), color var(--d-1) var(--ease-std), background var(--d-1) var(--ease-std); }
+.chip:hover .chip__p { color: var(--ink); border-color: var(--ink-2); }
+.num { font: inherit; line-height: max(1.25em, 24px); color: inherit; text-align: inherit; text-decoration: underline dotted; text-decoration-thickness: 1px; text-underline-offset: .22em; text-decoration-color: var(--line-strong); transition: color var(--d-2) var(--ease-std), text-decoration-color var(--d-1) var(--ease-std); }
+.num:hover { text-decoration-color: currentColor; }
+.num--old { color: var(--ink-2); }
+.num--none { color: var(--ink-2); }
+.num--bad { text-decoration-color: var(--bad); text-decoration-style: wavy; }
+.age { font: 400 var(--fs-12)/24px var(--font-mono); color: var(--ink-2); white-space: nowrap; }
+.num--pad { display: inline-block; padding-block: 11px; margin-block: -11px; }
+.age .st { margin-right: 5px; width: 7px; height: 7px; }
+.src { font: 400 var(--fs-12)/24px var(--font-mono); color: var(--ink-3); margin-top: var(--s-3); display: flex; flex-wrap: wrap; gap: 0 var(--s-2); align-items: center; }
+.src .num, .src .when { color: var(--ink-2); }
+.src .when { white-space: nowrap; }
+.src a { color: var(--ink-2); }
+
+/* ---------- Buttons ---------------------------------------------------------------- */
+.btn { display: inline-flex; align-items: center; justify-content: center; gap: var(--s-2); min-height: 48px; padding: 0 var(--s-5); border: 1px solid transparent; border-radius: var(--r-1); font: 500 var(--fs-15)/1 var(--font-ui); text-decoration: none; white-space: nowrap; transition: background var(--d-1) var(--ease-std), color var(--d-1) var(--ease-std), transform var(--d-1) var(--ease-std); }
+.btn:active { transform: translateY(1px); }
+.btn--primary { background: var(--accent); color: var(--accent-ink); }
+.btn--primary:hover { background: var(--ink); }
+.btn--inverse { background: var(--accent-ink); color: var(--accent); }
+.btn--inverse:hover { background: var(--accent-ink-2); }
+.btn--outline { border-color: var(--line-strong); color: var(--ink); }
+.btn--outline:hover { background: var(--surface-2); }
+.btn--ghost { padding: 0 var(--s-2); min-height: var(--tap); text-decoration: underline; text-decoration-thickness: 1px; text-underline-offset: .25em; text-decoration-color: currentColor; }
+
+/* ---------- Layout ------------------------------------------------------------------ */
+.wrap { max-width: var(--maxw); margin: 0 auto; padding: 0 var(--gutter); }
+main { display: block; }
+.sec { margin-top: var(--section); padding-top: var(--s-6); border-top: 1px solid var(--line-strong); }
+.sec__head { margin-bottom: var(--s-4); }
+.sec__no { font: 400 var(--fs-12)/16px var(--font-mono); color: var(--ink-3); margin-bottom: var(--s-2); }
+h2, .h2 { font: 400 var(--fs-h2)/var(--lh-h2) var(--font-serif); letter-spacing: var(--tr-h); text-wrap: balance; font-variation-settings: "opsz" 48; }
+h3, .h3 { font: 400 var(--fs-22)/var(--lh-22) var(--font-serif); letter-spacing: var(--tr-h); }
+.lede { font: 350 var(--fs-22)/var(--lh-22) var(--font-serif); letter-spacing: -.005em; margin-top: var(--s-4); max-width: 36em; text-wrap: pretty; }
+.lede b, .lede .num-lg { font-weight: 450; }
+.prose { font: 400 var(--fs-17)/var(--lh-17) var(--font-serif); color: var(--ink); max-width: var(--measure); text-wrap: pretty; }
+.prose + .prose { margin-top: var(--s-3); }
+.prose.ink-2 { color: var(--ink-2); }
+.note { font: 400 var(--fs-15)/var(--lh-15) var(--font-ui); color: var(--ink-2); max-width: var(--measure); margin-top: var(--s-3); }
+.more { margin-top: var(--s-4); display: inline-flex; align-items: center; gap: var(--s-2); min-height: var(--tap); font: 500 var(--fs-15)/1 var(--font-ui); }
+.more svg { transition: transform var(--d-2) var(--ease-out); }
+.more:hover svg { transform: translateX(3px); }
+
+/* ---------- Home: yellow band (the only one) --------------------------------------------- */
+.band { background: var(--accent); color: var(--accent-ink); }
+.band__in { max-width: var(--maxw); margin: 0 auto; padding: var(--s-4) var(--gutter) var(--s-5); }
+.band .st--fresh { background: var(--accent-ink); }
+.band .st--old { box-shadow: inset 0 0 0 1.5px var(--accent-ink); background: linear-gradient(90deg, var(--accent-ink) 50%, transparent 50%); }
+.dateline { display: flex; justify-content: space-between; gap: var(--s-3); padding-bottom: var(--s-2); border-bottom: 1px solid var(--accent-ink); font: 400 var(--fs-12)/16px var(--font-mono); color: var(--accent-ink-2); }
+.display { font: 300 var(--fs-display)/var(--lh-display) var(--font-serif); letter-spacing: var(--tr-display); font-variation-settings: "opsz" 72; margin-top: var(--s-5); }
+.display span { display: block; }
+.band .lede { color: var(--accent-ink); margin-top: var(--s-5); font-weight: 380; }
+.band .px { font-weight: 420; font-size: 2.1em; line-height: 1; letter-spacing: -.025em; font-variant-numeric: lining-nums; text-decoration: underline dotted 2px; text-underline-offset: .12em; text-decoration-color: rgb(0 0 0 / .4); vertical-align: -.02em; white-space: nowrap; }
+.band .chg-pill { display: inline-flex; align-items: center; gap: 5px; min-height: 28px; padding: 4px 10px 4px 8px; border-radius: var(--r-pill); background: var(--accent-ink); color: var(--accent); font: 500 var(--fs-13)/18px var(--font-mono); letter-spacing: 0; vertical-align: .3em; white-space: nowrap; }
+.band .chg-pill svg { width: 9px; height: 9px; }
+.band .sub { font: 400 var(--fs-15)/var(--lh-15) var(--font-ui); color: var(--accent-ink); margin-top: var(--s-4); max-width: 44ch; }
+.band .chip { color: var(--accent-ink); margin-top: var(--s-2); }
+.band .chip__p { border-color: var(--accent-ink); }
+.band .chip:hover .chip__p { background: rgb(0 0 0 / .08); color: var(--accent-ink); border-color: var(--accent-ink); }
+.band__act { display: flex; flex-direction: column; align-items: stretch; gap: var(--s-1); margin-top: var(--s-3); }
+.band .btn--ghost { color: var(--accent-ink); align-self: flex-start; padding-left: 0; }
+.facts { display: grid; grid-template-columns: repeat(3, auto); justify-content: space-between; gap: var(--s-3); margin-top: var(--s-5); padding-top: var(--s-3); border-top: 2px solid var(--accent-ink); }
+.facts dt { font: 400 var(--fs-13)/var(--lh-13) var(--font-ui); color: var(--accent-ink-2); order: 2; }
+.facts div { display: flex; flex-direction: column; }
+.facts dd { font: 400 var(--fs-fig)/var(--lh-fig) var(--font-serif); letter-spacing: -.015em; font-variant-numeric: lining-nums tabular-nums; }
+.facts .num { text-decoration-color: rgb(0 0 0 / .4); }
+
+/* ---------- Home grid and rail ---------------------------------------------------------- */
+.nb { white-space: nowrap; }
+.facts .facts__x { display: none; }
+.facts small { font: 400 var(--fs-13)/20px var(--font-ui); margin-left: 5px; color: var(--accent-ink-2); }
+
+/* ---------- What changed ------------------------------------------------------------------ */
+.big-sentence { font: 350 var(--fs-22)/var(--lh-22) var(--font-serif); margin-top: var(--s-4); }
+.tag { display: inline-flex; align-items: center; gap: 5px; min-height: 22px; padding: 0 7px 0 5px; border: 1px solid currentColor; border-radius: var(--r-1); font: 500 var(--fs-12)/16px var(--font-ui); white-space: nowrap; }
+.tag svg { width: 12px; height: 12px; }
+.tag--pos { color: var(--pos); } .tag--buy { color: var(--buy); } .tag--sell { color: var(--sell); } .tag--ibc { color: var(--ibc); } .tag--shield { color: var(--shield); }
+.last { margin-top: var(--s-4); display: flex; flex-wrap: wrap; gap: var(--s-1) var(--s-3); align-items: center; font: 400 var(--fs-15)/var(--lh-15) var(--font-ui); }
+.last > a { display: inline-flex; align-items: center; min-height: var(--tap); }
+.last .mono { color: var(--ink); }
+.last a { color: var(--ink); }
+.caveat { margin-top: var(--s-4); display: flex; gap: var(--s-3); align-items: flex-start; padding: var(--s-3) 0 0; font: 400 var(--fs-15)/var(--lh-15) var(--font-ui); color: var(--ink-2); max-width: var(--measure); }
+.caveat .st { margin-top: 6px; }
+.rules { border-top: 1px solid var(--line); }
+.rules li { display: grid; grid-template-columns: 1fr auto; column-gap: var(--s-4); row-gap: 2px; padding: var(--s-3) 0; border-bottom: 1px solid var(--line); }
+.rules li:last-child { border-bottom: 0; }
+.rules__t { font: 500 var(--fs-15)/var(--lh-15) var(--font-ui); }
+.rules__n { font: 500 var(--fs-15)/var(--lh-15) var(--font-mono); text-align: right; font-variant-numeric: tabular-nums; }
+.rules__n small { font: 400 var(--fs-12)/16px var(--font-mono); color: var(--ink-3); margin-left: 3px; }
+.rules__d { grid-column: 1 / -1; font: 400 var(--fs-13)/var(--lh-13) var(--font-ui); color: var(--ink-2); max-width: 52ch; }
+.q--s { margin-top: var(--s-5); border-top: 1px solid var(--line); }
+.q--s summary { min-height: 56px; }
+.q--s .q__t { font: 500 var(--fs-15)/22px var(--font-ui); letter-spacing: 0; }
+.q--s .q__a { padding-bottom: var(--s-2); }
+.hits li { display: grid; grid-template-columns: 1fr auto; gap: 2px var(--s-3); padding: var(--s-3) 0; border-bottom: 1px solid var(--line); }
+
+/* ---------- Where all NAM is -------------------------------------------------------------- */
+.supply { margin-top: var(--s-5); }
+.supply__note { display: flex; align-items: flex-end; gap: var(--s-2); margin-bottom: var(--s-2); font: 400 var(--fs-12)/16px var(--font-mono); color: var(--ink); }
+.supply__note i { width: 2px; height: 20px; background: var(--ink); margin-left: 3px; }
+.supply__bar { display: flex; gap: 2px; height: 28px; }
+.supply__seg { display: flex; align-items: center; padding: 0 var(--s-2); overflow: hidden; white-space: nowrap; font: 500 var(--fs-11)/1 var(--font-mono); color: var(--seg-ink, var(--bg)); min-width: 4px; height: 100%; background: var(--c); border-radius: 1px; clip-path: inset(0 100% 0 0); animation: wipe var(--d-3) var(--ease-out) forwards; animation-delay: calc(400ms + var(--i) * 80ms); }
+.supply__seg:first-child { border-radius: var(--r-1) 1px 1px var(--r-1); }
+.supply__seg:last-child { border-radius: 1px var(--r-1) var(--r-1) 1px; }
+.supply__ticks { display: flex; justify-content: space-between; margin-top: var(--s-2); font: 400 var(--fs-12)/16px var(--font-mono); color: var(--ink-3); }
+.supply__rows { margin-top: var(--s-4); border-top: 1px solid var(--line); }
+.supply__rows li { display: grid; grid-template-columns: 12px 1fr auto; column-gap: var(--s-3); align-items: start; padding: var(--s-3) 0; border-bottom: 1px solid var(--line); min-height: var(--row-h); }
+.supply__sw { width: 12px; height: 12px; margin-top: 6px; background: var(--c); border-radius: 2px; }
+.supply__w { font: 500 var(--fs-15)/var(--lh-15) var(--font-ui); }
+.supply__g { font: 400 var(--fs-13)/var(--lh-13) var(--font-ui); color: var(--ink-2); }
+.supply__v { text-align: right; display: flex; flex-direction: column; align-items: flex-end; }
+.supply__v .num { text-decoration-color: var(--line-strong); }
+.supply__pct { font: 400 var(--fs-22)/26px var(--font-serif); font-variant-numeric: lining-nums tabular-nums; }
+.supply__amt { font: 400 var(--fs-12)/16px var(--font-mono); color: var(--ink-2); font-variant-numeric: tabular-nums; }
+.supply__rows li.is-osm .supply__w { color: var(--ink); }
+@keyframes wipe { to { clip-path: inset(0 0 0 0); } }
+
+/* ---------- Holders: rows on phones, table from 640 ---------------------------------------- */
+.hlist { margin-top: var(--s-4); border-top: 1px solid var(--line); }
+.hrow { position: relative; display: grid; grid-template-columns: 24px 1fr auto; column-gap: var(--s-2); padding: var(--s-3) 0 var(--s-4); border-bottom: 1px solid var(--line); min-height: var(--row-h); }
+.hrow__rank { font: 400 var(--fs-12)/22px var(--font-mono); color: var(--ink-2); }
+.hrow__who { min-width: 0; }
+.hrow__who b { display: block; font: 500 var(--fs-15)/22px var(--font-ui); }
+.hrow__who b.mono { font: 500 var(--fs-13)/22px var(--font-mono); letter-spacing: .01em; }
+.hrow__tot { display: flex; flex-direction: column; align-items: flex-end; min-height: var(--tap); margin-top: -11px; padding-top: 11px; text-decoration: none; white-space: nowrap; }
+.hrow__t { font: 500 var(--fs-15)/22px var(--font-mono); font-variant-numeric: tabular-nums; text-decoration: underline dotted; text-decoration-thickness: 1px; text-underline-offset: .22em; text-decoration-color: var(--line-strong); }
+.hrow__t small { font: 400 var(--fs-12)/16px var(--font-mono); color: var(--ink-3); margin-left: 3px; }
+.hrow__p { font: 400 var(--fs-12)/20px var(--font-mono); color: var(--ink-2); font-variant-numeric: tabular-nums; }
+.hrow__bar { position: absolute; left: 0; bottom: -1px; height: 2px; width: calc(var(--w) * 1%); background: var(--ink-2); border-radius: 0 1px 1px 0; }
+.addr { font: 400 var(--fs-12)/20px var(--font-mono); color: var(--ink-3); letter-spacing: .01em; }
+.tbl-only { display: none; }
+.tbl-wrap { overflow-x: auto; }
+.c-md { display: none; }
+
+
+table { border-collapse: collapse; width: 100%; font: 400 var(--fs-13)/var(--lh-13) var(--font-ui); }
+th { font: 400 var(--fs-12)/16px var(--font-mono); color: var(--ink-2); text-align: left; padding: var(--s-3) var(--s-3) var(--s-3) 0; border-bottom: 1px solid var(--line-strong); white-space: nowrap; font-weight: 400; }
+td { padding: 10px var(--s-3) 10px 0; border-bottom: 1px solid var(--line); vertical-align: middle; }
+th.r, td.r { text-align: right; padding-right: var(--s-4); }
+th.c-rank, td.c-rank { width: 44px; text-align: left; padding-right: 0; color: var(--ink-3); font-family: var(--font-mono); }
+td.m, td.r { font-family: var(--font-mono); font-variant-numeric: tabular-nums; }
+td small, th small { font-size: inherit; color: var(--ink-3); }
+tbody tr { transition: background var(--d-1) var(--ease-std); }
+tbody tr:hover { background: var(--surface); }
+tr.is-sel { background: var(--surface-2); }
+.t-who b { font-weight: 500; font-family: var(--font-ui); display: block; font-size: var(--fs-13); }
+.t-bar { display: block; height: 2px; background: var(--ink-2); width: calc(var(--w) * 1px * .9); max-width: 100%; margin: 6px 0 0 auto; border-radius: 1px; }
+.is-old td.r .num, .is-old td.m .num { color: var(--ink-2); }
+
+/* ---------- Five questions (accordion) -------------------------------------------------------- */
+.qs { margin-top: var(--s-5); border-top: 1px solid var(--line-strong); }
+.q__a .src { margin-top: var(--s-2); }
+.q { border-bottom: 1px solid var(--line); }
+.q summary { list-style: none; display: grid; grid-template-columns: 1fr auto 20px; column-gap: var(--s-3); align-items: center; min-height: 68px; padding: var(--s-3) 0; cursor: pointer; }
+.q summary::-webkit-details-marker { display: none; }
+.q__t { font: 400 var(--fs-22)/var(--lh-22) var(--font-serif); letter-spacing: var(--tr-h); text-wrap: balance; }
+.q__peek { font: 400 var(--fs-13)/1 var(--font-mono); color: var(--ink-2); font-variant-numeric: tabular-nums; transition: opacity var(--d-1) var(--ease-std); white-space: nowrap; }
+.q__chev { transition: transform var(--d-2) var(--ease-out); color: var(--ink-2); }
+.q[open] .q__chev { transform: rotate(180deg); }
+.q[open] .q__peek { opacity: 0; }
+.q summary:hover .q__t { text-decoration: underline; text-decoration-thickness: 1px; text-underline-offset: .18em; text-decoration-color: var(--line-strong); }
+.q__a { padding: 0 0 var(--s-5); animation: rise var(--d-2) var(--ease-out); }
+.q__lead { display: flex; flex-direction: column; margin-bottom: var(--s-3); }
+.q__big { font: 300 var(--fs-ans)/var(--lh-ans) var(--font-serif); letter-spacing: -.02em; font-variant-numeric: lining-nums; font-variation-settings: "opsz" 72; align-self: flex-start; }
+.q__unit { font: 400 var(--fs-15)/var(--lh-15) var(--font-ui); color: var(--ink-2); margin-top: var(--s-1); }
+.q__a .prose { font-size: var(--fs-17); }
+.q__a .prose + .prose { margin-top: var(--s-2); }
+.q__a .age { display: block; margin-top: var(--s-3); }
+@keyframes rise { from { opacity: 0; transform: translateY(8px); } to { opacity: 1; transform: none; } }
+
+/* ---------- Ticket (Home mini-ticket) ----------------------------------------------------------- */
+.ticket { position: relative; margin-top: var(--s-5); background: var(--surface); border: 1px solid var(--line); border-radius: var(--r-2); overflow: hidden; }
+.ticket__top, .ticket__body { padding: var(--panel); }
+.ticket__top { padding-bottom: var(--s-4); }
+.ticket__row { display: flex; justify-content: space-between; align-items: center; gap: var(--s-3); }
+.ticket__amt { font: 400 var(--fs-22)/var(--lh-22) var(--font-serif); margin-top: var(--s-3); }
+.ticket__amt .mono { font-size: var(--fs-17); }
+.ticket__tear { position: relative; height: 0; border-top: 1px dashed var(--line-strong); }
+.ticket__tear::before, .ticket__tear::after { content: ""; position: absolute; top: -9px; width: 18px; height: 18px; border-radius: 50%; background: var(--bg); border: 1px solid var(--line); }
+.ticket__tear::before { left: -10px; }
+.ticket__tear::after { right: -10px; }
+.ticket__get { display: flex; align-items: baseline; gap: var(--s-3); }
+.ticket__get .l { font: 400 var(--fs-13)/var(--lh-13) var(--font-ui); color: var(--ink-2); }
+.ticket__none { font: 300 var(--fs-48)/36px var(--font-mono); color: var(--ink-2); }
+.ticket__why { margin-top: var(--s-2); font: 400 var(--fs-15)/var(--lh-15) var(--font-ui); max-width: 44ch; }
+.ticket__est { margin-top: var(--s-4); padding-top: var(--s-3); border-top: 1px solid var(--line); font: 400 var(--fs-15)/var(--lh-15) var(--font-ui); color: var(--ink-2); display: flex; flex-wrap: wrap; gap: var(--s-1) var(--s-3); align-items: baseline; }
+.ticket__est .mono { color: var(--ink); font-size: var(--fs-13); }
+.ticket__est .num { line-height: 24px; }
+.pill-state { display: inline-flex; align-items: center; gap: 6px; font: 400 var(--fs-12)/16px var(--font-mono); color: var(--ink-2); white-space: nowrap; }
+.ticket__row .age { white-space: normal; text-align: right; line-height: 16px; }
+
+/* ---------- Why trust it ---------------------------------------------------------------------- */
+.checks { margin-top: var(--s-5); border-top: 1px solid var(--line); }
+.checks li { display: grid; grid-template-columns: 20px 1fr; column-gap: var(--s-3); padding: var(--s-3) 0; border-bottom: 1px solid var(--line); }
+.checks .ck { width: 20px; height: 20px; margin-top: 1px; }
+.checks .ck--ok { color: var(--good); }
+.checks .ck--warn { color: var(--warn); }
+.checks__t { font: 500 var(--fs-15)/var(--lh-15) var(--font-ui); }
+.checks__d { display: flex; flex-wrap: wrap; gap: 0 var(--s-2); font: 400 var(--fs-12)/24px var(--font-mono); color: var(--ink-2); margin-top: 2px; }
+.checks__d .w { color: var(--ink-2); }
+.trust-pts { margin-top: var(--s-6); display: grid; gap: var(--s-5); }
+.trust-pts h3 { font: 500 var(--fs-15)/var(--lh-15) var(--font-ui); margin-bottom: var(--s-1); }
+.proof { margin-top: var(--s-5); padding: var(--panel); background: var(--surface); border-radius: var(--r-2); border: 1px solid var(--line); }
+.proof .tag { color: var(--ink-2); margin-bottom: var(--s-3); }
+.proof .prose { font-size: var(--fs-17); }
+
+/* ---------- Footer ----------------------------------------------------------------------------- */
+.foot { margin-top: var(--s-8); border-top: 1px solid var(--line-strong); padding: var(--s-6) 0 calc(var(--s-7) + env(safe-area-inset-bottom, 0px)); }
+.foot__wm { font: 400 var(--fs-48)/var(--lh-48) var(--font-serif); letter-spacing: -.02em; color: var(--ink); }
+.foot__wm i { font-style: italic; }
+.foot__wm b { display: inline-block; width: .2em; height: .2em; border-radius: 50%; background: var(--accent); margin-left: .06em; }
+.foot p { font: 400 var(--fs-13)/var(--lh-13) var(--font-ui); color: var(--ink-2); margin-top: var(--s-4); max-width: 60ch; }
+.foot nav { display: flex; flex-wrap: wrap; gap: 0 var(--s-5); margin-top: var(--s-3); }
+.foot nav a { display: inline-flex; align-items: center; min-height: var(--tap); min-width: var(--tap); font: 500 var(--fs-13)/1 var(--font-ui); }
+
+/* ---------- Page heads (Trade, Ledger) -------------------------------------------------------------- */
+.ph { padding-top: var(--s-6); }
+.ph__eyebrow { font: 400 var(--fs-12)/16px var(--font-mono); color: var(--ink-2); }
+h1 { font: 350 var(--fs-h1)/var(--lh-h1) var(--font-serif); letter-spacing: var(--tr-h); font-variation-settings: "opsz" 72; text-wrap: balance; margin-top: var(--s-2); max-width: 18em; }
+.ph__sub { font: 400 var(--fs-15)/var(--lh-15) var(--font-ui); color: var(--ink-2); margin-top: var(--s-3); max-width: 52ch; }
+
+/* ---------- Segmented, chips, fields ------------------------------------------------------------------ */
+.seg { display: inline-grid; grid-auto-flow: column; grid-auto-columns: 1fr; border: 1px solid var(--line-strong); border-radius: var(--r-1); padding: 2px; gap: 2px; width: 100%; }
+.seg label, .opt label, .seg .seg__b { display: flex; align-items: center; justify-content: center; min-height: 44px; padding: 0 var(--s-4); border-radius: 2px; font: 500 var(--fs-15)/1 var(--font-ui); color: var(--ink-2); cursor: pointer; transition: background var(--d-1) var(--ease-std), color var(--d-1) var(--ease-std); user-select: none; }
+.seg label:hover { color: var(--ink); }
+.seg input, .opt input { position: absolute; opacity: 0; width: 1px; height: 1px; pointer-events: none; }
+.seg input:checked + label, .seg label.is-on { background: var(--ink); color: var(--bg); }
+.seg input:focus-visible + label, .opt input:focus-visible + label { outline: 2px solid var(--focus); outline-offset: 2px; }
+.field-l { display: flex; justify-content: space-between; align-items: baseline; font: 400 var(--fs-13)/var(--lh-13) var(--font-ui); color: var(--ink-2); margin-bottom: var(--s-2); }
+.field { display: flex; align-items: baseline; gap: var(--s-2); min-height: 56px; padding: var(--s-3) var(--s-4); border: 1px solid var(--line-strong); border-radius: var(--r-1); background: var(--surface-2); }
+.field__v { font: 400 var(--fs-28)/var(--lh-28) var(--font-serif); font-variant-numeric: lining-nums; }
+.field__u { font: 400 var(--fs-12)/16px var(--font-mono); color: var(--ink-3); }
+.field__s { margin-left: auto; font: 400 var(--fs-12)/16px var(--font-mono); color: var(--ink-2); }
+.presets { display: flex; flex-wrap: wrap; gap: var(--s-2); margin-top: var(--s-3); }
+.presets label { flex: none; display: inline-flex; align-items: center; min-height: 44px; padding: 0 var(--s-4); border: 1px solid var(--line-strong); border-radius: var(--r-pill); font: 400 var(--fs-13)/1 var(--font-mono); font-variant-numeric: tabular-nums; cursor: pointer; color: var(--ink-2); transition: background var(--d-1) var(--ease-std), color var(--d-1) var(--ease-std); }
+.presets label:hover { color: var(--ink); }
+
+/* ---------- Trade ------------------------------------------------------------------------------------------ */
+.trade { padding-bottom: 0; }
+.tk { margin-top: var(--s-5); }
+.tk__panel { background: var(--surface); border: 1px solid var(--line); border-radius: var(--r-2); padding: var(--panel); }
+.tk__panel > * + * { margin-top: var(--s-4); }
+.get { display: none; }
+.get__l { font: 400 var(--fs-13)/var(--lh-13) var(--font-ui); color: var(--ink-2); }
+.get__n { display: flex; align-items: baseline; gap: var(--s-2); margin-top: var(--s-1); }
+.get__v { font: 300 var(--fs-num)/var(--lh-num) var(--font-serif); letter-spacing: -.03em; font-variant-numeric: lining-nums; font-variation-settings: "opsz" 72; text-decoration: underline dotted 2px; text-decoration-color: var(--line-strong); text-underline-offset: .1em; }
+.get__u { font: 400 var(--fs-13)/1 var(--font-mono); color: var(--ink-2); }
+.get__move { display: grid; grid-template-columns: 1fr 1fr; gap: var(--s-3) var(--s-4); margin-top: var(--s-3); padding-top: var(--s-3); border-top: 1px solid var(--line); }
+.get__move > div { display: flex; flex-direction: column; }
+.get__move > div:first-child { grid-column: 1 / -1; }
+.get__move > div:first-child .v { font-size: var(--fs-22); line-height: 28px; }
+.get__move .k { font: 400 var(--fs-12)/16px var(--font-mono); color: var(--ink-2); }
+.get__move .v { font: 500 var(--fs-17)/24px var(--font-mono); font-variant-numeric: tabular-nums; }
+.get__move .v .num { text-decoration-color: var(--line-strong); }
+.get__tip { margin-top: var(--s-3); font: 400 var(--fs-15)/var(--lh-15) var(--font-ui); color: var(--ink-2); }
+.alert { display: flex; gap: var(--s-3); align-items: flex-start; padding: var(--s-3) var(--s-4); border-left: 2px solid var(--warn); background: var(--surface); border-radius: 0 var(--r-1) var(--r-1) 0; font: 400 var(--fs-15)/var(--lh-15) var(--font-ui); color: var(--ink); }
+.alert svg { color: var(--warn); margin-top: 1px; }
+.alert--none { border-left-color: var(--none); }
+.alert--none svg { color: var(--ink-3); }
+.alert b { font-weight: 500; }
+.alert p + p { margin-top: var(--s-1); color: var(--ink-2); }
+.thin { margin-top: var(--s-4); }
+.tk .src { margin-top: var(--s-3); }
+.ticket-note { font: 400 var(--fs-15)/var(--lh-15) var(--font-ui); color: var(--ink-2); }
+
+.chart { margin-top: var(--s-5); }
+.chart__h { display: flex; flex-direction: column; gap: var(--s-4); }
+.chart__sub { font: 400 var(--fs-13)/var(--lh-13) var(--font-ui); color: var(--ink-2); margin-top: var(--s-2); max-width: 52ch; }
+.chart__svg { margin-top: var(--s-4); width: 100%; position: relative; }
+.chart__svg svg { width: 100%; height: auto; overflow: visible; }
+.chart .seg { width: auto; flex: none; }
+.chart .seg label { min-height: 44px; padding: 0 var(--s-3); font-size: var(--fs-13); }
+.chart .seg { align-self: flex-start; }
+.ch-sm { display: block; } .ch-lg { display: none; }
+.ch-grid { stroke: var(--line); stroke-width: 1; }
+.ch-axis { stroke: var(--line-strong); stroke-width: 1; }
+.ch-tick { fill: var(--ink-2); font: 400 var(--fs-11)/1 var(--font-mono); paint-order: stroke; stroke: var(--bg); stroke-width: 3px; stroke-linejoin: round; }
+.ch-exec { fill: none; stroke: var(--ink); stroke-width: 1.6; stroke-linejoin: round; stroke-linecap: round; }
+.ch-quote { fill: none; stroke: var(--ink-3); stroke-width: 1.6; stroke-dasharray: 4 4; stroke-linecap: round; }
+.ch-dot { fill: var(--ink); }
+.ch-ev { stroke: var(--line-strong); stroke-width: 1; stroke-dasharray: 2 3; }
+.ch-evt { fill: var(--ink-2); font: 400 var(--fs-11)/1 var(--font-mono); }
+.ch-pill { fill: var(--accent); }
+.ch-pillt { fill: var(--accent-ink); font: 500 var(--fs-11)/1 var(--font-mono); }
+.ch-lines { clip-path: inset(0 100% 0 0); animation: wipe var(--d-chart) var(--ease-out) 300ms forwards; }
+.key { display: flex; flex-wrap: wrap; gap: var(--s-1) var(--s-5); margin-top: var(--s-3); font: 400 var(--fs-12)/16px var(--font-mono); color: var(--ink-2); }
+.key span { display: inline-flex; align-items: center; gap: var(--s-2); }
+.key svg { width: 24px; height: 4px; }
+.chart-wrap > div { display: none; }
+
+/* ladder + pools lists */
+.ladder, .pools { margin-top: var(--s-5); }
+.lad__rows, .pool__rows { margin-top: var(--s-4); border-top: 1px solid var(--line); }
+.lrow { position: relative; display: grid; grid-template-columns: 1fr auto; column-gap: var(--s-3); row-gap: 2px; padding: var(--s-3) 0 var(--s-4); border-bottom: 1px solid var(--line); min-height: var(--row-h); cursor: pointer; transition: background var(--d-1) var(--ease-std); }
+.lrow:active { background: var(--surface); }
+.lrow__a { font: 500 var(--fs-15)/22px var(--font-mono); font-variant-numeric: tabular-nums; }
+.lrow__a small, .lrow__g small { font: 400 var(--fs-12)/16px var(--font-mono); color: var(--ink-3); margin-left: 3px; }
+.lrow__g { font: 500 var(--fs-15)/22px var(--font-mono); text-align: right; font-variant-numeric: tabular-nums; }
+.lrow__m { grid-column: 1 / -1; display: flex; flex-wrap: wrap; gap: 0 var(--s-4); font: 400 var(--fs-12)/18px var(--font-mono); color: var(--ink-2); font-variant-numeric: tabular-nums; }
+.lrow__bar { position: absolute; left: 0; bottom: -1px; height: 2px; width: calc(var(--w) * 1%); background: var(--ink-2); }
+.lrow .on { color: var(--ink); }
+.prow { display: grid; grid-template-columns: 1fr auto; column-gap: var(--s-3); row-gap: 2px; padding: var(--s-3) 0; border-bottom: 1px solid var(--line); min-height: var(--row-h); }
+.prow__n { font: 500 var(--fs-15)/22px var(--font-ui); }
+.prow__n .id { font: 400 var(--fs-12)/16px var(--font-mono); color: var(--ink-3); margin-left: var(--s-1); }
+.prow__l { font: 500 var(--fs-15)/22px var(--font-mono); text-align: right; font-variant-numeric: tabular-nums; }
+.prow__m { grid-column: 1 / -1; display: flex; gap: var(--s-2) var(--s-3); flex-wrap: wrap; align-items: center; font: 400 var(--fs-12)/18px var(--font-mono); color: var(--ink-2); }
+.kind { color: var(--ink-2); font: 400 var(--fs-12)/20px var(--font-mono); }
+.kind--ref { padding: 0 8px; border: 1px solid var(--ink-2); border-radius: var(--r-1); color: var(--ink); font: 500 var(--fs-12)/20px var(--font-ui); }
+.rest-note { padding: var(--s-3) 0; font: 400 var(--fs-15)/var(--lh-15) var(--font-ui); color: var(--ink-2); border-bottom: 1px solid var(--line); }
+.tbl-only .stress { display: none; width: 96px; height: 4px; background: var(--surface-2); border-radius: 1px; vertical-align: middle; margin-left: var(--s-3); position: relative; }
+@media (min-width: 1200px) { .tbl-only .stress { display: inline-block; } }
+.stress i { position: absolute; inset: 0 auto 0 0; width: calc(var(--w) * 1%); background: var(--ink-2); border-radius: 1px; }
+
+/* ---------- Ledger (holders) ----------------------------------------------------------------------------------- */
+.tabs { display: flex; gap: var(--s-5); margin-top: var(--s-5); border-bottom: 1px solid var(--line-strong); }
+.tabs a { position: relative; display: inline-flex; align-items: center; min-height: 48px; font: 500 var(--fs-15)/1 var(--font-ui); text-decoration: none; color: var(--ink-2); }
+.tabs a[aria-current="page"] { color: var(--ink); }
+.tabs a[aria-current="page"]::after { content: ""; position: absolute; left: 0; right: 0; bottom: -1px; height: 2px; background: var(--accent); }
+.ledger-sum { font: 350 var(--fs-22)/var(--lh-22) var(--font-serif); margin-top: var(--s-5); max-width: 36em; }
+.tools { display: flex; align-items: center; justify-content: space-between; gap: var(--s-3); margin-top: var(--s-5); }
+.fbtn { display: inline-flex; align-items: center; gap: var(--s-2); min-height: 44px; padding: 0 var(--s-4); border: 1px solid var(--line-strong); border-radius: var(--r-1); font: 500 var(--fs-15)/1 var(--font-ui);}
+.fbtn:hover { background: var(--surface-2); }
+.fbadge { display: none; min-width: 20px; height: 20px; padding: 0 5px; border-radius: var(--r-pill); background: var(--ink); color: var(--bg); font: 500 var(--fs-12)/20px var(--font-mono); text-align: center; }
+.tools__n { font: 400 var(--fs-12)/16px var(--font-mono); color: var(--ink-2); }
+.filters { inset: auto 0 0 0; margin: 0; width: 100%; max-width: none; max-height: calc(100dvh - var(--s-4)); overflow: auto; padding: var(--s-3) var(--panel) calc(var(--panel) + env(safe-area-inset-bottom, 0px)); border: 1px solid var(--line); border-bottom: 0; border-radius: var(--r-2) var(--r-2) 0 0; background: var(--surface); color: var(--ink); box-shadow: var(--elev-sheet); transform: translateY(16px); }
+.filters fieldset + fieldset { margin-top: var(--s-5); }
+.filters legend { font: 400 var(--fs-13)/var(--lh-13) var(--font-ui); color: var(--ink-2); padding: 0; margin-bottom: var(--s-2); }
+.opt { display: flex; flex-wrap: wrap; gap: var(--s-2); position: relative; }
+.opt label { border: 1px solid var(--line-strong); border-radius: var(--r-pill); min-height: 44px; padding: 0 var(--s-4); font: 400 var(--fs-15)/1 var(--font-ui); color: var(--ink-2); }
+.opt label small { font: 400 var(--fs-12)/1 var(--font-mono); color: var(--ink-3); margin-left: 6px; }
+.opt label:hover { color: var(--ink); }
+.filters__act { margin-top: var(--s-5); display: flex; justify-content: space-between; align-items: center; gap: var(--s-3); }
+.nodata { display: none; margin-top: var(--s-5); padding: var(--panel); border: 1px dashed var(--line-strong); border-radius: var(--r-2); }
+.nodata h3 { font: 400 var(--fs-22)/var(--lh-22) var(--font-serif); }
+.nodata p { margin-top: var(--s-2); font: 400 var(--fs-15)/var(--lh-15) var(--font-ui); color: var(--ink-2); max-width: 52ch; }
+.nodata .st { margin-right: var(--s-2); }
+.stillness { margin-top: var(--s-4); display: grid; gap: var(--s-1); font: 400 var(--fs-15)/var(--lh-15) var(--font-ui); color: var(--ink-2); max-width: var(--measure); }
+.stillness .st { margin-right: 6px; }
+.pager { margin-top: var(--s-5); display: flex; justify-content: space-between; align-items: center; gap: var(--s-3); flex-wrap: wrap; }
+.pager .mono { font-size: var(--fs-12); color: var(--ink-2); }
+
+/* ---------- Scroll reveal (progressive): sections rise once as they enter -------------------------------------------- */
+@media (prefers-reduced-motion: no-preference) {
+  @supports (animation-timeline: view()) {
+    .reveal { animation: rise linear both; animation-timeline: view(); animation-range: entry 0% entry 30%; }
+  }
+}
+
+/* ---------- Reduced motion ---------------------------------------------------------------------------------------- */
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after { animation: none !important; transition-duration: 0ms !important; }
+  .supply__seg, .ch-lines { clip-path: none; }
+}
+
+/* ---------- 640: tables, wider rhythm ------------------------------------------------------------------------------ */
+@media (min-width: 640px) {
+  .tbl-only { display: block; }
+  .rows-only { display: none; }
+  .ch-sm { display: none; } .ch-lg { display: block; }
+  .hrow__tot { font-size: var(--fs-15); }
+  .filters { inset: auto var(--s-5) var(--s-5) auto; width: 420px; border: 1px solid var(--line); border-radius: var(--r-2); }
+}
+
+/* ---------- 1024: top-bar nav, rail, two-column Trade ------------------------------------------------------------------- */
+@media (min-width: 1024px) {
+  .bar__in { gap: var(--s-6); }
+  .bar__menu { display: none; }
+  .bar__nav { display: flex; gap: var(--s-5); margin-right: auto; margin-left: var(--s-2); }
+  .wm { margin-right: 0; }
+  .bar__nav a { position: relative; display: inline-flex; align-items: center; min-height: var(--bar-h); font: 500 var(--fs-15)/1 var(--font-ui); color: var(--ink-2); text-decoration: none; transition: color var(--d-1) var(--ease-std); }
+  .bar__nav a:hover { color: var(--ink); }
+  .bar__nav a[aria-current="page"] { color: var(--ink); }
+  .bar__nav a[aria-current="page"]::after { content: ""; position: absolute; left: 0; right: 0; bottom: -1px; height: 2px; background: var(--accent); }
+  .bar__price { font-size: var(--fs-15); }
+
+  .band__in { padding: var(--s-5) var(--gutter) var(--s-6); }
+  .band__grid { display: grid; grid-template-columns: minmax(0, 1fr) 380px; column-gap: var(--s-8); align-items: end; margin-top: var(--s-6); }
+  .band__grid .display { margin-top: 0; }
+  .band__side .lede { margin-top: 0; }
+  .band__side { padding-bottom: var(--s-3); }
+
+  .facts { grid-template-columns: repeat(5, auto); justify-content: space-between; margin-top: var(--s-7); }
+  .facts .facts__x { display: flex; }
+  .sec { display: grid; grid-template-columns: clamp(220px, 24vw, 300px) minmax(0, 1fr); column-gap: clamp(32px, 5vw, 64px); align-items: start; padding-top: var(--s-5); }
+  .sec__head { position: sticky; top: calc(var(--bar-h) + var(--s-5)); margin-bottom: 0; }
+  .sec__body > .lede:first-child, .sec__body > .big-sentence:first-child { margin-top: 0; }
+  .ticket { max-width: 540px; }
+
+  .tk-grid { display: grid; grid-template-columns: minmax(0, 5fr) minmax(0, 7fr); grid-template-areas: "tk chart" "tk notice"; grid-template-rows: auto 1fr; column-gap: var(--s-7); align-items: start; margin-top: var(--s-6); }
+  .tk-grid .tk, .tk-grid .chart, .tk-grid .thin { margin-top: 0; }
+  .tk-grid .tk { grid-area: tk; position: sticky; top: calc(var(--bar-h) + var(--s-5)); }
+  .tk-grid .chart { grid-area: chart; }
+  .tk-grid .thin { grid-area: notice; margin-top: var(--s-5); }
+  .filters { position: static; inset: auto; display: block; width: auto; max-height: none; overflow: visible; padding: 0; margin: 0; border: 0; border-radius: 0; background: none; box-shadow: none; transform: none; opacity: 1; }
+  .filters fieldset { display: flex; align-items: center; gap: var(--s-4); }
+  .filters fieldset + fieldset { margin-top: var(--s-3); }
+  .filters legend { float: left; width: 64px; margin: 0; line-height: 44px; }
+  .filters .opt label { min-height: 36px; padding: 0 var(--s-3); font-size: var(--fs-13); }
+  .filters__act, .fbtn, .filters .sheet__handle, .filters .sheet__h, .tools__n { display: none; }
+  .chart__h { flex-direction: row; justify-content: space-between; align-items: flex-start; }
+  .tools { margin-top: var(--s-5); }
+}
+
+@media (min-width: 900px) { .c-md { display: table-cell; } }
+
+/* light theme: the yellow full stop needs a ring to hold on a pale ground */
+:root[data-theme="light"] .wm b, :root[data-theme="light"] .foot__wm b { box-shadow: 0 0 0 1px var(--ink); }
+
+
+main:has(#sz-1000:checked) .sz:not(.sz-1000) { display: none; }
+main:has(#sz-1000:checked) .pre-1000 { background: var(--ink); color: var(--bg); border-color: var(--ink); }
+main:has(#sz-1000:checked) .lad-1000 { background: var(--surface-2); }
+main:has(#sz-1000:checked) .lt-1000 { background: var(--surface-2); }
+main:has(#side-sell:checked):has(#sz-1000:checked) .get--sell.get--1000, main:has(#side-buy:checked):has(#sz-1000:checked) .get--buy.get--1000 { display: block; }
+main:has(#sz-5000:checked) .sz:not(.sz-5000) { display: none; }
+main:has(#sz-5000:checked) .pre-5000 { background: var(--ink); color: var(--bg); border-color: var(--ink); }
+main:has(#sz-5000:checked) .lad-5000 { background: var(--surface-2); }
+main:has(#sz-5000:checked) .lt-5000 { background: var(--surface-2); }
+main:has(#side-sell:checked):has(#sz-5000:checked) .get--sell.get--5000, main:has(#side-buy:checked):has(#sz-5000:checked) .get--buy.get--5000 { display: block; }
+main:has(#sz-10000:checked) .sz:not(.sz-10000) { display: none; }
+main:has(#sz-10000:checked) .pre-10000 { background: var(--ink); color: var(--bg); border-color: var(--ink); }
+main:has(#sz-10000:checked) .lad-10000 { background: var(--surface-2); }
+main:has(#sz-10000:checked) .lt-10000 { background: var(--surface-2); }
+main:has(#side-sell:checked):has(#sz-10000:checked) .get--sell.get--10000, main:has(#side-buy:checked):has(#sz-10000:checked) .get--buy.get--10000 { display: block; }
+main:has(#sz-25000:checked) .sz:not(.sz-25000) { display: none; }
+main:has(#sz-25000:checked) .pre-25000 { background: var(--ink); color: var(--bg); border-color: var(--ink); }
+main:has(#sz-25000:checked) .lad-25000 { background: var(--surface-2); }
+main:has(#sz-25000:checked) .lt-25000 { background: var(--surface-2); }
+main:has(#side-sell:checked):has(#sz-25000:checked) .get--sell.get--25000, main:has(#side-buy:checked):has(#sz-25000:checked) .get--buy.get--25000 { display: block; }
+main:has(#sz-50000:checked) .sz:not(.sz-50000) { display: none; }
+main:has(#sz-50000:checked) .pre-50000 { background: var(--ink); color: var(--bg); border-color: var(--ink); }
+main:has(#sz-50000:checked) .lad-50000 { background: var(--surface-2); }
+main:has(#sz-50000:checked) .lt-50000 { background: var(--surface-2); }
+main:has(#side-sell:checked):has(#sz-50000:checked) .get--sell.get--50000, main:has(#side-buy:checked):has(#sz-50000:checked) .get--buy.get--50000 { display: block; }
+main:has(#sz-100000:checked) .sz:not(.sz-100000) { display: none; }
+main:has(#sz-100000:checked) .pre-100000 { background: var(--ink); color: var(--bg); border-color: var(--ink); }
+main:has(#sz-100000:checked) .lad-100000 { background: var(--surface-2); }
+main:has(#sz-100000:checked) .lt-100000 { background: var(--surface-2); }
+main:has(#side-sell:checked):has(#sz-100000:checked) .get--sell.get--100000, main:has(#side-buy:checked):has(#sz-100000:checked) .get--buy.get--100000 { display: block; }
+main:has(#side-sell:checked) label[for=side-sell], main:has(#side-buy:checked) label[for=side-buy], main:has(#rng-30:checked) label[for=rng-30], main:has(#rng-7:checked) label[for=rng-7] { background: var(--ink); color: var(--bg); }
+main:has(#side-sell:checked) .only-buy, main:has(#side-buy:checked) .only-sell { display: none; }
+main:has(#side-sell:checked) .buy-m, main:has(#side-buy:checked) .sell-m { color: var(--ink-3); }
+main:has(#side-sell:checked) .sell-m, main:has(#side-buy:checked) .buy-m { color: var(--ink); }
+main:has(#rng-30:checked) .rng-30, main:has(#rng-7:checked) .rng-7 { display: block; }
+main:has(#rng-7:checked) .keep-30 { display: none; }
+main:has(#side-buy:checked) .h1-sell { display: none; } main:has(#side-sell:checked) .h1-buy { display: none; }
+main:has(#side-buy:checked) .put-sell { display: none; } main:has(#side-sell:checked) .put-buy { display: none; }
+main:has(input[type=radio]:focus-visible) label { --x: 0; }
+
+.chart .rng-30, .chart .rng-7 { display: none; }
+.chart .rng-30 .ch-sm, .chart .rng-7 .ch-sm { display: block; } .chart .rng-30 .ch-lg, .chart .rng-7 .ch-lg { display: none; }
+@media (min-width: 640px) { .chart .rng-30 .ch-sm, .chart .rng-7 .ch-sm { display: none; } .chart .rng-30 .ch-lg, .chart .rng-7 .ch-lg { display: block; } }
+.get--sell, .get--buy { display: none; }
+main:has(#side-sell:focus-visible) label[for=side-sell] { outline: 2px solid var(--focus); outline-offset: 2px; }
+main:has(#side-buy:focus-visible) label[for=side-buy] { outline: 2px solid var(--focus); outline-offset: 2px; }
+main:has(#rng-30:focus-visible) label[for=rng-30] { outline: 2px solid var(--focus); outline-offset: 2px; }
+main:has(#rng-7:focus-visible) label[for=rng-7] { outline: 2px solid var(--focus); outline-offset: 2px; }
+main:has(#sz-1000:focus-visible) label[for=sz-1000] { outline: 2px solid var(--focus); outline-offset: 2px; }
+main:has(#sz-5000:focus-visible) label[for=sz-5000] { outline: 2px solid var(--focus); outline-offset: 2px; }
+main:has(#sz-10000:focus-visible) label[for=sz-10000] { outline: 2px solid var(--focus); outline-offset: 2px; }
+main:has(#sz-25000:focus-visible) label[for=sz-25000] { outline: 2px solid var(--focus); outline-offset: 2px; }
+main:has(#sz-50000:focus-visible) label[for=sz-50000] { outline: 2px solid var(--focus); outline-offset: 2px; }
+main:has(#sz-100000:focus-visible) label[for=sz-100000] { outline: 2px solid var(--focus); outline-offset: 2px; }
+</style>
+</head>
+<body>
+<svg width="0" height="0" style="position:absolute" aria-hidden="true" focusable="false"><defs>
+<symbol id="i-chev" viewBox="0 0 20 20"><path d="M5 8l5 5 5-5" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></symbol>
+<symbol id="i-menu" viewBox="0 0 20 20"><path d="M3 6.5h14M3 13.5h14" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></symbol>
+<symbol id="i-close" viewBox="0 0 20 20"><path d="M5 5l10 10M15 5L5 15" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></symbol>
+<symbol id="i-arrow" viewBox="0 0 20 20"><path d="M4 10h12M11 5l5 5-5 5" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></symbol>
+<symbol id="i-check" viewBox="0 0 20 20"><circle cx="10" cy="10" r="8" fill="none" stroke="currentColor" stroke-width="1.5"/><path d="M6.5 10.3l2.4 2.4 4.6-5" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></symbol>
+<symbol id="i-alert" viewBox="0 0 20 20"><path d="M10 3.2l7.4 13H2.6z" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linejoin="round"/><path d="M10 8.3v3.6M10 14.3v.1" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></symbol>
+<symbol id="i-info" viewBox="0 0 20 20"><circle cx="10" cy="10" r="8" fill="none" stroke="currentColor" stroke-width="1.5"/><path d="M10 9v5M10 6.2v.1" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/></symbol>
+<symbol id="i-up" viewBox="0 0 10 10"><path d="M5 1.2l4 7H1z" fill="currentColor"/></symbol>
+<symbol id="i-down" viewBox="0 0 10 10"><path d="M5 8.8l4-7H1z" fill="currentColor"/></symbol>
+<symbol id="i-filter" viewBox="0 0 20 20"><path d="M3 5.5h14M6 10h8M8.5 14.5h3" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></symbol>
+<symbol id="i-lock" viewBox="0 0 16 16"><rect x="3" y="7" width="10" height="7" rx="1.5" fill="none" stroke="currentColor" stroke-width="1.4"/><path d="M5.2 7V5.2a2.8 2.8 0 015.6 0V7" fill="none" stroke="currentColor" stroke-width="1.4"/></symbol>
+</defs></svg>
+
+<a class="skip" href="#main">Skip to content</a>
+<header class="bar"><div class="bar__in">
+  <a class="wm" href="home.html" aria-label="Namada Trade, home">Namada<i>Trade</i><b aria-hidden="true"></b></a>
+  <nav class="bar__nav" aria-label="Primary"><a href="home.html">Home</a><a href="trade.html" aria-current="page">Price check</a><a href="#" data-unbuilt>Sellers</a><a href="#" data-unbuilt>Private pool</a><a href="holders.html">Ledger</a><a href="#" data-unbuilt>Alerts</a></nav>
+  <button type="button" class="bar__price" popovertarget="p-price" aria-label="NAM price, tap for source"><span>$0.001025</span><span class="chg"><svg aria-hidden="true"><use href="#i-up"/></svg>+0.87%</span></button>
+  <button type="button" class="bar__menu" popovertarget="menu" aria-label="Open menu"><svg class="ico"><use href="#i-menu"/></svg></button>
+</div></header>
+<div id="menu" popover class="menu" aria-label="Menu">
+  <div class="menu__top"><span>Menu</span><button type="button" class="icon-btn" popovertarget="menu" popovertargetaction="hide" aria-label="Close menu"><svg class="ico"><use href="#i-close"/></svg></button></div>
+  <ul class="menu__list"><li><a href="home.html">
+      <span class="menu__no">01</span><span class="menu__name">Home</span><span class="menu__gloss">What moved, who holds it, what it costs</span></a></li><li><a href="trade.html" aria-current="page">
+      <span class="menu__no">02</span><span class="menu__name">Price check</span><span class="menu__gloss">What would I get if I sold NAM now?</span></a></li><li><a href="#" data-unbuilt>
+      <span class="menu__no">03</span><span class="menu__name">Sellers</span><span class="menu__gloss">Is a big sale coming?</span></a></li><li><a href="#" data-unbuilt>
+      <span class="menu__no">04</span><span class="menu__name">Private pool</span><span class="menu__gloss">How much NAM can’t be seen?</span></a></li><li><a href="holders.html">
+      <span class="menu__no">05</span><span class="menu__name">Ledger</span><span class="menu__gloss">Every move, and who holds NAM</span></a></li><li><a href="#" data-unbuilt>
+      <span class="menu__no">06</span><span class="menu__name">Alerts</span><span class="menu__gloss">What should wake me up?</span></a></li></ul>
+  <div class="menu__foot"><p><span class="mono">5 of 7</span> cross-checks pass. <a href="home.html#trust">Where every number comes from</a></p></div>
+</div>
+
+<main id="main" class="trade">
+
+    <input class="vh" type="radio" name="side" id="side-sell" checked><input class="vh" type="radio" name="side" id="side-buy">
+    <input class="vh" type="radio" name="size" id="sz-1000"><input class="vh" type="radio" name="size" id="sz-5000" checked><input class="vh" type="radio" name="size" id="sz-10000"><input class="vh" type="radio" name="size" id="sz-25000"><input class="vh" type="radio" name="size" id="sz-50000"><input class="vh" type="radio" name="size" id="sz-100000">
+    <input class="vh" type="radio" name="range" id="rng-30" checked><input class="vh" type="radio" name="range" id="rng-7">
+<div class="wrap">
+  <header class="ph">
+    <p class="ph__eyebrow mono">Price check · 17 Oct 2026, 11:24 UTC</p>
+    <h1><span class="h1-sell">What would I get if I sold NAM now?</span><span class="h1-buy">What would it cost to buy NAM now?</span></h1>
+    <p class="ph__sub">An Osmosis quote, not an order. This site never trades for you.</p>
+  </header>
+
+  <div class="tk-grid">
+      <section class="tk" aria-label="Your quote">
+        <div class="tk__panel">
+          <div class="seg" role="group" aria-label="Side"><label for="side-sell">Sell NAM</label><label for="side-buy">Buy NAM</label></div>
+          <div>
+            <div class="field-l"><span id="amt-l">Amount</span><span class="age"><span class="st st--none" aria-hidden="true"></span>live quote not answering</span></div>
+            <div class="field" role="group" aria-labelledby="amt-l"><span class="field__v sz sz-1000">1,000</span><span class="field__v sz sz-5000">5,000</span><span class="field__v sz sz-10000">10,000</span><span class="field__v sz sz-25000">25,000</span><span class="field__v sz sz-50000">50,000</span><span class="field__v sz sz-100000">100,000</span><span class="field__u">NAM</span><span class="field__s sz sz-1000">≈ $1.03</span><span class="field__s sz sz-5000">≈ $5.13</span><span class="field__s sz sz-10000">≈ $10.25</span><span class="field__s sz sz-25000">≈ $25.64</span><span class="field__s sz sz-50000">≈ $51.27</span><span class="field__s sz sz-100000">≈ $102.54</span></div>
+            <div class="presets" role="group" aria-label="Measured sizes"><label for="sz-1000" class="pre pre-1000">1,000</label><label for="sz-5000" class="pre pre-5000">5,000</label><label for="sz-10000" class="pre pre-10000">10,000</label><label for="sz-25000" class="pre pre-25000">25,000</label><label for="sz-50000" class="pre pre-50000">50,000</label><label for="sz-100000" class="pre pre-100000">100,000</label></div>
+          </div>
+          <div aria-live="polite"><div class="get get--sell get--1000" data-side="sell" data-size="1000">
+      <p class="get__l">You get</p>
+      <p class="get__n"><span class="get__v"><button type="button" class="num get__v-n" popovertarget="p-curve" data-num data-status="fresh" >1.02</button></span><span class="get__u">USDC</span></p>
+      <div class="get__move">
+        <div><span class="k">Price move</span><span class="v"><button type="button" class="num " popovertarget="p-curve" data-num data-status="fresh" >−0.46%</button></span></div>
+        <div><span class="k">Your average price</span><span class="v"><button type="button" class="num " popovertarget="p-curve" data-num data-status="fresh" >$0.001020</button></span></div>
+        <div><span class="k">Quoted price</span><span class="v"><button type="button" class="num " popovertarget="p-price" data-num data-status="fresh" >$0.001025</button></span></div>
+      </div>
+      
+    </div><div class="get get--buy get--1000" data-side="buy" data-size="1000">
+      <p class="get__l">You pay</p>
+      <p class="get__n"><span class="get__v"><button type="button" class="num get__v-n" popovertarget="p-buyCost" data-num data-status="fresh" >1.04</button></span><span class="get__u">USDC</span></p>
+      <div class="get__move">
+        <div><span class="k">Price move</span><span class="v"><button type="button" class="num " popovertarget="p-curve" data-num data-status="fresh" >+3.14%</button></span></div>
+        <div><span class="k">Your average price</span><span class="v"><button type="button" class="num " popovertarget="p-curve" data-num data-status="fresh" >$0.001043</button></span></div>
+        <div><span class="k">Quoted price</span><span class="v"><button type="button" class="num " popovertarget="p-price" data-num data-status="fresh" >$0.001025</button></span></div>
+      </div>
+      <p class="get__tip">Keep the price move near 1% with orders of <button type="button" class="num " popovertarget="p-curve" data-num data-status="fresh" >318</button> NAM or less, or near 3% with <button type="button" class="num " popovertarget="p-curve" data-num data-status="fresh" >954</button> NAM or less.</p>
+    </div><div class="get get--sell get--5000" data-side="sell" data-size="5000">
+      <p class="get__l">You get</p>
+      <p class="get__n"><span class="get__v"><button type="button" class="num get__v-n" popovertarget="p-curve" data-num data-status="fresh" >5.05</button></span><span class="get__u">USDC</span></p>
+      <div class="get__move">
+        <div><span class="k">Price move</span><span class="v"><button type="button" class="num " popovertarget="p-curve" data-num data-status="fresh" >−1.49%</button></span></div>
+        <div><span class="k">Your average price</span><span class="v"><button type="button" class="num " popovertarget="p-curve" data-num data-status="fresh" >$0.001009</button></span></div>
+        <div><span class="k">Quoted price</span><span class="v"><button type="button" class="num " popovertarget="p-price" data-num data-status="fresh" >$0.001025</button></span></div>
+      </div>
+      
+    </div><div class="get get--buy get--5000" data-side="buy" data-size="5000">
+      <p class="get__l">You pay</p>
+      <p class="get__n"><span class="get__v"><button type="button" class="num get__v-n" popovertarget="p-buyCost" data-num data-status="fresh" >5.35</button></span><span class="get__u">USDC</span></p>
+      <div class="get__move">
+        <div><span class="k">Price move</span><span class="v"><button type="button" class="num " popovertarget="p-curve" data-num data-status="fresh" >+5.60%</button></span></div>
+        <div><span class="k">Your average price</span><span class="v"><button type="button" class="num " popovertarget="p-curve" data-num data-status="fresh" >$0.001071</button></span></div>
+        <div><span class="k">Quoted price</span><span class="v"><button type="button" class="num " popovertarget="p-price" data-num data-status="fresh" >$0.001025</button></span></div>
+      </div>
+      <p class="get__tip">Keep the price move near 1% with orders of <button type="button" class="num " popovertarget="p-curve" data-num data-status="fresh" >318</button> NAM or less, or near 3% with <button type="button" class="num " popovertarget="p-curve" data-num data-status="fresh" >954</button> NAM or less.</p>
+    </div><div class="get get--sell get--10000" data-side="sell" data-size="10000">
+      <p class="get__l">You get</p>
+      <p class="get__n"><span class="get__v"><button type="button" class="num get__v-n" popovertarget="p-curve" data-num data-status="fresh" >9.96</button></span><span class="get__u">USDC</span></p>
+      <div class="get__move">
+        <div><span class="k">Price move</span><span class="v"><button type="button" class="num " popovertarget="p-curve" data-num data-status="fresh" >−2.75%</button></span></div>
+        <div><span class="k">Your average price</span><span class="v"><button type="button" class="num " popovertarget="p-curve" data-num data-status="fresh" >$0.000996</button></span></div>
+        <div><span class="k">Quoted price</span><span class="v"><button type="button" class="num " popovertarget="p-price" data-num data-status="fresh" >$0.001025</button></span></div>
+      </div>
+      
+    </div><div class="get get--buy get--10000" data-side="buy" data-size="10000">
+      <p class="get__l">You pay</p>
+      <p class="get__n"><span class="get__v"><button type="button" class="num get__v-n" popovertarget="p-buyCost" data-num data-status="fresh" >11.14</button></span><span class="get__u">USDC</span></p>
+      <div class="get__move">
+        <div><span class="k">Price move</span><span class="v"><button type="button" class="num " popovertarget="p-curve" data-num data-status="fresh" >+9.11%</button></span></div>
+        <div><span class="k">Your average price</span><span class="v"><button type="button" class="num " popovertarget="p-curve" data-num data-status="fresh" >$0.001114</button></span></div>
+        <div><span class="k">Quoted price</span><span class="v"><button type="button" class="num " popovertarget="p-price" data-num data-status="fresh" >$0.001025</button></span></div>
+      </div>
+      <p class="get__tip">Keep the price move near 1% with orders of <button type="button" class="num " popovertarget="p-curve" data-num data-status="fresh" >318</button> NAM or less, or near 3% with <button type="button" class="num " popovertarget="p-curve" data-num data-status="fresh" >954</button> NAM or less.</p>
+    </div><div class="get get--sell get--25000" data-side="sell" data-size="25000">
+      <p class="get__l">You get</p>
+      <p class="get__n"><span class="get__v"><button type="button" class="num get__v-n" popovertarget="p-curve" data-num data-status="fresh" >23.99</button></span><span class="get__u">USDC</span></p>
+      <div class="get__move">
+        <div><span class="k">Price move</span><span class="v"><button type="button" class="num " popovertarget="p-curve" data-num data-status="fresh" >−6.34%</button></span></div>
+        <div><span class="k">Your average price</span><span class="v"><button type="button" class="num " popovertarget="p-curve" data-num data-status="fresh" >$0.000959</button></span></div>
+        <div><span class="k">Quoted price</span><span class="v"><button type="button" class="num " popovertarget="p-price" data-num data-status="fresh" >$0.001025</button></span></div>
+      </div>
+      <p class="get__tip">That is a lot for pools this small. The same NAM sold in smaller orders moves the price less.</p>
+    </div><div class="get get--buy get--25000" data-side="buy" data-size="25000">
+      <p class="get__l">You pay</p>
+      <p class="get__n"><span class="get__v"><button type="button" class="num get__v-n" popovertarget="p-buyCost" data-num data-status="fresh" >31.87</button></span><span class="get__u">USDC</span></p>
+      <div class="get__move">
+        <div><span class="k">Price move</span><span class="v"><button type="button" class="num " popovertarget="p-curve" data-num data-status="fresh" >+20.49%</button></span></div>
+        <div><span class="k">Your average price</span><span class="v"><button type="button" class="num " popovertarget="p-curve" data-num data-status="fresh" >$0.001275</button></span></div>
+        <div><span class="k">Quoted price</span><span class="v"><button type="button" class="num " popovertarget="p-price" data-num data-status="fresh" >$0.001025</button></span></div>
+      </div>
+      <p class="get__tip">Keep the price move near 1% with orders of <button type="button" class="num " popovertarget="p-curve" data-num data-status="fresh" >318</button> NAM or less, or near 3% with <button type="button" class="num " popovertarget="p-curve" data-num data-status="fresh" >954</button> NAM or less.</p>
+    </div><div class="get get--sell get--50000" data-side="sell" data-size="50000">
+      <p class="get__l">You get</p>
+      <p class="get__n"><span class="get__v"><button type="button" class="num get__v-n" popovertarget="p-curve" data-num data-status="fresh" >44.90</button></span><span class="get__u">USDC</span></p>
+      <div class="get__move">
+        <div><span class="k">Price move</span><span class="v"><button type="button" class="num " popovertarget="p-curve" data-num data-status="fresh" >−12.34%</button></span></div>
+        <div><span class="k">Your average price</span><span class="v"><button type="button" class="num " popovertarget="p-curve" data-num data-status="fresh" >$0.000898</button></span></div>
+        <div><span class="k">Quoted price</span><span class="v"><button type="button" class="num " popovertarget="p-price" data-num data-status="fresh" >$0.001025</button></span></div>
+      </div>
+      <p class="get__tip">That is a lot for pools this small. The same NAM sold in smaller orders moves the price less.</p>
+    </div><div class="get get--buy get--50000" data-side="buy" data-size="50000">
+      <p class="get__l">You pay</p>
+      <p class="get__n"><span class="get__v"><button type="button" class="num get__v-n" popovertarget="p-buyCost" data-num data-status="fresh" >70.99</button></span><span class="get__u">USDC</span></p>
+      <div class="get__move">
+        <div><span class="k">Price move</span><span class="v"><button type="button" class="num " popovertarget="p-curve" data-num data-status="fresh" >+28.15%</button></span></div>
+        <div><span class="k">Your average price</span><span class="v"><button type="button" class="num " popovertarget="p-curve" data-num data-status="fresh" >$0.001420</button></span></div>
+        <div><span class="k">Quoted price</span><span class="v"><button type="button" class="num " popovertarget="p-price" data-num data-status="fresh" >$0.001025</button></span></div>
+      </div>
+      <p class="get__tip">Keep the price move near 1% with orders of <button type="button" class="num " popovertarget="p-curve" data-num data-status="fresh" >318</button> NAM or less, or near 3% with <button type="button" class="num " popovertarget="p-curve" data-num data-status="fresh" >954</button> NAM or less.</p>
+    </div><div class="get get--sell get--100000" data-side="sell" data-size="100000">
+      <p class="get__l">You get</p>
+      <p class="get__n"><span class="get__v"><button type="button" class="num get__v-n" popovertarget="p-curve" data-num data-status="fresh" >75.52</button></span><span class="get__u">USDC</span></p>
+      <div class="get__move">
+        <div><span class="k">Price move</span><span class="v"><button type="button" class="num " popovertarget="p-curve" data-num data-status="fresh" >−26.27%</button></span></div>
+        <div><span class="k">Your average price</span><span class="v"><button type="button" class="num " popovertarget="p-curve" data-num data-status="fresh" >$0.000755</button></span></div>
+        <div><span class="k">Quoted price</span><span class="v"><button type="button" class="num " popovertarget="p-price" data-num data-status="fresh" >$0.001025</button></span></div>
+      </div>
+      <p class="get__tip">That is a lot for pools this small. The same NAM sold in smaller orders moves the price less.</p>
+    </div><div class="get get--buy get--100000" data-side="buy" data-size="100000">
+      <p class="get__l">You pay</p>
+      <p class="get__n"><span class="get__v"><button type="button" class="num get__v-n" popovertarget="p-buyCost" data-num data-status="fresh" >152.25</button></span><span class="get__u">USDC</span></p>
+      <div class="get__move">
+        <div><span class="k">Price move</span><span class="v"><button type="button" class="num " popovertarget="p-curve" data-num data-status="fresh" >+32.79%</button></span></div>
+        <div><span class="k">Your average price</span><span class="v"><button type="button" class="num " popovertarget="p-curve" data-num data-status="fresh" >$0.001522</button></span></div>
+        <div><span class="k">Quoted price</span><span class="v"><button type="button" class="num " popovertarget="p-price" data-num data-status="fresh" >$0.001025</button></span></div>
+      </div>
+      <p class="get__tip">Keep the price move near 1% with orders of <button type="button" class="num " popovertarget="p-curve" data-num data-status="fresh" >318</button> NAM or less, or near 3% with <button type="button" class="num " popovertarget="p-curve" data-num data-status="fresh" >954</button> NAM or less.</p>
+    </div></div>
+          <p class="ticket-note">The Osmosis quote service is not answering. These figures come from the size table, measured at the same moment, so you can pick one of six sizes.</p>
+          <p class="src"><span>Source</span> <button type="button" class="num " popovertarget="p-curve" data-num data-status="fresh" >Osmosis quote</button> <span class="when">as of 11:24 UTC · just now</span></p>
+        </div>
+      </section>
+      <div class="alert thin" role="note"><svg class="ico" aria-hidden="true"><use href="#i-alert"/></svg>
+        <div><p><b>This is a thin market.</b> The 28 NAM pools on Osmosis hold <button type="button" class="num " popovertarget="p-pools" data-num data-status="fresh" >$1,819</button> in all, and the biggest holds <button type="button" class="num " popovertarget="p-pools" data-num data-status="fresh" >$831</button>.</p>
+        <p>Selling 50,000 NAM, worth $51.27, would move the price <button type="button" class="num " popovertarget="p-curve" data-num data-status="fresh" >12.34%</button>.</p></div></div>
+
+    <section class="chart" aria-labelledby="h-chart">
+      <div class="chart__h">
+        <div><h2 id="h-chart" class="h3" style="font-size:var(--fs-22)">NAM has traded between $0.000589 and $0.001110 in the last 30 days</h2>
+          <p class="chart__sub">Price of one NAM in USDC. Solid: what trades paid. Dashed: the quoted price.</p></div>
+        <div class="seg" role="group" aria-label="Range"><label for="rng-7">7 days</label><label for="rng-30">30 days</label></div>
+      </div>
+      <div class="chart__svg chart-wrap"><div class="rng-30"><div class="ch-sm"><svg viewBox="0 0 343 210" width="343" height="210" role="img" aria-label="Price of NAM over 30 days. Executed trades from $0.000589 to $0.001110; latest quote $0.001025.">
+    <line class="ch-ev" x1="24.4" x2="24.4" y1="14" y2="188"/><text class="ch-evt" x="24.4" y="11" text-anchor="middle">+35.7%</text><line class="ch-ev" x1="205.7" x2="205.7" y1="14" y2="188"/><text class="ch-evt" x="205.7" y="11" text-anchor="middle">+21.2%</text><line class="ch-ev" x1="144.0" x2="144.0" y1="14" y2="188"/><text class="ch-evt" x="144.0" y="11" text-anchor="middle">+20.8%</text><line class="ch-grid" x1="2" x2="341" y1="171.7" y2="171.7"/><text class="ch-tick" x="2" y="166.7">$0.0006</text><line class="ch-grid" x1="2" x2="341" y1="119.9" y2="119.9"/><text class="ch-tick" x="2" y="114.9">$0.0008</text><line class="ch-grid" x1="2" x2="341" y1="68.1" y2="68.1"/><text class="ch-tick" x="2" y="63.1">$0.0010</text><line class="ch-axis" x1="2" x2="341" y1="188" y2="188"/><text class="ch-tick" x="341.0" y="205" text-anchor="end">17 Oct</text><text class="ch-tick" x="261.9" y="205" text-anchor="middle">10 Oct</text><text class="ch-tick" x="182.8" y="205" text-anchor="middle">3 Oct</text><text class="ch-tick" x="103.7" y="205" text-anchor="middle">26 Sep</text><text class="ch-tick" x="24.6" y="205" text-anchor="middle">19 Sep</text>
+    <g class="ch-lines"><path class="ch-quote" d="M315.4 82.5L329.5 63.8L341.0 61.5"/><path class="ch-exec" d="M13.1 174.5L20.2 164.3L24.4 106.3L25.3 109.7L35.2 74.8L38.5 81.1L39.9 91.2L50.3 119.2L70.1 86.9L81.8 76.1L90.3 111.9L124.2 127.2L132.2 141.9L144.0 103.4L155.3 123.5L182.6 129.3L186.8 130.5L195.3 151.9L208.0 114.6L214.6 89.6L218.4 91.5L225.0 85.4L241.0 59.5L245.7 72.8L249.0 68.3L253.2 43.5L258.4 39.6L261.2 47.6L275.4 60.1L276.3 62.9L284.3 52.9L287.1 67.6L287.6 78.4L292.8 70.8L298.0 78.3L301.3 101.0L306.4 97.5L309.7 100.0L311.6 80.1L317.7 88.1L319.1 98.6L322.0 70.9L330.0 62.6L340.3 65.0"/><circle class="ch-dot" cx="13.1" cy="174.5" r="1.8"/><circle class="ch-dot" cx="20.2" cy="164.3" r="1.8"/><circle class="ch-dot" cx="24.4" cy="106.3" r="1.8"/><circle class="ch-dot" cx="25.3" cy="109.7" r="1.8"/><circle class="ch-dot" cx="35.2" cy="74.8" r="1.8"/><circle class="ch-dot" cx="38.5" cy="81.1" r="1.8"/><circle class="ch-dot" cx="39.9" cy="91.2" r="1.8"/><circle class="ch-dot" cx="50.3" cy="119.2" r="1.8"/><circle class="ch-dot" cx="70.1" cy="86.9" r="1.8"/><circle class="ch-dot" cx="81.8" cy="76.1" r="1.8"/><circle class="ch-dot" cx="90.3" cy="111.9" r="1.8"/><circle class="ch-dot" cx="124.2" cy="127.2" r="1.8"/><circle class="ch-dot" cx="132.2" cy="141.9" r="1.8"/><circle class="ch-dot" cx="144.0" cy="103.4" r="1.8"/><circle class="ch-dot" cx="155.3" cy="123.5" r="1.8"/><circle class="ch-dot" cx="182.6" cy="129.3" r="1.8"/><circle class="ch-dot" cx="186.8" cy="130.5" r="1.8"/><circle class="ch-dot" cx="195.3" cy="151.9" r="1.8"/><circle class="ch-dot" cx="208.0" cy="114.6" r="1.8"/><circle class="ch-dot" cx="214.6" cy="89.6" r="1.8"/><circle class="ch-dot" cx="218.4" cy="91.5" r="1.8"/><circle class="ch-dot" cx="225.0" cy="85.4" r="1.8"/><circle class="ch-dot" cx="241.0" cy="59.5" r="1.8"/><circle class="ch-dot" cx="245.7" cy="72.8" r="1.8"/><circle class="ch-dot" cx="249.0" cy="68.3" r="1.8"/><circle class="ch-dot" cx="253.2" cy="43.5" r="1.8"/><circle class="ch-dot" cx="258.4" cy="39.6" r="1.8"/><circle class="ch-dot" cx="261.2" cy="47.6" r="1.8"/><circle class="ch-dot" cx="275.4" cy="60.1" r="1.8"/><circle class="ch-dot" cx="276.3" cy="62.9" r="1.8"/><circle class="ch-dot" cx="284.3" cy="52.9" r="1.8"/><circle class="ch-dot" cx="287.1" cy="67.6" r="1.8"/><circle class="ch-dot" cx="287.6" cy="78.4" r="1.8"/><circle class="ch-dot" cx="292.8" cy="70.8" r="1.8"/><circle class="ch-dot" cx="298.0" cy="78.3" r="1.8"/><circle class="ch-dot" cx="301.3" cy="101.0" r="1.8"/><circle class="ch-dot" cx="306.4" cy="97.5" r="1.8"/><circle class="ch-dot" cx="309.7" cy="100.0" r="1.8"/><circle class="ch-dot" cx="311.6" cy="80.1" r="1.8"/><circle class="ch-dot" cx="317.7" cy="88.1" r="1.8"/><circle class="ch-dot" cx="319.1" cy="98.6" r="1.8"/><circle class="ch-dot" cx="322.0" cy="70.9" r="1.8"/><circle class="ch-dot" cx="330.0" cy="62.6" r="1.8"/><circle class="ch-dot" cx="340.3" cy="65.0" r="1.8"/></g><g><rect class="ch-pill" x="269" y="35.5" width="72" height="18" rx="9"/><text class="ch-pillt" x="305" y="48.0" text-anchor="middle">$0.001025</text></g></svg></div><div class="ch-lg"><svg viewBox="0 0 636 300" width="636" height="300" role="img" aria-label="Price of NAM over 30 days. Executed trades from $0.000589 to $0.001110; latest quote $0.001025.">
+    <line class="ch-ev" x1="43.8" x2="43.8" y1="14" y2="278"/><text class="ch-evt" x="43.8" y="11" text-anchor="middle">+35.7%</text><line class="ch-ev" x1="381.7" x2="381.7" y1="14" y2="278"/><text class="ch-evt" x="381.7" y="11" text-anchor="middle">+21.2%</text><line class="ch-ev" x1="266.7" x2="266.7" y1="14" y2="278"/><text class="ch-evt" x="266.7" y="11" text-anchor="middle">+20.8%</text><line class="ch-grid" x1="2" x2="634" y1="253.0" y2="253.0"/><text class="ch-tick" x="2" y="248.0">$0.0006</text><line class="ch-grid" x1="2" x2="634" y1="173.8" y2="173.8"/><text class="ch-tick" x="2" y="168.8">$0.0008</text><line class="ch-grid" x1="2" x2="634" y1="94.6" y2="94.6"/><text class="ch-tick" x="2" y="89.6">$0.0010</text><line class="ch-axis" x1="2" x2="634" y1="278" y2="278"/><text class="ch-tick" x="634.0" y="295" text-anchor="end">17 Oct</text><text class="ch-tick" x="486.5" y="295" text-anchor="middle">10 Oct</text><text class="ch-tick" x="339.1" y="295" text-anchor="middle">3 Oct</text><text class="ch-tick" x="191.6" y="295" text-anchor="middle">26 Sep</text><text class="ch-tick" x="44.1" y="295" text-anchor="middle">19 Sep</text>
+    <g class="ch-lines"><path class="ch-quote" d="M586.2 116.6L612.6 88.1L634.0 84.6"/><path class="ch-exec" d="M22.7 257.4L35.9 241.8L43.8 153.0L45.5 158.2L64.0 104.8L70.1 114.5L72.7 129.9L92.0 172.8L128.9 123.4L150.9 106.9L166.7 161.6L229.9 185.1L244.8 207.5L266.7 148.7L287.8 179.3L338.7 188.2L346.6 190.1L362.4 222.8L386.1 165.7L398.4 127.5L405.4 130.5L417.7 121.1L447.5 81.4L456.3 101.9L462.5 94.9L470.4 57.0L480.0 51.0L485.3 63.2L511.6 82.4L513.4 86.7L528.3 71.4L533.6 93.8L534.4 110.4L544.1 98.7L553.8 110.2L559.9 145.0L569.6 139.6L575.7 143.4L579.2 113.0L590.6 125.2L593.3 141.3L598.5 98.9L613.4 86.2L632.8 89.9"/><circle class="ch-dot" cx="22.7" cy="257.4" r="1.8"/><circle class="ch-dot" cx="35.9" cy="241.8" r="1.8"/><circle class="ch-dot" cx="43.8" cy="153.0" r="1.8"/><circle class="ch-dot" cx="45.5" cy="158.2" r="1.8"/><circle class="ch-dot" cx="64.0" cy="104.8" r="1.8"/><circle class="ch-dot" cx="70.1" cy="114.5" r="1.8"/><circle class="ch-dot" cx="72.7" cy="129.9" r="1.8"/><circle class="ch-dot" cx="92.0" cy="172.8" r="1.8"/><circle class="ch-dot" cx="128.9" cy="123.4" r="1.8"/><circle class="ch-dot" cx="150.9" cy="106.9" r="1.8"/><circle class="ch-dot" cx="166.7" cy="161.6" r="1.8"/><circle class="ch-dot" cx="229.9" cy="185.1" r="1.8"/><circle class="ch-dot" cx="244.8" cy="207.5" r="1.8"/><circle class="ch-dot" cx="266.7" cy="148.7" r="1.8"/><circle class="ch-dot" cx="287.8" cy="179.3" r="1.8"/><circle class="ch-dot" cx="338.7" cy="188.2" r="1.8"/><circle class="ch-dot" cx="346.6" cy="190.1" r="1.8"/><circle class="ch-dot" cx="362.4" cy="222.8" r="1.8"/><circle class="ch-dot" cx="386.1" cy="165.7" r="1.8"/><circle class="ch-dot" cx="398.4" cy="127.5" r="1.8"/><circle class="ch-dot" cx="405.4" cy="130.5" r="1.8"/><circle class="ch-dot" cx="417.7" cy="121.1" r="1.8"/><circle class="ch-dot" cx="447.5" cy="81.4" r="1.8"/><circle class="ch-dot" cx="456.3" cy="101.9" r="1.8"/><circle class="ch-dot" cx="462.5" cy="94.9" r="1.8"/><circle class="ch-dot" cx="470.4" cy="57.0" r="1.8"/><circle class="ch-dot" cx="480.0" cy="51.0" r="1.8"/><circle class="ch-dot" cx="485.3" cy="63.2" r="1.8"/><circle class="ch-dot" cx="511.6" cy="82.4" r="1.8"/><circle class="ch-dot" cx="513.4" cy="86.7" r="1.8"/><circle class="ch-dot" cx="528.3" cy="71.4" r="1.8"/><circle class="ch-dot" cx="533.6" cy="93.8" r="1.8"/><circle class="ch-dot" cx="534.4" cy="110.4" r="1.8"/><circle class="ch-dot" cx="544.1" cy="98.7" r="1.8"/><circle class="ch-dot" cx="553.8" cy="110.2" r="1.8"/><circle class="ch-dot" cx="559.9" cy="145.0" r="1.8"/><circle class="ch-dot" cx="569.6" cy="139.6" r="1.8"/><circle class="ch-dot" cx="575.7" cy="143.4" r="1.8"/><circle class="ch-dot" cx="579.2" cy="113.0" r="1.8"/><circle class="ch-dot" cx="590.6" cy="125.2" r="1.8"/><circle class="ch-dot" cx="593.3" cy="141.3" r="1.8"/><circle class="ch-dot" cx="598.5" cy="98.9" r="1.8"/><circle class="ch-dot" cx="613.4" cy="86.2" r="1.8"/><circle class="ch-dot" cx="632.8" cy="89.9" r="1.8"/></g><g><rect class="ch-pill" x="562" y="58.6" width="72" height="18" rx="9"/><text class="ch-pillt" x="598" y="71.1" text-anchor="middle">$0.001025</text></g></svg></div></div><div class="rng-7"><div class="ch-sm"><svg viewBox="0 0 343 210" width="343" height="210" role="img" aria-label="Price of NAM over 7 days. Executed trades from $0.000873 to $0.001059; latest quote $0.001025.">
+    <line class="ch-ev" x1="110.1" x2="110.1" y1="14" y2="188"/><text class="ch-evt" x="110.1" y="11" text-anchor="middle">−14.4%</text><line class="ch-grid" x1="2" x2="341" y1="154.8" y2="154.8"/><text class="ch-tick" x="2" y="149.8">$0.0009</text><line class="ch-grid" x1="2" x2="341" y1="82.2" y2="82.2"/><text class="ch-tick" x="2" y="77.2">$0.0010</text><line class="ch-axis" x1="2" x2="341" y1="188" y2="188"/><text class="ch-tick" x="341.0" y="205" text-anchor="end">17 Oct</text><text class="ch-tick" x="244.1" y="205" text-anchor="middle">15 Oct</text><text class="ch-tick" x="147.3" y="205" text-anchor="middle">13 Oct</text><text class="ch-tick" x="50.4" y="205" text-anchor="middle">11 Oct</text>
+    <g class="ch-lines"><path class="ch-quote" d="M231.2 122.5L291.7 70.2L341.0 63.8"/><path class="ch-exec" d="M59.7 59.8L63.7 67.6L98.0 39.6L110.1 80.7L112.2 111.1L134.3 89.7L156.5 110.6L170.7 174.5L192.9 164.7L207.0 171.6L215.1 115.8L241.3 138.2L247.3 167.8L259.5 90.0L293.8 66.8L338.2 73.5"/><circle class="ch-dot" cx="59.7" cy="59.8" r="2.4"/><circle class="ch-dot" cx="63.7" cy="67.6" r="2.4"/><circle class="ch-dot" cx="98.0" cy="39.6" r="2.4"/><circle class="ch-dot" cx="110.1" cy="80.7" r="2.4"/><circle class="ch-dot" cx="112.2" cy="111.1" r="2.4"/><circle class="ch-dot" cx="134.3" cy="89.7" r="2.4"/><circle class="ch-dot" cx="156.5" cy="110.6" r="2.4"/><circle class="ch-dot" cx="170.7" cy="174.5" r="2.4"/><circle class="ch-dot" cx="192.9" cy="164.7" r="2.4"/><circle class="ch-dot" cx="207.0" cy="171.6" r="2.4"/><circle class="ch-dot" cx="215.1" cy="115.8" r="2.4"/><circle class="ch-dot" cx="241.3" cy="138.2" r="2.4"/><circle class="ch-dot" cx="247.3" cy="167.8" r="2.4"/><circle class="ch-dot" cx="259.5" cy="90.0" r="2.4"/><circle class="ch-dot" cx="293.8" cy="66.8" r="2.4"/><circle class="ch-dot" cx="338.2" cy="73.5" r="2.4"/></g><g><rect class="ch-pill" x="269" y="37.8" width="72" height="18" rx="9"/><text class="ch-pillt" x="305" y="50.3" text-anchor="middle">$0.001025</text></g></svg></div><div class="ch-lg"><svg viewBox="0 0 636 300" width="636" height="300" role="img" aria-label="Price of NAM over 7 days. Executed trades from $0.000873 to $0.001059; latest quote $0.001025.">
+    <line class="ch-ev" x1="203.6" x2="203.6" y1="14" y2="278"/><text class="ch-evt" x="203.6" y="11" text-anchor="middle">−14.4%</text><line class="ch-grid" x1="2" x2="634" y1="227.2" y2="227.2"/><text class="ch-tick" x="2" y="222.2">$0.00090</text><line class="ch-grid" x1="2" x2="634" y1="171.7" y2="171.7"/><text class="ch-tick" x="2" y="166.7">$0.00095</text><line class="ch-grid" x1="2" x2="634" y1="116.2" y2="116.2"/><text class="ch-tick" x="2" y="111.2">$0.00100</text><line class="ch-grid" x1="2" x2="634" y1="60.7" y2="60.7"/><text class="ch-tick" x="2" y="55.7">$0.00105</text><line class="ch-axis" x1="2" x2="634" y1="278" y2="278"/><text class="ch-tick" x="634.0" y="295" text-anchor="end">17 Oct</text><text class="ch-tick" x="453.4" y="295" text-anchor="middle">15 Oct</text><text class="ch-tick" x="272.9" y="295" text-anchor="middle">13 Oct</text><text class="ch-tick" x="92.3" y="295" text-anchor="middle">11 Oct</text>
+    <g class="ch-lines"><path class="ch-quote" d="M429.3 177.7L542.1 97.9L634.0 88.0"/><path class="ch-exec" d="M109.5 82.0L117.1 93.8L181.0 51.0L203.6 113.9L207.4 160.3L248.7 127.7L290.1 159.7L316.4 257.4L357.8 242.3L384.2 253.0L399.2 167.6L448.1 201.8L459.4 247.1L482.0 128.1L545.9 92.6L628.7 102.9"/><circle class="ch-dot" cx="109.5" cy="82.0" r="2.4"/><circle class="ch-dot" cx="117.1" cy="93.8" r="2.4"/><circle class="ch-dot" cx="181.0" cy="51.0" r="2.4"/><circle class="ch-dot" cx="203.6" cy="113.9" r="2.4"/><circle class="ch-dot" cx="207.4" cy="160.3" r="2.4"/><circle class="ch-dot" cx="248.7" cy="127.7" r="2.4"/><circle class="ch-dot" cx="290.1" cy="159.7" r="2.4"/><circle class="ch-dot" cx="316.4" cy="257.4" r="2.4"/><circle class="ch-dot" cx="357.8" cy="242.3" r="2.4"/><circle class="ch-dot" cx="384.2" cy="253.0" r="2.4"/><circle class="ch-dot" cx="399.2" cy="167.6" r="2.4"/><circle class="ch-dot" cx="448.1" cy="201.8" r="2.4"/><circle class="ch-dot" cx="459.4" cy="247.1" r="2.4"/><circle class="ch-dot" cx="482.0" cy="128.1" r="2.4"/><circle class="ch-dot" cx="545.9" cy="92.6" r="2.4"/><circle class="ch-dot" cx="628.7" cy="102.9" r="2.4"/></g><g><rect class="ch-pill" x="562" y="62.0" width="72" height="18" rx="9"/><text class="ch-pillt" x="598" y="74.5" text-anchor="middle">$0.001025</text></g></svg></div></div></div>
+      <div class="key"><span><svg viewBox="0 0 24 4"><line x1="0" x2="24" y1="2" y2="2" stroke="var(--ink)" stroke-width="2"/></svg>Executed trades, hourly median</span><span><svg viewBox="0 0 24 4"><line x1="0" x2="24" y1="2" y2="2" stroke="var(--ink-3)" stroke-width="2" stroke-dasharray="4 4"/></svg>Quoted price, recorded since 15 Oct 2026</span><span class="keep-30"><svg viewBox="0 0 24 14" style="height:14px"><line x1="12" x2="12" y1="0" y2="14" stroke="var(--line-strong)" stroke-width="1.5" stroke-dasharray="2 3"/></svg>Biggest price moves</span></div>
+      <p class="src"><span>Source</span> <button type="button" class="num " popovertarget="p-swap" data-num data-status="fresh" >Executed trades, hourly median</button> <span>and</span> <button type="button" class="num " popovertarget="p-price" data-num data-status="fresh" >Osmosis quote</button> · as of 11:24 UTC · just now</p>
+      <p class="note" style="margin-top:var(--s-2)">Hours with no trade have no point, so the solid line has gaps. The quote history is short; before 15 Oct the chart shows executed trades only.</p>
+      <div class="vh"><table><caption>Executed price, 30 days</caption><tr><th>First</th><td>$0.000589</td><th>Lowest</th><td>$0.000589</td><th>Highest</th><td>$0.001110</td><th>Last</th><td>$0.001012</td></tr></table></div>
+    </section>
+  </div>
+
+
+  <section class="sec reveal ladder" id="ladder" aria-labelledby="h-ladder">
+    <div class="sec__head"><p class="sec__no mono">How size moves the price</p><h2 id="h-ladder">The bigger the order, the worse the price</h2></div>
+    <div class="sec__body">
+    <p class="lede">Selling 100,000 NAM moves the price <button type="button" class="num " popovertarget="p-curve" data-num data-status="fresh" >26.27%</button>. Selling 1,000 NAM moves it <button type="button" class="num " popovertarget="p-curve" data-num data-status="fresh" >0.46%</button>.</p>
+    <ol class="lad__rows rows-only"><li><label class="lrow lad-1000" for="sz-1000">
+      <span class="lrow__a">1,000<small>NAM</small></span>
+      <span class="lrow__g"><button type="button" class="num num--pad" popovertarget="p-curve" data-num data-status="fresh" >1.02</button><small>USDC</small></span>
+      <span class="lrow__m"><span>worth $1.03</span>
+        <span class="side-sell-v"><span class="sell-m">sell −0.46%</span> <span class="buy-m">buy +3.14%</span></span></span>
+      <span class="lrow__bar only-sell" style="--w:1.40563137295463"></span><span class="lrow__bar only-buy" style="--w:9.58578832023784"></span></label></li><li><label class="lrow lad-5000" for="sz-5000">
+      <span class="lrow__a">5,000<small>NAM</small></span>
+      <span class="lrow__g"><button type="button" class="num num--pad" popovertarget="p-curve" data-num data-status="fresh" >5.05</button><small>USDC</small></span>
+      <span class="lrow__m"><span>worth $5.13</span>
+        <span class="side-sell-v"><span class="sell-m">sell −1.49%</span> <span class="buy-m">buy +5.60%</span></span></span>
+      <span class="lrow__bar only-sell" style="--w:4.546761280647324"></span><span class="lrow__bar only-buy" style="--w:17.0666972479598"></span></label></li><li><label class="lrow lad-10000" for="sz-10000">
+      <span class="lrow__a">10,000<small>NAM</small></span>
+      <span class="lrow__g"><button type="button" class="num num--pad" popovertarget="p-curve" data-num data-status="fresh" >9.96</button><small>USDC</small></span>
+      <span class="lrow__m"><span>worth $10.25</span>
+        <span class="side-sell-v"><span class="sell-m">sell −2.75%</span> <span class="buy-m">buy +9.11%</span></span></span>
+      <span class="lrow__bar only-sell" style="--w:8.382932871073285"></span><span class="lrow__bar only-buy" style="--w:27.780405542177007"></span></label></li><li><label class="lrow lad-25000" for="sz-25000">
+      <span class="lrow__a">25,000<small>NAM</small></span>
+      <span class="lrow__g"><button type="button" class="num num--pad" popovertarget="p-curve" data-num data-status="fresh" >23.99</button><small>USDC</small></span>
+      <span class="lrow__m"><span>worth $25.64</span>
+        <span class="side-sell-v"><span class="sell-m">sell −6.34%</span> <span class="buy-m">buy +20.49%</span></span></span>
+      <span class="lrow__bar only-sell" style="--w:19.325446424869412"></span><span class="lrow__bar only-buy" style="--w:62.48627164407944"></span></label></li><li><label class="lrow lad-50000" for="sz-50000">
+      <span class="lrow__a">50,000<small>NAM</small></span>
+      <span class="lrow__g"><button type="button" class="num num--pad" popovertarget="p-curve" data-num data-status="fresh" >44.90</button><small>USDC</small></span>
+      <span class="lrow__m"><span>worth $51.27</span>
+        <span class="side-sell-v"><span class="sell-m">sell −12.34%</span> <span class="buy-m">buy +28.15%</span></span></span>
+      <span class="lrow__bar only-sell" style="--w:37.63911743791278"></span><span class="lrow__bar only-buy" style="--w:85.84572172733583"></span></label></li><li><label class="lrow lad-100000" for="sz-100000">
+      <span class="lrow__a">100,000<small>NAM</small></span>
+      <span class="lrow__g"><button type="button" class="num num--pad" popovertarget="p-curve" data-num data-status="fresh" >75.52</button><small>USDC</small></span>
+      <span class="lrow__m"><span>worth $102.54</span>
+        <span class="side-sell-v"><span class="sell-m">sell −26.27%</span> <span class="buy-m">buy +32.79%</span></span></span>
+      <span class="lrow__bar only-sell" style="--w:80.13189374626086"></span><span class="lrow__bar only-buy" style="--w:100"></span></label></li></ol>
+    <div class="tbl-wrap tbl-only"><table><thead><tr><th>Order size</th><th class="r">Worth</th><th class="r">You get, selling</th><th class="r">Price move, selling</th><th class="r">Price move, buying</th></tr></thead><tbody><tr class="lt lt-1000">
+      <td class="m"><label for="sz-1000" style="cursor:pointer">1,000 <small style="color:var(--ink-3)">NAM</small></label></td>
+      <td class="r">$1.03</td><td class="r"><button type="button" class="num " popovertarget="p-curve" data-num data-status="fresh" >1.02 <small>USDC</small></button></td>
+      <td class="r"><span class="sell-m">−0.46%</span><span class="stress only-sell"><i style="--w:1.40563137295463"></i></span></td>
+      <td class="r"><span class="buy-m">+3.14%</span><span class="stress only-buy"><i style="--w:9.58578832023784"></i></span></td></tr><tr class="lt lt-5000">
+      <td class="m"><label for="sz-5000" style="cursor:pointer">5,000 <small style="color:var(--ink-3)">NAM</small></label></td>
+      <td class="r">$5.13</td><td class="r"><button type="button" class="num " popovertarget="p-curve" data-num data-status="fresh" >5.05 <small>USDC</small></button></td>
+      <td class="r"><span class="sell-m">−1.49%</span><span class="stress only-sell"><i style="--w:4.546761280647324"></i></span></td>
+      <td class="r"><span class="buy-m">+5.60%</span><span class="stress only-buy"><i style="--w:17.0666972479598"></i></span></td></tr><tr class="lt lt-10000">
+      <td class="m"><label for="sz-10000" style="cursor:pointer">10,000 <small style="color:var(--ink-3)">NAM</small></label></td>
+      <td class="r">$10.25</td><td class="r"><button type="button" class="num " popovertarget="p-curve" data-num data-status="fresh" >9.96 <small>USDC</small></button></td>
+      <td class="r"><span class="sell-m">−2.75%</span><span class="stress only-sell"><i style="--w:8.382932871073285"></i></span></td>
+      <td class="r"><span class="buy-m">+9.11%</span><span class="stress only-buy"><i style="--w:27.780405542177007"></i></span></td></tr><tr class="lt lt-25000">
+      <td class="m"><label for="sz-25000" style="cursor:pointer">25,000 <small style="color:var(--ink-3)">NAM</small></label></td>
+      <td class="r">$25.64</td><td class="r"><button type="button" class="num " popovertarget="p-curve" data-num data-status="fresh" >23.99 <small>USDC</small></button></td>
+      <td class="r"><span class="sell-m">−6.34%</span><span class="stress only-sell"><i style="--w:19.325446424869412"></i></span></td>
+      <td class="r"><span class="buy-m">+20.49%</span><span class="stress only-buy"><i style="--w:62.48627164407944"></i></span></td></tr><tr class="lt lt-50000">
+      <td class="m"><label for="sz-50000" style="cursor:pointer">50,000 <small style="color:var(--ink-3)">NAM</small></label></td>
+      <td class="r">$51.27</td><td class="r"><button type="button" class="num " popovertarget="p-curve" data-num data-status="fresh" >44.90 <small>USDC</small></button></td>
+      <td class="r"><span class="sell-m">−12.34%</span><span class="stress only-sell"><i style="--w:37.63911743791278"></i></span></td>
+      <td class="r"><span class="buy-m">+28.15%</span><span class="stress only-buy"><i style="--w:85.84572172733583"></i></span></td></tr><tr class="lt lt-100000">
+      <td class="m"><label for="sz-100000" style="cursor:pointer">100,000 <small style="color:var(--ink-3)">NAM</small></label></td>
+      <td class="r">$102.54</td><td class="r"><button type="button" class="num " popovertarget="p-curve" data-num data-status="fresh" >75.52 <small>USDC</small></button></td>
+      <td class="r"><span class="sell-m">−26.27%</span><span class="stress only-sell"><i style="--w:80.13189374626086"></i></span></td>
+      <td class="r"><span class="buy-m">+32.79%</span><span class="stress only-buy"><i style="--w:100"></i></span></td></tr></tbody></table></div>
+    <p class="note">Pick a size to put it in your quote.</p>
+    <p class="src"><span>Source</span> <button type="button" class="num " popovertarget="p-curve" data-num data-status="fresh" >Osmosis quote</button> <span class="when">as of 11:24 UTC · just now</span></p></div>
+  </section>
+
+
+  <section class="sec reveal pools" id="pools" aria-labelledby="h-pools">
+    <div class="sec__head"><p class="sec__no mono">Where NAM trades</p><h2 id="h-pools">28 pools, <button type="button" class="num " popovertarget="p-pools" data-num data-status="fresh" >$1,819</button> in all</h2></div>
+    <div class="sec__body">
+    <p class="lede">A pool is a shared pot of NAM and another coin that anyone trades against. One pool sets the quoted price and it holds <button type="button" class="num " popovertarget="p-pools" data-num data-status="fresh" >$831</button>.</p>
+    <ol class="pool__rows rows-only"><li class="prow"><span class="prow__n">NAM / USDC<span class="id">#3005</span></span>
+    <span class="prow__l"><button type="button" class="num num--pad" popovertarget="p-pools" data-num data-status="fresh" >$831</button></span>
+    <span class="prow__m"><span class="kind kind--ref">Sets the quoted price</span><span>Concentrated · fee 0.20%</span></span></li><li class="prow"><span class="prow__n">NAM / USDC</span>
+    <span class="prow__l"><button type="button" class="num num--pad" popovertarget="p-pools" data-num data-status="fresh" >$639</button></span>
+    <span class="prow__m"><span class="kind">Cosmwasm</span><span>fee 0.00%</span></span></li><li class="prow"><span class="prow__n">NAM / OSMO<span class="id">#3368</span></span>
+    <span class="prow__l"><button type="button" class="num num--pad" popovertarget="p-pools" data-num data-status="fresh" >$151</button></span>
+    <span class="prow__m"><span class="kind">Concentrated</span><span>fee 2.50%</span></span></li><li class="prow"><span class="prow__n">NAM / OSMO<span class="id">#3009</span></span>
+    <span class="prow__l"><button type="button" class="num num--pad" popovertarget="p-pools" data-num data-status="fresh" >$33</button></span>
+    <span class="prow__m"><span class="kind">Concentrated</span><span>fee 0.10%</span></span></li><li class="prow"><span class="prow__n">NAM / OSMO<span class="id">#3402</span></span>
+    <span class="prow__l"><button type="button" class="num num--pad" popovertarget="p-pools" data-num data-status="fresh" >$31</button></span>
+    <span class="prow__m"><span class="kind">Balancer</span><span>fee 0.30%</span></span></li><li class="prow"><span class="prow__n">NAM / ibc/0FA923…<span class="id">#3020</span></span>
+    <span class="prow__l"><button type="button" class="num num--pad" popovertarget="p-pools" data-num data-status="fresh" >$29</button></span>
+    <span class="prow__m"><span class="kind">Concentrated</span><span>fee 1.00%</span></span></li><li class="prow"><span class="prow__n">NAM / USDC<span class="id">#3439</span></span>
+    <span class="prow__l"><button type="button" class="num num--pad" popovertarget="p-pools" data-num data-status="fresh" >$27</button></span>
+    <span class="prow__m"><span class="kind">Balancer</span><span>fee 1.00%</span></span></li><li class="prow"><span class="prow__n">NAM / ibc/BC26A7…<span class="id">#3405</span></span>
+    <span class="prow__l"><button type="button" class="num num--pad" popovertarget="p-pools" data-num data-status="fresh" >$27</button></span>
+    <span class="prow__m"><span class="kind">Concentrated</span><span>fee 2.50%</span></span></li></ol>
+    <div class="tbl-wrap tbl-only"><table><thead><tr><th>Pool</th><th>Kind</th><th class="r">Fee</th><th class="r">NAM inside</th><th class="r">Liquidity</th></tr></thead><tbody><tr class="is-sel"><td class="t-who"><b>NAM / USDC</b><span class="addr">#3005</span></td><td>Concentrated · sets the quoted price</td><td class="r">0.20%</td><td class="r"><button type="button" class="num " popovertarget="p-pools" data-num data-status="fresh" >625,518</button></td><td class="r"><button type="button" class="num " popovertarget="p-pools" data-num data-status="fresh" >$831</button></td></tr><tr><td class="t-who"><b>NAM / USDC</b><span class="addr">no number</span></td><td>Cosmwasm</td><td class="r">0.00%</td><td class="r"><button type="button" class="num " popovertarget="p-pools" data-num data-status="fresh" >603,698</button></td><td class="r"><button type="button" class="num " popovertarget="p-pools" data-num data-status="fresh" >$639</button></td></tr><tr><td class="t-who"><b>NAM / OSMO</b><span class="addr">#3368</span></td><td>Concentrated</td><td class="r">2.50%</td><td class="r"><button type="button" class="num " popovertarget="p-pools" data-num data-status="fresh" >69,911</button></td><td class="r"><button type="button" class="num " popovertarget="p-pools" data-num data-status="fresh" >$151</button></td></tr><tr><td class="t-who"><b>NAM / OSMO</b><span class="addr">#3009</span></td><td>Concentrated</td><td class="r">0.10%</td><td class="r"><button type="button" class="num " popovertarget="p-pools" data-num data-status="fresh" >15,919</button></td><td class="r"><button type="button" class="num " popovertarget="p-pools" data-num data-status="fresh" >$33</button></td></tr><tr><td class="t-who"><b>NAM / OSMO</b><span class="addr">#3402</span></td><td>Balancer</td><td class="r">0.30%</td><td class="r"><button type="button" class="num " popovertarget="p-pools" data-num data-status="fresh" >15,314</button></td><td class="r"><button type="button" class="num " popovertarget="p-pools" data-num data-status="fresh" >$31</button></td></tr><tr><td class="t-who"><b>NAM / ibc/0FA923…</b><span class="addr">#3020</span></td><td>Concentrated</td><td class="r">1.00%</td><td class="r"><button type="button" class="num " popovertarget="p-pools" data-num data-status="fresh" >14,169</button></td><td class="r"><button type="button" class="num " popovertarget="p-pools" data-num data-status="fresh" >$29</button></td></tr><tr><td class="t-who"><b>NAM / USDC</b><span class="addr">#3439</span></td><td>Balancer</td><td class="r">1.00%</td><td class="r"><button type="button" class="num " popovertarget="p-pools" data-num data-status="fresh" >12,915</button></td><td class="r"><button type="button" class="num " popovertarget="p-pools" data-num data-status="fresh" >$27</button></td></tr><tr><td class="t-who"><b>NAM / ibc/BC26A7…</b><span class="addr">#3405</span></td><td>Concentrated</td><td class="r">2.50%</td><td class="r"><button type="button" class="num " popovertarget="p-pools" data-num data-status="fresh" >12,443</button></td><td class="r"><button type="button" class="num " popovertarget="p-pools" data-num data-status="fresh" >$27</button></td></tr></tbody></table></div>
+    <p class="rest-note">20 smaller pools hold <button type="button" class="num " popovertarget="p-pools" data-num data-status="fresh" >$51</button> between them.</p>
+    <p class="src"><span>Source</span> <button type="button" class="num " popovertarget="p-pools" data-num data-status="fresh" >Osmosis pools</button> <span class="when">as of 11:24 UTC · just now</span></p></div>
+  </section>
+</div>
+</main>
+
+<footer class="foot"><div class="wrap">
+  <div class="foot__wm" aria-hidden="true">Namada<i>Trade</i><b></b></div>
+  <p>Every number shows its source and age. Data: Osmosis router, Namada nodes, indexer.namada.net. Flow records trail by up to 3.2 hours. Not investment advice. Not affiliated with Namada or the Anoma Foundation.</p>
+  <nav aria-label="Footer"><a href="home.html#trust">How we know</a><a href="#" data-unbuilt>Settings</a><a href="#" data-unbuilt>API</a></nav>
+</div></footer>
+
+<div id="p-price" popover class="sheet" aria-label="Where this number comes from">
+  <div class="sheet__handle" aria-hidden="true"></div>
+  <div class="sheet__h"><div><h3>NAM price</h3><p>Where this number comes from</p></div>
+    <button type="button" class="icon-btn" popovertarget="p-price" popovertargetaction="hide" aria-label="Close"><svg class="ico"><use href="#i-close"/></svg></button></div>
+  <dl>
+    <dt>Source</dt><dd>Osmosis quote</dd>
+    <dt>Technical name</dt><dd>Osmosis SQS</dd>
+    
+    <dt>As of</dt><dd>17 Oct 2026, 11:24:45 UTC</dd>
+    <dt>Age</dt><dd>just now</dd>
+    <dt>Status</dt><dd><span class="st st--fresh" aria-hidden="true"></span>Fresh</dd>
+    <dt>Note</dt><dd>The change is measured against the price 24 hours earlier.</dd>
+  </dl>
+  <div class="sheet__act"><a class="btn btn--outline" href="?at=1792236285224">Rewind to this time</a></div>
+</div>
+
+<div id="p-curve" popover class="sheet" aria-label="Where this number comes from">
+  <div class="sheet__handle" aria-hidden="true"></div>
+  <div class="sheet__h"><div><h3>Size table</h3><p>Where this number comes from</p></div>
+    <button type="button" class="icon-btn" popovertarget="p-curve" popovertargetaction="hide" aria-label="Close"><svg class="ico"><use href="#i-close"/></svg></button></div>
+  <dl>
+    <dt>Source</dt><dd>Osmosis quote</dd>
+    <dt>Technical name</dt><dd>Osmosis SQS</dd>
+    
+    <dt>As of</dt><dd>17 Oct 2026, 11:24:46 UTC</dd>
+    <dt>Age</dt><dd>just now</dd>
+    <dt>Status</dt><dd><span class="st st--fresh" aria-hidden="true"></span>Fresh</dd>
+    <dt>Note</dt><dd>Quotes at six order sizes, measured at once.</dd>
+  </dl>
+  <div class="sheet__act"><a class="btn btn--outline" href="?at=1792236286872">Rewind to this time</a></div>
+</div>
+
+<div id="p-pools" popover class="sheet" aria-label="Where this number comes from">
+  <div class="sheet__handle" aria-hidden="true"></div>
+  <div class="sheet__h"><div><h3>Pool liquidity on Osmosis</h3><p>Where this number comes from</p></div>
+    <button type="button" class="icon-btn" popovertarget="p-pools" popovertargetaction="hide" aria-label="Close"><svg class="ico"><use href="#i-close"/></svg></button></div>
+  <dl>
+    <dt>Source</dt><dd>Osmosis pools</dd>
+    <dt>Technical name</dt><dd>Osmosis SQS pools</dd>
+    
+    <dt>As of</dt><dd>17 Oct 2026, 11:24:48 UTC</dd>
+    <dt>Age</dt><dd>just now</dd>
+    <dt>Status</dt><dd><span class="st st--fresh" aria-hidden="true"></span>Fresh</dd>
+    
+  </dl>
+  <div class="sheet__act"><a class="btn btn--outline" href="?at=1792236288523">Rewind to this time</a></div>
+</div>
+
+<div id="p-swap" popover class="sheet" aria-label="Where this number comes from">
+  <div class="sheet__handle" aria-hidden="true"></div>
+  <div class="sheet__h"><div><h3>Last trade price</h3><p>Where this number comes from</p></div>
+    <button type="button" class="icon-btn" popovertarget="p-swap" popovertargetaction="hide" aria-label="Close"><svg class="ico"><use href="#i-close"/></svg></button></div>
+  <dl>
+    <dt>Source</dt><dd>Executed trades, hourly median</dd>
+    <dt>Technical name</dt><dd>executed NAM/USDC swaps (hourly median)</dd>
+    
+    <dt>As of</dt><dd>17 Oct 2026, 10:00:00 UTC</dd>
+    <dt>Age</dt><dd>1.4 h</dd>
+    <dt>Status</dt><dd><span class="st st--fresh" aria-hidden="true"></span>Fresh</dd>
+    <dt>Note</dt><dd>Median of the real swaps in the last hour that had any.</dd>
+  </dl>
+  <div class="sheet__act"><a class="btn btn--outline" href="?at=1792231200000">Rewind to this time</a></div>
+</div>
+
+<div id="p-buyCost" popover class="sheet" aria-label="Where this number comes from">
+  <div class="sheet__handle" aria-hidden="true"></div>
+  <div class="sheet__h"><div><h3>You pay, buying</h3><p>Where this number comes from</p></div>
+    <button type="button" class="icon-btn" popovertarget="p-buyCost" popovertargetaction="hide" aria-label="Close"><svg class="ico"><use href="#i-close"/></svg></button></div>
+  <dl>
+    <dt>Source</dt><dd>Derived</dd>
+    
+    <dt>Derived from</dt><dd>Osmosis quote</dd>
+    <dt>As of</dt><dd>17 Oct 2026, 11:24:46 UTC</dd>
+    <dt>Age</dt><dd>just now</dd>
+    <dt>Status</dt><dd><span class="st st--fresh" aria-hidden="true"></span>Fresh</dd>
+    <dt>Note</dt><dd>Average price times order size. The snapshot holds no direct quote for a purchase.</dd>
+  </dl>
+  <div class="sheet__act"><a class="btn btn--outline" href="?at=1792236286872">Rewind to this time</a></div>
+</div>
+
+<div id="p-moves" popover class="sheet" aria-label="Where this number comes from">
+  <div class="sheet__handle" aria-hidden="true"></div>
+  <div class="sheet__h"><div><h3>Biggest recorded price moves</h3><p>Where this number comes from</p></div>
+    <button type="button" class="icon-btn" popovertarget="p-moves" popovertargetaction="hide" aria-label="Close"><svg class="ico"><use href="#i-close"/></svg></button></div>
+  <dl>
+    <dt>Source</dt><dd>Event set</dd>
+    
+    
+    <dt>As of</dt><dd>17 Oct 2026, 01:39:41 UTC</dd>
+    <dt>Age</dt><dd>9.8 h</dd>
+    <dt>Status</dt><dd><span class="st st--fresh" aria-hidden="true"></span>Fresh</dd>
+    <dt>Note</dt><dd>Markers on the chart.</dd>
+  </dl>
+  <div class="sheet__act"><a class="btn btn--outline" href="?at=1792201181596">Rewind to this time</a></div>
+</div>
+<script>/* deep link to a sheet, for review: page.html#open-p-price */
+(function(){var m=location.hash.match(/^#open-(.+)$/);if(!m)return;var e=document.getElementById(m[1]);if(e&&e.showPopover)requestAnimationFrame(function(){e.showPopover();});})();</script>
+</body>
+</html>

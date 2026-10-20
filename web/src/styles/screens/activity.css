@@ -1,0 +1,95 @@
+/* ==========================================================================
+   Activity (S5): /activity (Transactions) and /holders (Holders).
+   Ported from docs/design/final/site.css "HOLDERS (Activity, Holders tab)"
+   (.hhero → .act-hero, .hl-band → .act-band, .hl__count → .act-count,
+   .hl__sentence → .act-sentence, .filters → .act-filters, .more--load →
+   .act-more) plus the Transactions feed (system.md 9.5), which has no
+   reference page: rows below a 880 px container, a seven-column table above.
+   Tokens only; --c-* ground tokens so the blocks work on yellow, black, paper.
+   Hit areas: 44 px through ::after where a control is drawn smaller.
+   ========================================================================== */
+@layer components {
+  /* ---------- the yellow band: H1, the route's paragraph, four figures, the ruler edge ---------- */
+  .act-hero { position: relative; padding-block: var(--s-5) 0; }
+  .act-hero > .wrap { padding-bottom: var(--s-6); }
+  .act-hero .eyebrow { margin-bottom: var(--s-3); }
+  .act-hero .h1 { max-width: 14ch; }
+  .act-hero__sub { margin-top: var(--s-4); max-width: 60ch; }
+  .act-facts { margin-top: var(--s-5); }
+  .act-facts .facts { margin-top: 0; }
+  .act-facts .fact__n { min-height: var(--lh-24); }
+  .act-fact-sk { display: block; height: var(--lh-24); width: 5ch; }
+  .act-facts .fact__n .num__x { display: block; margin: 4px 0 0; line-height: 16px; }
+  .act-facts .facts__old { margin-top: var(--s-3); font-size: var(--t-13); line-height: var(--lh-13); }
+  .act-facts .facts__old .dot { margin-top: 6px; }
+  .act-facts .act-facts__note { margin-top: var(--s-3); }
+  .act-hero .scope__old { color: var(--c-ink); }
+  .act-src-ph { min-height: 44px; margin-top: var(--s-2); }
+
+  /* ---------- the black band: tabs, filters, the list ---------- */
+  .act-band { padding-block: var(--s-5) var(--s-7); }
+  .act-bar { min-width: 0; }
+  .act-bar .utabs a { font-size: var(--t-15); }
+  .act-filterbtn { flex: none; }
+  .act-filterbtn .badge { margin-left: 0; }
+  .act-bar__end { flex: 0 1 340px; min-width: 0; }
+
+  /* filter controls: a bottom sheet below 1024 px (kit Sheet), inline from 1024 px */
+  .act-fbody { display: grid; gap: var(--s-5); padding: var(--s-2) var(--s-4) var(--s-4); }
+  .act-fbody .seg { width: 100%; }
+  .act-fset { min-width: 0; }
+  .act-clear { justify-self: start; }
+
+  /* search: 48 px box, 16 px text (no zoom on iOS), a 44 px clear button */
+
+  /* ---------- sentences, count, the list scope ---------- */
+  .act-scope { display: grid; gap: 0; min-width: 0; }
+  .act-scope .dl-scope { display: grid; gap: var(--s-4); min-width: 0; }
+  .act-sentence { display: grid; gap: var(--s-1); margin-top: var(--s-4); font-size: var(--t-15); line-height: var(--lh-15); color: var(--c-ink-2); max-width: 60ch; }
+  .act-count { display: block; min-height: var(--lh-13); margin: var(--s-4) 0 var(--s-2); font-size: var(--t-13); line-height: var(--lh-13); color: var(--c-ink-2); }
+  .act-count > [data-num] { color: var(--c-ink); }
+  .act-count__sk { display: inline-block; width: min(60%, 320px); height: 14px; vertical-align: middle; }
+  .act-live { display: flex; align-items: center; gap: 6px; margin-top: 4px; font: var(--w-medium) var(--t-12) / 16px var(--font-code); color: var(--c-ink-2); }
+  .act-lag { margin-bottom: var(--s-3); font-size: var(--t-13); line-height: var(--lh-13); }
+  .act-lag .dot { margin-top: 6px; }
+  .act-skel { margin-top: var(--s-2); }
+  .is-busy { opacity: .55; transition: opacity var(--d-1) var(--ease-state); }
+  .act-scope > .empty { margin-block: var(--s-3); }
+  /* the page keeps the header's edges (.wrap, 1200); from 1024 px the transaction table alone runs out to
+     the Activity width (--max-wide, 1360), half of the difference on each side (system.md 6) */
+  .act-txwide { min-width: 0; }
+  @media (min-width: 1024px) {
+    .act-txwide { margin-inline: calc(-1 * max(0px, (min(100vw, var(--max-wide)) - var(--max)) / 2)); }
+  }
+
+  .act-more { display: grid; gap: var(--s-3); justify-items: start; margin-top: var(--s-6); }
+  .act-csv .ico { width: 16px; height: 16px; }
+  .act-about { margin-top: var(--s-6); padding-top: var(--s-5); border-top: 1px solid var(--c-line); font-size: var(--t-13); line-height: var(--lh-13); color: var(--c-ink-2); max-width: 64ch; }
+
+  /* ---------- holders: the kit's DataList rows, plus the name button and the inline change ---------- */
+  .act-holders .hrow__name .act-name { display: inline-block; max-width: 100%; }
+  .act-chg [data-num] { color: var(--c-ink); }
+  .is-old .act-chg [data-num] { color: var(--c-ink-2); }
+  @container dl (min-width: 930px) { .dl--chg .act-chg { display: none; } }
+
+  /* ---------- 640 px and up ---------- */
+  @media (min-width: 640px) {
+    .act-hero { padding-block: var(--s-7) 0; }
+    .act-live { display: inline-flex; margin: 0 0 0 var(--s-3); vertical-align: baseline; }
+  }
+
+  /* ---------- 1024 px and up: inline filters, wider hero copy ---------- */
+  @media (min-width: 1024px) {
+    .act-hero > .wrap { padding-bottom: var(--s-6); }
+    .act-hero .h1 { max-width: 18ch; }
+    .act-hero__sub { font-size: var(--t-18); line-height: var(--lh-18); max-width: 56ch; }
+    .act-facts { margin-top: var(--s-7); }
+    .act-band { padding-block: var(--s-6) var(--s-8); }
+    .act-filters { display: flex; flex-wrap: wrap; align-items: flex-start; gap: var(--s-5) var(--s-6); margin-top: var(--s-5); }
+    .act-filters .fset__l { margin-bottom: var(--s-2); }
+    .act-filters .act-kinds { flex: 1 1 100%; order: 5; }
+    .act-filters .act-cats { flex: 0 1 auto; }
+    .act-filters .act-clear { align-self: flex-end; }
+    .act-count { margin-top: var(--s-6); }
+  }
+}

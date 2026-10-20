@@ -1,0 +1,58 @@
+{
+  "name": "namada-trade",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Real-time NAM tracker across Osmosis and Namada (Cloudflare Workers + D1 + Durable Objects)",
+  "scripts": {
+    "dev:web": "vite --config web/vite.config.ts",
+    "build": "npm run gen && vite build --config web/vite.config.ts",
+    "dev": "npm run build && wrangler dev",
+    "deploy": "npm run build && wrangler deploy",
+    "typecheck": "tsc -p worker/tsconfig.json --noEmit && tsc -p web/tsconfig.json --noEmit",
+    "test": "vitest run",
+    "db:migrate:local": "wrangler d1 migrations apply namada-trade-db --local",
+    "db:migrate:remote": "wrangler d1 migrations apply namada-trade-db --remote",
+    "backfill:namada": "node --experimental-strip-types scripts/backfill-namada.ts",
+    "backfill:osmosis": "node --experimental-strip-types scripts/backfill-osmosis.ts",
+    "test:replay": "vitest run test/replay.test.ts",
+    "events": "node --experimental-strip-types scripts/events.ts",
+    "task-tests": "node --experimental-strip-types scripts/task-tests.ts",
+    "backfill:history": "node --experimental-strip-types scripts/backfill-history.ts",
+    "db:apply": "node --experimental-strip-types scripts/d1-apply.ts",
+    "gen": "node --experimental-strip-types scripts/export-proof.ts",
+    "e2e": "playwright test -c web/e2e/playwright.config.ts",
+    "shoot": "node scripts/shoot.mjs"
+  },
+  "dependencies": {
+    "@fontsource-variable/space-grotesk": "^5.3.0",
+    "@fontsource/jetbrains-mono": "^5.3.0",
+    "@noble/curves": "^2.4.0",
+    "@noble/hashes": "^2.4.0",
+    "@scure/base": "^2.4.0",
+    "hono": "^4.6.0",
+    "qrcode": "^1.5.4",
+    "react": "^18.3.1",
+    "react-dom": "^18.3.1"
+  },
+  "devDependencies": {
+    "@axe-core/playwright": "^4.14.0",
+    "@cloudflare/workers-types": "^5.20261015.1",
+    "@playwright/test": "^1.64.1",
+    "@types/qrcode": "^1.5.6",
+    "@types/react": "^18.3.11",
+    "@types/react-dom": "^18.3.1",
+    "@vitejs/plugin-react": "^4.3.2",
+    "tsx": "^4.23.15",
+    "typescript": "^5.6.3",
+    "vite": "^5.4.9",
+    "vitest": "^2.1.3",
+    "wrangler": "^4.151.0"
+  },
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/BidurS/namada-trade.git"
+  },
+  "homepage": "https://namada.trade"
+}

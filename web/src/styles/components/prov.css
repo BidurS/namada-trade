@@ -1,0 +1,77 @@
+/* ==========================================================================
+   Provenance (F2): status dot, ProvChip (.chip), ProvDot (.pdot), SourceLine
+   (.srcb), and the four number states. Ported from docs/design/final/site.css
+   ("status dot", "provenance", "number states"). Reads --c-* ground tokens only.
+   ========================================================================== */
+@layer components {
+  /* ---------- status dot (the reference helper; the stamp's mark) ---------- */
+  .dot { display: inline-block; width: 8px; height: 8px; flex: none; border-radius: 50%; background: var(--st, #858585); }
+  [data-status="fresh"] { --st: var(--c-good); }
+  [data-status="old"] { --st: var(--c-warn); }
+  [data-status="disagree"] { --st: var(--c-bad); }
+  .dot[data-status="none"], .dot[data-status="age"] { background: transparent; box-shadow: inset 0 0 0 1.5px var(--c-ink-3, #858585); }
+
+  /* ---------- ProvChip: hero figures only. 24 px pill, 44 px hit area ---------- */
+  .chip { position: relative; display: inline-flex; align-items: center; gap: 6px; max-width: 100%; height: 24px; padding: 0 10px 0 8px; background: var(--c-chip-bg); color: var(--c-chip-ink); border: 1px solid var(--c-chip-line); border-radius: var(--r-pill); font: var(--w-medium) var(--t-12) / 16px var(--font-code); letter-spacing: 0; white-space: nowrap; vertical-align: middle; text-align: left; cursor: pointer; transition: background var(--d-1) var(--ease-state); }
+  .chip::after { content: ""; position: absolute; inset: -11px -5px; }   /* 1 px border: padding box 22 + 22 = 44 px tall hit area */
+  .chip > span { overflow: hidden; text-overflow: ellipsis; }
+  .chip:hover { background: var(--c-chip-line); }
+  .ground-accent .chip:hover, .g-accent-to-ink .chip:hover { background: #1f1f1f; }
+  .chip .dot[data-status="none"], .chip .dot[data-status="age"] { box-shadow: inset 0 0 0 1.5px #858585; }
+  .chip[aria-expanded="true"] { background: var(--c-chip-line); }
+
+  /* ---------- ProvDot: secondary figures. Dot, source word, age; dotted underline ---------- */
+  .pdot { position: relative; display: inline-flex; align-items: center; gap: 6px; min-height: 24px; padding: 0; background: none; border: 0; color: var(--c-ink-2); font: var(--w-medium) var(--t-12) / 16px var(--font-code); white-space: nowrap; text-align: left; vertical-align: middle; cursor: pointer; }
+  .pdot::after { content: ""; position: absolute; inset: -11px -7px; }   /* 46 px: a fractional transform on an ancestor never measures it under 44 */
+  .pdot > span { text-decoration: underline dotted; text-decoration-thickness: 1px; text-underline-offset: 3px; }
+  .pdot:hover { color: var(--c-ink); }
+  .pdot--wrap { white-space: normal; }
+
+  /* ---------- SourceLine: the panel footer; one button for every figure in the scope ---------- */
+  .src { margin-top: var(--s-2); }
+  .src--note { display: flex; flex-wrap: wrap; align-items: center; gap: 0 var(--s-3); }
+  .srcb { position: relative; display: inline-flex; align-items: flex-start; gap: 8px; min-height: 44px; padding: 14px 0 10px; background: none; border: 0; text-align: left; color: var(--c-ink-2); font: var(--w-regular) var(--t-12) / 16px var(--font-code); cursor: pointer; }
+  .srcb::after { content: ""; position: absolute; inset: -1px 0; }   /* 1 px spare above and below the 44 px box */
+  .srcb .dot { margin-top: 4px; }
+  .src--wait { min-height: 44px; }   /* the SourceLine's slot, held until its figures' stamps arrive */
+  .srcb__l { text-decoration: underline dotted; text-decoration-thickness: 1px; text-underline-offset: 3px; }
+  .srcb:hover { color: var(--c-ink); }
+  .srcline { display: flex; flex-wrap: wrap; gap: var(--s-2); align-items: center; font-size: var(--t-12); line-height: 16px; color: var(--c-ink-2); }
+
+  /* ---------- number states ----------
+     Isolated old figure in an otherwise fresh context: dim plus dotted underline.
+     Disagree: wavy underline. No data: "—", dashed underline, the reason beside it in view.
+     A whole list that is old is dimmed once (.is-old on the scope) and explained in one
+     sentence: no underline per number. */
+  [data-num][data-status="old"] { color: var(--c-ink-2); text-decoration: underline dotted; text-decoration-thickness: 1px; text-underline-offset: 4px; }
+  [data-num][data-status="disagree"] { text-decoration: underline wavy var(--c-bad); text-decoration-thickness: 1px; text-underline-offset: 4px; text-decoration-skip-ink: none; }
+  .ground-accent [data-num][data-status="disagree"], .g-accent-to-ink [data-num][data-status="disagree"] { text-decoration-color: #000; }
+  /* a figure with a unit: the underline runs under the number (.num__v) only, never under "NAM" */
+  [data-num][data-status="old"]:has(> .num__v), [data-num][data-status="disagree"]:has(> .num__v) { text-decoration: none; }
+  [data-num][data-status="old"] > .num__v { text-decoration: underline dotted; text-decoration-thickness: 1px; text-underline-offset: 4px; }
+  [data-num][data-status="disagree"] > .num__v { text-decoration: underline wavy var(--c-bad); text-decoration-thickness: 1px; text-underline-offset: 4px; text-decoration-skip-ink: none; }
+  .ground-accent [data-num][data-status="disagree"] > .num__v, .g-accent-to-ink [data-num][data-status="disagree"] > .num__v { text-decoration-color: #000; }
+  .is-old [data-num] > .num__v { text-decoration: none; }
+  [data-num][data-status="none"] { text-decoration: underline dashed; text-decoration-thickness: 1px; text-underline-offset: 4px; color: var(--c-ink-2); }
+  .is-old [data-num], .is-old [data-num][data-status="old"] { color: var(--c-ink-2); text-decoration: none; }
+  @media (min-width: 1024px) { .g-accent-to-ink [data-num][data-status="disagree"], .g-accent-to-ink [data-num][data-status="disagree"] > .num__v { text-decoration-color: var(--c-bad); } }
+
+  /* Num with its inline extras: the age after an old figure, the reason after a missing one.
+     The extras are 12 px mono (the provenance floor), never underlined, never hover-only. */
+  .num { display: inline; }
+  .num__x { margin-left: 6px; font: var(--w-regular) var(--t-12) / 16px var(--font-code); letter-spacing: 0; color: var(--c-ink-2); text-decoration: none; white-space: normal; vertical-align: middle; }
+  .num__x--why { white-space: normal; }
+  .is-old .num__x--age { display: none; }   /* an old scope says the age once, in its sentence */
+
+  /* ProvScope: a panel whose SourceLine covers its figures (system.md 12, N1). */
+  .scope { display: grid; gap: var(--s-4); align-content: start; min-width: 0; }
+  .scope__old { display: flex; align-items: flex-start; gap: var(--s-2); font-size: var(--t-15); line-height: var(--lh-15); color: var(--c-ink-2); max-width: 60ch; }
+  .scope__old .dot { margin-top: 7px; }
+
+  /* Derived marker in running text ("derived · now") uses .pdot. Leading-zero dim (price). */
+  .lz { color: var(--c-ink-2); font-weight: var(--w-regular); }
+  /* A hero price that is old keeps the dimmed-zero device (system.md 5.3, "$0.001025" never reads as
+     "$1025"): the significant digits stay ink and only "$0.00" is ink-2. The dotted underline and the
+     "old 37 s" chip beside it carry the old state. Elsewhere an old figure dims whole, as before. */
+  .hero-n__v [data-num][data-status="old"]:has(> .lz) { color: var(--c-ink); }
+}

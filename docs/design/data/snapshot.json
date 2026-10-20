@@ -1,0 +1,4943 @@
+{
+ "capturedAt": 1792236284530,
+ "overview": {
+  "generatedAt": 1792236285224,
+  "asOf": null,
+  "price": {
+   "usd": {
+    "value": 0.001025414637150394,
+    "prov": {
+     "source": "Osmosis SQS",
+     "at": 1792236285224,
+     "status": "live"
+    }
+   },
+   "swap1h": {
+    "value": 0.001011995601178413,
+    "prov": {
+     "source": "executed NAM/USDC swaps (hourly median)",
+     "at": 1792231200000,
+     "status": "live"
+    }
+   },
+   "change24h": 0.87411919466046
+  },
+  "supply": {
+   "total": 1147457991.648976,
+   "bonded": 341947228.418103,
+   "pgf": 89299375.043118,
+   "shielded": 50702670.184468,
+   "ibcEscrow": 19988602.411823,
+   "osmosis": 19986988.411823,
+   "transparentLiquid": 645520115.5914642,
+   "prov": {
+    "source": "Namada RPC abci_query",
+    "at": 1792236274192,
+    "status": "live"
+   },
+   "osmosisProv": {
+    "source": "Keplr Osmosis bank/supply",
+    "at": 1792236274192,
+    "status": "live"
+   }
+  },
+  "heads": {
+   "osmosis": {
+    "value": 72685698,
+    "prov": {
+     "source": "last indexed Osmosis flow",
+     "at": 1792234350771,
+     "status": "stale",
+     "note": "32 min old"
+    }
+   },
+   "namada": {
+    "value": 8310299,
+    "prov": {
+     "source": "Namada RPC status",
+     "at": 1792236274192,
+     "status": "live"
+    }
+   },
+   "epoch": 2673
+  },
+  "dex": {
+   "pools": 28,
+   "liquidityUsd": 1819,
+   "refPoolLiquidityUsd": 831,
+   "holders": 1332,
+   "volume24hNam": 28937.616899,
+   "volume24hUsd": 29.673055932485195,
+   "buys24h": 43,
+   "sells24h": 3,
+   "buyNam24h": 17969.995499,
+   "sellNam24h": 10967.6214,
+   "netIbc24h": -60000,
+   "prov": {
+    "source": "Osmosis SQS pools",
+    "at": 1792236285224,
+    "status": "live"
+   },
+   "coverage": {
+    "source": "D1 flow index",
+    "at": 1792234350771,
+    "status": "stale",
+    "note": "last Osmosis flow 32 min ago, last Namada flow 32 min ago"
+   }
+  },
+  "namada": {
+   "holders": 2209,
+   "flows24h": 17,
+   "bonded24h": 41000,
+   "withdrawn24h": 0,
+   "shielded24h": 60000,
+   "unshielded24h": 50000.427477,
+   "coverage": {
+    "source": "D1 flow index",
+    "at": 1792224857527,
+    "status": "stale",
+    "note": "last Osmosis flow 3.2 h ago, last Namada flow 3.2 h ago"
+   }
+  },
+  "concentration": {
+   "osmosisTop10Pct": 50.51452737171081,
+   "namadaTop10Pct": 22.515566938969563
+  },
+  "checks": [
+   {
+    "key": "ibc_conservation",
+    "status": "warn",
+    "title": "IBC conservation: Namada escrow = Osmosis voucher supply",
+    "detail": {
+     "namadaIbcEscrow": 19988602.411823,
+     "osmosisSupply": 19986988.411823,
+     "driftNam": 1614,
+     "sources": [
+      "Namada RPC abci_query",
+      "Keplr Osmosis bank/supply"
+     ]
+    },
+    "checkedAt": 1792236274192
+   },
+   {
+    "key": "rpc_consensus",
+    "status": "ok",
+    "title": "Namada RPC agreement (5ElementsNodes vs Papadritta)",
+    "detail": {
+     "statuses": [
+      {
+       "provider": "5ElementsNodes",
+       "height": 8310298,
+       "time": 1792236262197,
+       "catchingUp": false,
+       "earliest": 1
+      },
+      {
+       "provider": "Papadritta",
+       "height": 8310298,
+       "time": 1792236262197,
+       "catchingUp": false,
+       "earliest": 1
+      }
+     ],
+     "heightDiff": 0
+    },
+    "checkedAt": 1792236274192
+   },
+   {
+    "key": "supply_integrity",
+    "status": "ok",
+    "title": "Supply partition: locked + escrowed \u2264 minted",
+    "detail": {
+     "totalMinted": 1147457991.648976,
+     "allocatedOrLocked": 501937876.0575119,
+     "transparentLiquid": 645520115.5914642,
+     "pctLocked": "43.74%"
+    },
+    "checkedAt": 1792236274192
+   },
+   {
+    "key": "indexer_lag",
+    "status": "ok",
+    "title": "Namada indexer height vs RPC height",
+    "detail": {
+     "indexerHeight": 8310298,
+     "rpcHeight": 8310298,
+     "lagBlocks": 0
+    },
+    "checkedAt": 1792236274192
+   },
+   {
+    "key": "supply_cross_source",
+    "status": "ok",
+    "title": "Minted supply: indexer vs ABCI",
+    "detail": {
+     "indexer": 1147457991.648976,
+     "abci": 1147457991.648976,
+     "diffNam": 0
+    },
+    "checkedAt": 1792236274192
+   },
+   {
+    "key": "price_vs_execution",
+    "status": "ok",
+    "title": "SQS mid price vs executed swap price (last hour with trades)",
+    "detail": {
+     "sqsUsd": 0.001025414637150394,
+     "executedUsd": 0.001011995601178413,
+     "executedAt": 1792231200000,
+     "deviationPct": "1.33"
+    },
+    "checkedAt": 1792236274192
+   },
+   {
+    "key": "bonded_coverage",
+    "status": "warn",
+    "title": "Bonded stake: \u03a3 verified per-address bonds vs chain PoS balance",
+    "detail": {
+     "verifiedAddresses": 2221,
+     "knownAddresses": 2221,
+     "sumVerifiedNam": 233050859.240014,
+     "posBalanceNam": 341947228.418103,
+     "coveragePct": "68.2%"
+    },
+    "checkedAt": 1792236274192
+   }
+  ],
+  "sources": [
+   {
+    "name": "Keplr Osmosis REST (holders)",
+    "ok": true,
+    "at": 1792236039030,
+    "latencyMs": 4777
+   },
+   {
+    "name": "Keplr Osmosis REST (supply)",
+    "ok": true,
+    "at": 1792236274439,
+    "latencyMs": 193
+   },
+   {
+    "name": "Namada indexer (indexer.namada.net)",
+    "ok": true,
+    "at": 1792236275262,
+    "latencyMs": 225
+   },
+   {
+    "name": "Namada RPC (epoch)",
+    "ok": true,
+    "at": 1792236274673,
+    "latencyMs": 141
+   },
+   {
+    "name": "Namada RPC (IBC escrow)",
+    "ok": true,
+    "at": 1792236274720,
+    "latencyMs": 188
+   },
+   {
+    "name": "Namada RPC (MASP balance)",
+    "ok": true,
+    "at": 1792236274720,
+    "latencyMs": 188
+   },
+   {
+    "name": "Namada RPC (minted supply)",
+    "ok": true,
+    "at": 1792236274720,
+    "latencyMs": 188
+   },
+   {
+    "name": "Namada RPC (PGF balance)",
+    "ok": true,
+    "at": 1792236274673,
+    "latencyMs": 141
+   },
+   {
+    "name": "Namada RPC (PoS balance)",
+    "ok": true,
+    "at": 1792236274673,
+    "latencyMs": 141
+   },
+   {
+    "name": "Namada RPC (stake verification)",
+    "ok": true,
+    "at": 1792236274192,
+    "note": "120 addresses verified this tick, 0 failed"
+   },
+   {
+    "name": "Namada RPC 5ElementsNodes",
+    "ok": true,
+    "at": 1792236274192,
+    "note": "height 8310298"
+   },
+   {
+    "name": "Namada RPC Papadritta",
+    "ok": true,
+    "at": 1792236274192,
+    "note": "height 8310298"
+   },
+   {
+    "name": "Osmosis SQS (pools)",
+    "ok": true,
+    "at": 1792236274246
+   },
+   {
+    "name": "Osmosis SQS (price)",
+    "ok": true,
+    "at": 1792236274246
+   }
+  ]
+ },
+ "pressure": {
+  "asOf": 1792236285979,
+  "windowDays": 7,
+  "onDeck": [
+   {
+    "address": "osmo1d5vr22acajgwlr2qh334kplmfs7cs4wwqmxfc6",
+    "label": null,
+    "linkedNamada": "tnam1qrt5tar7ptj9gsx24fpnxz6yp7ag0ljx5qtxg7vd",
+    "linkedLabel": "Genesis: public_allocations_completed",
+    "bridgedIn": 16666.836558,
+    "soldSince": 16576.948974,
+    "bridgedOutSince": 0,
+    "remaining": 89.88758400000006,
+    "priorSells30d": 0,
+    "firstArrival": 1791981265795,
+    "lastSeen": 1791981700946
+   },
+   {
+    "address": "osmo1ljd6d8quzfn4zev99unxnz5x89frev3vh0qecm",
+    "label": null,
+    "linkedNamada": "tnam1qqx95qay2cupfnx832m96sm4p0tjctwcxcj8qs22",
+    "linkedLabel": null,
+    "bridgedIn": 2755,
+    "soldSince": 2724.215337,
+    "bridgedOutSince": 0,
+    "remaining": 30.78466299999991,
+    "priorSells30d": 6516.614953,
+    "firstArrival": 1791761440695,
+    "lastSeen": 1792063621005
+   },
+   {
+    "address": "osmo1sqdwxh2tlvpmsh7rapjmtmyeg4pn4hu494v9mf",
+    "label": null,
+    "linkedNamada": "tnam1qq6wus66shjjwhe48c3udfyrh05vq62s0ysy3flp",
+    "linkedLabel": null,
+    "bridgedIn": 500,
+    "soldSince": 4985.01,
+    "bridgedOutSince": 40000,
+    "remaining": 0,
+    "priorSells30d": 0,
+    "firstArrival": 1791993368001,
+    "lastSeen": 1791993368001
+   },
+   {
+    "address": "osmo137zwfeku64lzfg4laedyg628qnepqpgkahqyk3",
+    "label": null,
+    "linkedNamada": "tnam1qxd6n2pfj6jucqnx2tf3feuevkqmr266gg06yurm",
+    "linkedLabel": null,
+    "bridgedIn": 2,
+    "soldSince": 0,
+    "bridgedOutSince": 4,
+    "remaining": 0,
+    "priorSells30d": 0,
+    "firstArrival": 1791837832161,
+    "lastSeen": 1791905024457
+   }
+  ],
+  "onDeckTotal": 120.67224699999997,
+  "ibcIn7d": 19923.836558,
+  "ibcOut7d": 676574.705894,
+  "unlocks": [
+   {
+    "address": "tnam1qp7fvl820xfy20rzz8u20z60tn3xu5pqlqsj6nxs",
+    "label": "Genesis: public_allocations_completed",
+    "kind": "bond",
+    "amountNam": 149000,
+    "ts": 1791894384931,
+    "txHash": "8EE8FDE4999DE486CCE6F20DF1241FF2217667D78BD9761DD61C571A871FE3BC",
+    "liquidAt": null,
+    "outcome": null
+   },
+   {
+    "address": "tnam1qrk5pyvtzxjmykcqmhglssshdjf3njac2qvqmlse",
+    "label": null,
+    "kind": "bond",
+    "amountNam": 2999715.994171,
+    "ts": 1790836381441,
+    "txHash": "4F4C800000252987C3CD815EA2CCF4A91A40D3DD94C9FB723B769E73C1D9360A",
+    "liquidAt": null,
+    "outcome": null
+   },
+   {
+    "address": "tnam1qp29qct9qpd73r23n8vtwk6a89qqjar9lugn3ypu",
+    "label": "Genesis: early_core_contributors",
+    "kind": "bond",
+    "amountNam": 1584920,
+    "ts": 1790745612887,
+    "txHash": "97DC578347A58093303B7CB0A2820BEC9C8340AA7770EA5462DC27B9A6CAC203",
+    "liquidAt": null,
+    "outcome": null
+   },
+   {
+    "address": "tnam1qp29qct9qpd73r23n8vtwk6a89qqjar9lugn3ypu",
+    "label": "Genesis: early_core_contributors",
+    "kind": "bond",
+    "amountNam": 1000000,
+    "ts": 1790745551769,
+    "txHash": "3CF18D3DD21E4D88FA79DC0D85B84E9332FE933D98398B9F71EF319D344BB9A4",
+    "liquidAt": null,
+    "outcome": null
+   },
+   {
+    "address": "tnam1qp29qct9qpd73r23n8vtwk6a89qqjar9lugn3ypu",
+    "label": "Genesis: early_core_contributors",
+    "kind": "withdraw",
+    "amountNam": 500000,
+    "ts": 1790745436194,
+    "txHash": "738FEDDA3C403D9B094EF7E7C4FEFBFD7171CE01BC3BC66DD49E02D16C6218EB",
+    "liquidAt": null,
+    "outcome": {
+     "kind": "rebonded",
+     "amountNam": 2584920
+    }
+   },
+   {
+    "address": "tnam1qp29qct9qpd73r23n8vtwk6a89qqjar9lugn3ypu",
+    "label": "Genesis: early_core_contributors",
+    "kind": "withdraw",
+    "amountNam": 500000,
+    "ts": 1790745388463,
+    "txHash": "7CF44C7D38EAFF5FDEA87289ED804A0964B07074E2690C03F4ABFA23B1518B34",
+    "liquidAt": null,
+    "outcome": {
+     "kind": "rebonded",
+     "amountNam": 2584920
+    }
+   },
+   {
+    "address": "tnam1qp29qct9qpd73r23n8vtwk6a89qqjar9lugn3ypu",
+    "label": "Genesis: early_core_contributors",
+    "kind": "withdraw",
+    "amountNam": 500000,
+    "ts": 1790745307329,
+    "txHash": "E0DD2A94E0B001761613F1EF2A3899DF5A427E04549356709C7EE3617BD1EDEB",
+    "liquidAt": null,
+    "outcome": {
+     "kind": "rebonded",
+     "amountNam": 2584920
+    }
+   },
+   {
+    "address": "tnam1qp29qct9qpd73r23n8vtwk6a89qqjar9lugn3ypu",
+    "label": "Genesis: early_core_contributors",
+    "kind": "withdraw",
+    "amountNam": 524753.518512,
+    "ts": 1790745273797,
+    "txHash": "C752EF4065B6DDFD323F7C5B413BF685EADB853A4F5089A2E240F5CF32B3DA24",
+    "liquidAt": null,
+    "outcome": {
+     "kind": "rebonded",
+     "amountNam": 2584920
+    }
+   },
+   {
+    "address": "tnam1qr808ctzcpjzyzwp2agtjz5737vdyskwfsw8p82s",
+    "label": "Genesis: early_core_contributors",
+    "kind": "bond",
+    "amountNam": 1411010,
+    "ts": 1790745219062,
+    "txHash": "6E9353858CE34B38262087029757090B17D97681A50B8D54CE45D21B546D54B1",
+    "liquidAt": null,
+    "outcome": null
+   },
+   {
+    "address": "tnam1qr808ctzcpjzyzwp2agtjz5737vdyskwfsw8p82s",
+    "label": "Genesis: early_core_contributors",
+    "kind": "withdraw",
+    "amountNam": 500000,
+    "ts": 1790745048899,
+    "txHash": "3AFB61A60C68CC7B62FC1EB331CD00D80EF00CA72EF0A602E4B73DE5DFBC8084",
+    "liquidAt": null,
+    "outcome": {
+     "kind": "rebonded",
+     "amountNam": 1411010
+    }
+   },
+   {
+    "address": "tnam1qr808ctzcpjzyzwp2agtjz5737vdyskwfsw8p82s",
+    "label": "Genesis: early_core_contributors",
+    "kind": "withdraw",
+    "amountNam": 526913.622171,
+    "ts": 1790745008805,
+    "txHash": "0756B90083008452DF871F730CB12C5ACF8555FB4B4CE54CDC977026067DD085",
+    "liquidAt": null,
+    "outcome": {
+     "kind": "rebonded",
+     "amountNam": 1411010
+    }
+   },
+   {
+    "address": "tnam1qrk6ls0mtqgdl22rcn3p4xg6pevedycr7vpqkmeg",
+    "label": "Genesis: early_core_contributors",
+    "kind": "bond",
+    "amountNam": 805860,
+    "ts": 1790744906854,
+    "txHash": "3A372BE6A101EC8F60E999E72C7C7DC08703A682AC35D93042779DA6EB6D55DB",
+    "liquidAt": null,
+    "outcome": null
+   },
+   {
+    "address": "tnam1qrk6ls0mtqgdl22rcn3p4xg6pevedycr7vpqkmeg",
+    "label": "Genesis: early_core_contributors",
+    "kind": "withdraw",
+    "amountNam": 500000,
+    "ts": 1790744695226,
+    "txHash": "B6238927952D2B0F59CCCA3DB92F302BF2F5E128EDBB17C7E320D9CAEA3842D4",
+    "liquidAt": null,
+    "outcome": {
+     "kind": "rebonded",
+     "amountNam": 805860
+    }
+   },
+   {
+    "address": "tnam1qr9rs6a0shuetyxglzxpt3xqyt663a7u2qre4zw2",
+    "label": "Genesis: early_core_contributors",
+    "kind": "bond",
+    "amountNam": 867810,
+    "ts": 1790744661989,
+    "txHash": "4E707BDB125FD097EDC8C1406B83B2C7D38BE3C94CA7599CB5F6A471848493E9",
+    "liquidAt": null,
+    "outcome": null
+   },
+   {
+    "address": "tnam1qr9rs6a0shuetyxglzxpt3xqyt663a7u2qre4zw2",
+    "label": "Genesis: early_core_contributors",
+    "kind": "withdraw",
+    "amountNam": 500000,
+    "ts": 1790744436989,
+    "txHash": "35F0D0F8B3C97A533FA01D12807EB267BD1A092283D1A86DB18A682FE5314898",
+    "liquidAt": null,
+    "outcome": {
+     "kind": "rebonded",
+     "amountNam": 867810
+    }
+   },
+   {
+    "address": "tnam1qqeqy8tx35tm6ujfluchr8v7s7ddczgyjgu40gfe",
+    "label": "Genesis: early_core_contributors",
+    "kind": "bond",
+    "amountNam": 1141990,
+    "ts": 1790744402025,
+    "txHash": "C7AADBADEEDE0835BD3E7805E3C428CC8B1C5009F65411CC26FB8FAE3A548A62",
+    "liquidAt": null,
+    "outcome": null
+   },
+   {
+    "address": "tnam1qqeqy8tx35tm6ujfluchr8v7s7ddczgyjgu40gfe",
+    "label": "Genesis: early_core_contributors",
+    "kind": "withdraw",
+    "amountNam": 529066.944567,
+    "ts": 1790744226225,
+    "txHash": "BB4EF1041B4ECF62CF4227FA5A30FD1781B5409C4E2F2C90AC902DCF9994D23B",
+    "liquidAt": null,
+    "outcome": {
+     "kind": "rebonded",
+     "amountNam": 1141990
+    }
+   },
+   {
+    "address": "tnam1qp7fvl820xfy20rzz8u20z60tn3xu5pqlqsj6nxs",
+    "label": "Genesis: public_allocations_completed",
+    "kind": "bond",
+    "amountNam": 226000,
+    "ts": 1790736037026,
+    "txHash": "ACAC5E86CAC47D3829B9EEB4992D549CA0A5D9EED6E5425C5C2681BC74A8A955",
+    "liquidAt": null,
+    "outcome": null
+   },
+   {
+    "address": "tnam1qp7fvl820xfy20rzz8u20z60tn3xu5pqlqsj6nxs",
+    "label": "Genesis: public_allocations_completed",
+    "kind": "bond",
+    "amountNam": 100000,
+    "ts": 1790736037026,
+    "txHash": "8D371A0C3386563A466D0833C716AAE64685069318934DB94F42140245784BC1",
+    "liquidAt": null,
+    "outcome": null
+   },
+   {
+    "address": "tnam1qp7fvl820xfy20rzz8u20z60tn3xu5pqlqsj6nxs",
+    "label": "Genesis: public_allocations_completed",
+    "kind": "bond",
+    "amountNam": 100000,
+    "ts": 1790736037026,
+    "txHash": "927BC0984082CC709C9E7EE3CA578CDED524FD320D1DE9B4A0FE263DAA00128E",
+    "liquidAt": null,
+    "outcome": null
+   },
+   {
+    "address": "tnam1qp7fvl820xfy20rzz8u20z60tn3xu5pqlqsj6nxs",
+    "label": "Genesis: public_allocations_completed",
+    "kind": "bond",
+    "amountNam": 100000,
+    "ts": 1790736037026,
+    "txHash": "16BEA6BC0B6C60E99DB17FB69A60A6DFDA34269412846871EAE51FCEE4CB3E0F",
+    "liquidAt": null,
+    "outcome": null
+   },
+   {
+    "address": "tnam1qp7fvl820xfy20rzz8u20z60tn3xu5pqlqsj6nxs",
+    "label": "Genesis: public_allocations_completed",
+    "kind": "bond",
+    "amountNam": 100000,
+    "ts": 1790736037026,
+    "txHash": "2531FC814A8791DAEC1778122F47E30CDA29D778091379FBC433AC6DA744D5B8",
+    "liquidAt": null,
+    "outcome": null
+   },
+   {
+    "address": "tnam1qp7fvl820xfy20rzz8u20z60tn3xu5pqlqsj6nxs",
+    "label": "Genesis: public_allocations_completed",
+    "kind": "bond",
+    "amountNam": 100000,
+    "ts": 1790736037026,
+    "txHash": "D9FD61C5671AD8E923A09B0FFBE85D9FF9584C7246AC2A25FE1CE2E4FEDAFC65",
+    "liquidAt": null,
+    "outcome": null
+   },
+   {
+    "address": "tnam1qp7fvl820xfy20rzz8u20z60tn3xu5pqlqsj6nxs",
+    "label": "Genesis: public_allocations_completed",
+    "kind": "bond",
+    "amountNam": 100000,
+    "ts": 1790736037026,
+    "txHash": "01C0DD7CEEDA15F5DC778ACF7A9FEBE652AD24009DB1FBBE7A6327D47EA78F0C",
+    "liquidAt": null,
+    "outcome": null
+   },
+   {
+    "address": "tnam1qp7fvl820xfy20rzz8u20z60tn3xu5pqlqsj6nxs",
+    "label": "Genesis: public_allocations_completed",
+    "kind": "bond",
+    "amountNam": 300000,
+    "ts": 1790736037026,
+    "txHash": "30160B53D4F9402E30B1DF0F51F0F1E5308BDC1B9A66179F1E8C77F2903A75D5",
+    "liquidAt": null,
+    "outcome": null
+   },
+   {
+    "address": "tnam1qp7fvl820xfy20rzz8u20z60tn3xu5pqlqsj6nxs",
+    "label": "Genesis: public_allocations_completed",
+    "kind": "withdraw",
+    "amountNam": 595926.003517,
+    "ts": 1790735737627,
+    "txHash": "16516AC5C976FFAF110968AB1CDCD37591E049F614E8AD89D8D003870DE43F6F",
+    "liquidAt": null,
+    "outcome": {
+     "kind": "rebonded",
+     "amountNam": 1126000
+    }
+   },
+   {
+    "address": "tnam1qp7fvl820xfy20rzz8u20z60tn3xu5pqlqsj6nxs",
+    "label": "Genesis: public_allocations_completed",
+    "kind": "withdraw",
+    "amountNam": 449952.601588,
+    "ts": 1790735737627,
+    "txHash": "EED859AFFB5EB357CE278E400F313462FBE1718B25001E1B01E9B129A7D0EAB5",
+    "liquidAt": null,
+    "outcome": {
+     "kind": "rebonded",
+     "amountNam": 1126000
+    }
+   },
+   {
+    "address": "tnam1qz96zq20qjx8253r8z68t5q0j9mneqmz6vsx9usp",
+    "label": "Genesis: public_allocations_completed",
+    "kind": "bond",
+    "amountNam": 150000,
+    "ts": 1790314945021,
+    "txHash": "0E7E8A2E2B38A98B2F95A01A4A31FD8D55D578ADAB7F0C5ECAEB14C4180F6073",
+    "liquidAt": null,
+    "outcome": null
+   },
+   {
+    "address": "tnam1qrw786xy5jxl3jn6nrfa32alm55pxspn9uq08gdh",
+    "label": null,
+    "kind": "bond",
+    "amountNam": 300000,
+    "ts": 1790314837162,
+    "txHash": "8DCBCF8713C85BC6AB0F3506FD1EE8A5541C1BC860B15E4A986527B200251DB3",
+    "liquidAt": null,
+    "outcome": null
+   },
+   {
+    "address": "tnam1qrsqrdak4azz8y4vcsxuatldt5wlt3xz65j3lgc0",
+    "label": "Genesis: public_allocations_completed",
+    "kind": "bond",
+    "amountNam": 189000,
+    "ts": 1790266598754,
+    "txHash": "536569CAEB5B33A37FA4DCE5E922693D1B46AF75291A06E0863385EB0FD356A7",
+    "liquidAt": null,
+    "outcome": null
+   },
+   {
+    "address": "tnam1qz2lcz5c6shmtaclcgevhh2e29c2dwkvessgwqlg",
+    "label": null,
+    "kind": "bond",
+    "amountNam": 100000,
+    "ts": 1790231263405,
+    "txHash": "6ED1DAE70ECE8C96BC6A103FFF0260E9BE79F8D06552EC775C6BA3BBA79FE756",
+    "liquidAt": null,
+    "outcome": null
+   },
+   {
+    "address": "tnam1qrk5pyvtzxjmykcqmhglssshdjf3njac2qvqmlse",
+    "label": null,
+    "kind": "bond",
+    "amountNam": 29386967.189242,
+    "ts": 1790097706326,
+    "txHash": "192A229ECB1C195D1198D59D9FEACFF96D3D6BDB4DAC21FA4036E569F4DBF9A0",
+    "liquidAt": null,
+    "outcome": null
+   },
+   {
+    "address": "tnam1qrk5pyvtzxjmykcqmhglssshdjf3njac2qvqmlse",
+    "label": null,
+    "kind": "bond",
+    "amountNam": 100000000,
+    "ts": 1790097625876,
+    "txHash": "5F9E44142731CC939DF6F4B02F2C08A82770F14B04A7A3F10A75B6F5A83F7DBE",
+    "liquidAt": null,
+    "outcome": null
+   },
+   {
+    "address": "tnam1qrk5pyvtzxjmykcqmhglssshdjf3njac2qvqmlse",
+    "label": null,
+    "kind": "bond",
+    "amountNam": 100000000,
+    "ts": 1790097545268,
+    "txHash": "3B6C6C648886F5C2D2A3F767AE5CDD157A9B1E6AAFD0D9CF6FF582B71AD926DB",
+    "liquidAt": null,
+    "outcome": null
+   },
+   {
+    "address": "tnam1qrk5pyvtzxjmykcqmhglssshdjf3njac2qvqmlse",
+    "label": null,
+    "kind": "bond",
+    "amountNam": 99999900,
+    "ts": 1790097427433,
+    "txHash": "59AA5A3380F1047107C6FE92F7464B76B715C0E6DDD9E5FA2B9EE05A13056E9E",
+    "liquidAt": null,
+    "outcome": null
+   },
+   {
+    "address": "tnam1qzvt35kh8rn8j4qcu6fj06t3t9rzhp8lpufy0x58",
+    "label": "Genesis: early_core_contributors",
+    "kind": "unbond",
+    "amountNam": 1874000,
+    "ts": 1789994325261,
+    "txHash": "2A7AB1F39AC5C6BF495C5065333CEA29AEB9CE57E7D00F81C6E7F50E87F10DAF",
+    "liquidAt": 1791182325261,
+    "outcome": null
+   },
+   {
+    "address": "tnam1qqvt75r2eqpldxkpesr0d5p846pany3kfgaw7jsd",
+    "label": "Genesis: public_allocations_completed",
+    "kind": "unbond",
+    "amountNam": 1170000,
+    "ts": 1789909239851,
+    "txHash": "FB77460C9CBA1F72C01013096A42D6BA3C147A56372F5146BAB0420FB6D391B1",
+    "liquidAt": 1791097239851,
+    "outcome": null
+   },
+   {
+    "address": "tnam1qr8x5rly5mj8wly2ph0zqjkcqkju0g5jkggjn9k3",
+    "label": null,
+    "kind": "bond",
+    "amountNam": 3200000,
+    "ts": 1789857390510,
+    "txHash": "061AE0D18FE0E61D9E068139DA281E826D0818A5A9A6C2858FEE23A042A4196E",
+    "liquidAt": null,
+    "outcome": null
+   },
+   {
+    "address": "tnam1qr8x5rly5mj8wly2ph0zqjkcqkju0g5jkggjn9k3",
+    "label": null,
+    "kind": "bond",
+    "amountNam": 2500000,
+    "ts": 1789857241971,
+    "txHash": "2ADD06BD3B7D403E87C6FBFE932E1623AA74337ED7BA718CB8BE7F91F407951C",
+    "liquidAt": null,
+    "outcome": null
+   },
+   {
+    "address": "tnam1qr8x5rly5mj8wly2ph0zqjkcqkju0g5jkggjn9k3",
+    "label": null,
+    "kind": "withdraw",
+    "amountNam": 5250000,
+    "ts": 1789857194487,
+    "txHash": "2D526322334F0D0237CE82EEC994081EC88E5E0C26FB70F26C7C788041FDC326",
+    "liquidAt": null,
+    "outcome": {
+     "kind": "rebonded",
+     "amountNam": 5700000
+    }
+   },
+   {
+    "address": "tnam1qr8x5rly5mj8wly2ph0zqjkcqkju0g5jkggjn9k3",
+    "label": null,
+    "kind": "bond",
+    "amountNam": 2500000,
+    "ts": 1789857167606,
+    "txHash": "F52195AB230103F3C23D23DB1D3433B9823C7DC3AE4014619D95D1C5817D40DB",
+    "liquidAt": null,
+    "outcome": null
+   },
+   {
+    "address": "tnam1qr8x5rly5mj8wly2ph0zqjkcqkju0g5jkggjn9k3",
+    "label": null,
+    "kind": "bond",
+    "amountNam": 2500000,
+    "ts": 1789856971366,
+    "txHash": "0B4F50FFBBE39D6953CF2C021495FEB0B9BBA0631B2D56B4E3FF0AB0B4ED819B",
+    "liquidAt": null,
+    "outcome": null
+   },
+   {
+    "address": "tnam1qr8x5rly5mj8wly2ph0zqjkcqkju0g5jkggjn9k3",
+    "label": null,
+    "kind": "withdraw",
+    "amountNam": 5265681.502143,
+    "ts": 1789761248834,
+    "txHash": "59245D18614A964A7ECE92BCFBBDE863382098FDCCFCB6425A04EBEDB843E271",
+    "liquidAt": null,
+    "outcome": {
+     "kind": "rebonded",
+     "amountNam": 10700000
+    }
+   },
+   {
+    "address": "tnam1qrer242n23l0vmp69p8l7y3klwe8qc6tuvqvc7r0",
+    "label": null,
+    "kind": "bond",
+    "amountNam": 350000,
+    "ts": 1789679239434,
+    "txHash": "DD7848B1A74A671B4A9BF5017D6F78AB45C6540ED75D68657F24ADB496B067B9",
+    "liquidAt": null,
+    "outcome": null
+   }
+  ],
+  "unbondingDays": 13.75,
+  "bondedTrend": [
+   {
+    "ts": 1792043967426,
+    "value": 341609297.20588
+   },
+   {
+    "ts": 1792065567429,
+    "value": 341618215.5016654
+   },
+   {
+    "ts": 1792087167486,
+    "value": 341637200.7123551
+   },
+   {
+    "ts": 1792108767449,
+    "value": 341728934.5804452
+   },
+   {
+    "ts": 1792130367422,
+    "value": 341776851.2520883
+   },
+   {
+    "ts": 1792151974200,
+    "value": 341796843.0638746
+   },
+   {
+    "ts": 1792173574201,
+    "value": 341837310.77513206
+   },
+   {
+    "ts": 1792195174198,
+    "value": 341876351.0136715
+   },
+   {
+    "ts": 1792216774193,
+    "value": 341896158.786044
+   },
+   {
+    "ts": 1792236274192,
+    "value": 341927209.3736814
+   }
+  ],
+  "movers": [
+   {
+    "address": "osmo1sqdwxh2tlvpmsh7rapjmtmyeg4pn4hu494v9mf",
+    "label": null,
+    "chain": "osmosis",
+    "netNam24h": 845.580676,
+    "netNam7d": 115392.62063699997,
+    "buys": 183,
+    "sells": 1,
+    "lastTs": 1792159799442
+   },
+   {
+    "address": "osmo1vkyae7qe2xqtp3u00t32jg0d4wzcs8c60mlrl4",
+    "label": null,
+    "chain": "osmosis",
+    "netNam24h": 17124.414823,
+    "netNam7d": 88352.74496200004,
+    "buys": 136,
+    "sells": 0,
+    "lastTs": 1792234350771
+   },
+   {
+    "address": "osmo12laa7fnv79602cqyzjrc3ah257pdkzyfjcfer4",
+    "label": null,
+    "chain": "osmosis",
+    "netNam24h": 0,
+    "netNam7d": -79214.28015800001,
+    "buys": 0,
+    "sells": 2,
+    "lastTs": 1792015422917
+   },
+   {
+    "address": "osmo1tvd8zylqge0qutq2nvckqqrrnxscsaqasl7uuw",
+    "label": null,
+    "chain": "osmosis",
+    "netNam24h": 0,
+    "netNam7d": -60611.760196999996,
+    "buys": 0,
+    "sells": 1,
+    "lastTs": 1792040448592
+   },
+   {
+    "address": "osmo1w7qun3qx2he8rgyt6f2d98nnrck3q48zacfcmp",
+    "label": null,
+    "chain": "osmosis",
+    "netNam24h": 0,
+    "netNam7d": -31481.576903,
+    "buys": 0,
+    "sells": 1,
+    "lastTs": 1791818765734
+   },
+   {
+    "address": "osmo19d6hffmz2jcwpuh9gy2q2uzneldchawz235f4p",
+    "label": null,
+    "chain": "osmosis",
+    "netNam24h": 0,
+    "netNam7d": -24146.512253,
+    "buys": 0,
+    "sells": 1,
+    "lastTs": 1792069773136
+   },
+   {
+    "address": "osmo1d5hq49fenfj8rtlyz8ckya44jxagv0f7lmdtl4",
+    "label": null,
+    "chain": "osmosis",
+    "netNam24h": 0,
+    "netNam7d": -23288.597688,
+    "buys": 0,
+    "sells": 1,
+    "lastTs": 1791817248974
+   },
+   {
+    "address": "osmo1d5vr22acajgwlr2qh334kplmfs7cs4wwqmxfc6",
+    "label": null,
+    "chain": "osmosis",
+    "netNam24h": 0,
+    "netNam7d": -16576.948974,
+    "buys": 0,
+    "sells": 1,
+    "lastTs": 1791981909836
+   },
+   {
+    "address": "osmo10kwxq88s6s4nzad8x36efcghcafwafhze657jh",
+    "label": null,
+    "chain": "osmosis",
+    "netNam24h": 0,
+    "netNam7d": 8655.183969,
+    "buys": 4,
+    "sells": 0,
+    "lastTs": 1791955495364
+   },
+   {
+    "address": "osmo1f56eqgwm6zz73plfvwhamquugjr2ewnusveral",
+    "label": null,
+    "chain": "osmosis",
+    "netNam24h": -10967.6214,
+    "netNam7d": 4320.468194999981,
+    "buys": 16,
+    "sells": 20,
+    "lastTs": 1792190534363
+   },
+   {
+    "address": "osmo1ljd6d8quzfn4zev99unxnz5x89frev3vh0qecm",
+    "label": null,
+    "chain": "osmosis",
+    "netNam24h": 0,
+    "netNam7d": -2724.215337,
+    "buys": 0,
+    "sells": 2,
+    "lastTs": 1792063805344
+   },
+   {
+    "address": "osmo18nf84jgwkqypaplz45xyf3yegpu4vvhz4j2lnl",
+    "label": null,
+    "chain": "osmosis",
+    "netNam24h": 0,
+    "netNam7d": -1491.9218389999999,
+    "buys": 0,
+    "sells": 5,
+    "lastTs": 1791908171783
+   },
+   {
+    "address": "osmo1p5pzwrtupms3wgdwvmqzwvuqmjpepk4p3jd04l",
+    "label": null,
+    "chain": "osmosis",
+    "netNam24h": 0,
+    "netNam7d": 602.799025,
+    "buys": 1,
+    "sells": 0,
+    "lastTs": 1791827636889
+   },
+   {
+    "address": "osmo15aa4v29vlhkzdh5vmf7m55uz6sf9jqm2pxwxgy",
+    "label": null,
+    "chain": "osmosis",
+    "netNam24h": 0,
+    "netNam7d": 319.18071,
+    "buys": 1,
+    "sells": 0,
+    "lastTs": 1791903712196
+   },
+   {
+    "address": "osmo1khfrzy6fgpxu6a7lzj7xs43rsmr4r8tyxpdcjl",
+    "label": null,
+    "chain": "osmosis",
+    "netNam24h": 0,
+    "netNam7d": -259.678031,
+    "buys": 0,
+    "sells": 1,
+    "lastTs": 1791735188057
+   },
+   {
+    "address": "osmo1vjrx0lks65yefnsz4xk92vugda2z25esvq85hn",
+    "label": null,
+    "chain": "osmosis",
+    "netNam24h": 0,
+    "netNam7d": 3.86817,
+    "buys": 1,
+    "sells": 0,
+    "lastTs": 1791640379438
+   }
+  ],
+  "proposals": [],
+  "coverage": {
+   "source": "D1 flow index",
+   "at": 1792224857527,
+   "status": "stale",
+   "note": "last Osmosis flow 32 min ago, last Namada flow 3.2 h ago"
+  }
+ },
+ "blindspot": {
+  "asOf": 1792236286250,
+  "shielded": {
+   "value": 50702670.184468,
+   "prov": {
+    "source": "Namada RPC (MASP balance)",
+    "at": 1792236274192,
+    "status": "live"
+   }
+  },
+  "total": 1147457991.648976,
+  "sharePct": 4.418695111583543,
+  "trend": [
+   {
+    "ts": 1749772800000,
+    "value": 2517246.092197
+   },
+   {
+    "ts": 1749859200000,
+    "value": 2951861.632758
+   },
+   {
+    "ts": 1749945600000,
+    "value": 3056450.015355
+   },
+   {
+    "ts": 1750032000000,
+    "value": 4472544.151694
+   },
+   {
+    "ts": 1750118400000,
+    "value": 22717018.860691
+   },
+   {
+    "ts": 1750204800000,
+    "value": 29719562.414867
+   },
+   {
+    "ts": 1750291200000,
+    "value": 24454019.847389
+   },
+   {
+    "ts": 1750377600000,
+    "value": 24559952.655878
+   },
+   {
+    "ts": 1750464000000,
+    "value": 24783623.956069
+   },
+   {
+    "ts": 1750550400000,
+    "value": 25263454.435516
+   },
+   {
+    "ts": 1750636800000,
+    "value": 28282757.680876
+   },
+   {
+    "ts": 1750723200000,
+    "value": 26182458.850174
+   },
+   {
+    "ts": 1750809600000,
+    "value": 26258762.962611
+   },
+   {
+    "ts": 1750896000000,
+    "value": 26270050.821053
+   },
+   {
+    "ts": 1750982400000,
+    "value": 26093687.063549
+   },
+   {
+    "ts": 1751068800000,
+    "value": 25983903.681671
+   },
+   {
+    "ts": 1751155200000,
+    "value": 25803678.211147
+   },
+   {
+    "ts": 1751241600000,
+    "value": 26456118.897552
+   },
+   {
+    "ts": 1751328000000,
+    "value": 26452392.143773
+   },
+   {
+    "ts": 1751414400000,
+    "value": 29700126.947423
+   },
+   {
+    "ts": 1751500800000,
+    "value": 27855754.152595
+   },
+   {
+    "ts": 1751587200000,
+    "value": 27767759.330195
+   },
+   {
+    "ts": 1751673600000,
+    "value": 27797967.888904
+   },
+   {
+    "ts": 1751760000000,
+    "value": 28071192.969721
+   },
+   {
+    "ts": 1751846400000,
+    "value": 28113811.705609
+   },
+   {
+    "ts": 1751932800000,
+    "value": 28970934.135991
+   },
+   {
+    "ts": 1752019200000,
+    "value": 33486856.470015
+   },
+   {
+    "ts": 1752105600000,
+    "value": 33499810.269249
+   },
+   {
+    "ts": 1752192000000,
+    "value": 32962726.59505
+   },
+   {
+    "ts": 1752278400000,
+    "value": 32767656.97814
+   },
+   {
+    "ts": 1752364800000,
+    "value": 32781707.540969
+   },
+   {
+    "ts": 1752451200000,
+    "value": 36059048.244314
+   },
+   {
+    "ts": 1752537600000,
+    "value": 38622271.793422
+   },
+   {
+    "ts": 1752624000000,
+    "value": 40885145.398124
+   },
+   {
+    "ts": 1752710400000,
+    "value": 40915982.414557
+   },
+   {
+    "ts": 1752796800000,
+    "value": 41350247.459126
+   },
+   {
+    "ts": 1752883200000,
+    "value": 41417782.722456
+   },
+   {
+    "ts": 1752969600000,
+    "value": 41465336.664857
+   },
+   {
+    "ts": 1753056000000,
+    "value": 42761152.295353
+   },
+   {
+    "ts": 1753142400000,
+    "value": 42836246.039338
+   },
+   {
+    "ts": 1753228800000,
+    "value": 42816268.480088
+   },
+   {
+    "ts": 1753315200000,
+    "value": 42899128.449359
+   },
+   {
+    "ts": 1753401600000,
+    "value": 42885534.109484
+   },
+   {
+    "ts": 1753488000000,
+    "value": 42971821.747579
+   },
+   {
+    "ts": 1753574400000,
+    "value": 42995692.42988
+   },
+   {
+    "ts": 1753660800000,
+    "value": 42159185.344863
+   },
+   {
+    "ts": 1753747200000,
+    "value": 42261774.581669
+   },
+   {
+    "ts": 1753833600000,
+    "value": 42083256.03427
+   },
+   {
+    "ts": 1753920000000,
+    "value": 42687629.059038
+   },
+   {
+    "ts": 1754006400000,
+    "value": 42813362.428197
+   },
+   {
+    "ts": 1754092800000,
+    "value": 44657605.684617
+   },
+   {
+    "ts": 1754179200000,
+    "value": 44491161.049061
+   },
+   {
+    "ts": 1754265600000,
+    "value": 44606633.872902
+   },
+   {
+    "ts": 1754352000000,
+    "value": 48603225.968823
+   },
+   {
+    "ts": 1754438400000,
+    "value": 48715929.852054
+   },
+   {
+    "ts": 1754524800000,
+    "value": 49000235.290458
+   },
+   {
+    "ts": 1754611200000,
+    "value": 49109516.364622
+   },
+   {
+    "ts": 1754697600000,
+    "value": 49215053.922034
+   },
+   {
+    "ts": 1754784000000,
+    "value": 48712948.412136
+   },
+   {
+    "ts": 1754870400000,
+    "value": 48683537.166142
+   },
+   {
+    "ts": 1754956800000,
+    "value": 48427391.643073
+   },
+   {
+    "ts": 1755043200000,
+    "value": 50243598.764017
+   },
+   {
+    "ts": 1755129600000,
+    "value": 50338283.753037
+   },
+   {
+    "ts": 1755216000000,
+    "value": 50441852.514796
+   },
+   {
+    "ts": 1755302400000,
+    "value": 50523055.991336
+   },
+   {
+    "ts": 1755388800000,
+    "value": 50622069.525428
+   },
+   {
+    "ts": 1755475200000,
+    "value": 50719531.814439
+   },
+   {
+    "ts": 1755561600000,
+    "value": 51604280.259582
+   },
+   {
+    "ts": 1755648000000,
+    "value": 51711712.588723
+   },
+   {
+    "ts": 1755734400000,
+    "value": 51813655.675177
+   },
+   {
+    "ts": 1755820800000,
+    "value": 51904603.213848
+   },
+   {
+    "ts": 1755907200000,
+    "value": 52032690.872424
+   },
+   {
+    "ts": 1755993600000,
+    "value": 51893433.427659
+   },
+   {
+    "ts": 1756080000000,
+    "value": 52143131.066108
+   },
+   {
+    "ts": 1756166400000,
+    "value": 52226455.44129
+   },
+   {
+    "ts": 1756252800000,
+    "value": 52347581.716507
+   },
+   {
+    "ts": 1756339200000,
+    "value": 52416768.106195
+   },
+   {
+    "ts": 1756425600000,
+    "value": 52526716.996636
+   },
+   {
+    "ts": 1756512000000,
+    "value": 52620832.322864
+   },
+   {
+    "ts": 1756598400000,
+    "value": 52728128.043314
+   },
+   {
+    "ts": 1756684800000,
+    "value": 52815879.467421
+   },
+   {
+    "ts": 1756771200000,
+    "value": 52913308.877657
+   },
+   {
+    "ts": 1756857600000,
+    "value": 53010632.963897
+   },
+   {
+    "ts": 1756944000000,
+    "value": 53114886.753572
+   },
+   {
+    "ts": 1757030400000,
+    "value": 53220451.772642
+   },
+   {
+    "ts": 1757116800000,
+    "value": 53346345.325655
+   },
+   {
+    "ts": 1757203200000,
+    "value": 53441618.862871
+   },
+   {
+    "ts": 1757289600000,
+    "value": 53542357.229551
+   },
+   {
+    "ts": 1757376000000,
+    "value": 53831079.051788
+   },
+   {
+    "ts": 1757462400000,
+    "value": 53949079.750112
+   },
+   {
+    "ts": 1757548800000,
+    "value": 53508766.168271
+   },
+   {
+    "ts": 1757635200000,
+    "value": 53591385.844089
+   },
+   {
+    "ts": 1757721600000,
+    "value": 53571434.451694
+   },
+   {
+    "ts": 1757808000000,
+    "value": 53669287.815541
+   },
+   {
+    "ts": 1757894400000,
+    "value": 53767981.163037
+   },
+   {
+    "ts": 1757980800000,
+    "value": 53876363.02736
+   },
+   {
+    "ts": 1758067200000,
+    "value": 55377693.093457
+   },
+   {
+    "ts": 1758153600000,
+    "value": 55492351.258809
+   },
+   {
+    "ts": 1758240000000,
+    "value": 55592676.161112
+   },
+   {
+    "ts": 1758326400000,
+    "value": 55704239.125497
+   },
+   {
+    "ts": 1758412800000,
+    "value": 57135735.868466
+   },
+   {
+    "ts": 1758499200000,
+    "value": 57658524.91429
+   },
+   {
+    "ts": 1758585600000,
+    "value": 57242942.353828
+   },
+   {
+    "ts": 1758672000000,
+    "value": 57389557.173551
+   },
+   {
+    "ts": 1758758400000,
+    "value": 57526742.19894
+   },
+   {
+    "ts": 1758844800000,
+    "value": 59145528.158945
+   },
+   {
+    "ts": 1758931200000,
+    "value": 59295880.654589
+   },
+   {
+    "ts": 1759017600000,
+    "value": 59439888.18896
+   },
+   {
+    "ts": 1759104000000,
+    "value": 59267259.339854
+   },
+   {
+    "ts": 1759190400000,
+    "value": 60369392.700796
+   },
+   {
+    "ts": 1759276800000,
+    "value": 60463198.949322
+   },
+   {
+    "ts": 1759363200000,
+    "value": 61103265.275826
+   },
+   {
+    "ts": 1759449600000,
+    "value": 55348314.921564
+   },
+   {
+    "ts": 1759536000000,
+    "value": 55456328.149989
+   },
+   {
+    "ts": 1759622400000,
+    "value": 55564462.983854
+   },
+   {
+    "ts": 1759708800000,
+    "value": 55640752.241368
+   },
+   {
+    "ts": 1759795200000,
+    "value": 55750019.856173
+   },
+   {
+    "ts": 1759881600000,
+    "value": 58333560.000529
+   },
+   {
+    "ts": 1759968000000,
+    "value": 58372893.570514
+   },
+   {
+    "ts": 1760054400000,
+    "value": 55539408.514158
+   },
+   {
+    "ts": 1760140800000,
+    "value": 56539920.018958
+   },
+   {
+    "ts": 1760227200000,
+    "value": 49454876.343793
+   },
+   {
+    "ts": 1760313600000,
+    "value": 48612624.482084
+   },
+   {
+    "ts": 1760400000000,
+    "value": 49273983.340094
+   },
+   {
+    "ts": 1760486400000,
+    "value": 48525947.270228
+   },
+   {
+    "ts": 1760572800000,
+    "value": 48594054.776401
+   },
+   {
+    "ts": 1760659200000,
+    "value": 48710151.992841
+   },
+   {
+    "ts": 1760745600000,
+    "value": 48792794.159682
+   },
+   {
+    "ts": 1760832000000,
+    "value": 48875463.078343
+   },
+   {
+    "ts": 1760918400000,
+    "value": 48974069.337172
+   },
+   {
+    "ts": 1761004800000,
+    "value": 48942897.66638
+   },
+   {
+    "ts": 1761091200000,
+    "value": 48940341.868996
+   },
+   {
+    "ts": 1761177600000,
+    "value": 49036398.348927
+   },
+   {
+    "ts": 1761264000000,
+    "value": 49176411.585207
+   },
+   {
+    "ts": 1761350400000,
+    "value": 49307199.476662
+   },
+   {
+    "ts": 1761436800000,
+    "value": 49447091.969963
+   },
+   {
+    "ts": 1761523200000,
+    "value": 49585694.131421
+   },
+   {
+    "ts": 1761609600000,
+    "value": 49172290.569979
+   },
+   {
+    "ts": 1761696000000,
+    "value": 49118891.896077
+   },
+   {
+    "ts": 1761782400000,
+    "value": 44068348.710294
+   },
+   {
+    "ts": 1761868800000,
+    "value": 40601174.13156
+   },
+   {
+    "ts": 1761955200000,
+    "value": 40744163.386494
+   },
+   {
+    "ts": 1762041600000,
+    "value": 40952832.395243
+   },
+   {
+    "ts": 1762128000000,
+    "value": 41087273.854645
+   },
+   {
+    "ts": 1762214400000,
+    "value": 40583654.823531
+   },
+   {
+    "ts": 1762300800000,
+    "value": 40724237.951075
+   },
+   {
+    "ts": 1762387200000,
+    "value": 40582038.70191
+   },
+   {
+    "ts": 1762473600000,
+    "value": 40609216.759677
+   },
+   {
+    "ts": 1762560000000,
+    "value": 40424951.616511
+   },
+   {
+    "ts": 1762646400000,
+    "value": 40543593.789888
+   },
+   {
+    "ts": 1762732800000,
+    "value": 40600216.736043
+   },
+   {
+    "ts": 1762819200000,
+    "value": 40740934.267681
+   },
+   {
+    "ts": 1762905600000,
+    "value": 40863605.020976
+   },
+   {
+    "ts": 1762992000000,
+    "value": 40993567.270024
+   },
+   {
+    "ts": 1763078400000,
+    "value": 41101030.414293
+   },
+   {
+    "ts": 1763164800000,
+    "value": 41296553.463619
+   },
+   {
+    "ts": 1763251200000,
+    "value": 42795570.79575
+   },
+   {
+    "ts": 1763337600000,
+    "value": 42717469.346035
+   },
+   {
+    "ts": 1763424000000,
+    "value": 45231998.989406
+   },
+   {
+    "ts": 1763510400000,
+    "value": 45179894.017104
+   },
+   {
+    "ts": 1763596800000,
+    "value": 41359131.879383
+   },
+   {
+    "ts": 1763683200000,
+    "value": 42323795.583012
+   },
+   {
+    "ts": 1763769600000,
+    "value": 42417649.299607
+   },
+   {
+    "ts": 1763856000000,
+    "value": 42346146.434136
+   },
+   {
+    "ts": 1763942400000,
+    "value": 41418074.285069
+   },
+   {
+    "ts": 1764028800000,
+    "value": 41441371.102602
+   },
+   {
+    "ts": 1764115200000,
+    "value": 41478304.828443
+   },
+   {
+    "ts": 1764201600000,
+    "value": 41553370.963465
+   },
+   {
+    "ts": 1764288000000,
+    "value": 41582816.507497
+   },
+   {
+    "ts": 1764374400000,
+    "value": 41617089.057183
+   },
+   {
+    "ts": 1764460800000,
+    "value": 41623221.052063
+   },
+   {
+    "ts": 1764547200000,
+    "value": 41659582.493705
+   },
+   {
+    "ts": 1764633600000,
+    "value": 41684481.729387
+   },
+   {
+    "ts": 1764720000000,
+    "value": 41736857.30912
+   },
+   {
+    "ts": 1764806400000,
+    "value": 41736949.640646
+   },
+   {
+    "ts": 1764892800000,
+    "value": 41774992.404595
+   },
+   {
+    "ts": 1764979200000,
+    "value": 41798819.994295
+   },
+   {
+    "ts": 1765065600000,
+    "value": 41837521.314284
+   },
+   {
+    "ts": 1765152000000,
+    "value": 41622971.6412
+   },
+   {
+    "ts": 1765238400000,
+    "value": 41808608.914401
+   },
+   {
+    "ts": 1765324800000,
+    "value": 41648690.061959
+   },
+   {
+    "ts": 1765411200000,
+    "value": 39177772.178788
+   },
+   {
+    "ts": 1765497600000,
+    "value": 39203039.198064
+   },
+   {
+    "ts": 1765584000000,
+    "value": 39229504.192141
+   },
+   {
+    "ts": 1765670400000,
+    "value": 39255064.594122
+   },
+   {
+    "ts": 1765756800000,
+    "value": 39592368.87231
+   },
+   {
+    "ts": 1765843200000,
+    "value": 39863824.310661
+   },
+   {
+    "ts": 1765929600000,
+    "value": 40020424.917993
+   },
+   {
+    "ts": 1766016000000,
+    "value": 39947479.79314
+   },
+   {
+    "ts": 1766102400000,
+    "value": 39794340.240976
+   },
+   {
+    "ts": 1766188800000,
+    "value": 39822037.942797
+   },
+   {
+    "ts": 1766275200000,
+    "value": 39862556.605799
+   },
+   {
+    "ts": 1766361600000,
+    "value": 39760857.345275
+   },
+   {
+    "ts": 1766448000000,
+    "value": 39788453.623743
+   },
+   {
+    "ts": 1766534400000,
+    "value": 39875863.58984
+   },
+   {
+    "ts": 1766620800000,
+    "value": 39843138.442593
+   },
+   {
+    "ts": 1766707200000,
+    "value": 39869480.923065
+   },
+   {
+    "ts": 1766793600000,
+    "value": 39912080.922488
+   },
+   {
+    "ts": 1766880000000,
+    "value": 39939766.614074
+   },
+   {
+    "ts": 1766966400000,
+    "value": 38166907.105208
+   },
+   {
+    "ts": 1767052800000,
+    "value": 38192304.039008
+   },
+   {
+    "ts": 1767139200000,
+    "value": 38210619.402122
+   },
+   {
+    "ts": 1767225600000,
+    "value": 36648770.539286
+   },
+   {
+    "ts": 1767312000000,
+    "value": 36674010.546073
+   },
+   {
+    "ts": 1767398400000,
+    "value": 36677872.945234
+   },
+   {
+    "ts": 1767484800000,
+    "value": 36706879.482266
+   },
+   {
+    "ts": 1767571200000,
+    "value": 36564714.815466
+   },
+   {
+    "ts": 1767657600000,
+    "value": 36542882.964311
+   },
+   {
+    "ts": 1767744000000,
+    "value": 36543107.796176
+   },
+   {
+    "ts": 1767830400000,
+    "value": 36480858.113516
+   },
+   {
+    "ts": 1767916800000,
+    "value": 36512349.759374
+   },
+   {
+    "ts": 1768003200000,
+    "value": 36510905.62371
+   },
+   {
+    "ts": 1768089600000,
+    "value": 36544604.255343
+   },
+   {
+    "ts": 1768176000000,
+    "value": 36576379.548521
+   },
+   {
+    "ts": 1768262400000,
+    "value": 36710569.241152
+   },
+   {
+    "ts": 1768348800000,
+    "value": 36736340.300965
+   },
+   {
+    "ts": 1768435200000,
+    "value": 36059554.901285
+   },
+   {
+    "ts": 1768521600000,
+    "value": 36109832.204971
+   },
+   {
+    "ts": 1768608000000,
+    "value": 36529922.885887
+   },
+   {
+    "ts": 1768694400000,
+    "value": 36455152.74548
+   },
+   {
+    "ts": 1768780800000,
+    "value": 36482000.402384
+   },
+   {
+    "ts": 1768867200000,
+    "value": 36518039.873918
+   },
+   {
+    "ts": 1768953600000,
+    "value": 35472720.959347
+   },
+   {
+    "ts": 1769040000000,
+    "value": 35377228.163002
+   },
+   {
+    "ts": 1769126400000,
+    "value": 35413346.921469
+   },
+   {
+    "ts": 1769212800000,
+    "value": 35435318.016812
+   },
+   {
+    "ts": 1769299200000,
+    "value": 37052301.57479
+   },
+   {
+    "ts": 1769385600000,
+    "value": 37712336.756719
+   },
+   {
+    "ts": 1769472000000,
+    "value": 37748107.311079
+   },
+   {
+    "ts": 1769558400000,
+    "value": 37943670.855463
+   },
+   {
+    "ts": 1769644800000,
+    "value": 38161814.284787
+   },
+   {
+    "ts": 1769731200000,
+    "value": 38103875.366344
+   },
+   {
+    "ts": 1769817600000,
+    "value": 38138216.797262
+   },
+   {
+    "ts": 1769904000000,
+    "value": 38178180.056543
+   },
+   {
+    "ts": 1769990400000,
+    "value": 38217642.224741
+   },
+   {
+    "ts": 1770076800000,
+    "value": 37822506.352552
+   },
+   {
+    "ts": 1770163200000,
+    "value": 37812209.489366
+   },
+   {
+    "ts": 1770249600000,
+    "value": 37876408.660226
+   },
+   {
+    "ts": 1770336000000,
+    "value": 37919827.327286
+   },
+   {
+    "ts": 1770422400000,
+    "value": 37941868.09422
+   },
+   {
+    "ts": 1770508800000,
+    "value": 37984360.1584
+   },
+   {
+    "ts": 1770595200000,
+    "value": 37631618.465868
+   },
+   {
+    "ts": 1770681600000,
+    "value": 36085968.165814
+   },
+   {
+    "ts": 1770768000000,
+    "value": 36131228.238683
+   },
+   {
+    "ts": 1770854400000,
+    "value": 36170234.91668
+   },
+   {
+    "ts": 1770940800000,
+    "value": 36244599.36937
+   },
+   {
+    "ts": 1771027200000,
+    "value": 36289902.90014
+   },
+   {
+    "ts": 1771113600000,
+    "value": 36348088.613778
+   },
+   {
+    "ts": 1771200000000,
+    "value": 36394621.186378
+   },
+   {
+    "ts": 1771286400000,
+    "value": 36418591.058596
+   },
+   {
+    "ts": 1771372800000,
+    "value": 36466480.947478
+   },
+   {
+    "ts": 1771459200000,
+    "value": 36015369.748867
+   },
+   {
+    "ts": 1771545600000,
+    "value": 35571398.920409
+   },
+   {
+    "ts": 1771632000000,
+    "value": 35622102.916369
+   },
+   {
+    "ts": 1771718400000,
+    "value": 35673810.162339
+   },
+   {
+    "ts": 1771804800000,
+    "value": 35726416.047223
+   },
+   {
+    "ts": 1771891200000,
+    "value": 35741735.904934
+   },
+   {
+    "ts": 1771977600000,
+    "value": 35715208.415236
+   },
+   {
+    "ts": 1772064000000,
+    "value": 34467452.721043
+   },
+   {
+    "ts": 1772150400000,
+    "value": 34535828.187483
+   },
+   {
+    "ts": 1772236800000,
+    "value": 34753676.80578
+   },
+   {
+    "ts": 1772323200000,
+    "value": 34777123.142001
+   },
+   {
+    "ts": 1772409600000,
+    "value": 34673458.041487
+   },
+   {
+    "ts": 1772496000000,
+    "value": 34727007.361816
+   },
+   {
+    "ts": 1772582400000,
+    "value": 34780580.749117
+   },
+   {
+    "ts": 1772668800000,
+    "value": 34834175.477144
+   },
+   {
+    "ts": 1772755200000,
+    "value": 34890170.571813
+   },
+   {
+    "ts": 1772841600000,
+    "value": 34943789.566703
+   },
+   {
+    "ts": 1772928000000,
+    "value": 34501377.339459
+   },
+   {
+    "ts": 1773014400000,
+    "value": 34563130.678421
+   },
+   {
+    "ts": 1773100800000,
+    "value": 34406763.10808
+   },
+   {
+    "ts": 1773187200000,
+    "value": 34457828.03199
+   },
+   {
+    "ts": 1773273600000,
+    "value": 34508919.094856
+   },
+   {
+    "ts": 1773360000000,
+    "value": 34560009.064778
+   },
+   {
+    "ts": 1773446400000,
+    "value": 34610418.081126
+   },
+   {
+    "ts": 1773532800000,
+    "value": 34616987.332532
+   },
+   {
+    "ts": 1773619200000,
+    "value": 35454435.380747
+   },
+   {
+    "ts": 1773705600000,
+    "value": 35505501.643484
+   },
+   {
+    "ts": 1773792000000,
+    "value": 35556921.473591
+   },
+   {
+    "ts": 1773878400000,
+    "value": 35609799.953515
+   },
+   {
+    "ts": 1773964800000,
+    "value": 31660807.096179
+   },
+   {
+    "ts": 1774051200000,
+    "value": 31711044.708725
+   },
+   {
+    "ts": 1774137600000,
+    "value": 31757260.361124
+   },
+   {
+    "ts": 1774224000000,
+    "value": 31808421.053162
+   },
+   {
+    "ts": 1774310400000,
+    "value": 31853869.328885
+   },
+   {
+    "ts": 1774396800000,
+    "value": 64346157.639601
+   },
+   {
+    "ts": 1774483200000,
+    "value": 65021555.013977
+   },
+   {
+    "ts": 1774569600000,
+    "value": 64614545.247029
+   },
+   {
+    "ts": 1774656000000,
+    "value": 64665728.010987
+   },
+   {
+    "ts": 1774742400000,
+    "value": 64717949.033774
+   },
+   {
+    "ts": 1774828800000,
+    "value": 64770791.164072
+   },
+   {
+    "ts": 1774915200000,
+    "value": 64821996.713651
+   },
+   {
+    "ts": 1775001600000,
+    "value": 64868572.62871
+   },
+   {
+    "ts": 1775088000000,
+    "value": 64919723.717791
+   },
+   {
+    "ts": 1775174400000,
+    "value": 64971001.15868
+   },
+   {
+    "ts": 1775260800000,
+    "value": 64521812.642241
+   },
+   {
+    "ts": 1775347200000,
+    "value": 64572939.389539
+   },
+   {
+    "ts": 1775433600000,
+    "value": 64620521.839345
+   },
+   {
+    "ts": 1775520000000,
+    "value": 64675331.680122
+   },
+   {
+    "ts": 1775606400000,
+    "value": 64726476.269268
+   },
+   {
+    "ts": 1775692800000,
+    "value": 64777626.848855
+   },
+   {
+    "ts": 1775779200000,
+    "value": 64828786.913365
+   },
+   {
+    "ts": 1775865600000,
+    "value": 64879904.473192
+   },
+   {
+    "ts": 1775952000000,
+    "value": 64938578.928179
+   },
+   {
+    "ts": 1776038400000,
+    "value": 64989755.57054
+   },
+   {
+    "ts": 1776124800000,
+    "value": 65041349.311299
+   },
+   {
+    "ts": 1776211200000,
+    "value": 64841945.363892
+   },
+   {
+    "ts": 1776297600000,
+    "value": 64878674.015106
+   },
+   {
+    "ts": 1776384000000,
+    "value": 64929857.691592
+   },
+   {
+    "ts": 1776470400000,
+    "value": 64981198.671176
+   },
+   {
+    "ts": 1776556800000,
+    "value": 65032410.491171
+   },
+   {
+    "ts": 1776643200000,
+    "value": 65083616.130417
+   },
+   {
+    "ts": 1776729600000,
+    "value": 65134829.326544
+   },
+   {
+    "ts": 1776816000000,
+    "value": 65186049.069757
+   },
+   {
+    "ts": 1776902400000,
+    "value": 65231607.320852
+   },
+   {
+    "ts": 1776988800000,
+    "value": 65282842.683386
+   },
+   {
+    "ts": 1777075200000,
+    "value": 65334086.766594
+   },
+   {
+    "ts": 1777161600000,
+    "value": 65236328.328276
+   },
+   {
+    "ts": 1777248000000,
+    "value": 65287580.35672
+   },
+   {
+    "ts": 1777334400000,
+    "value": 65131615.592038
+   },
+   {
+    "ts": 1777420800000,
+    "value": 65181057.906277
+   },
+   {
+    "ts": 1777507200000,
+    "value": 65232337.957865
+   },
+   {
+    "ts": 1777593600000,
+    "value": 65283577.607564
+   },
+   {
+    "ts": 1777680000000,
+    "value": 65334848.660806
+   },
+   {
+    "ts": 1777766400000,
+    "value": 65386156.602358
+   },
+   {
+    "ts": 1777852800000,
+    "value": 65437465.378495
+   },
+   {
+    "ts": 1777939200000,
+    "value": 65488782.136502
+   },
+   {
+    "ts": 1778025600000,
+    "value": 65540106.756918
+   },
+   {
+    "ts": 1778112000000,
+    "value": 65576741.667327
+   },
+   {
+    "ts": 1778198400000,
+    "value": 65628083.619045
+   },
+   {
+    "ts": 1778284800000,
+    "value": 65679432.145883
+   },
+   {
+    "ts": 1778371200000,
+    "value": 65730788.672829
+   },
+   {
+    "ts": 1778457600000,
+    "value": 65847842.970887
+   },
+   {
+    "ts": 1778544000000,
+    "value": 66000944.813337
+   },
+   {
+    "ts": 1778630400000,
+    "value": 66052448.576956
+   },
+   {
+    "ts": 1778716800000,
+    "value": 66354611.232465
+   },
+   {
+    "ts": 1778803200000,
+    "value": 66420583.141067
+   },
+   {
+    "ts": 1778889600000,
+    "value": 66471986.229743
+   },
+   {
+    "ts": 1778976000000,
+    "value": 66523397.087879
+   },
+   {
+    "ts": 1779062400000,
+    "value": 66574814.74963
+   },
+   {
+    "ts": 1779148800000,
+    "value": 66626239.949022
+   },
+   {
+    "ts": 1779235200000,
+    "value": 66677672.387037
+   },
+   {
+    "ts": 1779321600000,
+    "value": 66729117.542588
+   },
+   {
+    "ts": 1779408000000,
+    "value": 66780569.852554
+   },
+   {
+    "ts": 1779494400000,
+    "value": 66832030.097229
+   },
+   {
+    "ts": 1779580800000,
+    "value": 66984947.530497
+   },
+   {
+    "ts": 1779667200000,
+    "value": 66953930.872586
+   },
+   {
+    "ts": 1779753600000,
+    "value": 66955782.442906
+   },
+   {
+    "ts": 1779840000000,
+    "value": 66507272.871285
+   },
+   {
+    "ts": 1779926400000,
+    "value": 66517193.867414
+   },
+   {
+    "ts": 1780012800000,
+    "value": 66568698.521866
+   },
+   {
+    "ts": 1780099200000,
+    "value": 66620210.273071
+   },
+   {
+    "ts": 1780185600000,
+    "value": 66672153.824124
+   },
+   {
+    "ts": 1780272000000,
+    "value": 66723680.051029
+   },
+   {
+    "ts": 1780358400000,
+    "value": 66775213.840284
+   },
+   {
+    "ts": 1780444800000,
+    "value": 66828876.216826
+   },
+   {
+    "ts": 1780531200000,
+    "value": 66880424.854698
+   },
+   {
+    "ts": 1780617600000,
+    "value": 66937481.18075
+   },
+   {
+    "ts": 1780704000000,
+    "value": 66992695.141538
+   },
+   {
+    "ts": 1780790400000,
+    "value": 66992695.141538
+   },
+   {
+    "ts": 1780876800000,
+    "value": 66992695.141538
+   },
+   {
+    "ts": 1780963200000,
+    "value": 67147468.643481
+   },
+   {
+    "ts": 1781049600000,
+    "value": 67199060.578649
+   },
+   {
+    "ts": 1781136000000,
+    "value": 64799567.018324
+   },
+   {
+    "ts": 1781222400000,
+    "value": 64851174.139914
+   },
+   {
+    "ts": 1781308800000,
+    "value": 64851174.139914
+   },
+   {
+    "ts": 1781395200000,
+    "value": 64954510.306415
+   },
+   {
+    "ts": 1781481600000,
+    "value": 65406139.816833
+   },
+   {
+    "ts": 1781568000000,
+    "value": 65458276.643308
+   },
+   {
+    "ts": 1781654400000,
+    "value": 65509915.675831
+   },
+   {
+    "ts": 1781740800000,
+    "value": 65509915.675831
+   },
+   {
+    "ts": 1781827200000,
+    "value": 65561665.409151
+   },
+   {
+    "ts": 1781913600000,
+    "value": 65531050.346651
+   },
+   {
+    "ts": 1782000000000,
+    "value": 56593968.860192
+   },
+   {
+    "ts": 1782086400000,
+    "value": 56593968.860192
+   },
+   {
+    "ts": 1782172800000,
+    "value": 56593868.797692
+   },
+   {
+    "ts": 1782259200000,
+    "value": 56593868.797692
+   },
+   {
+    "ts": 1782345600000,
+    "value": 56293868.197692
+   },
+   {
+    "ts": 1782432000000,
+    "value": 56293867.197692
+   },
+   {
+    "ts": 1782518400000,
+    "value": 56293867.057062
+   },
+   {
+    "ts": 1782604800000,
+    "value": 56293867.057062
+   },
+   {
+    "ts": 1782691200000,
+    "value": 56293867.057062
+   },
+   {
+    "ts": 1782777600000,
+    "value": 56293867.057062
+   },
+   {
+    "ts": 1782864000000,
+    "value": 56293867.057062
+   },
+   {
+    "ts": 1782950400000,
+    "value": 56293867.057062
+   },
+   {
+    "ts": 1783036800000,
+    "value": 56293881.739495
+   },
+   {
+    "ts": 1783123200000,
+    "value": 56044381.739495
+   },
+   {
+    "ts": 1783209600000,
+    "value": 38411776.915106
+   },
+   {
+    "ts": 1783296000000,
+    "value": 38411776.915106
+   },
+   {
+    "ts": 1783382400000,
+    "value": 38411777.915106
+   },
+   {
+    "ts": 1783468800000,
+    "value": 50715197.493908
+   },
+   {
+    "ts": 1783555200000,
+    "value": 50715197.493908
+   },
+   {
+    "ts": 1783641600000,
+    "value": 50713670.836167
+   },
+   {
+    "ts": 1783728000000,
+    "value": 50597617.307373
+   },
+   {
+    "ts": 1783814400000,
+    "value": 50597617.307373
+   },
+   {
+    "ts": 1783900800000,
+    "value": 50597617.307373
+   },
+   {
+    "ts": 1783987200000,
+    "value": 50597617.307373
+   },
+   {
+    "ts": 1784073600000,
+    "value": 50597617.307373
+   },
+   {
+    "ts": 1784160000000,
+    "value": 50597617.307373
+   },
+   {
+    "ts": 1784246400000,
+    "value": 50597617.307373
+   },
+   {
+    "ts": 1784332800000,
+    "value": 50597617.307373
+   },
+   {
+    "ts": 1784419200000,
+    "value": 50597617.307373
+   },
+   {
+    "ts": 1784505600000,
+    "value": 50597617.307373
+   },
+   {
+    "ts": 1784592000000,
+    "value": 50597617.307373
+   },
+   {
+    "ts": 1784678400000,
+    "value": 50597617.307373
+   },
+   {
+    "ts": 1784764800000,
+    "value": 50597617.307373
+   },
+   {
+    "ts": 1784851200000,
+    "value": 50597617.307373
+   },
+   {
+    "ts": 1784937600000,
+    "value": 50597617.307373
+   },
+   {
+    "ts": 1785024000000,
+    "value": 50597617.307373
+   },
+   {
+    "ts": 1785110400000,
+    "value": 50597617.307373
+   },
+   {
+    "ts": 1785196800000,
+    "value": 50597617.307373
+   },
+   {
+    "ts": 1785283200000,
+    "value": 50597617.307373
+   },
+   {
+    "ts": 1785369600000,
+    "value": 50597617.307373
+   },
+   {
+    "ts": 1785456000000,
+    "value": 50597617.307373
+   },
+   {
+    "ts": 1785542400000,
+    "value": 50597617.307373
+   },
+   {
+    "ts": 1785628800000,
+    "value": 50597617.307373
+   },
+   {
+    "ts": 1785715200000,
+    "value": 50597617.307373
+   },
+   {
+    "ts": 1785801600000,
+    "value": 50597761.371028
+   },
+   {
+    "ts": 1785888000000,
+    "value": 50597761.371028
+   },
+   {
+    "ts": 1785974400000,
+    "value": 50597761.371028
+   },
+   {
+    "ts": 1786060800000,
+    "value": 50593310.758254
+   },
+   {
+    "ts": 1786147200000,
+    "value": 50593310.758254
+   },
+   {
+    "ts": 1786233600000,
+    "value": 50593310.758254
+   },
+   {
+    "ts": 1786320000000,
+    "value": 50593410.758254
+   },
+   {
+    "ts": 1786406400000,
+    "value": 50593410.758254
+   },
+   {
+    "ts": 1786492800000,
+    "value": 50593410.758254
+   },
+   {
+    "ts": 1786579200000,
+    "value": 50593410.758254
+   },
+   {
+    "ts": 1786665600000,
+    "value": 50593410.758254
+   },
+   {
+    "ts": 1786752000000,
+    "value": 50593410.758254
+   },
+   {
+    "ts": 1786838400000,
+    "value": 50593410.758254
+   },
+   {
+    "ts": 1786924800000,
+    "value": 50743445.470165
+   },
+   {
+    "ts": 1787011200000,
+    "value": 50743445.470165
+   },
+   {
+    "ts": 1787097600000,
+    "value": 50743445.470165
+   },
+   {
+    "ts": 1787184000000,
+    "value": 50743445.470165
+   },
+   {
+    "ts": 1787270400000,
+    "value": 50743445.470165
+   },
+   {
+    "ts": 1787356800000,
+    "value": 50743445.470165
+   },
+   {
+    "ts": 1787443200000,
+    "value": 50743445.470165
+   },
+   {
+    "ts": 1787529600000,
+    "value": 50743445.470165
+   },
+   {
+    "ts": 1787616000000,
+    "value": 50743445.470165
+   },
+   {
+    "ts": 1787702400000,
+    "value": 50743445.470165
+   },
+   {
+    "ts": 1787788800000,
+    "value": 50743445.470165
+   },
+   {
+    "ts": 1787875200000,
+    "value": 50743445.470165
+   },
+   {
+    "ts": 1787961600000,
+    "value": 50743445.470165
+   },
+   {
+    "ts": 1788048000000,
+    "value": 50743445.470165
+   },
+   {
+    "ts": 1788134400000,
+    "value": 50743445.470165
+   },
+   {
+    "ts": 1788220800000,
+    "value": 60743443.801072
+   },
+   {
+    "ts": 1788307200000,
+    "value": 60743443.801072
+   },
+   {
+    "ts": 1788393600000,
+    "value": 50743446.235102
+   },
+   {
+    "ts": 1788480000000,
+    "value": 50743446.235102
+   },
+   {
+    "ts": 1788566400000,
+    "value": 50743446.235102
+   },
+   {
+    "ts": 1788652800000,
+    "value": 50743446.235102
+   },
+   {
+    "ts": 1788739200000,
+    "value": 50743446.235102
+   },
+   {
+    "ts": 1788825600000,
+    "value": 50743446.235102
+   },
+   {
+    "ts": 1788912000000,
+    "value": 50743446.235102
+   },
+   {
+    "ts": 1788998400000,
+    "value": 50743446.235102
+   },
+   {
+    "ts": 1789084800000,
+    "value": 50743446.235102
+   },
+   {
+    "ts": 1789171200000,
+    "value": 50743446.235102
+   },
+   {
+    "ts": 1789257600000,
+    "value": 50743446.235102
+   },
+   {
+    "ts": 1789344000000,
+    "value": 50743446.235102
+   },
+   {
+    "ts": 1789430400000,
+    "value": 50743446.235102
+   },
+   {
+    "ts": 1789516800000,
+    "value": 50743446.235102
+   },
+   {
+    "ts": 1789603200000,
+    "value": 50743446.235102
+   },
+   {
+    "ts": 1789689600000,
+    "value": 50743446.235102
+   },
+   {
+    "ts": 1789776000000,
+    "value": 50743446.235102
+   },
+   {
+    "ts": 1789862400000,
+    "value": 50743446.235102
+   },
+   {
+    "ts": 1789948800000,
+    "value": 50743446.235102
+   },
+   {
+    "ts": 1790035200000,
+    "value": 50743446.235102
+   },
+   {
+    "ts": 1790121600000,
+    "value": 50743446.235102
+   },
+   {
+    "ts": 1790208000000,
+    "value": 50740943.297141
+   },
+   {
+    "ts": 1790294400000,
+    "value": 50740943.297141
+   },
+   {
+    "ts": 1790380800000,
+    "value": 50741043.297141
+   },
+   {
+    "ts": 1790467200000,
+    "value": 50741043.297141
+   },
+   {
+    "ts": 1790553600000,
+    "value": 50741043.297141
+   },
+   {
+    "ts": 1790640000000,
+    "value": 50741043.297141
+   },
+   {
+    "ts": 1790726400000,
+    "value": 50741043.297141
+   },
+   {
+    "ts": 1790812800000,
+    "value": 50741043.297141
+   },
+   {
+    "ts": 1790899200000,
+    "value": 50741043.297141
+   },
+   {
+    "ts": 1790985600000,
+    "value": 50741043.297141
+   },
+   {
+    "ts": 1791072000000,
+    "value": 50741043.297141
+   },
+   {
+    "ts": 1791158400000,
+    "value": 50741043.297141
+   },
+   {
+    "ts": 1791244800000,
+    "value": 50783243.297141
+   },
+   {
+    "ts": 1791331200000,
+    "value": 50783243.297141
+   },
+   {
+    "ts": 1791417600000,
+    "value": 50783243.297141
+   },
+   {
+    "ts": 1791504000000,
+    "value": 50783243.297141
+   },
+   {
+    "ts": 1791590400000,
+    "value": 50783243.297141
+   },
+   {
+    "ts": 1791676800000,
+    "value": 50783243.297141
+   },
+   {
+    "ts": 1791763200000,
+    "value": 50783243.297141
+   },
+   {
+    "ts": 1791849600000,
+    "value": 50783243.297141
+   },
+   {
+    "ts": 1791936000000,
+    "value": 50702743.008823
+   },
+   {
+    "ts": 1792022400000,
+    "value": 50702671.333677
+   },
+   {
+    "ts": 1792043967426,
+    "value": 50702742.515409
+   },
+   {
+    "ts": 1792065567429,
+    "value": 50702742.515409
+   },
+   {
+    "ts": 1792087167486,
+    "value": 50702742.515409
+   },
+   {
+    "ts": 1792108767449,
+    "value": 50715295.459259614
+   },
+   {
+    "ts": 1792130367422,
+    "value": 50702671.30983195
+   },
+   {
+    "ts": 1792151974200,
+    "value": 50696105.662918754
+   },
+   {
+    "ts": 1792173574201,
+    "value": 50705225.9770485
+   },
+   {
+    "ts": 1792195174198,
+    "value": 50702670.259468
+   },
+   {
+    "ts": 1792216774193,
+    "value": 50702670.259468
+   },
+   {
+    "ts": 1792236274192,
+    "value": 50702670.21539108
+   }
+  ],
+  "shields24h": 60000,
+  "unshields24h": 50000.427477,
+  "shields7d": 170270,
+  "unshields7d": 251124.00608700002,
+  "ibcShielded7d": 0,
+  "unshields": [
+   {
+    "id": "namada:EEAE85D4C29D9CA1007FD2A1EB6F6B4E4535C3DE954BB9BD63F40B74E622B452:1",
+    "chain": "namada",
+    "height": 7991489,
+    "ts": 1789948631393,
+    "txHash": "EEAE85D4C29D9CA1007FD2A1EB6F6B4E4535C3DE954BB9BD63F40B74E622B452",
+    "kind": "unshield",
+    "from": "tnam1pcqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqzmefah",
+    "to": "tnam1qpvlteqjrmjwjjepj4jf33tggehm4hdsqv5lgkj5",
+    "amount": 41422.454515,
+    "counterDenom": null,
+    "counterAmount": null,
+    "poolId": null,
+    "priceUsd": null,
+    "valueUsd": null,
+    "meta": {
+     "descriptor": "transfer-from-wasm"
+    },
+    "fromLabel": "MASP shielded pool",
+    "toLabel": null,
+    "whale": true
+   },
+   {
+    "id": "namada:EE519A36E34BE50CA6950C208E3A811FE240C8F5B9C16BAC9DE675EEDDDC5427:1",
+    "chain": "namada",
+    "height": 8274761,
+    "ts": 1791992992797,
+    "txHash": "EE519A36E34BE50CA6950C208E3A811FE240C8F5B9C16BAC9DE675EEDDDC5427",
+    "kind": "unshield",
+    "from": "tnam1pcqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqzmefah",
+    "to": "tnam1qq6wus66shjjwhe48c3udfyrh05vq62s0ysy3flp",
+    "amount": 41000.144159,
+    "counterDenom": null,
+    "counterAmount": null,
+    "poolId": null,
+    "priceUsd": null,
+    "valueUsd": null,
+    "meta": {
+     "descriptor": "transfer-from-wasm"
+    },
+    "fromLabel": "MASP shielded pool",
+    "toLabel": null,
+    "whale": true
+   },
+   {
+    "id": "namada:3C37F8B49690220A2E077FD3EC1BB0865FF4C194B460B5CD17B35F45C9957A25:1",
+    "chain": "namada",
+    "height": 8290136,
+    "ts": 1792097851359,
+    "txHash": "3C37F8B49690220A2E077FD3EC1BB0865FF4C194B460B5CD17B35F45C9957A25",
+    "kind": "unshield",
+    "from": "tnam1pcqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqzmefah",
+    "to": "tnam1qpvanl0ngj72zp7f2k8mldq3a59pnjd4ucyany6t",
+    "amount": 40000.144159,
+    "counterDenom": null,
+    "counterAmount": null,
+    "poolId": null,
+    "priceUsd": 0.001018386932133538,
+    "valueUsd": 40.73562409498327,
+    "meta": {
+     "descriptor": "transfer-from-wasm"
+    },
+    "fromLabel": "MASP shielded pool",
+    "toLabel": null,
+    "whale": true
+   },
+   {
+    "id": "namada:CA307D8A3D273C9713E92883D609CECC466B75150B3DF8261D1D52A327E212E9:1",
+    "chain": "namada",
+    "height": 8273651,
+    "ts": 1791985420169,
+    "txHash": "CA307D8A3D273C9713E92883D609CECC466B75150B3DF8261D1D52A327E212E9",
+    "kind": "unshield",
+    "from": "tnam1pcqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqzmefah",
+    "to": "tnam1qpmppuy6tm3mmch2m77pkf0vjskhn87jgy9qmcrs",
+    "amount": 40000.144159,
+    "counterDenom": null,
+    "counterAmount": null,
+    "poolId": null,
+    "priceUsd": null,
+    "valueUsd": null,
+    "meta": {
+     "descriptor": "transfer-from-wasm"
+    },
+    "fromLabel": "MASP shielded pool",
+    "toLabel": null,
+    "whale": true
+   },
+   {
+    "id": "namada:ADCD07E3325F849DF4301F6DDC43AEB095EB3DA671F9BCDA8AEE726D34E29D68:1",
+    "chain": "namada",
+    "height": 8290136,
+    "ts": 1792097839739,
+    "txHash": "ADCD07E3325F849DF4301F6DDC43AEB095EB3DA671F9BCDA8AEE726D34E29D68",
+    "kind": "unshield",
+    "from": "tnam1pcqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqzmefah",
+    "to": "tnam1qq6wus66shjjwhe48c3udfyrh05vq62s0ysy3flp",
+    "amount": 40000,
+    "counterDenom": null,
+    "counterAmount": null,
+    "poolId": null,
+    "priceUsd": 0.000868,
+    "valueUsd": 34.72,
+    "meta": {
+     "descriptor": "transfer-from-wasm",
+     "innerTxHash": "3C37F8B49690220A2E077FD3EC1BB0865FF4C194B460B5CD17B35F45C9957A25"
+    },
+    "fromLabel": "MASP shielded pool",
+    "toLabel": null,
+    "whale": true
+   },
+   {
+    "id": "namada:44FDB0E2295D88BB59A24E8028265500C4B6D951F0B485CFB442FDEC53AC877E:1",
+    "chain": "namada",
+    "height": 8300033,
+    "ts": 1792165529968,
+    "txHash": "44FDB0E2295D88BB59A24E8028265500C4B6D951F0B485CFB442FDEC53AC877E",
+    "kind": "unshield",
+    "from": "tnam1pcqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqzmefah",
+    "to": "tnam1qq6wus66shjjwhe48c3udfyrh05vq62s0ysy3flp",
+    "amount": 20000.144159,
+    "counterDenom": null,
+    "counterAmount": null,
+    "poolId": null,
+    "priceUsd": 0.001050703012068884,
+    "valueUsd": 21.014211709673194,
+    "meta": {
+     "descriptor": "transfer-from-wasm"
+    },
+    "fromLabel": "MASP shielded pool",
+    "toLabel": null,
+    "whale": true
+   },
+   {
+    "id": "namada:CFE121D2BB52D86B1B37E0979F0CC34DD34E63AC4CA4B15EAAECADDA4C5C5483:1",
+    "chain": "namada",
+    "height": 8299248,
+    "ts": 1792160170007,
+    "txHash": "CFE121D2BB52D86B1B37E0979F0CC34DD34E63AC4CA4B15EAAECADDA4C5C5483",
+    "kind": "unshield",
+    "from": "tnam1pcqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqzmefah",
+    "to": "tnam1qq6wus66shjjwhe48c3udfyrh05vq62s0ysy3flp",
+    "amount": 20000.144159,
+    "counterDenom": null,
+    "counterAmount": null,
+    "poolId": null,
+    "priceUsd": 0.001059538432762452,
+    "valueUsd": 21.19092139724997,
+    "meta": {
+     "descriptor": "transfer-from-wasm"
+    },
+    "fromLabel": "MASP shielded pool",
+    "toLabel": null,
+    "whale": true
+   },
+   {
+    "id": "namada:984244598B5857D543A7C9CCF7F1EFB010978E8F2DE63E169ADF70E3EE9A327C:1",
+    "chain": "namada",
+    "height": 8288955,
+    "ts": 1792089790912,
+    "txHash": "984244598B5857D543A7C9CCF7F1EFB010978E8F2DE63E169ADF70E3EE9A327C",
+    "kind": "unshield",
+    "from": "tnam1pcqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqzmefah",
+    "to": "tnam1qq6wus66shjjwhe48c3udfyrh05vq62s0ysy3flp",
+    "amount": 14700.144159,
+    "counterDenom": null,
+    "counterAmount": null,
+    "poolId": null,
+    "priceUsd": 0.000977661295150687,
+    "valueUsd": 14.371761977389745,
+    "meta": {
+     "descriptor": "transfer-from-wasm"
+    },
+    "fromLabel": "MASP shielded pool",
+    "toLabel": null,
+    "whale": true
+   },
+   {
+    "id": "namada:AD23E068E0773BED14D517AD31570B3B03F991284E4B7A3FFB05466C152E7B9B:1",
+    "chain": "namada",
+    "height": 8288955,
+    "ts": 1792089782123,
+    "txHash": "AD23E068E0773BED14D517AD31570B3B03F991284E4B7A3FFB05466C152E7B9B",
+    "kind": "unshield",
+    "from": "tnam1pcqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqzmefah",
+    "to": "tnam1qq6wus66shjjwhe48c3udfyrh05vq62s0ysy3flp",
+    "amount": 14700,
+    "counterDenom": null,
+    "counterAmount": null,
+    "poolId": null,
+    "priceUsd": 0.000868,
+    "valueUsd": 12.759599999999999,
+    "meta": {
+     "descriptor": "transfer-from-wasm",
+     "innerTxHash": "984244598B5857D543A7C9CCF7F1EFB010978E8F2DE63E169ADF70E3EE9A327C"
+    },
+    "fromLabel": "MASP shielded pool",
+    "toLabel": null,
+    "whale": true
+   },
+   {
+    "id": "namada:C5D019C7F3F387802902CF89239ED5059C2B1D35DB5ABE94C269DF1ECF6DFA10:1",
+    "chain": "namada",
+    "height": 8295993,
+    "ts": 1792137873325,
+    "txHash": "C5D019C7F3F387802902CF89239ED5059C2B1D35DB5ABE94C269DF1ECF6DFA10",
+    "kind": "unshield",
+    "from": "tnam1pcqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqzmefah",
+    "to": "tnam1qq69hqz0n5hw9qk962wtekrgvxj9tkfm4gfarshv",
+    "amount": 10000.144159,
+    "counterDenom": null,
+    "counterAmount": null,
+    "poolId": null,
+    "priceUsd": 0.001015425133170758,
+    "valueUsd": 10.154397714379352,
+    "meta": {
+     "descriptor": "transfer-from-wasm"
+    },
+    "fromLabel": "MASP shielded pool",
+    "toLabel": null,
+    "whale": true
+   },
+   {
+    "id": "namada:E3B414C9ADA13222E3E9D495121718E256A3990E7B95D9BA83D06362B01B6625:1",
+    "chain": "namada",
+    "height": 8298914,
+    "ts": 1792157885214,
+    "txHash": "E3B414C9ADA13222E3E9D495121718E256A3990E7B95D9BA83D06362B01B6625",
+    "kind": "unshield",
+    "from": "tnam1pcqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqzmefah",
+    "to": "tnam1qq6wus66shjjwhe48c3udfyrh05vq62s0ysy3flp",
+    "amount": 10000.064159,
+    "counterDenom": null,
+    "counterAmount": null,
+    "poolId": null,
+    "priceUsd": 0.001047960105983368,
+    "valueUsd": 10.47966829590612,
+    "meta": {
+     "descriptor": "transfer-from-wasm"
+    },
+    "fromLabel": "MASP shielded pool",
+    "toLabel": null,
+    "whale": true
+   },
+   {
+    "id": "namada:B6B21B56F95E8ACBAEB5C6C3949DBF164837E28308B92FA04DF532A4AACC3E57:1",
+    "chain": "namada",
+    "height": 8037896,
+    "ts": 1790265865968,
+    "txHash": "B6B21B56F95E8ACBAEB5C6C3949DBF164837E28308B92FA04DF532A4AACC3E57",
+    "kind": "unshield",
+    "from": "tnam1pcqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqzmefah",
+    "to": "tnam1qrsqrdak4azz8y4vcsxuatldt5wlt3xz65j3lgc0",
+    "amount": 2500.129698,
+    "counterDenom": null,
+    "counterAmount": null,
+    "poolId": null,
+    "priceUsd": null,
+    "valueUsd": null,
+    "meta": {
+     "descriptor": "transfer-from-wasm"
+    },
+    "fromLabel": "MASP shielded pool",
+    "toLabel": "Genesis: public_allocations_completed",
+    "whale": false
+   },
+   {
+    "id": "namada:4A75C85AE82D0B1C13F2687F663BF88C6BD9640D957AE952A856AA6092518C99:ibcmasp:5",
+    "chain": "namada",
+    "height": 8290188,
+    "ts": 1792098195288,
+    "txHash": "4A75C85AE82D0B1C13F2687F663BF88C6BD9640D957AE952A856AA6092518C99",
+    "kind": "unshield",
+    "from": "tnam1pcqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqzmefah",
+    "to": "osmo1sqdwxh2tlvpmsh7rapjmtmyeg4pn4hu494v9mf",
+    "amount": 200,
+    "counterDenom": "OSMO",
+    "counterAmount": 200,
+    "poolId": null,
+    "priceUsd": null,
+    "valueUsd": null,
+    "meta": {
+     "descriptor": "ibc-masp",
+     "tokenSymbol": "OSMO",
+     "tokenAddress": "tnam1p5z8ruwyu7ha8urhq2l0dhpk2f5dv3ts7uyf2n75",
+     "innerTxHash": "0B7A5F94D08A060DF50289571F733E352436D972D55F7B7841185C4B81DD76FA"
+    },
+    "fromLabel": "MASP shielded pool",
+    "toLabel": null,
+    "whale": false
+   },
+   {
+    "id": "namada:206C101F620C4C302E1AF59480F264386EEC540D28B7C324F8B3F325366281CF:1",
+    "chain": "namada",
+    "height": 8294006,
+    "ts": 1792124263939,
+    "txHash": "206C101F620C4C302E1AF59480F264386EEC540D28B7C324F8B3F325366281CF",
+    "kind": "unshield",
+    "from": "tnam1pcqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqzmefah",
+    "to": "tnam1qp7fvl820xfy20rzz8u20z60tn3xu5pqlqsj6nxs",
+    "amount": 20,
+    "counterDenom": "OSMO",
+    "counterAmount": 20,
+    "poolId": null,
+    "priceUsd": null,
+    "valueUsd": null,
+    "meta": {
+     "descriptor": "transfer-from-wasm",
+     "tokenSymbol": "OSMO",
+     "tokenAddress": "tnam1p5z8ruwyu7ha8urhq2l0dhpk2f5dv3ts7uyf2n75",
+     "feeNam": 0.084159,
+     "innerTxHash": "4C6B100F6FB842ED14728BD74DD1F678CC53ABBF164789FC59935680586EE196"
+    },
+    "fromLabel": "MASP shielded pool",
+    "toLabel": "Genesis: public_allocations_completed",
+    "whale": false
+   },
+   {
+    "id": "namada:A30EA0B782199284E0D8663529DA0F990E069BC41DB8354880B0A75E8447437E:1",
+    "chain": "namada",
+    "height": 8038539,
+    "ts": 1790270227509,
+    "txHash": "A30EA0B782199284E0D8663529DA0F990E069BC41DB8354880B0A75E8447437E",
+    "kind": "unshield",
+    "from": "tnam1pcqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqzmefah",
+    "to": "tnam1qrw786xy5jxl3jn6nrfa32alm55pxspn9uq08gdh",
+    "amount": 2.808263,
+    "counterDenom": null,
+    "counterAmount": null,
+    "poolId": null,
+    "priceUsd": null,
+    "valueUsd": null,
+    "meta": {
+     "descriptor": "transfer-from-wasm"
+    },
+    "fromLabel": "MASP shielded pool",
+    "toLabel": null,
+    "whale": false
+   },
+   {
+    "id": "namada:3EB35A7D02A84A457169CED8AFF7EDBA242FDAD5EE224680B692DCCF55BE43C4:1",
+    "chain": "namada",
+    "height": 7950252,
+    "ts": 1789667734444,
+    "txHash": "3EB35A7D02A84A457169CED8AFF7EDBA242FDAD5EE224680B692DCCF55BE43C4",
+    "kind": "unshield",
+    "from": "tnam1pcqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqzmefah",
+    "to": "tnam1qpqz9d2v4k3e7vzwt9q7csrgaqhknmy8wqz4jqz4",
+    "amount": 1,
+    "counterDenom": null,
+    "counterAmount": null,
+    "poolId": null,
+    "priceUsd": null,
+    "valueUsd": null,
+    "meta": {
+     "descriptor": "transfer-from-wasm"
+    },
+    "fromLabel": "MASP shielded pool",
+    "toLabel": "Genesis: public_allocations_completed",
+    "whale": false
+   },
+   {
+    "id": "namada:0B7A5F94D08A060DF50289571F733E352436D972D55F7B7841185C4B81DD76FA:6",
+    "chain": "namada",
+    "height": 8290188,
+    "ts": 1792098210002,
+    "txHash": "0B7A5F94D08A060DF50289571F733E352436D972D55F7B7841185C4B81DD76FA",
+    "kind": "unshield",
+    "from": "tnam1pcqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqzmefah",
+    "to": "tnam1qz62amdtllg8tc8hn4v92mzruw0th8nmwgrmy6gk",
+    "amount": 0.893414,
+    "counterDenom": null,
+    "counterAmount": null,
+    "poolId": null,
+    "priceUsd": 0.001021691243766535,
+    "valueUsd": 0.0009127932608584352,
+    "meta": {
+     "descriptor": "transfer-from-wasm"
+    },
+    "fromLabel": "MASP shielded pool",
+    "toLabel": null,
+    "whale": false
+   },
+   {
+    "id": "namada:4A75C85AE82D0B1C13F2687F663BF88C6BD9640D957AE952A856AA6092518C99:6",
+    "chain": "namada",
+    "height": 8290188,
+    "ts": 1792098195288,
+    "txHash": "4A75C85AE82D0B1C13F2687F663BF88C6BD9640D957AE952A856AA6092518C99",
+    "kind": "unshield",
+    "from": "tnam1pcqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqzmefah",
+    "to": "tnam1qz62amdtllg8tc8hn4v92mzruw0th8nmwgrmy6gk",
+    "amount": 0.893414,
+    "counterDenom": null,
+    "counterAmount": null,
+    "poolId": null,
+    "priceUsd": 0.000868,
+    "valueUsd": 0.000775483352,
+    "meta": {
+     "descriptor": "transfer-from-wasm",
+     "innerTxHash": "0B7A5F94D08A060DF50289571F733E352436D972D55F7B7841185C4B81DD76FA"
+    },
+    "fromLabel": "MASP shielded pool",
+    "toLabel": null,
+    "whale": false
+   },
+   {
+    "id": "namada:C80276EDBCDB78FE66E9D999D82D963F7080BCAB1F1D49203A00C11E7342489A:6",
+    "chain": "namada",
+    "height": 8295532,
+    "ts": 1792134716603,
+    "txHash": "C80276EDBCDB78FE66E9D999D82D963F7080BCAB1F1D49203A00C11E7342489A",
+    "kind": "unshield",
+    "from": "tnam1pcqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqzmefah",
+    "to": "tnam1qqvxrrfzhejtx6zp45aja3260wkg88gu2smfzhau",
+    "amount": 0.493414,
+    "counterDenom": null,
+    "counterAmount": null,
+    "poolId": null,
+    "priceUsd": 0.001015425133170758,
+    "valueUsd": 0.0005010249766583164,
+    "meta": {
+     "descriptor": "transfer-from-wasm"
+    },
+    "fromLabel": "MASP shielded pool",
+    "toLabel": null,
+    "whale": false
+   },
+   {
+    "id": "namada:B48FE79B8BF70052F0A38604D6104CBC1CF1213D883D1FE79C978A048F2767A6:5",
+    "chain": "namada",
+    "height": 8274814,
+    "ts": 1791993353057,
+    "txHash": "B48FE79B8BF70052F0A38604D6104CBC1CF1213D883D1FE79C978A048F2767A6",
+    "kind": "unshield",
+    "from": "tnam1pcqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqzmefah",
+    "to": "tnam1qpv8xqe6h76m3cwt6sezvt66hak42n6vkgumj5c4",
+    "amount": 0.493414,
+    "counterDenom": null,
+    "counterAmount": null,
+    "poolId": null,
+    "priceUsd": null,
+    "valueUsd": null,
+    "meta": {
+     "descriptor": "transfer-from-wasm"
+    },
+    "fromLabel": "MASP shielded pool",
+    "toLabel": null,
+    "whale": false
+   },
+   {
+    "id": "namada:4C6B100F6FB842ED14728BD74DD1F678CC53ABBF164789FC59935680586EE196:1",
+    "chain": "namada",
+    "height": 8294006,
+    "ts": 1792124272176,
+    "txHash": "4C6B100F6FB842ED14728BD74DD1F678CC53ABBF164789FC59935680586EE196",
+    "kind": "unshield",
+    "from": "tnam1pcqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqzmefah",
+    "to": "tnam1qqse40kckj9f6cmrwqgthjaqw80l768rgugsmuh2",
+    "amount": 0.084159,
+    "counterDenom": null,
+    "counterAmount": null,
+    "poolId": null,
+    "priceUsd": 0.001013608696728077,
+    "valueUsd": 8.530429430793823e-05,
+    "meta": {
+     "descriptor": "transfer-from-wasm"
+    },
+    "fromLabel": "MASP shielded pool",
+    "toLabel": null,
+    "whale": false
+   },
+   {
+    "id": "namada:94C03D90808415FF458B3EDDB7EE2C569CD18642599F81B7DE4D2AF203C8AE1F:1",
+    "chain": "namada",
+    "height": 8308627,
+    "ts": 1792224857527,
+    "txHash": "94C03D90808415FF458B3EDDB7EE2C569CD18642599F81B7DE4D2AF203C8AE1F",
+    "kind": "unshield",
+    "from": "tnam1pcqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqzmefah",
+    "to": "tnam1qznyn6m9vh3f8pvlmhw5pkjltl4yscncpu5jjwem",
+    "amount": 0.075,
+    "counterDenom": null,
+    "counterAmount": null,
+    "poolId": null,
+    "priceUsd": 0.001000536620513012,
+    "valueUsd": 7.50402465384759e-05,
+    "meta": {
+     "descriptor": "transfer-from-wasm",
+     "innerTxHash": "FE7CC3AE4F824FFA81E4C49FEFE421FAD756EDDEC104443D78BD33B51EFA4219"
+    },
+    "fromLabel": "MASP shielded pool",
+    "toLabel": null,
+    "whale": false
+   }
+  ],
+  "coverage": {
+   "source": "D1 flow index",
+   "at": 1792224857527,
+   "status": "stale",
+   "note": "last Osmosis flow 32 min ago, last Namada flow 3.2 h ago"
+  }
+ },
+ "alerts": {
+  "since": 1792149886440,
+  "until": 1792236286440,
+  "hits": []
+ },
+ "rules": [
+  {
+   "id": "ibc_inventory",
+   "title": "Inventory arrived on Osmosis",
+   "decision": "D2",
+   "condition": "IBC transfer into Osmosis \u2265 25,000 NAM",
+   "thresholdNam": 25000
+  },
+  {
+   "id": "unlock",
+   "title": "Stake withdrawn (supply unlocked)",
+   "decision": "D3",
+   "condition": "Unbond request or withdrawal from PoS \u2265 100,000 NAM",
+   "thresholdNam": 100000
+  },
+  {
+   "id": "big_swap",
+   "title": "Large DEX swap",
+   "decision": "D4",
+   "condition": "Single buy or sell \u2265 10,000 NAM (arbitrage excluded)",
+   "thresholdNam": 10000
+  },
+  {
+   "id": "unshield",
+   "title": "Hidden holder surfaced",
+   "decision": "D5",
+   "condition": "Unshield from MASP \u2265 50,000 NAM to a user address",
+   "thresholdNam": 50000
+  },
+  {
+   "id": "bond",
+   "title": "Overhang removed (large bond)",
+   "decision": "D3",
+   "condition": "Bond into PoS \u2265 1,000,000 NAM",
+   "thresholdNam": 1000000
+  }
+ ],
+ "holders": {
+  "total": 2209,
+  "page": 1,
+  "limit": 10,
+  "holders": [
+   {
+    "rank": 1,
+    "chain": "namada",
+    "address": "tnam1qqscx40lsm80mgv0e32gtv9wwwhh95x6yuq027zh",
+    "balance": 40455316.415892,
+    "bonded": 14662107.029992,
+    "bondedEstimated": 14562107.029992,
+    "bondedVerifiedAt": 1792235674189,
+    "total": 55117423.445884,
+    "pctSupply": 4.8034371495096275,
+    "change24h": 0,
+    "change7d": 0,
+    "label": "Genesis: public_allocations_completed",
+    "category": "genesis",
+    "linked": [
+     "osmo169hpcstyc9qal5t2hu2y6xlqjjvc303crwa8sz",
+     "osmo1s7cw0y6hq9meq6nkyz4me7uf2ac4r9k9x48ltt"
+    ],
+    "updatedAt": 1792036784858,
+    "verifiedAt": 1792036784858
+   },
+   {
+    "rank": 2,
+    "chain": "namada",
+    "address": "tnam1q8nm4ar7aua8035du0m8x6amfe4407uzvqtfs6lm",
+    "balance": 22,
+    "bonded": 49999978,
+    "bondedEstimated": 49999978,
+    "bondedVerifiedAt": 1792235674189,
+    "total": 50000000,
+    "pctSupply": 4.357457995315938,
+    "change24h": 0,
+    "change7d": 0,
+    "label": "Anoma Foundation",
+    "category": "foundation",
+    "linked": [],
+    "updatedAt": 1792036784858,
+    "verifiedAt": 1792036784858
+   },
+   {
+    "rank": 3,
+    "chain": "namada",
+    "address": "tnam1qqzg5xzdmf9wykn7zm4y4dfzl3w9xfljrvspf0pa",
+    "balance": 24219272,
+    "bonded": 0,
+    "bondedEstimated": null,
+    "bondedVerifiedAt": 1792235614189,
+    "total": 24219272,
+    "pctSupply": 2.1106892083426287,
+    "change24h": 0,
+    "change7d": 0,
+    "label": null,
+    "category": null,
+    "linked": [],
+    "updatedAt": 1792036784858,
+    "verifiedAt": 1792036784858
+   },
+   {
+    "rank": 4,
+    "chain": "namada",
+    "address": "tnam1qxt7uxhj9r00mfm4u870e7ghz6j20jrdz58gm5kj",
+    "balance": 21846649.523594,
+    "bonded": 0,
+    "bondedEstimated": null,
+    "bondedVerifiedAt": 1792235914190,
+    "total": 21846649.523594,
+    "pctSupply": 1.9039171527489962,
+    "change24h": 0,
+    "change7d": 0,
+    "label": "Anoma Foundation",
+    "category": "foundation",
+    "linked": [],
+    "updatedAt": 1792036784858,
+    "verifiedAt": 1792036784858
+   },
+   {
+    "rank": 5,
+    "chain": "namada",
+    "address": "tnam1qrgzn9q7n6yew78dxykczau5vdp0fxlc3gkyahzz",
+    "balance": 20000000.1,
+    "bonded": 0,
+    "bondedEstimated": 0,
+    "bondedVerifiedAt": 1792235494195,
+    "total": 20000000.1,
+    "pctSupply": 1.7429832068412914,
+    "change24h": 0,
+    "change7d": 0,
+    "label": "Anoma Foundation",
+    "category": "foundation",
+    "linked": [],
+    "updatedAt": 1792036784858,
+    "verifiedAt": 1792036784858
+   },
+   {
+    "rank": 6,
+    "chain": "namada",
+    "address": "tnam1qq5rtyhdmj4fnkstlvsj5zd0u79t84xwugfjxjj5",
+    "balance": 18749989.875,
+    "bonded": 0,
+    "bondedEstimated": null,
+    "bondedVerifiedAt": 1792235434194,
+    "total": 18749989.875,
+    "pctSupply": 1.634045865858233,
+    "change24h": 0,
+    "change7d": 0,
+    "label": "Genesis: af_backers",
+    "category": "backer",
+    "linked": [],
+    "updatedAt": 1792036784858,
+    "verifiedAt": 1792036784858
+   },
+   {
+    "rank": 7,
+    "chain": "namada",
+    "address": "tnam1qqp69rzwsgnqdm0d4qfhw4qa4s6v3tlzm5069f4j",
+    "balance": 18423337.261796,
+    "bonded": 0,
+    "bondedEstimated": null,
+    "bondedVerifiedAt": 1792235554189,
+    "total": 18423337.261796,
+    "pctSupply": 1.6055783650363007,
+    "change24h": 0,
+    "change7d": 0,
+    "label": "Anoma Foundation",
+    "category": "foundation",
+    "linked": [],
+    "updatedAt": 1792036784858,
+    "verifiedAt": 1792036784858
+   },
+   {
+    "rank": 8,
+    "chain": "namada",
+    "address": "tnam1qxpxtw4cu4ht96fu999ya7mzuhapaly7mywwchvr",
+    "balance": 16666666.666675,
+    "bonded": 0,
+    "bondedEstimated": null,
+    "bondedVerifiedAt": 1792235914190,
+    "total": 16666666.666675,
+    "pctSupply": 1.4524859984393723,
+    "change24h": 0,
+    "change7d": 0,
+    "label": "Heliax",
+    "category": "foundation",
+    "linked": [],
+    "updatedAt": 1792036784858,
+    "verifiedAt": 1792036784858
+   },
+   {
+    "rank": 9,
+    "chain": "namada",
+    "address": "tnam1q8vsay36r3u50yd4773nal0dz7duyw3fhujk0547",
+    "balance": 16666666.666666,
+    "bonded": 0,
+    "bondedEstimated": null,
+    "bondedVerifiedAt": 1792236274192,
+    "total": 16666666.666666,
+    "pctSupply": 1.452485998438588,
+    "change24h": 0,
+    "change7d": 0,
+    "label": "Heliax",
+    "category": "foundation",
+    "linked": [],
+    "updatedAt": 1792036784858,
+    "verifiedAt": 1792036784858
+   },
+   {
+    "rank": 10,
+    "chain": "namada",
+    "address": "tnam1qrucghh3hw2zq8xtqzdj44nh5nrmnkn0usqng8yq",
+    "balance": 16666666.666666,
+    "bonded": 0,
+    "bondedEstimated": null,
+    "bondedVerifiedAt": 1792235854245,
+    "total": 16666666.666666,
+    "pctSupply": 1.452485998438588,
+    "change24h": 0,
+    "change7d": 0,
+    "label": "Anoma Foundation",
+    "category": "foundation",
+    "linked": [],
+    "updatedAt": 1792036784858,
+    "verifiedAt": 1792036784858
+   }
+  ]
+ },
+ "curve": {
+  "spotUsd": 0.001025414637150394,
+  "poolsCount": 28,
+  "totalLiquidityUsd": 1819,
+  "refPoolLiquidityUsd": 831,
+  "maxSafeClip1PctNam": 318,
+  "maxSafeClip3PctNam": 954,
+  "curve": [
+   {
+    "amountNam": 1000,
+    "usdSize": 1.025414637150394,
+    "buyImpactPct": 3.1430107128913676,
+    "sellImpactPct": 0.4608817048719251,
+    "buyEffectiveUsd": 0.0010433914653053791,
+    "sellEffectiveUsd": 0.001019668,
+    "sellOutUsdc": 1.019668,
+    "buyInUsdc": 1.025415
+   },
+   {
+    "amountNam": 5000,
+    "usdSize": 5.12707318575197,
+    "buyImpactPct": 5.595868643454495,
+    "sellImpactPct": 1.4908027317757044,
+    "buyEffectiveUsd": 0.001070500972083934,
+    "sellEffectiveUsd": 0.0010091176000000001,
+    "sellOutUsdc": 5.045588,
+    "buyInUsdc": 5.127073
+   },
+   {
+    "amountNam": 10000,
+    "usdSize": 10.25414637150394,
+    "buyImpactPct": 9.10870439765382,
+    "sellImpactPct": 2.748615652570429,
+    "buyEffectiveUsd": 0.00111366659297591,
+    "sellEffectiveUsd": 0.0009962327,
+    "sellOutUsdc": 9.962327,
+    "buyInUsdc": 10.254146
+   },
+   {
+    "amountNam": 25000,
+    "usdSize": 25.63536592875985,
+    "buyImpactPct": 20.488145014776297,
+    "sellImpactPct": 6.3364726108687615,
+    "buyEffectiveUsd": 0.001274987813002675,
+    "sellEffectiveUsd": 0.00095947908,
+    "sellOutUsdc": 23.986977,
+    "buyInUsdc": 25.635366
+   },
+   {
+    "amountNam": 50000,
+    "usdSize": 51.2707318575197,
+    "buyImpactPct": 28.14729618796894,
+    "sellImpactPct": 12.341201931340052,
+    "buyEffectiveUsd": 0.0014197525273275515,
+    "sellEffectiveUsd": 0.00089796728,
+    "sellOutUsdc": 44.898364,
+    "buyInUsdc": 51.270732
+   },
+   {
+    "amountNam": 100000,
+    "usdSize": 102.5414637150394,
+    "buyImpactPct": 32.78823408040147,
+    "sellImpactPct": 26.2738328945826,
+    "buyEffectiveUsd": 0.0015224630372264797,
+    "sellEffectiveUsd": 0.0007552429100000001,
+    "sellOutUsdc": 75.524291,
+    "buyInUsdc": 102.541464
+   }
+  ],
+  "prov": {
+   "source": "Osmosis SQS",
+   "at": 1792236286872,
+   "status": "live"
+  }
+ },
+ "quote5000": {
+  "quote": null,
+  "error": "Error: HTTP 403 for https://sqs.osmosis.zone/router/quote?tokenIn=5000000000ibc%2FC7110DEC66869DAE9BE9C3C60F4B5313B16A22"
+ },
+ "pools": {
+  "pools": [
+   {
+    "id": "3005",
+    "type": "concentrated",
+    "address": "osmo1m459jtgn77tz8cffvthq5jh0erswxu9872mjd9qde546mslc6udq85we5r",
+    "pair": "NAM / USDC",
+    "counterDenom": "ibc/498A0751C798A0D9A389AA3691123DADA57DAA4FE165D5C75894505B876BA6E4",
+    "counterSymbol": "USDC",
+    "namReserve": 625517.901977,
+    "counterReserve": 188.566408,
+    "liquidityUsd": 831,
+    "spreadFactor": 0.002,
+    "volume24hUsd": null
+   },
+   {
+    "id": "",
+    "type": "cosmwasm",
+    "address": "",
+    "pair": "NAM / USDC",
+    "counterDenom": "ibc/498A0751C798A0D9A389AA3691123DADA57DAA4FE165D5C75894505B876BA6E4",
+    "counterSymbol": "USDC",
+    "namReserve": 603698.32334,
+    "counterReserve": 33.317189,
+    "liquidityUsd": 639,
+    "spreadFactor": 0,
+    "volume24hUsd": null
+   },
+   {
+    "id": "3368",
+    "type": "concentrated",
+    "address": "osmo1h6zkrf476ha3csjmgf6eneh3p43ltmjlppvyzpmpyfxts0zk3k0s288e7l",
+    "pair": "NAM / OSMO",
+    "counterDenom": "uosmo",
+    "counterSymbol": "OSMO",
+    "namReserve": 69910.619601,
+    "counterReserve": 2038.247351,
+    "liquidityUsd": 151,
+    "spreadFactor": 0.025,
+    "volume24hUsd": null
+   },
+   {
+    "id": "3009",
+    "type": "concentrated",
+    "address": "osmo1rcl39flt5ua3t92vtwj7xllj9u2ucmrsjdhl945jc25f6zxvnvns5rtv6l",
+    "pair": "NAM / OSMO",
+    "counterDenom": "uosmo",
+    "counterSymbol": "OSMO",
+    "namReserve": 15918.853707,
+    "counterReserve": 394.387352,
+    "liquidityUsd": 33,
+    "spreadFactor": 0.001,
+    "volume24hUsd": null
+   },
+   {
+    "id": "3402",
+    "type": "balancer",
+    "address": "osmo1rj0hh5zutd4d7rpw3af95zmw965krfh3uk5f8tnpgpx9tj4w79fqvustrn",
+    "pair": "NAM / OSMO",
+    "counterDenom": "uosmo",
+    "counterSymbol": "OSMO",
+    "namReserve": 15313.690473,
+    "counterReserve": 378.690358,
+    "liquidityUsd": 31,
+    "spreadFactor": 0.003,
+    "volume24hUsd": null
+   },
+   {
+    "id": "3020",
+    "type": "concentrated",
+    "address": "osmo1gecl5ec5s723d6vjyz5mwtlp97dt8tp5zq4hs6p8gsy8key4n75quzf9u6",
+    "pair": "NAM / ibc/0FA923\u2026",
+    "counterDenom": "ibc/0FA9232B262B89E77D1335D54FB1E1F506A92A7E4B51524B400DC69C68D28372",
+    "counterSymbol": "ibc/0FA923\u2026",
+    "namReserve": 14168.895495,
+    "counterReserve": 3412.582471,
+    "liquidityUsd": 29,
+    "spreadFactor": 0.01,
+    "volume24hUsd": null
+   },
+   {
+    "id": "3439",
+    "type": "balancer",
+    "address": "osmo1j6zwg8lws2j58mgvfyrmls7ux2hgusvhe5gejf3nl67u8ej5hauqx6rk5q",
+    "pair": "NAM / USDC",
+    "counterDenom": "ibc/498A0751C798A0D9A389AA3691123DADA57DAA4FE165D5C75894505B876BA6E4",
+    "counterSymbol": "USDC",
+    "namReserve": 12914.622786,
+    "counterReserve": 12.953433,
+    "liquidityUsd": 27,
+    "spreadFactor": 0.01,
+    "volume24hUsd": null
+   },
+   {
+    "id": "3405",
+    "type": "concentrated",
+    "address": "osmo1aumare74jsjfnyxf6wh6wucpazpjkc9er884zfx34pzpmc6z9czsth0n22",
+    "pair": "NAM / ibc/BC26A7\u2026",
+    "counterDenom": "ibc/BC26A7A805ECD6822719472BCB7842A48EF09DF206182F8F259B2593EB5D23FB",
+    "counterSymbol": "ibc/BC26A7\u2026",
+    "namReserve": 12442.768919,
+    "counterReserve": 141.736085,
+    "liquidityUsd": 27,
+    "spreadFactor": 0.025,
+    "volume24hUsd": null
+   },
+   {
+    "id": "3015",
+    "type": "concentrated",
+    "address": "osmo1fltj8zcxmhp8gc044v258pfcnpw7tgmzsvucp6utthxk8j3q0s3q3cy5dt",
+    "pair": "NAM / OSMO",
+    "counterDenom": "uosmo",
+    "counterSymbol": "OSMO",
+    "namReserve": 13608.611423,
+    "counterReserve": 60.022453,
+    "liquidityUsd": 17,
+    "spreadFactor": 0.01,
+    "volume24hUsd": null
+   },
+   {
+    "id": "3017",
+    "type": "concentrated",
+    "address": "osmo14jlk9xpt7ht9hd7y6xlazal2rwn8ar3jygm5yrf7r0a2r4w5exuq85ymap",
+    "pair": "NAM / factory/osmo1z6r6qdknhgsc0zeracktgpcxf43j6sekq07nw8sxduc9lg0qjjlqfu25e3/alloyed/allBTC",
+    "counterDenom": "factory/osmo1z6r6qdknhgsc0zeracktgpcxf43j6sekq07nw8sxduc9lg0qjjlqfu25e3/alloyed/allBTC",
+    "counterSymbol": "factory/osmo1z6r6qdknhgsc0zeracktgpcxf43j6sekq07nw8sxduc9lg0qjjlqfu25e3/alloyed/allBTC",
+    "namReserve": 763.679815,
+    "counterReserve": 0.002212,
+    "liquidityUsd": 3,
+    "spreadFactor": 0.005,
+    "volume24hUsd": null
+   },
+   {
+    "id": "3011",
+    "type": "concentrated",
+    "address": "osmo1myn2qs0rmj0fqtngq46epke7kh89ev68clar9dcj0p4h88lt78msn2cuyu",
+    "pair": "NAM / factory/osmo1z6r6qdknhgsc0zeracktgpcxf43j6sekq07nw8sxduc9lg0qjjlqfu25e3/alloyed/allBTC",
+    "counterDenom": "factory/osmo1z6r6qdknhgsc0zeracktgpcxf43j6sekq07nw8sxduc9lg0qjjlqfu25e3/alloyed/allBTC",
+    "counterSymbol": "factory/osmo1z6r6qdknhgsc0zeracktgpcxf43j6sekq07nw8sxduc9lg0qjjlqfu25e3/alloyed/allBTC",
+    "namReserve": 0.000886,
+    "counterReserve": 0.000972,
+    "liquidityUsd": 2,
+    "spreadFactor": 0.01,
+    "volume24hUsd": null
+   },
+   {
+    "id": "3023",
+    "type": "concentrated",
+    "address": "osmo1c3qf8md8flvrvl5amwg8ct3wjnqp3xezm5mt4mkpjfjr5yzmadwqrpztup",
+    "pair": "NAM / factory/osmo1n3n75av8awcnw4jl62n3l48e6e4sxqmaf97w5ua6ddu4s475q5qq9udvx4/alloyed/allSOL",
+    "counterDenom": "factory/osmo1n3n75av8awcnw4jl62n3l48e6e4sxqmaf97w5ua6ddu4s475q5qq9udvx4/alloyed/allSOL",
+    "counterSymbol": "factory/osmo1n3n75av8awcnw4jl62n3l48e6e4sxqmaf97w5ua6ddu4s475q5qq9udvx4/alloyed/allSOL",
+    "namReserve": 0.000828,
+    "counterReserve": 0.000852,
+    "liquidityUsd": 2,
+    "spreadFactor": 0.01,
+    "volume24hUsd": null
+   },
+   {
+    "id": "3062",
+    "type": "balancer",
+    "address": "osmo1n7lp9m8elk3g4xzpvq9hdnxywmywt5s2wnjclu8yzadnl2xsezjq5n89gq",
+    "pair": "NAM / ibc/37CB30\u2026",
+    "counterDenom": "ibc/37CB3078432510EE57B9AFA8DBE028B33AE3280A144826FEAC5F2334CF2C5539",
+    "counterSymbol": "ibc/37CB30\u2026",
+    "namReserve": 18.820832,
+    "counterReserve": 0.567273,
+    "liquidityUsd": 2,
+    "spreadFactor": 0.01,
+    "volume24hUsd": null
+   },
+   {
+    "id": "3052",
+    "type": "concentrated",
+    "address": "osmo1xh4memv90ek5m87xpqtkj2aghxrtud69rry7gk33hsyu20aaqu8s7mpecz",
+    "pair": "NAM / ibc/D17615\u2026",
+    "counterDenom": "ibc/D176154B0C63D1F9C6DCFB4F70349EBF2E2B5A87A05902F57A6AE92B863E9AEC",
+    "counterSymbol": "ibc/D17615\u2026",
+    "namReserve": 36.340947,
+    "counterReserve": 0.724494,
+    "liquidityUsd": 2,
+    "spreadFactor": 0.01,
+    "volume24hUsd": null
+   },
+   {
+    "id": "3037",
+    "type": "concentrated",
+    "address": "osmo18r47qvvyh6rkxay8uc5dz9g8jrdtpag9vntcrsvf0r0ulpajenequtm8ul",
+    "pair": "NAM / ibc/89EE10\u2026",
+    "counterDenom": "ibc/89EE10FCF78800B572BAAC7080AEFA301B5F3BBC51C5371E907EB129C5B900E7",
+    "counterSymbol": "ibc/89EE10\u2026",
+    "namReserve": 0.000195,
+    "counterReserve": 0.000202,
+    "liquidityUsd": 2,
+    "spreadFactor": 0.01,
+    "volume24hUsd": null
+   },
+   {
+    "id": "3006",
+    "type": "concentrated",
+    "address": "osmo176m4peqy6qr0zc9q3vw8x454xtslc87gaucnwuy4c9swjcc2myfsfcdsa7",
+    "pair": "NAM / ibc/23104D\u2026",
+    "counterDenom": "ibc/23104D411A6EB6031FA92FB75F227422B84989969E91DCAD56A535DD7FF0A373",
+    "counterSymbol": "ibc/23104D\u2026",
+    "namReserve": 0.000563,
+    "counterReserve": 0.000567,
+    "liquidityUsd": 2,
+    "spreadFactor": 0.01,
+    "volume24hUsd": null
+   },
+   {
+    "id": "3018",
+    "type": "concentrated",
+    "address": "osmo1q7w4mzsdxv7dfc3qx7g7hn94gfua9ysj390v4jwwl99w2h4cu7tsyl0g9w",
+    "pair": "NAM / ibc/698350\u2026",
+    "counterDenom": "ibc/698350B8A61D575025F3ED13E9AC9C0F45C89DEFE92F76D5838F1D3C1A7FF7C9",
+    "counterSymbol": "ibc/698350\u2026",
+    "namReserve": 0.001076,
+    "counterReserve": 0.00108,
+    "liquidityUsd": 2,
+    "spreadFactor": 0.01,
+    "volume24hUsd": null
+   },
+   {
+    "id": "3007",
+    "type": "balancer",
+    "address": "osmo1zgn0stc4upnezcnyhkrf775ducjfqs4cre57q0q5j6flqgd2tf8sxz06mz",
+    "pair": "NAM / USDC",
+    "counterDenom": "ibc/498A0751C798A0D9A389AA3691123DADA57DAA4FE165D5C75894505B876BA6E4",
+    "counterSymbol": "USDC",
+    "namReserve": 171.649919,
+    "counterReserve": 0.161082,
+    "liquidityUsd": 2,
+    "spreadFactor": 0.0001,
+    "volume24hUsd": null
+   },
+   {
+    "id": "3022",
+    "type": "concentrated",
+    "address": "osmo1eua7d2fym73k2qmdehp3tkay486zpjjqy4cl5sy8n4ezgaydvfvszwmupp",
+    "pair": "NAM / ibc/2F21E6\u2026",
+    "counterDenom": "ibc/2F21E6D4271DE3F561F20A02CD541DAF7405B1E9CB3B9B07E3C2AC7D8A4338A5",
+    "counterSymbol": "ibc/2F21E6\u2026",
+    "namReserve": 0.000788,
+    "counterReserve": 0.000862,
+    "liquidityUsd": 2,
+    "spreadFactor": 0.01,
+    "volume24hUsd": null
+   },
+   {
+    "id": "3454",
+    "type": "balancer",
+    "address": "osmo1wtzrkc64h0y354pnux0xr743wmhqgf9lfcveaxasu8jfddvakzdshhqyr3",
+    "pair": "NAM / OSMO",
+    "counterDenom": "uosmo",
+    "counterSymbol": "OSMO",
+    "namReserve": 307.664261,
+    "counterReserve": 6.851584,
+    "liquidityUsd": 2,
+    "spreadFactor": 0.05,
+    "volume24hUsd": null
+   },
+   {
+    "id": "3367",
+    "type": "balancer",
+    "address": "osmo1gwum6evhr6syq7gvs4prnncqxez542jln47m4j37mcuhsqd92c9s7wk5xn",
+    "pair": "NAM / OSMO",
+    "counterDenom": "uosmo",
+    "counterSymbol": "OSMO",
+    "namReserve": 54.449864,
+    "counterReserve": 1.061858,
+    "liquidityUsd": 2,
+    "spreadFactor": 0.03,
+    "volume24hUsd": null
+   },
+   {
+    "id": "3010",
+    "type": "concentrated",
+    "address": "osmo10lhyguzmkmdwt8sk5x9t98zm0n68x9l9vj2mmhwprjxwtsv4ylpqzm55pv",
+    "pair": "NAM / USDC",
+    "counterDenom": "ibc/498A0751C798A0D9A389AA3691123DADA57DAA4FE165D5C75894505B876BA6E4",
+    "counterSymbol": "USDC",
+    "namReserve": 0.000747,
+    "counterReserve": 0.000661,
+    "liquidityUsd": 2,
+    "spreadFactor": 0.01,
+    "volume24hUsd": null
+   },
+   {
+    "id": "3012",
+    "type": "concentrated",
+    "address": "osmo1nsmnhgh8ljrw89mtz9lh5fnjlzs03892m6v3g9hcwwmjrghzgtas0uvkhp",
+    "pair": "NAM / ibc/BC26A7\u2026",
+    "counterDenom": "ibc/BC26A7A805ECD6822719472BCB7842A48EF09DF206182F8F259B2593EB5D23FB",
+    "counterSymbol": "ibc/BC26A7\u2026",
+    "namReserve": 0.000721,
+    "counterReserve": 0.000713,
+    "liquidityUsd": 2,
+    "spreadFactor": 0.01,
+    "volume24hUsd": null
+   },
+   {
+    "id": "3398",
+    "type": "stableswap",
+    "address": "osmo13dwjjmyuzscw2kf4hz55gehea53kd6hmc9xnttquxnhykf0r86yqxexuae",
+    "pair": "NAM / USDC",
+    "counterDenom": "ibc/498A0751C798A0D9A389AA3691123DADA57DAA4FE165D5C75894505B876BA6E4",
+    "counterSymbol": "USDC",
+    "namReserve": 3.761574,
+    "counterReserve": 0.00334,
+    "liquidityUsd": 2,
+    "spreadFactor": 0.01,
+    "volume24hUsd": null
+   },
+   {
+    "id": "3019",
+    "type": "concentrated",
+    "address": "osmo1z2zamg27em7xsd7tywp2r6leus3tc3ccthejnc8nt694a023l9vqj45jpw",
+    "pair": "NAM / ibc/C140AF\u2026",
+    "counterDenom": "ibc/C140AFD542AE77BD7DCC83F13FDD8C5E5BB8C4929785E6EC2F4C636F98F17901",
+    "counterSymbol": "ibc/C140AF\u2026",
+    "namReserve": 0.001059,
+    "counterReserve": 0.001191,
+    "liquidityUsd": 2,
+    "spreadFactor": 0.01,
+    "volume24hUsd": null
+   },
+   {
+    "id": "3263",
+    "type": "concentrated",
+    "address": "osmo1hldk6q5yy3dpw3tkwedhpw43w3ycvu36ygw0u0fnwvhydc6jju5spvds3u",
+    "pair": "NAM / factory/osmo1twk0c4kcwnhkyn6pzxe0qsk6a3nrye2w2sy309d60sljfysugagsd7e3mn/alloyed/allZEC",
+    "counterDenom": "factory/osmo1twk0c4kcwnhkyn6pzxe0qsk6a3nrye2w2sy309d60sljfysugagsd7e3mn/alloyed/allZEC",
+    "counterSymbol": "factory/osmo1twk0c4kcwnhkyn6pzxe0qsk6a3nrye2w2sy309d60sljfysugagsd7e3mn/alloyed/allZEC",
+    "namReserve": 0.00088,
+    "counterReserve": 0.000857,
+    "liquidityUsd": 1,
+    "spreadFactor": 0.01,
+    "volume24hUsd": null
+   },
+   {
+    "id": "3021",
+    "type": "concentrated",
+    "address": "osmo1ln75k46kd2hqcae7h94yhgqrk2m3e6ulpkxs3ptcsrlgpha93lmqd4ydw6",
+    "pair": "NAM / UNKNOWN",
+    "counterDenom": "",
+    "counterSymbol": "UNKNOWN",
+    "namReserve": 0,
+    "counterReserve": 0,
+    "liquidityUsd": 0,
+    "spreadFactor": 0.01,
+    "volume24hUsd": null
+   },
+   {
+    "id": "3016",
+    "type": "concentrated",
+    "address": "osmo1m3uzk3ey4k0wdegjrg0vwjwcacjpzy2m0svq7yj3vphrh3ug6qcsc0ddql",
+    "pair": "NAM / UNKNOWN",
+    "counterDenom": "",
+    "counterSymbol": "UNKNOWN",
+    "namReserve": 0,
+    "counterReserve": 0,
+    "liquidityUsd": 0,
+    "spreadFactor": 0.005,
+    "volume24hUsd": null
+   }
+  ],
+  "prov": {
+   "source": "Osmosis SQS pools",
+   "at": 1792236288523,
+   "status": "live"
+  }
+ },
+ "priceHistory7d": [
+  {
+   "ts": 1792040367428,
+   "value": 0.0009445610060230361
+  },
+  {
+   "ts": 1792148374201,
+   "value": 0.001016528962371026
+  }
+ ],
+ "executedHistory30d": [
+  {
+   "ts": 1789729200000,
+   "value": 0.0005890530617991762
+  },
+  {
+   "ts": 1789783200000,
+   "value": 0.00062831002834082
+  },
+  {
+   "ts": 1789815600000,
+   "value": 0.0008526445617293982
+  },
+  {
+   "ts": 1789822800000,
+   "value": 0.000839377150131644
+  },
+  {
+   "ts": 1789898400000,
+   "value": 0.0009742452316489279
+  },
+  {
+   "ts": 1789923600000,
+   "value": 0.0009499253183224108
+  },
+  {
+   "ts": 1789934400000,
+   "value": 0.0009108898658250198
+  },
+  {
+   "ts": 1790013600000,
+   "value": 0.0008026731196223698
+  },
+  {
+   "ts": 1790164800000,
+   "value": 0.0009274137196648886
+  },
+  {
+   "ts": 1790254800000,
+   "value": 0.0009690930075031612
+  },
+  {
+   "ts": 1790319600000,
+   "value": 0.0008307863598778309
+  },
+  {
+   "ts": 1790578800000,
+   "value": 0.0007716604379931033
+  },
+  {
+   "ts": 1790640000000,
+   "value": 0.0007150232996541442
+  },
+  {
+   "ts": 1790730000000,
+   "value": 0.0008636022796343438
+  },
+  {
+   "ts": 1790816400000,
+   "value": 0.0007861736151649311
+  },
+  {
+   "ts": 1791025200000,
+   "value": 0.0007638188464335204
+  },
+  {
+   "ts": 1791057600000,
+   "value": 0.0007590452934786203
+  },
+  {
+   "ts": 1791122400000,
+   "value": 0.0006763626462140748
+  },
+  {
+   "ts": 1791219600000,
+   "value": 0.0008205823621079168
+  },
+  {
+   "ts": 1791270000000,
+   "value": 0.0009171155123058932
+  },
+  {
+   "ts": 1791298800000,
+   "value": 0.0009094861394460593
+  },
+  {
+   "ts": 1791349200000,
+   "value": 0.0009331924818940517
+  },
+  {
+   "ts": 1791471600000,
+   "value": 0.0010333580073059031
+  },
+  {
+   "ts": 1791507600000,
+   "value": 0.00098175028736151
+  },
+  {
+   "ts": 1791532800000,
+   "value": 0.0009993921862326972
+  },
+  {
+   "ts": 1791565200000,
+   "value": 0.0010950913338187889
+  },
+  {
+   "ts": 1791604800000,
+   "value": 0.001110189937637996
+  },
+  {
+   "ts": 1791626400000,
+   "value": 0.0010793014208734539
+  },
+  {
+   "ts": 1791734400000,
+   "value": 0.001030830367009368
+  },
+  {
+   "ts": 1791741600000,
+   "value": 0.0010201714740792898
+  },
+  {
+   "ts": 1791802800000,
+   "value": 0.0010587382200981917
+  },
+  {
+   "ts": 1791824400000,
+   "value": 0.0010021097275610645
+  },
+  {
+   "ts": 1791828000000,
+   "value": 0.0009602606127155069
+  },
+  {
+   "ts": 1791867600000,
+   "value": 0.0009896506392832378
+  },
+  {
+   "ts": 1791907200000,
+   "value": 0.0009608303192972531
+  },
+  {
+   "ts": 1791932400000,
+   "value": 0.0008728322510887642
+  },
+  {
+   "ts": 1791972000000,
+   "value": 0.0008863943976163113
+  },
+  {
+   "ts": 1791997200000,
+   "value": 0.0008768075982872206
+  },
+  {
+   "ts": 1792011600000,
+   "value": 0.0009536792971193415
+  },
+  {
+   "ts": 1792058400000,
+   "value": 0.00092292188319173
+  },
+  {
+   "ts": 1792069200000,
+   "value": 0.000882108561467279
+  },
+  {
+   "ts": 1792090800000,
+   "value": 0.0009893068531499276
+  },
+  {
+   "ts": 1792152000000,
+   "value": 0.0010212303697223557
+  },
+  {
+   "ts": 1792231200000,
+   "value": 0.001011995601178413
+  }
+ ],
+ "shieldedTrend": [
+  {
+   "ts": 1749772800000,
+   "value": 2517246.092197
+  },
+  {
+   "ts": 1750118400000,
+   "value": 22717018.860691
+  },
+  {
+   "ts": 1750464000000,
+   "value": 24783623.956069
+  },
+  {
+   "ts": 1750809600000,
+   "value": 26258762.962611
+  },
+  {
+   "ts": 1751155200000,
+   "value": 25803678.211147
+  },
+  {
+   "ts": 1751500800000,
+   "value": 27855754.152595
+  },
+  {
+   "ts": 1751846400000,
+   "value": 28113811.705609
+  },
+  {
+   "ts": 1752192000000,
+   "value": 32962726.59505
+  },
+  {
+   "ts": 1752537600000,
+   "value": 38622271.793422
+  },
+  {
+   "ts": 1752883200000,
+   "value": 41417782.722456
+  },
+  {
+   "ts": 1753228800000,
+   "value": 42816268.480088
+  },
+  {
+   "ts": 1753574400000,
+   "value": 42995692.42988
+  },
+  {
+   "ts": 1753920000000,
+   "value": 42687629.059038
+  },
+  {
+   "ts": 1754265600000,
+   "value": 44606633.872902
+  },
+  {
+   "ts": 1754611200000,
+   "value": 49109516.364622
+  },
+  {
+   "ts": 1754956800000,
+   "value": 48427391.643073
+  },
+  {
+   "ts": 1755302400000,
+   "value": 50523055.991336
+  },
+  {
+   "ts": 1755648000000,
+   "value": 51711712.588723
+  },
+  {
+   "ts": 1755993600000,
+   "value": 51893433.427659
+  },
+  {
+   "ts": 1756339200000,
+   "value": 52416768.106195
+  },
+  {
+   "ts": 1756684800000,
+   "value": 52815879.467421
+  },
+  {
+   "ts": 1757030400000,
+   "value": 53220451.772642
+  },
+  {
+   "ts": 1757376000000,
+   "value": 53831079.051788
+  },
+  {
+   "ts": 1757721600000,
+   "value": 53571434.451694
+  },
+  {
+   "ts": 1758067200000,
+   "value": 55377693.093457
+  },
+  {
+   "ts": 1758412800000,
+   "value": 57135735.868466
+  },
+  {
+   "ts": 1758758400000,
+   "value": 57526742.19894
+  },
+  {
+   "ts": 1759104000000,
+   "value": 59267259.339854
+  },
+  {
+   "ts": 1759449600000,
+   "value": 55348314.921564
+  },
+  {
+   "ts": 1759795200000,
+   "value": 55750019.856173
+  },
+  {
+   "ts": 1760140800000,
+   "value": 56539920.018958
+  },
+  {
+   "ts": 1760486400000,
+   "value": 48525947.270228
+  },
+  {
+   "ts": 1760832000000,
+   "value": 48875463.078343
+  },
+  {
+   "ts": 1761177600000,
+   "value": 49036398.348927
+  },
+  {
+   "ts": 1761523200000,
+   "value": 49585694.131421
+  },
+  {
+   "ts": 1761868800000,
+   "value": 40601174.13156
+  },
+  {
+   "ts": 1762214400000,
+   "value": 40583654.823531
+  },
+  {
+   "ts": 1762560000000,
+   "value": 40424951.616511
+  },
+  {
+   "ts": 1762905600000,
+   "value": 40863605.020976
+  },
+  {
+   "ts": 1763251200000,
+   "value": 42795570.79575
+  },
+  {
+   "ts": 1763596800000,
+   "value": 41359131.879383
+  },
+  {
+   "ts": 1763942400000,
+   "value": 41418074.285069
+  },
+  {
+   "ts": 1764288000000,
+   "value": 41582816.507497
+  },
+  {
+   "ts": 1764633600000,
+   "value": 41684481.729387
+  },
+  {
+   "ts": 1764979200000,
+   "value": 41798819.994295
+  },
+  {
+   "ts": 1765324800000,
+   "value": 41648690.061959
+  },
+  {
+   "ts": 1765670400000,
+   "value": 39255064.594122
+  },
+  {
+   "ts": 1766016000000,
+   "value": 39947479.79314
+  },
+  {
+   "ts": 1766361600000,
+   "value": 39760857.345275
+  },
+  {
+   "ts": 1766707200000,
+   "value": 39869480.923065
+  },
+  {
+   "ts": 1767052800000,
+   "value": 38192304.039008
+  },
+  {
+   "ts": 1767398400000,
+   "value": 36677872.945234
+  },
+  {
+   "ts": 1767744000000,
+   "value": 36543107.796176
+  },
+  {
+   "ts": 1768089600000,
+   "value": 36544604.255343
+  },
+  {
+   "ts": 1768435200000,
+   "value": 36059554.901285
+  },
+  {
+   "ts": 1768780800000,
+   "value": 36482000.402384
+  },
+  {
+   "ts": 1769126400000,
+   "value": 35413346.921469
+  },
+  {
+   "ts": 1769472000000,
+   "value": 37748107.311079
+  },
+  {
+   "ts": 1769817600000,
+   "value": 38138216.797262
+  },
+  {
+   "ts": 1770163200000,
+   "value": 37812209.489366
+  },
+  {
+   "ts": 1770508800000,
+   "value": 37984360.1584
+  },
+  {
+   "ts": 1770854400000,
+   "value": 36170234.91668
+  },
+  {
+   "ts": 1771200000000,
+   "value": 36394621.186378
+  },
+  {
+   "ts": 1771545600000,
+   "value": 35571398.920409
+  },
+  {
+   "ts": 1771891200000,
+   "value": 35741735.904934
+  },
+  {
+   "ts": 1772236800000,
+   "value": 34753676.80578
+  },
+  {
+   "ts": 1772582400000,
+   "value": 34780580.749117
+  },
+  {
+   "ts": 1772928000000,
+   "value": 34501377.339459
+  },
+  {
+   "ts": 1773273600000,
+   "value": 34508919.094856
+  },
+  {
+   "ts": 1773619200000,
+   "value": 35454435.380747
+  },
+  {
+   "ts": 1773964800000,
+   "value": 31660807.096179
+  },
+  {
+   "ts": 1774310400000,
+   "value": 31853869.328885
+  },
+  {
+   "ts": 1774656000000,
+   "value": 64665728.010987
+  },
+  {
+   "ts": 1775001600000,
+   "value": 64868572.62871
+  },
+  {
+   "ts": 1775347200000,
+   "value": 64572939.389539
+  },
+  {
+   "ts": 1775692800000,
+   "value": 64777626.848855
+  },
+  {
+   "ts": 1776038400000,
+   "value": 64989755.57054
+  },
+  {
+   "ts": 1776384000000,
+   "value": 64929857.691592
+  },
+  {
+   "ts": 1776729600000,
+   "value": 65134829.326544
+  },
+  {
+   "ts": 1777075200000,
+   "value": 65334086.766594
+  },
+  {
+   "ts": 1777420800000,
+   "value": 65181057.906277
+  },
+  {
+   "ts": 1777766400000,
+   "value": 65386156.602358
+  },
+  {
+   "ts": 1778112000000,
+   "value": 65576741.667327
+  },
+  {
+   "ts": 1778457600000,
+   "value": 65847842.970887
+  },
+  {
+   "ts": 1778803200000,
+   "value": 66420583.141067
+  },
+  {
+   "ts": 1779148800000,
+   "value": 66626239.949022
+  },
+  {
+   "ts": 1779494400000,
+   "value": 66832030.097229
+  },
+  {
+   "ts": 1779840000000,
+   "value": 66507272.871285
+  },
+  {
+   "ts": 1780185600000,
+   "value": 66672153.824124
+  },
+  {
+   "ts": 1780531200000,
+   "value": 66880424.854698
+  },
+  {
+   "ts": 1780876800000,
+   "value": 66992695.141538
+  },
+  {
+   "ts": 1781222400000,
+   "value": 64851174.139914
+  },
+  {
+   "ts": 1781568000000,
+   "value": 65458276.643308
+  },
+  {
+   "ts": 1781913600000,
+   "value": 65531050.346651
+  },
+  {
+   "ts": 1782259200000,
+   "value": 56593868.797692
+  },
+  {
+   "ts": 1782604800000,
+   "value": 56293867.057062
+  },
+  {
+   "ts": 1782950400000,
+   "value": 56293867.057062
+  },
+  {
+   "ts": 1783296000000,
+   "value": 38411776.915106
+  },
+  {
+   "ts": 1783641600000,
+   "value": 50713670.836167
+  },
+  {
+   "ts": 1783987200000,
+   "value": 50597617.307373
+  },
+  {
+   "ts": 1784332800000,
+   "value": 50597617.307373
+  },
+  {
+   "ts": 1784678400000,
+   "value": 50597617.307373
+  },
+  {
+   "ts": 1785024000000,
+   "value": 50597617.307373
+  },
+  {
+   "ts": 1785369600000,
+   "value": 50597617.307373
+  },
+  {
+   "ts": 1785715200000,
+   "value": 50597617.307373
+  },
+  {
+   "ts": 1786060800000,
+   "value": 50593310.758254
+  },
+  {
+   "ts": 1786406400000,
+   "value": 50593410.758254
+  },
+  {
+   "ts": 1786752000000,
+   "value": 50593410.758254
+  },
+  {
+   "ts": 1787097600000,
+   "value": 50743445.470165
+  },
+  {
+   "ts": 1787443200000,
+   "value": 50743445.470165
+  },
+  {
+   "ts": 1787788800000,
+   "value": 50743445.470165
+  },
+  {
+   "ts": 1788134400000,
+   "value": 50743445.470165
+  },
+  {
+   "ts": 1788480000000,
+   "value": 50743446.235102
+  },
+  {
+   "ts": 1788825600000,
+   "value": 50743446.235102
+  },
+  {
+   "ts": 1789171200000,
+   "value": 50743446.235102
+  },
+  {
+   "ts": 1789516800000,
+   "value": 50743446.235102
+  },
+  {
+   "ts": 1789862400000,
+   "value": 50743446.235102
+  },
+  {
+   "ts": 1790208000000,
+   "value": 50740943.297141
+  },
+  {
+   "ts": 1790553600000,
+   "value": 50741043.297141
+  },
+  {
+   "ts": 1790899200000,
+   "value": 50741043.297141
+  },
+  {
+   "ts": 1791244800000,
+   "value": 50783243.297141
+  },
+  {
+   "ts": 1791590400000,
+   "value": 50783243.297141
+  },
+  {
+   "ts": 1791936000000,
+   "value": 50702743.008823
+  },
+  {
+   "ts": 1792087167486,
+   "value": 50702742.515409
+  },
+  {
+   "ts": 1792173574201,
+   "value": 50705225.9770485
+  }
+ ]
+}

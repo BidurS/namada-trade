@@ -1,0 +1,126 @@
+/* ==========================================================================
+   Charts (F4): PriceChart, OrderSizeCurve, Sparkline. Ported from
+   final/site.css "chart" and "order-size curve". The SVGs are measured in CSS
+   px (ResizeObserver), never a scaled viewBox, so ticks are exactly 11 px at
+   every width. The plot boxes have fixed heights so nothing shifts on load.
+   ========================================================================== */
+@layer components {
+  /* ---------- chart block ---------- */
+  .chartsec { display: grid; gap: var(--s-4); min-width: 0; }
+  .chartsec__top { display: grid; gap: var(--s-4); }
+  .chartsec__title .cap { margin-top: var(--s-2); }
+  .chartsec__h { font-size: var(--t-24); line-height: var(--lh-24); font-weight: var(--w-semi); letter-spacing: var(--track-h2); text-wrap: balance; max-width: 24ch; }
+  .chartsec .cap, .chart-cap { font-size: var(--t-13); line-height: var(--lh-13); color: var(--c-ink-2); }
+  @media (min-width: 640px) { .chartsec__top { grid-template-columns: minmax(0, 1fr) auto; align-items: end; } }
+
+  .chart-box { position: relative; height: 208px; touch-action: pan-y; user-select: none; -webkit-user-select: none; }
+  .chart-box--sm { height: 160px; }
+  @media (min-width: 640px) { .chart-box { height: 288px; } .chart-box--sm { height: 260px; } }
+  .chart-box > svg { position: absolute; inset: 0; display: block; overflow: visible; }
+  .chart-box:focus-visible { outline: var(--ring-w) solid var(--c-focus); outline-offset: var(--ring-o); }
+  .c-grid { stroke: var(--c-line); stroke-width: 1; }
+  .c-axis { stroke: var(--c-ink-2); stroke-width: 1; }
+  .c-tick { fill: var(--c-ink-2); font-family: var(--font-code); font-weight: 500; font-size: 11px; }
+  .c-exec { fill: none; stroke: var(--c-ink); stroke-width: 2; stroke-linejoin: round; stroke-linecap: round; }
+  .c-exec-dot { fill: var(--c-ink); }
+  .c-quote { fill: none; stroke: var(--c-ink-3); stroke-width: 2; stroke-dasharray: 5 5; }
+  .c-quote-dot { fill: var(--c-bg); stroke: var(--c-ink-3); stroke-width: 1.5; }
+  .c-shielded { fill: none; stroke: var(--shielded); stroke-width: 2; stroke-linejoin: round; }
+  .c-shielded-dot { fill: var(--shielded); }
+  .c-evt { stroke: var(--c-ink-3); stroke-width: 1; stroke-dasharray: 3 3; }
+  .c-evtl { fill: var(--c-ink); font-family: var(--font-code); font-weight: 500; font-size: 11px; paint-order: stroke; stroke: var(--c-bg); stroke-width: 3px; stroke-linejoin: round; }
+  .c-at { stroke: var(--c-mark); stroke-width: 1.5; stroke-dasharray: 2 3; }
+  .c-pill rect { fill: var(--c-mark); }
+  .c-pill text { fill: var(--c-mark-ink); font-family: var(--font-code); font-weight: 500; font-size: 11px; }
+  .c-cursor { stroke: var(--c-mark); stroke-width: 1.5; pointer-events: none; }
+  .c-cursor-dot { fill: var(--c-bg); stroke: var(--c-mark); stroke-width: 2; }
+  .c-wipe { animation: nt-wipe var(--d-chart) var(--ease-enter) both; }
+  .readout { display: flex; flex-wrap: wrap; align-items: baseline; gap: 2px var(--s-3); min-height: 28px; font-size: var(--t-13); line-height: 20px; }
+  .readout__k { color: var(--c-ink-2); }
+  .readout__v { font-size: var(--t-18); line-height: var(--lh-18); font-weight: var(--w-medium); }
+  .readout__t { color: var(--c-ink-2); font-family: var(--font-code); font-size: var(--t-12); }
+  .key { display: flex; flex-wrap: wrap; gap: var(--s-2) var(--s-5); font-size: var(--t-13); line-height: 20px; color: var(--c-ink-2); list-style: none; padding: 0; }
+  .key__ln { display: inline-block; width: 22px; height: 0; margin-right: var(--s-2); border-top: 2px solid var(--c-ink); vertical-align: middle; }
+  .key__ln--dash { border-top-style: dashed; border-top-color: var(--c-ink-3); }
+  .key__ln--evt { width: 0; height: 14px; margin-right: var(--s-2); border-top: 0; border-left: 1px dashed var(--c-ink-3); }
+  .cstats { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); border-top: 1px solid var(--c-line); }
+  .cstats > div { display: grid; gap: 2px; padding: var(--s-3) var(--s-3) var(--s-3) 0; border-bottom: 1px solid var(--c-line); min-width: 0; }
+  .cstats > div:nth-child(even) { padding-left: var(--s-3); border-left: 1px solid var(--c-line); }
+  .cstats dt { font-size: var(--t-13); line-height: 18px; color: var(--c-ink-2); }
+  .cstats dd { font-size: var(--t-18); line-height: var(--lh-18); font-weight: var(--w-medium); }
+  .cstats dd small { display: block; font: var(--w-regular) var(--t-12) / 16px var(--font-code); color: var(--c-ink-2); }
+  @media (min-width: 640px) {
+    .cstats { grid-template-columns: repeat(4, minmax(0, 1fr)); }
+    .cstats > div { border-bottom: 0; }
+    .cstats > div + div { padding-left: var(--s-4); border-left: 1px solid var(--c-line); }
+  }
+
+  /* ---------- order-size curve: log x over the real quote sizes, a snapping slider ---------- */
+  .curve-box { container: curvebox / inline-size; min-width: 0; }
+  .curve { display: grid; gap: var(--s-3); margin: var(--s-4) 0 0; min-width: 0; }
+  .curve__plot { position: relative; height: 188px; touch-action: pan-y; }
+  .curve__plot > svg { position: absolute; inset: 0; display: block; overflow: visible; }
+  .cv-grid { stroke: var(--c-line); stroke-width: 1; }
+  .cv-tick { fill: var(--c-ink-2); font-family: var(--font-code); font-weight: 500; font-size: 11px; }
+  .cv-axis { stroke: var(--c-ink-2); stroke-width: 1; }
+  .cv-sell { stroke: var(--c-ink); stroke-width: 2; fill: none; stroke-linejoin: round; stroke-linecap: round; }
+  .cv-buy { stroke: var(--c-ink-3); stroke-width: 2; stroke-dasharray: 5 5; fill: none; }
+  .cv-ds { fill: var(--c-ink); }
+  .cv-db { fill: var(--c-bg); stroke: var(--c-ink-3); stroke-width: 1.5; }
+  .cv-cur { stroke: var(--c-mark); stroke-width: 2; }
+  .cv-curd { fill: var(--c-bg); stroke: var(--c-ink); stroke-width: 2; }
+  .cv-wipe { animation: nt-wipe var(--d-chart) var(--ease-enter) both; }
+  .curve__key { display: flex; flex-wrap: wrap; gap: var(--s-1) var(--s-5); font-size: var(--t-13); line-height: 20px; color: var(--c-ink-2); }
+  .curve__ctl { display: grid; grid-template-columns: 1fr auto; align-items: baseline; gap: 0 var(--s-3); }
+  .curve__lbl { font: var(--w-medium) var(--t-12) / 16px var(--font-code); color: var(--c-ink-2); }
+  .curve__size { font-size: var(--t-18); line-height: var(--lh-18); font-weight: var(--w-medium); text-align: right; }
+  .curve__rng { grid-column: 1 / -1; width: 100%; margin: 0; height: 44px; background: transparent; -webkit-appearance: none; appearance: none; cursor: pointer; touch-action: pan-y; }
+  .curve__rng::-webkit-slider-runnable-track { height: 2px; background: var(--c-ink); }
+  .curve__rng::-moz-range-track { height: 2px; background: var(--c-ink); }
+  .curve__rng::-webkit-slider-thumb { -webkit-appearance: none; width: 28px; height: 28px; margin-top: -13px; border-radius: 50%; background: var(--c-sel-bg); border: 3px solid var(--c-bg); box-shadow: 0 0 0 2px var(--c-sel-bg); }
+  .curve__rng::-moz-range-thumb { width: 22px; height: 22px; border-radius: 50%; background: var(--c-sel-bg); border: 3px solid var(--c-bg); box-shadow: 0 0 0 2px var(--c-sel-bg); }
+  .curve__rng:focus-visible { outline: var(--ring-w) solid var(--c-focus); outline-offset: var(--ring-o); }
+  .curve__read { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); border-top: 2px solid var(--c-ink); }
+  .curve__read > div { display: flex; flex-direction: column; gap: 2px; padding: var(--s-3) var(--s-2) 0 0; min-width: 0; }
+  .curve__read > div + div { padding-left: var(--s-3); border-left: 1px solid var(--c-line); }
+  .curve__read dt { order: 2; font-size: var(--t-13); line-height: 18px; color: var(--c-ink-2); }
+  .curve__read dd { order: 1; font-size: var(--t-24); line-height: var(--lh-24); font-weight: var(--w-medium); letter-spacing: var(--track-num); white-space: nowrap; overflow-wrap: normal; }
+  .curve__how { display: flex; flex-wrap: wrap; align-items: center; gap: var(--s-1) var(--s-2); font-size: var(--t-13); line-height: 20px; color: var(--c-ink); font-weight: var(--w-medium); }
+  .curve__note { font-size: var(--t-13); line-height: 20px; color: var(--c-ink-2); max-width: 60ch; }
+  @container curvebox (max-width: 359px) { .curve__read dd { font-size: var(--t-18); line-height: var(--lh-18); } }
+  @container curvebox (min-width: 480px) { .curve__plot { height: 248px; } }
+  @container curvebox (min-width: 800px) {
+    .curve { grid-template-columns: minmax(0, 7fr) minmax(0, 5fr); column-gap: var(--s-7); row-gap: var(--s-3); align-items: start; grid-template-areas: "plot ctl" "plot read" "plot how" "plot note" "key ."; }
+    .curve > .curve__plot { grid-area: plot; }
+    .curve > .curve__key { grid-area: key; }
+    .curve > .curve__ctl { grid-area: ctl; }
+    .curve > .curve__read { grid-area: read; }
+    .curve > .curve__how { grid-area: how; }
+    .curve > .curve__note { grid-area: note; }
+  }
+
+  /* ---------- sparkline (Home hero, desktop) ---------- */
+  .spark { display: grid; gap: var(--s-2); min-width: 0; }
+  .spark__plot { position: relative; height: 64px; }
+  .spark__plot > svg { position: absolute; inset: 0; display: block; overflow: visible; color: var(--c-ink); }
+  .spark__plot path { fill: none; stroke: currentColor; stroke-width: 2; stroke-linejoin: round; stroke-linecap: round; }
+  .spark__plot circle { fill: currentColor; }
+  .spark__c { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; font-size: var(--t-12); line-height: 16px; color: var(--c-ink-2); }
+
+  @keyframes nt-wipe { from { clip-path: inset(0 100% 0 0); } to { clip-path: inset(0 0 0 0); } }
+
+  /* ---------- SeriesChart (ui/SeriesChart.tsx) ---------- */
+  /* SeriesChart's strip has three figures (Low, High, Last): three columns at every width */
+  /* phones: three label-and-figure rows; from 640 px: three columns */
+  .cstats--3 { grid-template-columns: minmax(0, 1fr); }
+  .cstats--3 > div, .cstats--3 > div:nth-child(even) { display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: baseline; column-gap: var(--s-3); padding: 10px 0; border-left: 0; border-bottom: 1px solid var(--c-line); }
+  .cstats--3 dd { text-align: right; }
+  .cstats--3 dd small { display: inline; margin-left: var(--s-2); }
+  @media (min-width: 640px) {
+    .cstats--3 { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+    .cstats--3 > div, .cstats--3 > div:nth-child(even) { display: grid; grid-template-columns: none; gap: 2px; padding: var(--s-3) var(--s-3) var(--s-3) 0; border-bottom: 0; }
+    .cstats--3 > div + div { padding-left: var(--s-4); border-left: 1px solid var(--c-line); }
+    .cstats--3 dd { text-align: left; }
+    .cstats--3 dd small { display: block; margin-left: 0; }
+  }
+}

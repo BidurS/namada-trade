@@ -1,0 +1,85 @@
+/* ==========================================================================
+   NamadaTrade styles, entry (F1). Order matters:
+   1. tokens.css declares the layer order once: reset, tokens, base, components, utilities.
+   2. Component layers: shell (F1), provenance, tags, sheets (F2), controls and feedback (F3),
+      data and charts (F4), the inner-page frame and list pieces (page.css).
+   3. Screen layers (S1 to S8).
+   Every rule in this tree is inside a layer (the @font-face rules are not rules of the cascade). Fonts are self-hosted (no third-party request).
+   ========================================================================== */
+@import "./tokens.css";
+
+@import "./components/shell.css";
+@import "./components/prov.css";
+@import "./components/tag.css";
+@import "./components/sheet.css";
+@import "./components/controls.css";
+@import "./components/feedback.css";
+@import "./components/data.css";
+@import "./components/charts.css";
+@import "./components/page.css";
+
+@import "./screens/home.css";
+@import "./screens/trade.css";
+@import "./screens/supply.css";
+@import "./screens/shielded.css";
+@import "./screens/activity.css";
+@import "./screens/alerts.css";
+@import "./screens/settings.css";
+@import "./screens/seo.css";
+
+/* ---------- Fonts: self-hosted latin subsets, woff2 only (gate G9: 65 KB of 120) ----------
+   Space Grotesk variable 300-700 (one file, preloaded in index.html) and JetBrains Mono 400
+   and 500, from the fontsource packages. The fallbacks are metric-matched to the local
+   system face (measured in Chrome against the woff2 files: width over a sentence of the
+   site's copy, then ascent and descent divided by size-adjust) so the swap does not shift
+   the layout. */
+@font-face {
+  font-family: "Space Grotesk Variable";
+  font-style: normal;
+  font-display: swap;
+  font-weight: 300 700;
+  src: url("@fontsource-variable/space-grotesk/files/space-grotesk-latin-wght-normal.woff2") format("woff2-variations");
+  unicode-range: U+0000-00FF, U+0131, U+0152-0153, U+02BB-02BC, U+02C6, U+02DA, U+02DC, U+0304, U+0308, U+0329, U+2000-206F, U+20AC, U+2122, U+2191, U+2193, U+2212, U+2215, U+FEFF, U+FFFD;
+}
+@font-face {
+  font-family: "JetBrains Mono";
+  font-style: normal;
+  font-display: swap;
+  font-weight: 400;
+  src: url("@fontsource/jetbrains-mono/files/jetbrains-mono-latin-400-normal.woff2") format("woff2");
+  unicode-range: U+0000-00FF, U+0131, U+0152-0153, U+02BB-02BC, U+02C6, U+02DA, U+02DC, U+0304, U+0308, U+0329, U+2000-206F, U+20AC, U+2122, U+2191, U+2193, U+2212, U+2215, U+FEFF, U+FFFD;
+}
+@font-face {
+  font-family: "JetBrains Mono";
+  font-style: normal;
+  font-display: swap;
+  font-weight: 500;
+  src: url("@fontsource/jetbrains-mono/files/jetbrains-mono-latin-500-normal.woff2") format("woff2");
+  unicode-range: U+0000-00FF, U+0131, U+0152-0153, U+02BB-02BC, U+02C6, U+02DA, U+02DC, U+0304, U+0308, U+0329, U+2000-206F, U+20AC, U+2122, U+2191, U+2193, U+2212, U+2215, U+FEFF, U+FFFD;
+}
+/* Space Grotesk over Arial/Helvetica: width 108.06%; ascent 984, descent 292 per 1000 */
+@font-face {
+  font-family: "NT Text Fallback";
+  src: local("Arial"), local("Helvetica"), local("ArialMT");
+  size-adjust: 108.06%;
+  ascent-override: 91.06%;
+  descent-override: 27.02%;
+  line-gap-override: 0%;
+}
+/* JetBrains Mono over Menlo / Courier New: width 99.8%; ascent 1020, descent 300 per 1000 */
+@font-face {
+  font-family: "NT Code Fallback";
+  src: local("Menlo"), local("Courier New"), local("CourierNewPSMT");
+  size-adjust: 99.8%;
+  ascent-override: 102.2%;
+  descent-override: 30.06%;
+  line-gap-override: 0%;
+}
+@layer base {
+  /* tokens.css is a verbatim copy of docs/design/tokens.css; the metric-matched fallbacks are
+     inserted here, one layer above it, so the copy stays untouched. */
+  :root {
+    --font-text: "Space Grotesk Variable", "NT Text Fallback", ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+    --font-code: "JetBrains Mono", "NT Code Fallback", ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+  }
+}

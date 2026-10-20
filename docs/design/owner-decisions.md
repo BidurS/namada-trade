@@ -1,0 +1,21 @@
+# Owner decisions for the build (defaults, 2026-10-17)
+
+The design panel left open questions (`system.md` section 14, workflow result). The owner asked for the work to go ahead, so these defaults are binding for the build. Each one can be changed later without rework beyond the named file.
+
+| # | Question | Decision for v1 | Where it lands |
+|---|---|---|---|
+| 1 | Mark: dial (open ring, needle, hub) instead of ring and two triangles | **Dial.** | `web/public/*`, `ui/Wordmark.tsx` |
+| 2 | N1 reading: ProvChip only on hero figures; a panel's SourceLine is the provenance control for the figures inside it | **Accepted** as written in `system.md` (own control, or inside a scope whose SourceLine exists, is visible, and lists it). | gates G10 N1 |
+| 3 | Rewind example wording | **"the first alert before 331 million NAM were withdrawn from staking"**, linking `/supply?at=<first alert ms>`. Accurate to the replay report. | Home trust section |
+| 4 | Footer "Source code" link | **Added 2026-10-20**: https://github.com/BidurS/namada-trade (public, MIT). Previously omitted while there was no public repository. The Namada symbol is **not** placed anywhere. | `app/Footer.tsx` |
+| 5 | Analytics beacon | Production HTML on 2026-10-17 17:10 UTC loads **no** `cloudflareinsights` beacon. The privacy line says: "This site loads no analytics or advertising scripts, and its fonts are served from this site. Cloudflare, which hosts it, sees standard request data such as IP addresses." The N9 network gate (only `/api`, `/ws` and same-origin assets) enforces it. | Settings privacy section, footer |
+| 6 | Plain labels for genesis addresses | `label_plain`: `Genesis: af backers` → **"Early backers (genesis)"**; `Genesis: public_allocations_completed` / `Genesis: public allocations completed` → **"Public sale allocation (genesis)"**; other `Genesis: x_y` → "Genesis: x y" with underscores as spaces, first letter capital. `category_plain`: `genesis` → "Genesis", `foundation` → "Foundation", `validator` → "Validator", `exchange` → "Exchange", `bridge` → "Bridge", `pgf` → "Public funding", anything else → the word with the first letter capitalised. Owner to review the wording. | `worker/src/labels.ts` (W3) |
+| 7 | Holder rank 1: `bonded` (chain read) vs `bondedEstimated` | **The chain read is authoritative** when `bondedVerifiedAt` exists. Holder `status`: `stale` when the liquid balance (`verifiedAt`) is older than 6 h; `conflict` only when there is **no** chain read newer than 24 h **and** the estimate and the last known figure differ by more than 1 NAM; otherwise `live`. The estimate-vs-chain difference feeds the "Staked NAM adds up address by address" check, not a red mark on the row. | `worker/src/api.ts` (W2) |
+| 8 | Holder history for Rewind | **No history in v1.** Under rewind the UI says "Balances were not recorded over time; these are current, not as of {time}." | S5, S7 |
+| 9 | Wallet logos on the sign-in sheet | **Names only**, no logos and no letter squares. | sign-in sheet |
+| 10 | Owner's own trades (kept in `private/`, never committed) | **Never public.** Home uses market events and the dated replay example. | everywhere |
+| 11 | Home length on phones (8,114 px) | **Accepted** for v1; section order by importance. | Home |
+| 12 | Yellow at night | **Kept** (two yellow fields maximum per screen). No "calmer" appearance option in v1. | tokens |
+| 13 | Holder balances are stale | Found on 2026-10-17: every holder row had `updatedAt` 2.55 days old, and `change24h`/`change7d` were 0. **Fix the refresh** so liquid balances update on a schedule (W13), and let W2's status say "old" honestly until it does. | worker cron |
+| 14 | Moves the server finds late (catch-up search) | **Send the Discord alert**, marked as found late with the time the move happened; never twice for the same move. (Owner, 2026-10-17.) | worker cron / discord |
+| 15 | Rewind banner on narrow phones | **Shorter wording** so the banner keeps the normal 16 px side margin (owner: "you make it short"). | `web/src/app/RewindBanner.tsx` |

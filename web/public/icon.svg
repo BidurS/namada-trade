@@ -1,0 +1,12 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="100%" height="100%" viewBox="0 0 512 512">
+  <!-- App icon: the dial at 60% on black (inside the maskable safe zone). Source of icon-512.png,
+       icon-192.png and apple-touch-icon.png (180): a headless Chrome screenshot of this file at each
+       size (device scale 1, not mobile). The favicon is favicon.svg (the dial edge to edge). -->
+  <title>NamadaTrade</title>
+  <rect width="512" height="512" fill="#000"/>
+  <g transform="translate(102.4 102.4) scale(9.6)">
+    <path d="M16 3.5a12.5 12.5 0 1 0 12.5 12.5" fill="none" stroke="#ff0" stroke-width="4.5"/>
+    <path d="M16 16 25 7" fill="none" stroke="#ff0" stroke-width="3.2"/>
+    <circle cx="16" cy="16" r="2.6" fill="#ff0"/>
+  </g>
+</svg>

@@ -1,0 +1,184 @@
+/* ==========================================================================
+   S8: the content pages (/staking, /osmosis, /learn/how-nam-trading-works,
+   /faq) and the not-found view. One visual language with the app screens:
+   a compact yellow band that states the question (caps H1) and carries the
+   reading (hero figure and ProvChip, fact strip and SourceLine, the ruler on
+   its bottom edge), then black evidence bands where each H2 is a question
+   answered in its first sentence. Every class is prefixed seo- so no other
+   screen's file can collide with it; kit classes (facts, hero-n, chip, srcb,
+   link, btn, term) come from styles/components.
+   Breakpoints as the reference: 640, 1024 (12 columns). Motion: geometry
+   only, first paint only, and none under reduced motion (tokens.css base).
+   ========================================================================== */
+@layer components {
+  .seo { display: block; }
+
+  /* ---------- the yellow band ---------- */
+  .seo-hero { position: relative; padding-top: var(--s-5); }
+  .seo-hero__in { padding-bottom: var(--s-6); }
+  .seo-eyebrow { margin-bottom: var(--s-3); }
+  .seo-h1 { max-width: 20ch; }
+  .seo-sub { margin-top: var(--s-4); font-size: var(--t-15); line-height: var(--lh-15); color: var(--c-ink); max-width: 48ch; }
+  .seo-hero__grid { display: grid; gap: var(--s-6); }
+  .seo-hero__lead, .seo-hero__fig { min-width: 0; }
+  .seo-hero__fig { max-width: 30rem; }   /* keeps the chip beside its label below 1024 px */
+  .seo-hero__fig .hero-n__sub { color: var(--c-ink-2); }
+  .seo-hero__fig .hero-n__top { min-height: 24px; }
+  .seo-hero__more { margin-top: var(--s-6); font-size: var(--t-13); line-height: var(--lh-13); color: var(--c-ink-2); max-width: 64ch; }
+  .seo-facts .facts { margin-top: var(--s-4); }
+  .seo-hero > .ruler { position: relative; }
+  @media (min-width: 640px) {
+    .seo-hero { padding-top: var(--s-7); }
+  }
+  @media (min-width: 1024px) {
+    .seo-hero { padding-top: var(--s-8); }
+    .seo-hero__in { padding-bottom: var(--s-7); }
+    .seo-h1 { max-width: 22ch; }
+    .seo-sub { font-size: var(--t-18); line-height: var(--lh-18); max-width: 54ch; }
+    .seo-hero__grid--fig { grid-template-columns: repeat(12, minmax(0, 1fr)); column-gap: var(--s-5); align-items: end; }
+    .seo-hero__grid--fig .seo-hero__lead { grid-column: 1 / span 7; }
+    .seo-hero__grid--fig .seo-hero__fig { grid-column: 9 / span 4; }
+    .seo-hero__more { margin-top: var(--s-7); }
+  }
+
+  /* ---------- black evidence bands: question left, answer right from 1024 px ---------- */
+  .seo-sec { display: grid; gap: var(--s-4); min-width: 0; }
+  .seo-sec + .seo-sec { margin-top: var(--s-7); padding-top: var(--s-6); border-top: 1px solid var(--c-line); }
+  .seo-sec__h { max-width: 24ch; }
+  .seo-sec__b { display: grid; gap: var(--s-4); align-content: start; min-width: 0; }
+  .seo-sec__b > .link, .seo-sec__b > .btn, .seo-q__b > .link, .seo-q__b > .btn { justify-self: start; }
+  .seo-answer { font-size: var(--t-18); line-height: var(--lh-18); max-width: 60ch; }
+  .seo-p { font-size: var(--t-15); line-height: var(--lh-15); color: var(--c-ink-2); max-width: 64ch; }
+  .seo-p--fig { color: var(--c-ink); }
+  .seo-say { display: flex; align-items: flex-start; gap: var(--s-2); font-size: var(--t-15); line-height: var(--lh-15); color: var(--c-ink-2); max-width: 60ch; }
+  .seo-say .dot { margin-top: 7px; }
+  .seo-terms { display: flex; flex-wrap: wrap; align-items: baseline; gap: var(--s-2) var(--s-4); font-size: var(--t-15); line-height: 22px; color: var(--c-ink-2); }
+  .seo-terms .term { color: var(--c-ink); font-weight: var(--w-medium); }
+  .seo-scope { display: grid; gap: var(--s-4); min-width: 0; }
+  @media (min-width: 1024px) {
+    .seo-sec { grid-template-columns: repeat(12, minmax(0, 1fr)); column-gap: var(--s-5); }
+    .seo-sec__h { grid-column: 1 / span 4; position: sticky; top: calc(var(--header-h) + var(--s-5)); align-self: start; }
+    .seo-sec__b { grid-column: 6 / span 7; }
+    .seo-sec + .seo-sec { margin-top: var(--s-8); padding-top: var(--s-8); }
+  }
+
+  /* ---------- a short list of figures: label left, figure right, one SourceLine ---------- */
+  .seo-figs { display: grid; min-width: 0; }
+  .seo-figs__l { display: grid; border-top: 2px solid var(--c-ink); }
+  .seo-fig { display: flex; flex-wrap: wrap; justify-content: space-between; align-items: baseline; gap: var(--s-1) var(--s-4); min-height: 64px; padding: 14px 0; border-bottom: 1px solid var(--c-line); }
+  .seo-fig dt { display: grid; gap: 2px; flex: 1 1 11rem; min-width: 0; font-size: var(--t-15); line-height: var(--lh-15); font-weight: var(--w-medium); }
+  .seo-fig__note { font-size: var(--t-13); line-height: 20px; font-weight: var(--w-regular); color: var(--c-ink-2); }
+  .seo-fig__note [data-num] { color: var(--c-ink); }
+  .seo-fig dd { flex: 0 1 auto; min-width: 0; max-width: 100%; margin-left: auto; text-align: right; font-size: var(--t-24); line-height: var(--lh-24); font-weight: var(--w-medium); letter-spacing: var(--track-num); }
+  .seo-fig dd .u { letter-spacing: 0; }
+  .seo-fig dd .seo-fig__q { font-size: var(--t-15); line-height: var(--lh-15); font-weight: var(--w-regular); letter-spacing: 0; color: var(--c-ink-2); }   /* "about", "under", "at least": how the figure was made */
+  .seo-fig dd .num__x { letter-spacing: 0; }
+  .seo-figs__old { margin-bottom: var(--s-4); }
+  .seo-src-wait { min-height: 44px; margin-top: var(--s-2); }
+  .seo-spark { margin-top: var(--s-1); }
+
+  /* skeletons sized like the figure they stand for */
+  .seo-skel { display: inline-block; vertical-align: middle; max-width: 100%; }
+  .seo-fig dd .seo-skel { display: block; margin-left: auto; }
+  .seo-skel-dot { display: inline-block; width: 128px; height: 24px; }
+  /* list skeletons at the measured row heights of the lists they stand for (rows, then table) */
+  .seo-skel-pools .skel__row { min-height: 97px !important; }
+  .seo-skel-pools .skel__row:last-child { min-height: 56px !important; }
+  .seo-skel-ladder .skel__row { min-height: 78px !important; }
+  @media (min-width: 700px) {
+    .seo-skel-pools, .seo-skel-ladder { padding-top: 24px; }
+    .seo-skel-pools .skel__row { min-height: 71px !important; }
+    .seo-skel-ladder .skel__row { min-height: 53px !important; }
+  }
+
+  /* a missing hero or fact figure: the dash, then its reason on its own line in mono 12 px */
+  .seo-hero .hero-n__v .num__x, .seo-hero .fact__n .num__x { display: block; margin: var(--s-2) 0 0; max-width: 32ch; white-space: normal; overflow-wrap: normal; word-break: normal; line-height: 16px; }
+  .seo-hero .hero-n__v .num { white-space: normal; }
+
+
+  /* ---------- the path (Learn): four steps on a rail inside the yellow band ---------- */
+  .seo-steps { position: relative; display: grid; gap: var(--s-7); margin-top: var(--s-7); }
+  .seo-steps::before, .seo-steps::after { content: ""; position: absolute; left: 13px; top: 14px; bottom: 14px; width: 2px; pointer-events: none; }
+  .seo-steps::before { background: var(--c-line); }
+  /* one animation name at every width (a name change between breakpoints would restart it); the axis is a variable */
+  .seo-steps::after { --seo-rail-from: scaleY(0); background: var(--c-ink); transform-origin: top; animation: seo-rail var(--d-chart) var(--ease-enter) both; }
+  .seo-step { position: relative; display: grid; grid-template-columns: 28px minmax(0, 1fr); column-gap: var(--s-4); align-content: start; }
+  .seo-step__ring { position: relative; z-index: 1; width: 28px; height: 28px; background: var(--c-bg); color: var(--c-ink); }
+  .seo-step__ring svg { width: 28px; height: 28px; }
+  .seo-step__ring .r1 { transform-origin: center; transform-box: fill-box; animation: seo-dot-in var(--d-3) var(--ease-enter) both; animation-delay: calc(var(--i, 0) * 120ms + 200ms); }
+  .seo-step__body { display: grid; grid-template-rows: auto auto 1fr auto auto; gap: var(--s-2); min-width: 0; }
+  .seo-step__k { display: flex; align-items: baseline; gap: var(--s-3); font-size: var(--t-15); line-height: 22px; font-weight: var(--w-semi); }
+  .seo-step__i { font: var(--w-medium) var(--t-12) / 16px var(--font-code); color: var(--c-ink-2); }
+  .seo-step__h { font-size: var(--t-24); line-height: var(--lh-24); font-weight: var(--w-semi); letter-spacing: var(--track-h2); text-wrap: balance; }
+  .seo-step__copy { font-size: var(--t-15); line-height: var(--lh-15); max-width: 42ch; align-self: start; }
+  .seo-step__copy + .seo-step__copy { margin-top: calc(var(--s-1) * -1); }
+  .seo-step__fig { display: flex; flex-wrap: wrap; align-items: baseline; gap: var(--s-1) var(--s-2); margin-top: var(--s-2); font-size: var(--t-24); line-height: var(--lh-24); font-weight: var(--w-medium); letter-spacing: var(--track-num); }
+  .seo-step__fig .u, .seo-step__fig .num__x { letter-spacing: 0; }
+  .seo-step__note { display: flex; flex-direction: column; align-items: flex-start; gap: var(--s-1); font-size: var(--t-13); line-height: 20px; color: var(--c-ink-2); }
+  @media (min-width: 1024px) {
+    .seo-steps { grid-template-columns: repeat(4, minmax(0, 1fr)); gap: var(--s-5); margin-top: var(--s-8); }
+    .seo-steps::before, .seo-steps::after { left: 0; right: 0; top: 13px; bottom: auto; width: auto; height: 2px; }
+    .seo-steps::after { --seo-rail-from: scaleX(0); transform-origin: left; }
+    .seo-step { grid-template-columns: minmax(0, 1fr); grid-template-rows: auto 1fr; row-gap: var(--s-5); }   /* the figures line up at the foot of the four columns */
+    .seo-step__h { font-size: var(--t-18); line-height: var(--lh-18); }
+  }
+
+  /* ---------- the FAQ: one open <details> per question; related pages as a rail from 1024 px ---------- */
+  .seo-band--faq > .wrap { display: grid; gap: var(--s-7); }
+  .seo-qs { display: grid; min-width: 0; border-top: 2px solid var(--c-ink); }
+  .seo-q { border-bottom: 1px solid var(--c-line); }
+  .seo-q__s { display: flex; align-items: center; justify-content: space-between; gap: var(--s-4); min-height: 64px; padding: var(--s-4) 0; cursor: pointer; list-style: none; }
+  .seo-q__s::-webkit-details-marker { display: none; }
+  .seo-q__s:focus-visible { outline-offset: -2px; }
+  .seo-q__h { font-size: var(--t-24); line-height: var(--lh-24); font-weight: var(--w-semi); letter-spacing: var(--track-h2); text-wrap: balance; }
+  .seo-q__i { width: 20px; height: 20px; color: var(--c-ink-2); transition: transform var(--d-2) var(--ease-state); }
+  .seo-q[open] > .seo-q__s .seo-q__i { transform: rotate(180deg); }
+  .seo-q__s:hover .seo-q__i { color: var(--c-ink); }
+  .seo-q__b { display: grid; gap: var(--s-4); padding-bottom: var(--s-6); min-width: 0; }
+  .seo-band--faq .seo-rel { margin-top: 0; }
+  @media (min-width: 1024px) {
+    .seo-band--faq > .wrap { grid-template-columns: repeat(12, minmax(0, 1fr)); column-gap: var(--s-5); align-items: start; }
+    .seo-band--faq .seo-qs, .seo-band--faq > .wrap > .seo-say { grid-column: 1 / span 8; }
+    .seo-band--faq .seo-rel { grid-column: 10 / span 3; grid-row: 1 / span 2; position: sticky; top: calc(var(--header-h) + var(--s-5)); }
+    .seo-band--faq .seo-links { grid-template-columns: minmax(0, 1fr); }
+    .seo-q__b { padding-bottom: var(--s-7); }
+  }
+
+  /* the four states of a figure (FAQ "How old is this number?") */
+  .seo-states { display: grid; border-top: 1px solid var(--c-line); }
+  .seo-state { display: grid; grid-template-columns: 16px minmax(0, 1fr); column-gap: var(--s-2); row-gap: 2px; align-items: baseline; padding: 12px 0; border-bottom: 1px solid var(--c-line); }
+  .seo-state .dot { grid-row: 1; align-self: center; }
+  .seo-state__w { font-size: var(--t-15); line-height: var(--lh-15); font-weight: var(--w-medium); }
+  .seo-state__t { grid-column: 2; font-size: var(--t-13); line-height: 20px; color: var(--c-ink-2); }
+
+  /* ---------- related pages and the not-found list: one link per row, 72 px ---------- */
+  .seo-rel { margin-top: var(--s-8); }
+  .seo-rel__h { margin-bottom: var(--s-3); }
+  .seo-links { display: grid; border-top: 2px solid var(--c-ink); }
+  .seo-links > li { min-width: 0; border-bottom: 1px solid var(--c-line); }
+  .seo-link { display: grid; grid-template-columns: minmax(0, 1fr) 20px; align-items: center; gap: var(--s-3); min-height: 72px; padding: 12px 0; color: var(--c-ink); text-decoration: none; }
+  .seo-link:has(.seo-link__i) { grid-template-columns: 22px minmax(0, 1fr) 20px; }
+  .seo-link__i { width: 22px; height: 22px; color: var(--c-ink-2); }
+  .seo-link__t { display: grid; gap: 2px; min-width: 0; }
+  .seo-link__l { font-size: var(--t-18); line-height: var(--lh-18); font-weight: var(--w-medium); text-decoration: underline; text-decoration-thickness: 2px; text-underline-offset: 5px; text-decoration-color: color-mix(in srgb, currentColor 35%, transparent); transition: text-decoration-color var(--d-1) var(--ease-state); }
+  .seo-link__s { font-size: var(--t-13); line-height: 20px; color: var(--c-ink-2); }
+  .seo-link__a { width: 20px; height: 20px; color: var(--c-ink-2); transition: transform var(--d-2) var(--ease-enter), color var(--d-1) var(--ease-state); }
+  .seo-link:hover .seo-link__l { text-decoration-color: currentColor; }
+  .seo-link:hover .seo-link__a { transform: translateX(3px); color: var(--c-ink); }
+  .seo-link:hover .seo-link__i { color: var(--c-ink); }
+  @media (min-width: 640px) {
+    .seo-links { grid-template-columns: repeat(2, minmax(0, 1fr)); column-gap: var(--s-6); }
+  }
+  @media (min-width: 1024px) {
+    .seo-links { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+    .seo-rel { margin-top: var(--s-9); }
+  }
+
+  .seo-nf__search { display: flex; flex-wrap: wrap; align-items: center; gap: var(--s-3) var(--s-4); margin-top: var(--s-6); }
+  .seo-nf__search .cap { max-width: 40ch; }
+  .seo--nf .seo-rel { margin-top: var(--s-7); }
+
+  /* first paint only: the rail draws, the step dots appear (reduced motion: none of it) */
+  @keyframes seo-rail { from { transform: var(--seo-rail-from); } to { transform: none; } }
+  @keyframes seo-dot-in { from { transform: scale(0); } to { transform: scale(1); } }
+}

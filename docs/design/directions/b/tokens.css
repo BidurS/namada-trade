@@ -1,0 +1,179 @@
+/* =============================================================================
+   NamadaTrade, Direction B: "Editorial instrument"
+   Design tokens. Every variable the system uses is declared here; component
+   CSS (inlined into each page by build.mjs) uses no raw colour, type size or
+   duration. Control dimensions (44 / 48 / 56 px heights) are the only literals.
+
+   Contrast ratios are WCAG 2.x, computed with the relative-luminance formula
+   (script kept in the build notes). Text needs 4.5:1 (3:1 from 24 px, or
+   18.66 px bold). Control borders and chart marks need 3:1.
+
+   Fonts (mockup loads them from Google Fonts; production self-hosts, see notes.md):
+     serif    Newsreader (variable: opsz 6-72, wght 300-600, italic)  headlines, lede, big numbers, prose
+     ui       Space Grotesk (variable 400-700)                        labels, buttons, nav, small copy
+     mono     IBM Plex Mono (400, 500)                                numbers in lists, addresses, ages, source lines
+   ============================================================================= */
+
+:root {
+  color-scheme: dark;
+
+  /* ---- Font families ---------------------------------------------------- */
+  --font-serif: "Newsreader", "Iowan Old Style", "Palatino Linotype", Georgia, serif;
+  --font-ui:    "Space Grotesk", ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif;
+  --font-mono:  "IBM Plex Mono", ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+
+  /* ---- Colour, dark (default; black-first) ------------------------------- */
+  --bg:           #000000;
+  --surface:      #0d0d0d;  /* sheets, ticket, notices */
+  --surface-2:    #171717;  /* selected row, input well, pressed */
+  --line:         #242424;  /* hairlines (decorative; never the only boundary of a control) */
+  --line-strong:  #666666;  /* control borders, chart marks: 3.66:1 on bg, 3.38:1 on surface, 3.12:1 on surface-2 */
+
+  --ink:          #f5f5f5;  /* 19.26:1 on bg, 17.83:1 on surface, 16.44:1 on surface-2 */
+  --ink-2:        #a8a8a8;  /*  8.83:1 on bg,  8.17:1 on surface,  7.54:1 on surface-2 */
+  --ink-3:        #858585;  /*  5.69:1 on bg,  5.27:1 on surface,  4.86:1 on surface-2. 12 px or larger, never on a number */
+
+  --accent:       #ffff00;  /* the one yellow: band, mark, one primary button per view, focus ring, last-value pill */
+  --accent-ink:   #000000;  /* 19.56:1 on accent */
+  --accent-ink-2: #3a3a00;  /* secondary text on the yellow band: 10.95:1 on accent */
+  --accent-text:  #ffff00;  /* yellow used as text on black: 19.56:1 on bg */
+  --focus:        #ffff00;  /* 2 px ring, 2 px offset: 19.56:1 on bg */
+
+  --shielded:     #00ffff;  /* shielded module only, always with words: 16.75:1 on bg */
+
+  /* Flow tags: colour is never alone, every tag carries a word and a glyph.
+     All text uses on bg / surface / surface-2 */
+  --buy:          #3987e5;  /* 5.77 / 5.34 / 4.93 */
+  --sell:         #d95926;  /* 5.41 / 5.00 / 4.62 */
+  --ibc:          #199e70;  /* 6.17 / 5.71 / 5.26 */
+  --shield:       #9085e9;  /* 6.72 / 6.22 / 5.73 */
+  --pos:          #d55181;  /* 5.32 / 4.93 / 4.54 */
+
+  /* Provenance status: only for fresh, old, no data, sources disagree. Always beside a word or an age
+     and always with a distinct shape (filled, half, ring, diamond). */
+  --good:         #2fbf2f;  /* fresh.     8.61 / 7.97 / 7.35 */
+  --warn:         #ff9d00;  /* old.      10.07 / 9.32 / 8.60 */
+  --none:         #858585;  /* no data.   5.69 / 5.27 / 4.86 (same as ink-3) */
+  --bad:          #ff5c5c;  /* disagree.  6.94 / 6.42 / 5.92 */
+
+  --scrim:        rgb(0 0 0 / .6);
+  --tick-bg:      rgb(255 255 255 / .08);   /* flash behind a value that just changed (static highlight under reduced motion) */
+
+  /* ---- Type scale (px / line-height). Sizes are tokens, never typed in components -------------------- */
+  --fs-11: 11px;  --lh-11: 16px;   /* eyebrows and chart ticks only (caps, +0.08em) */
+  --fs-12: 12px;  --lh-12: 16px;   /* provenance, source lines, ages: mono. The floor for anything with provenance */
+  --fs-13: 13px;  --lh-13: 20px;   /* controls, chips, table cells, tags */
+  --fs-15: 15px;  --lh-15: 24px;   /* UI body, notes, glosses, list titles (grotesk). 24 px so inline number buttons inside meet the tap-target exemption */
+  --fs-17: 17px;  --lh-17: 26px;   /* prose answers (serif) */
+  --fs-22: 22px;  --lh-22: 28px;   /* lede, H3, hero sentence in a section (serif) */
+  --fs-21: 21px;  --lh-21: 21px;   /* wordmark in the top bar */
+  --fs-28: 28px;  --lh-28: 32px;   /* key figures (facts strip 28 phone, 40 from 640 px), field value, menu names */
+  --fs-fig: 28px; --lh-fig: 32px;  /* facts strip numerals: 28 phone, 40 from 640 px */
+  --fs-48: 48px;  --lh-48: 48px;   /* footer wordmark, no-data dash */
+  --fs-ans: 56px; --lh-ans: 56px;  /* the number that leads an accordion answer: 56 phone, 72 from 1024 px */
+  --fs-h2: 30px;  --lh-h2: 34px;   /* H2 (serif 400) */
+  --fs-h1: 36px;  --lh-h1: 40px;   /* H1 on Trade and Ledger (serif 350) */
+  --fs-num: 72px; --lh-num: 72px;  /* "You get": the one number moment on Trade (serif 300) */
+  --fs-display: clamp(56px, 16.2vw, 160px);  /* Home H1 only (serif 300). 61 px at 375, 160 px from 988 px up */
+  --lh-display: .94;
+
+  --tr-eyebrow: .08em;
+  --tr-display: -.025em;
+  --tr-h:       -.012em;
+  --measure:    62ch;                   /* prose line length */
+
+  /* ---- Spacing (4-pt scale) ------------------------------------------------ */
+  --s-1: 4px;  --s-2: 8px;  --s-3: 12px;  --s-4: 16px;  --s-5: 24px;
+  --s-6: 32px; --s-7: 48px; --s-8: 64px;  --s-9: 96px;
+
+  --gutter:   16px;    /* page side padding */
+  --panel:    16px;    /* inner padding of a sheet, ticket, notice */
+  --section:  32px;    /* space above and below a hairline section rule */
+  --maxw:     1200px;
+  --bar-h:    52px;    /* top bar */
+  --row-h:    56px;    /* list row on a phone (44 px tap target inside) */
+  --tap:      44px;    /* minimum interactive size */
+
+  /* ---- Radius: soft 4 / 12 ------------------------------------------------- */
+  --r-0:    0;          /* bands, tables, rules */
+  --r-1:    4px;        /* controls, tags, inputs, segmented thumbs, bars */
+  --r-2:    12px;       /* sheets, ticket, notices, popovers */
+  --r-pill: 999px;      /* provenance chips and the status dot only */
+
+  /* ---- Elevation: tone plus hairline; overlays get the scrim and one shadow ---------- */
+  --elev-0: none;
+  --elev-sheet: 0 24px 48px -12px rgb(0 0 0 / .6);
+
+  /* ---- Motion: 120 / 200 / 320 ms. Motion reports change, it never invents it ---------- */
+  --d-1: 120ms;   /* hover, pressed, colour change */
+  --d-2: 200ms;   /* sheets, accordion, state change */
+  --d-3: 320ms;   /* bar fill, section reveal */
+  --d-chart: 600ms;  /* chart wipe, first paint of Home and Trade */
+  --ease-out: cubic-bezier(.16, 1, .3, 1);   /* entering */
+  --ease-std: cubic-bezier(.4, 0, .2, 1);    /* state changes; exits run at 0.75x duration */
+}
+
+/* ---- Larger screens: type and layout tokens only -------------------------------- */
+@media (min-width: 640px) {
+  :root {
+    --gutter: 24px;
+    --section: 48px;
+    --fs-fig: 40px; --lh-fig: 44px;
+  }
+}
+@media (min-width: 1024px) {
+  :root {
+    --gutter: 32px;
+    --panel: 24px;
+    --section: 64px;
+    --bar-h: 64px;
+    --fs-17: 18px;  --lh-17: 28px;
+    --fs-22: 24px;  --lh-22: 32px;
+    --fs-h2: 40px;  --lh-h2: 44px;
+    --fs-h1: 56px;  --lh-h1: 60px;
+    --fs-num: 96px; --lh-num: 92px;
+    --fs-ans: 72px; --lh-ans: 72px;
+  }
+}
+
+/* ---- Light theme (production toggle; same names, hue-less) ----------------------- */
+:root[data-theme="light"] {
+  color-scheme: light;
+  --bg:          #f4f4f2;
+  --surface:     #ffffff;
+  --surface-2:   #ececea;
+  --line:        #dcdcd8;
+  --line-strong: #767676;   /* 4.12:1 on bg */
+
+  --ink:         #000000;   /* 19.07 on bg, 21.00 on surface, 17.75 on surface-2 */
+  --ink-2:       #4d4d4d;   /*  7.68 / 8.45 / 7.15 */
+  --ink-3:       #6b6b6b;   /*  4.84 / 5.33 / 4.51 */
+
+  --accent:       #ffff00;  /* fills and the band only; never text on light */
+  --accent-ink:   #000000;
+  --accent-ink-2: #3a3a00;
+  --accent-text:  #5c5100;  /* 7.24 on bg, 7.98 on surface, 6.74 on surface-2 */
+  --focus:        #000000;
+
+  --shielded:     #006b6b;  /* 5.75 / 6.33 / 5.35 (fills may use #00ffff) */
+
+  --buy:   #1f5fb0;   /* 5.74 on bg / 6.32 on surface / 5.34 on surface-2 */
+  --sell:  #b8431a;   /* 4.95 / 5.45 / 4.60 */
+  --ibc:   #0f7a55;   /* 4.85 / 5.34 / 4.51 */
+  --shield:#6250d6;   /* 5.24 / 5.77 / 4.88 */
+  --pos:   #b02f63;   /* 5.55 / 6.12 / 5.17 */
+
+  --good:  #0a7a0a;   /* 5.02 / 5.52 / 4.67 */
+  --warn:  #b45309;   /* 4.56 / 5.02 / 4.25: not allowed as text on surface-2 */
+  --none:  #6b6b6b;
+  --bad:   #b42323;   /* 5.95 / 6.55 / 5.54 */
+
+  --scrim:    rgb(0 0 0 / .4);
+  --tick-bg:  rgb(0 0 0 / .06);
+  --elev-sheet: 0 1px 2px rgb(0 0 0 / .06), 0 4px 12px rgb(0 0 0 / .08), 0 24px 48px rgb(0 0 0 / .18);
+}
+
+/* ---- Reduced motion: every duration collapses, nothing loops ---------------------- */
+@media (prefers-reduced-motion: reduce) {
+  :root { --d-1: 0ms; --d-2: 0ms; --d-3: 0ms; --d-chart: 0ms; }
+}

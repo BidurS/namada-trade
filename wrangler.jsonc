@@ -1,0 +1,56 @@
+{
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "namada-trade",
+  "main": "worker/src/index.ts",
+  "compatibility_date": "2025-09-01",
+  "compatibility_flags": ["nodejs_compat"],
+  "observability": { "enabled": true },
+
+  // Production domain. `custom_domain` makes Cloudflare create the DNS records and certificate.
+  "routes": [
+    { "pattern": "namada.trade", "custom_domain": true },
+    { "pattern": "www.namada.trade", "custom_domain": true }
+  ],
+
+  // Static UI (built by Vite). API + WebSocket routes always hit the Worker first.
+  "assets": {
+    "directory": "web/dist",
+    "binding": "ASSETS",
+    "not_found_handling": "single-page-application",
+    "run_worker_first": true
+  },
+
+  "d1_databases": [
+    {
+      "binding": "DB",
+      "database_name": "namada-trade-db",
+      "database_id": "9073901c-274f-4c3f-ba02-65e2241540d6",
+      "migrations_dir": "migrations"
+    }
+  ],
+
+  "durable_objects": {
+    "bindings": [{ "name": "LIVE", "class_name": "LiveHub" }]
+  },
+  "migrations": [{ "tag": "v1", "new_sqlite_classes": ["LiveHub"] }],
+
+  // Exports, search, address reports and searched flow lists read thousands of rows a call: 30 a minute per
+  // client address (worker/src/http.ts rateLimited). namespace_id is any number unique to this account.
+  "ratelimits": [
+    { "name": "HEAVY_LIMITER", "namespace_id": "1001", "simple": { "limit": 30, "period": 60 } }
+  ],
+
+  // Every minute: holders refresh, prices, supply split, integrity checks, gap-fill.
+  "triggers": { "crons": ["* * * * *"] },
+
+  "vars": {
+    // Whale thresholds in NAM (user choice: 10k on both chains).
+    "WHALE_OSMOSIS_NAM": "10000",
+    "WHALE_NAMADA_NAM": "10000"
+  }
+
+  // Secrets (set with `wrangler secret put <NAME>`, locally in .dev.vars):
+  //   KEPLR_KEY            -> keplr_xxx path key for api.keplr.app
+  //   DISCORD_WEBHOOK_URL  -> whale alerts
+  //   ACCESS_AUD           -> optional: Cloudflare Access application AUD tag (enforces Access JWT presence)
+}

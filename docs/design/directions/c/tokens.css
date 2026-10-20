@@ -1,0 +1,199 @@
+/* ==========================================================================
+   NamadaTrade, Direction C: Paper and receipts.
+   Every variable of the system. Light paper is the primary ground; the dark
+   "carbon copy" is a secondary variant (see the two dark blocks at the end).
+
+   Contrast ratios are WCAG 2.1, computed with the script in notes.md.
+   Text pairs must be >= 4.5:1 (3:1 at 24 px or 18.66 px bold). Control borders
+   and chart marks >= 3:1. --ink-3 is for 12 px+ prose only, never for numbers.
+   ========================================================================== */
+
+:root {
+  color-scheme: light;
+
+  /* ---- Ground: paper, ink, one marker -------------------------------------- */
+  --bg:           #f4f4f2;   /* paper */
+  --surface:      #fbfbf9;   /* a slip laid on the paper (receipts only, never nested) */
+  --surface-2:    #ebebe7;   /* wells, hatch background, table header wash */
+  --line:         #d9d9d3;   /* hairline; 1.29:1 on --bg, decorative only */
+  --line-strong:  #7a7a74;   /* control borders, dotted leaders; 3.92:1 on --bg */
+  --ink:          #111110;   /* 17.16:1 on --bg, 18.1:1 on --surface */
+  --ink-2:        #4a4a46;   /* 8.08:1 on --bg, 7.45:1 on --surface-2 */
+  --ink-3:        #66665f;   /* 5.25:1 on --bg, 5.58:1 on --surface, 4.84:1 on --surface-2; prose only */
+
+  --accent:       #ffff00;   /* the marker: fills, bands, highlight; ink on it is 17.59:1 */
+  --accent-ink:   #111110;
+  --accent-text:  #5c5100;   /* yellow as readable text, 7.24:1 on --bg */
+  --focus:        #111110;   /* 2 px ring, offset 2 px; 17.16:1 on --bg */
+
+  /* ---- Shielded (the shielded module only, always with words) ------------- */
+  --shielded-text: #006b6b;  /* 5.75:1 on --bg */
+  --shielded-fill: #00ffff;  /* fill only; ink on it is 16.2:1 */
+
+  /* ---- Flow tag colours: only inside a tag, always with a word and a glyph - */
+  --buy:    #1f5fb0;         /* 5.74:1 on --bg, 6.10:1 on --surface */
+  --sell:   #b8431a;         /* 4.95:1 on --bg, 5.26:1 on --surface */
+  --ibc:    #0f7a55;         /* 4.85:1 on --bg, 5.15:1 on --surface (bridged) */
+  --shield: #6250d6;         /* 5.24:1 on --bg, 5.57:1 on --surface */
+  --pos:    #b02f63;         /* 5.55:1 on --bg, 5.90:1 on --surface (staking) */
+
+  /* ---- Provenance underline colours (ambient freshness) -------------------
+     solid ink = fresh, dotted amber = old, wavy red = sources disagree,
+     dashed grey = no data. Text colours (--good/--warn/--bad) are also used for
+     the check glyphs and the stub tick.                                        */
+  --good: #0a7a0a;           /* 5.02:1 on --bg */
+  --warn: #9a4a08;           /* 5.68:1 on --bg */
+  --bad:  #b42323;           /* 5.95:1 on --bg */
+  --u-fresh:    var(--ink);
+  --u-old:      var(--warn);
+  --u-conflict: var(--bad);
+  --u-none:     var(--line-strong);
+
+  --scrim: rgb(17 17 16 / .40);
+
+  /* The marker: a highlighter swipe behind the lower part of the glyphs on paper;
+     on the dark ground ink-coloured text would be unreadable on yellow, so it becomes a bar under the text. */
+  --marker: linear-gradient(transparent 56%, var(--accent) 56% 94%, transparent 94%);
+
+  /* Torn receipt edge: downward teeth in --surface with a hairline.
+     Data URIs cannot read custom properties, so each theme carries its own.  */
+  --zig: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='14' height='8' viewBox='0 0 14 8'%3E%3Cpath d='M0 0L7 7L14 0' fill='%23fbfbf9' stroke='%23d9d9d3' stroke-width='1'/%3E%3Cpath d='M0 0H14' stroke='%23fbfbf9' stroke-width='2'/%3E%3C/svg%3E");
+
+  /* ---- Type families ------------------------------------------------------
+     Mock-ups load both from Google Fonts. Production self-hosts the two woff2
+     files (see notes.md), with metric-matched fallbacks below.                 */
+  --font-mono: "JetBrains Mono", ui-monospace, "SF Mono", "Cascadia Mono", Menlo, Consolas, monospace;
+  --font-sans: "IBM Plex Sans", system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+
+  /* ---- Type scale (px) ----------------------------------------------------
+     Role                                   size / line   family  weight
+     --t-11  eyebrow, chart ticks only       11 / 16      mono    500, caps +0.08em
+     --t-12  provenance, ages, headers       12 / 16      mono    400
+     --t-13  controls, cells, chips          13 / 20      mono    500
+     --t-15  body, sub copy                  15 / 22      sans    400
+     --t-18  lead, row titles                18 / 26      sans    500
+     --t-20  H2 on phone                     20 / 26      mono    600, -0.02em
+     --t-24  H2 desktop, inner H1 on phone   24 / 30      mono    600, -0.025em
+     --t-32  Home H1 on phone, inner H1 desk 32 / 36      mono    700, -0.035em
+     --t-48  Home H1 desktop, "You get" hero 48 / 50      mono    700, -0.04em
+     --t-display  Home price only  clamp(52px, 14.5vw, 96px) / 1  mono 700, -0.05em */
+  --t-11: 11px;  --lh-11: 16px;
+  --t-12: 12px;  --lh-12: 16px;
+  --t-13: 13px;  --lh-13: 20px;
+  --t-15: 15px;  --lh-15: 22px;
+  --t-18: 18px;  --lh-18: 26px;
+  --t-20: 20px;  --lh-20: 26px;
+  --t-24: 24px;  --lh-24: 30px;
+  --t-32: 32px;  --lh-32: 36px;
+  --t-48: 48px;  --lh-48: 50px;
+  --t-display: clamp(52px, 14.5vw, 96px);
+
+  --tr-eyebrow: .08em;
+  --tr-20: -.02em;
+  --tr-24: -.025em;
+  --tr-32: -.035em;
+  --tr-48: -.04em;
+  --tr-display: -.05em;
+
+  /* ---- Spacing: 4, 8, 12, 16, 24, 32, 48, 64, 96 --------------------------- */
+  --s-1: 4px;  --s-2: 8px;  --s-3: 12px;  --s-4: 16px;  --s-5: 24px;
+  --s-6: 32px; --s-7: 48px; --s-8: 64px;  --s-9: 96px;
+
+  --gutter: 16px;            /* 24 at 640, 32 at 1024 */
+  --sec-gap: 32px;           /* 48 at 768, 64 at 1024 (Home: 96) */
+  --header-h: 52px;          /* 64 at 1024 */
+  --tabbar-h: 56px;          /* plus env(safe-area-inset-bottom) */
+  --row-h: 56px;             /* list row on phones; table row 40 at 640 */
+  --tap: 44px;               /* minimum interactive size on phones */
+  --max: 1200px;
+
+  /* ---- Radius: 0 everywhere. One token so nobody invents another. --------- */
+  --r-0: 0;
+
+  /* ---- Elevation: paper has no height. Only a slip and an overlay lift. --- */
+  --elev-0: none;
+  --elev-slip:  0 1px 0 rgb(17 17 16 / .06), 0 10px 18px -14px rgb(17 17 16 / .28);
+  --elev-pop:   0 4px 12px -4px rgb(17 17 16 / .18);
+  --elev-sheet: 0 -24px 48px -16px rgb(17 17 16 / .22);
+
+  /* ---- Motion: durations and easings ---------------------------------------
+     Motion reports change, it never invents it. Geometry only; no number is
+     ever animated through intermediate values. Exits run at .75x.            */
+  --d-1: 120ms;
+  --d-2: 200ms;
+  --d-3: 320ms;
+  --d-print: 90ms;           /* stagger between receipt lines */
+  --ease-out: cubic-bezier(.16, 1, .3, 1);   /* entering */
+  --ease-std: cubic-bezier(.4, 0, .2, 1);    /* state changes, exits */
+  --ease-print: steps(5, end);               /* a line printer, not a tween */
+}
+
+@media (min-width: 640px)  { :root { --gutter: 24px; --row-h: 40px; } }
+@media (min-width: 768px)  { :root { --sec-gap: 48px; } }
+@media (min-width: 1024px) { :root { --gutter: 32px; --sec-gap: 64px; --header-h: 64px; } }
+
+/* ==========================================================================
+   Dark variant: "carbon copy". Secondary; shown once. Same structure, new values.
+   ========================================================================== */
+:root[data-theme="dark"] {
+  color-scheme: dark;
+  --bg:           #0d0d0c;
+  --surface:      #151514;
+  --surface-2:    #1d1d1b;
+  --line:         #2b2b28;
+  --line-strong:  #6b6b66;   /* 3.63:1 on --bg */
+  --ink:          #f4f4f2;   /* 17.66:1 on --bg */
+  --ink-2:        #b0b0aa;   /* 8.92:1 on --bg */
+  --ink-3:        #8b8b85;   /* 5.68:1 on --bg, 5.33:1 on --surface */
+
+  --accent:       #ffff00;   /* 18.11:1 on --bg */
+  --accent-ink:   #111110;
+  --accent-text:  #ffff00;
+  --focus:        #ffff00;
+
+  --shielded-text: #00ffff;  /* 15.51:1 on --bg */
+  --shielded-fill: #00ffff;
+
+  --buy:    #3987e5;         /* 5.34:1 */
+  --sell:   #d95926;         /* 5.01:1 */
+  --ibc:    #199e70;         /* 5.71:1 */
+  --shield: #9085e9;         /* 6.22:1 */
+  --pos:    #d55181;         /* 4.93:1 */
+
+  --good: #2fbf2f;           /* 7.98:1 */
+  --warn: #ff9d00;           /* 9.33:1 */
+  --bad:  #ff5c5c;           /* 6.42:1 */
+
+  --scrim: rgb(0 0 0 / .60);
+  --marker: linear-gradient(transparent 88%, var(--accent) 88% 100%);
+  --zig: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='14' height='8' viewBox='0 0 14 8'%3E%3Cpath d='M0 0L7 7L14 0' fill='%23151514' stroke='%232b2b28' stroke-width='1'/%3E%3Cpath d='M0 0H14' stroke='%23151514' stroke-width='2'/%3E%3C/svg%3E");
+
+  --elev-slip:  0 0 0 1px var(--line);
+  --elev-pop:   0 4px 12px -4px rgb(0 0 0 / .6);
+  --elev-sheet: 0 -24px 48px -12px rgb(0 0 0 / .6);
+}
+
+/* Production follows the system unless the visitor chose a theme. */
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    color-scheme: dark;
+    --bg: #0d0d0c; --surface: #151514; --surface-2: #1d1d1b;
+    --line: #2b2b28; --line-strong: #6b6b66;
+    --ink: #f4f4f2; --ink-2: #b0b0aa; --ink-3: #8b8b85;
+    --accent-text: #ffff00; --focus: #ffff00;
+    --shielded-text: #00ffff;
+    --buy: #3987e5; --sell: #d95926; --ibc: #199e70; --shield: #9085e9; --pos: #d55181;
+    --good: #2fbf2f; --warn: #ff9d00; --bad: #ff5c5c;
+    --scrim: rgb(0 0 0 / .60);
+    --marker: linear-gradient(transparent 88%, var(--accent) 88% 100%);
+    --zig: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='14' height='8' viewBox='0 0 14 8'%3E%3Cpath d='M0 0L7 7L14 0' fill='%23151514' stroke='%232b2b28' stroke-width='1'/%3E%3Cpath d='M0 0H14' stroke='%23151514' stroke-width='2'/%3E%3C/svg%3E");
+    --elev-slip: 0 0 0 1px var(--line);
+    --elev-pop: 0 4px 12px -4px rgb(0 0 0 / .6);
+    --elev-sheet: 0 -24px 48px -12px rgb(0 0 0 / .6);
+  }
+}
+
+/* Reduced motion: tokens collapse so every animation falls through to its final state. */
+@media (prefers-reduced-motion: reduce) {
+  :root { --d-1: 0ms; --d-2: 0ms; --d-3: 0ms; --d-print: 0ms; }
+}

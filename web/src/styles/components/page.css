@@ -1,0 +1,77 @@
+/* ==========================================================================
+   Inner pages (Supply, Shielded and any page built the same way): the yellow
+   reading band, the black body and its sections, and the list pieces every
+   screen with address rows uses (ui/ListBits.tsx: .xaddr, .xrec, .xmore).
+   Reads --c-* ground tokens only.
+   ========================================================================== */
+@layer components {
+  /* ---------- inner page: the yellow reading band ---------- */
+  .ipg-band { position: relative; padding-block: var(--s-5) 0; }
+  .ipg-band > .wrap { padding-bottom: var(--s-6); }
+  .ipg-band .eyebrow { margin-bottom: var(--s-3); }
+  .ipg-band .h1 { max-width: 16ch; }
+  .ipg-band .sub { margin-top: var(--s-4); }
+  .ipg-band__grid { display: grid; gap: var(--s-6); }
+  .ipg-band__lead, .ipg-band__hero { min-width: 0; }
+  .ipg-band__hero { display: grid; gap: var(--s-5); align-content: start; }
+  .ipg-facts { margin-top: var(--s-6); }
+  .ipg-facts .facts { margin-top: 0; }
+  /* the strip's SourceLine slot is reserved until its figures arrive (no shift) */
+  .ipg-facts--wait .scope-facts:not(:has(> .src)) { padding-bottom: 52px; }
+  @media (min-width: 640px) { .ipg-band { padding-block: var(--s-7) 0; } }
+  @media (min-width: 640px) and (max-width: 1023px) { .ipg-band__hero { max-width: 32rem; } }
+  @media (min-width: 1024px) {
+    .ipg-band { padding-block: var(--s-8) 0; }
+    .ipg-band > .wrap { padding-bottom: var(--s-7); }
+    .ipg-band__grid { grid-template-columns: repeat(12, minmax(0, 1fr)); column-gap: var(--s-5); align-items: end; }
+    .ipg-band__lead { grid-column: 1 / span 7; }
+    .ipg-band__hero { grid-column: 8 / span 5; }
+    .ipg-band .sub { font-size: var(--t-18); line-height: var(--lh-18); max-width: 44ch; }
+    .ipg-facts { margin-top: var(--s-8); }
+  }
+
+  /* ---------- inner page: the black body and its sections ---------- */
+  .ipg-body { padding-block: var(--s-7); }
+  .ipg-grid { display: grid; min-width: 0; }
+  .ipg-sec { display: grid; gap: var(--s-4); align-content: start; min-width: 0; }
+  .ipg-sec + .ipg-sec { margin-top: var(--s-6); padding-top: var(--s-6); border-top: 1px solid var(--c-line); }
+  .ipg-sec__head { display: grid; gap: var(--s-3); min-width: 0; }
+  .ipg-lead { font-size: var(--t-15); line-height: var(--lh-15); color: var(--c-ink-2); max-width: 64ch; }
+  .ipg-lead [data-num]:not([data-status="old"]):not([data-status="none"]) { color: var(--c-ink); font-weight: var(--w-medium); }
+  .ipg-kv { display: grid; border-top: 1px solid var(--c-line); max-width: 40rem; }
+  .ipg-kv > div { display: flex; flex-wrap: wrap; justify-content: space-between; align-items: baseline; gap: 2px var(--s-4); padding: 10px 0; border-bottom: 1px solid var(--c-line); }
+  .ipg-kv dt { font-size: var(--t-13); line-height: 20px; color: var(--c-ink-2); }
+  .ipg-kv dd { font-size: var(--t-15); line-height: 22px; font-weight: var(--w-medium); text-align: right; }
+  .ipg-prose { font-size: var(--t-15); line-height: var(--lh-15); color: var(--c-ink-2); max-width: 64ch; }
+  .ipg-prose [data-num]:not([data-status="old"]):not([data-status="none"]) { color: var(--c-ink); font-weight: var(--w-medium); }
+  .ipg-about { gap: var(--s-3); }
+  .ipg-about .h2 { font-size: var(--t-18); line-height: var(--lh-18); }
+  .ipg-grid.is-busy > .ipg-sec:not(.ipg-about) { opacity: .55; transition: opacity var(--d-2) var(--ease-state); }
+  @media (min-width: 1024px) {
+    .ipg-body { padding-block: var(--s-8) var(--s-9); }
+    .ipg-grid { grid-template-columns: repeat(12, minmax(0, 1fr)); column-gap: var(--s-5); }
+    .ipg-col--7 { grid-column: 1 / span 7; }
+    .ipg-col--5 { grid-column: 8 / span 5; }
+    .ipg-col--full { grid-column: 1 / -1; }
+    .ipg-sec + .ipg-sec { margin-top: var(--s-8); padding-top: var(--s-8); }
+    .ipg-col--7 + .ipg-col--5 { margin-top: 0; padding-top: 0; border-top: 0; padding-left: var(--s-5); border-left: 1px solid var(--c-line); }
+  }
+
+  /* ---------- list pieces shared by the rows below ---------- */
+  .xlist { display: grid; gap: var(--s-3); min-width: 0; }
+  .xmore { margin-top: var(--s-1); }
+  /* an address name: opens the address sheet. Lines are 18 to 22 px tall: + 26 = 44 to 48 px hit area */
+  .xaddr { position: relative; display: inline; padding: 0; margin: 0; border: 0; background: none; color: inherit; font: inherit; letter-spacing: inherit; text-align: left; cursor: pointer; overflow-wrap: anywhere; }
+  .xaddr::after { content: ""; position: absolute; inset: -13px -4px; }
+  .xaddr:hover { text-decoration: underline; text-decoration-thickness: 1px; text-underline-offset: 3px; }
+  .xaddr--sm { font-size: var(--t-13); line-height: 18px; color: var(--c-ink-2); }
+  .xaddr--mono .xaddr__n { font-family: var(--font-code); font-size: var(--t-12); }
+  .xaddr__pre { color: var(--c-ink-2); font-family: var(--font-text); }
+  /* the short address after a shared label (AddrName withAddr): one unit, never broken inside */
+  .xaddr__a { color: var(--c-ink-2); font-family: var(--font-code); font-size: var(--t-12); white-space: nowrap; }
+  .xaddr__by { color: var(--c-ink-2); font-family: var(--font-text); font-size: var(--t-12); }
+  /* the record of a move on a public explorer (new tab) */
+  .xrec { display: inline-flex; align-items: center; justify-content: flex-end; gap: 6px; min-width: 44px; min-height: 44px; color: var(--c-ink-2); font-size: var(--t-13); line-height: 20px; font-weight: var(--w-medium); text-decoration: underline; text-decoration-thickness: 1px; text-underline-offset: 3px; white-space: nowrap; }
+  .xrec:hover { color: var(--c-ink); }
+  .xrec .ico { width: 14px; height: 14px; }
+}

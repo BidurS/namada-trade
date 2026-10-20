@@ -1,0 +1,111 @@
+/* ==========================================================================
+   Trade (S2): split ground, ticket, chart block, size block, pools band.
+   Ported from docs/design/final/site.css "TRADE" (values kept), plus the
+   states the reference does not draw: the live quote, the empty size table,
+   Rewind, and skeletons at the final heights.
+   Mobile first: the ticket comes first on phones; from 1024 px it is the
+   sticky left column with its own scroll when taller than the window.
+   ========================================================================== */
+@layer components {
+  /* ---------- split ground ---------- */
+  .trade .split { display: block; }
+  .split__a { position: relative; padding: var(--s-5) var(--gutter) var(--s-7); }
+  .split__b { min-width: 0; }
+  .trade[data-rewound] .split__a { box-shadow: inset 0 1px 0 var(--c-line-strong); }   /* the yellow rewound banner sits right above the yellow ticket */
+  .tk-chart { padding: var(--s-7) var(--gutter); min-width: 0; }
+
+  /* ---------- the ticket ---------- */
+  .ticket { display: grid; gap: 0; max-width: 560px; min-width: 0; }
+  .ticket .eyebrow { margin-bottom: var(--s-3); }
+  .ticket .sub { margin-top: var(--s-4); }
+  .ticket .seg--side { margin-top: var(--s-5); }
+  .ticket .tk-field { margin-top: var(--s-5); }
+  .ticket .field__state { flex-wrap: wrap; }
+  .ticket .field__in:read-only { cursor: default; }
+  .ticket .field__box:has(.field__in:read-only) { cursor: default; }
+  .tk-slot { display: block; height: 20px; }
+  .tk-note { margin-top: var(--s-2); }
+
+  .get { display: grid; margin-top: var(--s-5); padding-top: var(--s-4); border-top: 2px solid var(--c-ink); min-width: 0; }
+  .get > * + * { margin-top: var(--s-2); }
+  .get__k { display: flex; flex-wrap: wrap; align-items: center; gap: var(--s-2); min-height: 24px; font-size: var(--t-13); line-height: 20px; font-weight: var(--w-medium); color: var(--c-ink-2); }
+  .get__k .field__state { color: var(--c-ink); }
+  .get__v { display: flex; align-items: baseline; flex-wrap: wrap; min-height: 48px; font-size: var(--t-48); line-height: var(--lh-48); font-weight: var(--w-medium); letter-spacing: var(--track-num); font-variant-numeric: tabular-nums; }
+  .get__u { margin-left: var(--s-3); font-size: var(--t-18); line-height: 1; font-weight: var(--w-medium); letter-spacing: 0; }
+  .get__s { min-height: 22px; font-size: var(--t-15); line-height: var(--lh-15); color: var(--c-ink-2); overflow-wrap: anywhere; }
+  .get__s [data-num] { color: var(--c-ink); }
+  .get__reason { color: var(--c-ink); }
+  .pair { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: var(--s-4); margin-top: var(--s-4) !important; padding-top: var(--s-3); border-top: 1px solid var(--c-line); }
+  .pair > div { min-width: 0; }
+  .pair dt { font-size: var(--t-13); line-height: 20px; color: var(--c-ink-2); }
+  .pair dt .term { color: var(--c-ink-2); }
+  .pair dd { min-height: 26px; font-size: var(--t-18); line-height: var(--lh-18); font-weight: var(--w-medium); }
+  .pair .pair__big { min-height: 28px; font-size: var(--t-24); line-height: var(--lh-24); letter-spacing: var(--track-num); }
+  .pair .num__x { display: block; margin: 2px 0 0; }
+  .get__why { margin-top: var(--s-3) !important; font-size: var(--t-13); line-height: 20px; color: var(--c-ink); max-width: 46ch; }
+  .get__why--sm { font-size: var(--t-12); line-height: 16px; color: var(--c-ink-2); }
+  .get__why--sm .pdot { vertical-align: middle; }
+  .get__prov { margin-top: var(--s-4) !important; display: flex; flex-wrap: wrap; align-items: center; gap: var(--s-2); min-height: 24px; }
+  .tk-chipslot { display: inline-block; width: 150px; height: 24px; }
+  .get .skel__b { max-width: 100%; }
+  .notice--thin { margin-top: var(--s-5); max-width: 560px; }
+  .notice--thin .notice__t .term { font-weight: inherit; }
+
+  /* ---------- chart block (the PriceChart section sits inside .tk-chart) ---------- */
+  .tk-chartskel { display: grid; gap: var(--s-4); align-content: start; min-height: 853px; }   /* the loaded block's height at 375 */
+  .tk-chartskel .skel__b { max-width: 100%; }
+  .tk-chartfail { display: grid; gap: var(--s-5); align-content: start; max-width: 640px; }   /* the history failed to load: the reason and Try again, never an empty chart */
+
+  /* ---------- size block: curve, then the ladder as rows (phones) or a table (wide) ---------- */
+  .ladder { padding-block: var(--s-7); }
+  .ladder .lead { margin-top: var(--s-3); }
+  .tk-body { margin-top: var(--s-3); max-width: 60ch; }
+  .tk-size { display: grid; gap: var(--s-4); margin-top: var(--s-4); min-width: 0; }
+  .tk-size > .curve-box .curve { margin-top: 0; }
+  .tk-size .dl--ladder { margin-top: var(--s-4); }
+  .tk-safe b { font-weight: var(--w-medium); color: var(--c-ink); }
+  .tk-sizeskel { display: grid; gap: var(--s-5); min-height: 1186px; align-content: start; }
+  .tk-sizeskel .skel__b { max-width: 100%; }
+
+  /* ---------- pools band, full width under the split ---------- */
+  .pools { padding-block: var(--s-7); }
+  .tk-sec, .tk-scope { display: grid; gap: var(--s-4); align-content: start; min-width: 0; }
+  .tk-sec .lead b { font-weight: var(--w-medium); }
+  .tk-osmo b { font-weight: var(--w-medium); color: var(--c-ink); }
+  .tk-pools { margin-top: var(--s-2); }
+  .tk-lead-skel { display: block; height: 52px; }
+
+  /* ---------- desktop: the split ground ---------- */
+  @media (min-width: 1024px) {
+    /* The left column is 5/12 of the content width (--max) plus the margin outside it, never under 440 px, so the
+       ticket keeps one width (about 428 px) from 1200 px up instead of narrowing as the window widens: a share of the
+       whole viewport minus a padding that grows with it shrank the ticket to 368 px at 1920 and 315 px at 2560. */
+    .trade .split { display: grid; grid-template-columns: max(440px, calc((100vw - var(--max)) / 2 + var(--max) * 5 / 12)) minmax(0, 1fr); align-items: stretch; }
+    .split__a { padding: var(--s-7) var(--s-6) var(--s-8) max(var(--gutter), calc((100vw - var(--max)) / 2 + var(--gutter))); }
+    /* the column edge carries the scale (the screen's one decorative ruler) */
+    .split__a::after { content: ""; position: absolute; top: 0; right: 0; bottom: 0; width: 14px; color: #000; background-image: linear-gradient(0deg, currentColor 0 1px, transparent 1px), linear-gradient(0deg, currentColor 0 1px, transparent 1px); background-size: 7px 8px, 14px 40px; background-repeat: repeat-y; background-position: 100% 0, 100% 0; pointer-events: none; }
+    .split__stick { position: sticky; top: calc(var(--header-h) + var(--s-5)); max-height: calc(100dvh - var(--header-h) - var(--s-6)); overflow: auto; overscroll-behavior: contain; scrollbar-width: thin; padding-right: var(--s-2);
+      /* scroll shadows: a soft edge appears only where the ticket has more to scroll */
+      background:
+        linear-gradient(var(--c-bg) 30%, transparent) center top / 100% 32px no-repeat local,
+        linear-gradient(transparent, var(--c-bg) 70%) center bottom / 100% 32px no-repeat local,
+        linear-gradient(rgb(0 0 0 / .16), transparent) center top / 100% 12px no-repeat scroll,
+        linear-gradient(transparent, rgb(0 0 0 / .16)) center bottom / 100% 12px no-repeat scroll; }
+    .trade[data-rewound] .split__stick { top: calc(var(--header-h) + var(--banner-h) + var(--s-5)); max-height: calc(100dvh - var(--header-h) - var(--banner-h) - var(--s-6)); }
+    .ticket .h1 { font-size: var(--t-32); line-height: var(--lh-32); }
+    /* The presets keep the kit's wrapping row (system.md 8, selectable Chip: "wrap from 640 px") with the 16 px pill padding:
+       six forced into one row of the ~428 px column left "100,000" touching its outline. */
+    .tk-chart, .split__b > .ladder { padding-inline: var(--s-6) max(var(--gutter), calc((100vw - var(--max)) / 2 + var(--gutter))); }
+    .tk-chart { padding-block: var(--s-8); }
+    .split__b > .ladder { padding-block: var(--s-8); border-top: 1px solid var(--c-line); }
+    .ladder > .wrap { padding-inline: 0; max-width: none; margin: 0; }
+    .tk-chartskel { min-height: 703px; }
+    .pools { padding-block: var(--s-8); }
+  }
+  @media (min-width: 640px) {
+    .tk-sizeskel { min-height: 1058px; }
+  }
+  @media (min-width: 640px) and (max-width: 1023px) {
+    .tk-chartskel { min-height: 675px; }
+  }
+}

@@ -1,0 +1,79 @@
+/* ==========================================================================
+   Sheets and popovers (F2), plus the key/value list (.kv). Ported from
+   final/site.css "popovers and sheets". The React Sheet is a modal <dialog>
+   (top layer, Escape, focus return, light dismiss on the scrim).
+   Phone: bottom sheet, 0 radius, 2 px yellow top rule, max-height
+   calc(100dvh - 16px), internal scroll, safe-area padding at the foot.
+   From 640 px: centred dialog 460 px (560 for --lg). --side: a full-height
+   right panel (420 px) from 1024 px.
+   ========================================================================== */
+@layer components {
+  .sheet { position: fixed; inset: auto 0 0 0; margin: 0; width: 100%; max-width: none; height: auto; max-height: calc(100dvh - 16px); padding: 0; overflow: auto; overscroll-behavior: contain; color: var(--c-ink); border: 0; border-top: 2px solid var(--accent); border-radius: var(--r-0); box-shadow: var(--shadow-overlay); background: var(--surface); }
+  .sheet::backdrop { background: var(--scrim); }
+  /* two rules, not one list: a browser that does not know :popover-open drops a whole selector list */
+  .sheet[open] { animation: nt-sheet-in var(--d-3) var(--ease-enter); }
+  .sheet:popover-open { animation: nt-sheet-in var(--d-3) var(--ease-enter); }
+  .sheet[open]::backdrop { animation: nt-fade-in var(--d-3) var(--ease-enter); }
+  .sheet:focus { outline: none; }
+  .sheet:focus-visible { outline: none; }
+  .sheet__in { display: grid; min-height: 100%; }
+  .sheet__head { display: flex; align-items: flex-start; justify-content: space-between; gap: var(--s-4); padding: var(--s-5) var(--s-4) var(--s-3); }
+  .sheet__t { font-size: var(--t-18); line-height: var(--lh-18); font-weight: var(--w-semi); letter-spacing: 0; text-transform: none; }
+  .sheet__head .icon-btn { margin: -10px -10px -10px 0; }
+  .sheet__lead { padding: 0 var(--s-4) var(--s-3); font-size: var(--t-15); line-height: var(--lh-15); color: var(--c-ink-2); }
+  .sheet__lead b { color: var(--c-ink); }
+  .sheet__body { padding: 0 var(--s-4) var(--s-3); }
+  .sheet__foot { padding: var(--s-3) var(--s-4) calc(var(--s-5) + env(safe-area-inset-bottom, 0px)); display: grid; gap: var(--s-2); }
+  .sheet .chks { padding: 0 var(--s-4); }
+  .sheet .how { margin: var(--s-4); border-top: 1px solid var(--c-line); }
+  .how summary { display: flex; align-items: center; justify-content: space-between; gap: var(--s-2); min-height: 44px; font-size: var(--t-13); font-weight: var(--w-medium); cursor: pointer; list-style: none; }
+  .how summary::-webkit-details-marker { display: none; }
+  .how summary .ico { width: 16px; height: 16px; transition: transform var(--d-2) var(--ease-state); }
+  .how[open] summary .ico { transform: rotate(180deg); }
+  .srcs { display: grid; margin-top: var(--s-2); }
+  .srcs li { display: flex; justify-content: space-between; gap: var(--s-3); padding: 8px 0; border-top: 1px solid var(--c-line); color: var(--c-ink-2); }
+
+  /* key / value rows: the provenance sheet (Status, As of, Age, Source, Derived, Note, Technical name) */
+  .kv { display: grid; grid-template-columns: auto 1fr; gap: 10px var(--s-4); padding: 0 var(--s-4) var(--s-2); font-size: var(--t-13); line-height: 20px; }
+  .kv dt { color: var(--c-ink-2); }
+  .kv dd { display: flex; align-items: center; flex-wrap: wrap; gap: var(--s-2); min-width: 0; overflow-wrap: anywhere; }
+  .kv dd .dot { flex: none; }
+  .kv .mono { font-family: var(--font-code); font-size: var(--t-12); }
+  .kv__sub { display: block; width: 100%; color: var(--c-ink-2); font-size: var(--t-12); line-height: 16px; font-family: var(--font-code); }
+
+  @media (min-width: 640px) {
+    .sheet { inset: 0; margin: auto; height: fit-content; width: min(460px, calc(100vw - 48px)); max-height: calc(100dvh - 48px); border: 1px solid var(--c-line-strong); border-top: 2px solid var(--accent); }
+    .sheet--lg { width: min(560px, calc(100vw - 48px)); }
+  }
+  @media (min-width: 1024px) {
+    .sheet--side { inset: 0 0 0 auto; margin: 0; width: 420px; height: 100dvh; max-height: 100dvh; border-width: 0 0 0 1px; border-left: 1px solid var(--c-line-strong); border-top: 2px solid var(--accent); }
+    .sheet--side[open] { animation-name: nt-side-in; }
+  }
+
+  /* page scroll stays put while a sheet or search is open */
+  html:has(.sheet[open], .pal[open]) { overflow: hidden; }
+
+  /* ---------- Popover: glossary terms and tag explanations ----------
+     Anchored card from 640 px (positioned by script beside its invoker); on phones the
+     same element is a bottom sheet. Native popover="auto": light dismiss, Escape, top layer. */
+  /* hidden unless open: without the Popover API no UA rule hides [popover], and .is-open is the fallback (ui/Term.tsx) */
+  .pop { display: none; position: fixed; inset: auto 0 0 0; margin: 0; width: 100%; max-width: none; max-height: calc(100dvh - 16px); padding: var(--s-5) var(--s-4) calc(var(--s-5) + env(safe-area-inset-bottom, 0px)); overflow: auto; color: var(--c-ink); background: var(--surface); border: 0; border-top: 2px solid var(--accent); border-radius: var(--r-0); box-shadow: var(--shadow-overlay); }
+  .pop:popover-open { display: grid; gap: var(--s-2); animation: nt-sheet-in var(--d-3) var(--ease-enter); }
+  .pop.is-open { display: grid; gap: var(--s-2); z-index: 60; animation: nt-sheet-in var(--d-3) var(--ease-enter); }
+  .pop::backdrop { background: var(--scrim); }
+  .pop__plain { font-size: var(--t-15); line-height: var(--lh-15); font-weight: var(--w-semi); padding-right: 44px; }
+  .pop__expert { font: var(--w-medium) var(--t-12) / 16px var(--font-code); color: var(--c-ink-2); }
+  .pop__text { font-size: var(--t-13); line-height: 20px; }
+  .pop__x { position: absolute; top: var(--s-3); right: var(--s-2); }
+  .pop .link { min-height: 44px; }
+  @media (min-width: 640px) {
+    .pop { inset: auto; top: var(--pop-y, 50%); left: var(--pop-x, 50%); width: max-content; max-width: 320px; padding: var(--s-4); border: 1px solid var(--c-line-strong); border-top: 2px solid var(--accent); }
+    .pop::backdrop { background: transparent; }
+    .pop:popover-open { animation-name: nt-fade-in; }
+    .pop.is-open { animation-name: nt-fade-in; }
+  }
+
+  @keyframes nt-sheet-in { from { transform: translateY(16px); opacity: 0; } }
+  @keyframes nt-side-in { from { transform: translateX(16px); opacity: 0; } }
+  @keyframes nt-fade-in { from { opacity: 0; } }
+}

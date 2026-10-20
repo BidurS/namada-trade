@@ -1,0 +1,90 @@
+/* ==========================================================================
+   Shielded (S4). The yellow field (share hero, shielded bar, key) stacks over
+   the black chart on phones and sits beside it from 1024 px: the split ground
+   of Trade (final/site.css .split, .split__a::after seam scale), ported.
+   The sections below reuse the inner-page frame in supply.css (.ipg-*).
+   ========================================================================== */
+@layer components {
+  .shd-split { display: block; }
+
+  /* ---------- the yellow field ---------- */
+  .shd-band { position: relative; }
+  .shd-band__in { width: 100%; max-width: var(--max); margin-inline: auto; padding: var(--s-5) var(--gutter) var(--s-6); }
+  .shd-band .eyebrow { margin-bottom: var(--s-3); }
+  .shd-band .h1 { max-width: 16ch; }
+  .shd-band .sub { margin-top: var(--s-4); }
+  .shd-hero { margin-top: var(--s-6); min-height: 128px; }
+  .shd-hero .hero-n__sub { color: var(--c-ink); max-width: 36ch; }
+  /* figures kept after a failed refresh: one sentence, the reason */
+  .shd-refresh { margin-top: var(--s-4); color: var(--c-ink); font-size: var(--t-13); line-height: var(--lh-13); max-width: 60ch; }
+  .shd-refresh .dot { margin-top: 6px; }
+  .shd-gap { margin-top: var(--s-2); }
+  .shd-bar { margin-top: var(--s-2); min-width: 0; }
+  .shd-bar__skel { display: grid; gap: var(--s-4); }
+  .shd-src-slot { min-height: 52px; }
+  .shd-bar__none { padding: var(--s-4) 0; border-top: 2px solid var(--c-ink); font-size: var(--t-15); line-height: var(--lh-15); max-width: 46ch; }
+  /* cyan beside yellow needs an edge to read as its own segment (WCAG 1.4.11) */
+  .shd-band .sg--shielded { box-shadow: inset 0 0 0 1px #000; }
+  .shd-key { display: grid; margin-top: var(--s-4); }
+  .shd-key li { display: grid; grid-template-columns: 12px minmax(0, 1fr) auto; align-items: center; column-gap: var(--s-3); min-height: 40px; padding: 8px 0; border-top: 1px solid var(--c-line); font-size: var(--t-13); line-height: 20px; }
+  .shd-key__sw { width: 12px; height: 12px; min-width: 0; }
+  .shd-key__n { color: var(--c-ink-2); min-width: 0; }
+  .shd-key .shd-key__all { border-top: 2px solid var(--c-ink); }
+  .shd-key__all .shd-key__n { color: var(--c-ink); font-weight: var(--w-medium); }
+  .shd-key__v { text-align: right; font-size: var(--t-15); font-weight: var(--w-medium); white-space: nowrap; }
+  .shd-band__ruler { display: block; }
+  @media (min-width: 640px) { .shd-band__in { padding-top: var(--s-7); } }
+
+  /* ---------- the chart ---------- */
+  .shd-chart__in { width: 100%; max-width: var(--max); margin-inline: auto; padding: var(--s-7) var(--gutter); min-width: 0; }
+  .shd-chart__skel { display: grid; gap: var(--s-4); }
+  .shd-chart__box { height: 160px; }
+  .shd-sk--top { height: 206px; }
+  .shd-sk--read { height: 48px; width: 70%; }
+  .shd-sk--stats { height: 142px; }
+  @media (min-width: 640px) { .shd-chart__box { height: 260px; } .shd-sk--top { height: 124px; } .shd-sk--read { height: 28px; } .shd-sk--stats { height: 87px; } }
+
+  /* ---------- Inside the shielded set ---------- */
+  .shd-facts .facts { margin-top: 0; }
+  .shd-io { display: block; margin-top: 2px; font: var(--w-regular) var(--t-12) / 16px var(--font-code); color: var(--c-ink-2); }
+
+  /* ---------- Largest moves out: three-line rows, a six-column table from 700 px ---------- */
+  .mor { container: mor / inline-size; display: grid; min-width: 0; }
+  .mor__head { display: none; }
+  .mor__row { display: grid; grid-template-columns: minmax(0, 1fr) auto; grid-template-areas: "kind amt" "to to" "cap rec"; column-gap: var(--s-3); row-gap: var(--s-1); align-items: center; padding: 14px 0 0; border-top: 1px solid var(--c-line); }
+  .mor__kind { grid-area: kind; min-width: 0; }
+  .mor__amt { grid-area: amt; text-align: right; font-size: var(--t-18); line-height: 22px; font-weight: var(--w-medium); white-space: nowrap; }
+  .mor__to { grid-area: to; display: flex; flex-wrap: wrap; align-items: baseline; gap: 2px var(--s-2); min-width: 0; font-size: var(--t-15); line-height: 22px; font-weight: var(--w-medium); }
+  .mor__tow { color: var(--c-ink-2); font-weight: var(--w-regular); }
+  .mor__addr { color: var(--c-ink-2); font-weight: var(--w-regular); }
+  .mor__cap { grid-area: cap; font-size: var(--t-13); line-height: 20px; color: var(--c-ink-2); }
+  .mor__rec { grid-area: rec; justify-self: end; }
+  .mor__when, .mor__usd { display: none; }
+  @container mor (min-width: 700px) {
+    .mor__head, .mor__row { grid-template-columns: 112px 128px minmax(0, 1fr) minmax(0, 1fr) minmax(0, 1.8fr) 76px; column-gap: var(--s-4); }
+    .mor__head { display: grid; padding: 0 0 var(--s-2); color: var(--c-ink-2); font-size: var(--t-12); line-height: 16px; font-weight: var(--w-medium); }
+    .mor__head > span { align-self: end; }
+    .mor__row { grid-template-areas: "when kind amt usd to rec"; padding: 6px 0; min-height: 56px; }
+    .mor__when, .mor__usd { display: block; font-size: var(--t-13); line-height: 20px; color: var(--c-ink-2); }
+    .mor__when { grid-area: when; }
+    .mor__usd { grid-area: usd; text-align: right; }
+    .mor__cap { display: none; }
+    .mor__tow { display: none; }
+    .mor__to { display: grid; gap: 0; font-size: var(--t-13); line-height: 20px; }
+    .mor__amt { font-size: var(--t-15); }
+  }
+  @media (min-width: 1024px) {
+    .mor__head { position: sticky; top: var(--header-h); z-index: 2; background: var(--c-bg); padding-top: var(--s-2); }
+  }
+
+  /* ---------- split ground from 1024 px: yellow 5/12 beside the black chart 7/12 ---------- */
+  @media (min-width: 1024px) {
+    .shd-split { display: grid; grid-template-columns: max(440px, calc((100vw - var(--max)) / 2 + var(--max) * 5 / 12)) minmax(0, 1fr); align-items: stretch; }
+    .shd-band__in { max-width: none; margin: 0; padding: var(--s-8) var(--s-6) var(--s-8) max(var(--gutter), calc((100vw - var(--max)) / 2 + var(--gutter))); }
+    .shd-band .h1 { font-size: var(--t-32); line-height: var(--lh-32); }
+    /* the seam carries the screen's one decorative scale */
+    .shd-band::after { content: ""; position: absolute; top: 0; right: 0; bottom: 0; width: 14px; color: #000; background-image: linear-gradient(0deg, currentColor 0 1px, transparent 1px), linear-gradient(0deg, currentColor 0 1px, transparent 1px); background-size: 7px 8px, 14px 40px; background-repeat: repeat-y; background-position: 100% 0, 100% 0; pointer-events: none; }
+    .shd-band__ruler { display: none; }
+    .shd-chart__in { max-width: none; margin: 0; padding: var(--s-8) max(var(--gutter), calc((100vw - var(--max)) / 2 + var(--gutter))) var(--s-8) var(--s-6); }
+  }
+}

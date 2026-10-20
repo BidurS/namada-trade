@@ -1,0 +1,252 @@
+/* ==========================================================================
+   Home (S1). Ported from docs/design/final/site.css ("sections", "Home hero",
+   "narrative", "what changed", "holders" sentence, "path of a NAM", "explore",
+   "mini ticket, trust, closing", "motion"). Values are the reference's; the
+   kit's components (hero number, facts, supply bar, rows, curve) keep their
+   own CSS in components/*. Everything here is scoped under .home, so a screen
+   that reuses a reference class name (.sec, .chk, .more) cannot change Home.
+   Mobile first: base rules are 375 px; 640, 900, 1024 add to them.
+   ========================================================================== */
+@layer components {
+
+  /* ---------- sections ---------- */
+  .home .sec { display: grid; gap: var(--s-4); align-content: start; min-width: 0; }
+  .home .sec + .sec { margin-top: var(--s-6); padding-top: var(--s-6); border-top: 1px solid var(--c-line); }
+  .home .more { margin-top: var(--s-2); }
+  .home .home-none { display: flex; align-items: flex-start; gap: var(--s-2); font-size: var(--t-15); line-height: var(--lh-15); color: var(--c-ink-2); max-width: 60ch; }
+  .home .home-none .dot { margin-top: 7px; }
+  @media (min-width: 1024px) { .home .sec + .sec { margin-top: var(--s-8); padding-top: var(--s-8); } }
+
+  /* ---------- hero: the yellow field ---------- */
+  .home .hero { position: relative; padding-block: var(--s-5) 0; }
+  .home .hero > .wrap { padding-bottom: var(--s-4); }
+  .home .hero__grid { display: grid; gap: var(--s-4); grid-template-areas: "lead" "price" "actions"; }
+  .home .hero__lead { grid-area: lead; min-width: 0; }
+  .home .hero .eyebrow { margin-bottom: var(--s-3); }
+  .home .hero .sub { margin-top: var(--s-4); }
+  .home .price { grid-area: price; min-width: 0; }
+  .home .actions { grid-area: actions; display: flex; flex-wrap: wrap; gap: var(--s-3); }
+  .home .actions .btn { flex: 1 1 100%; }
+  .home .hero__facts .facts { margin-top: var(--s-4); }
+  .home .hero .ruler { position: relative; }
+  /* the price figure never wraps; the leading zeros are dimmed by the kit (.lz) */
+  .home .hero .hero-n__v [data-num] { white-space: nowrap; }
+  /* skeleton slots at the final sizes (no shift when the overview arrives) */
+  .home .hero__wait { display: inline-block; width: 17em; max-width: 60%; height: 10px; vertical-align: middle; }
+  .home .hero__pwait { max-width: 100%; height: 1em !important; }   /* the display size at every width (64 px phone, 80 px desktop) */
+  .home .hero__dwait { display: inline-block; width: 220px; max-width: 100%; height: 28px; border-radius: var(--r-pill); }
+  .home .hero__fwait { display: inline-block; width: 4ch; height: 22px; vertical-align: middle; }
+  .home .hero__swait { display: inline-block; width: 22ch; max-width: 70vw; height: 12px; }
+  .home .srcb--wait { cursor: default; }
+  /* the 30-day executed-price line: from 640 px, under the price */
+  .home .hero__spark { display: none; margin-top: var(--s-5); min-height: 96px; }   /* 64 px line, 8 px gap, 24 px caption */
+  .home .hero__spark .spark__c [data-num] { color: var(--c-ink); }
+  @media (min-width: 640px) {
+    .home .actions .btn { flex: 0 1 auto; }
+    .home .hero__spark { display: block; }
+  }
+  @media (min-width: 1024px) {
+    .home .hero { padding-block: var(--s-8) 0; }
+    .home .hero > .wrap { padding-bottom: var(--s-8); }
+    .home .hero__grid { grid-template-columns: repeat(12, minmax(0, 1fr)); column-gap: var(--s-5); row-gap: var(--s-5); grid-template-areas: "lead lead lead lead lead lead lead price price price price price" "actions actions actions actions actions actions actions price price price price price"; align-items: end; }
+    .home .price, .home .actions { align-self: end; }
+    .home .hero .sub { font-size: var(--t-18); line-height: var(--lh-18); max-width: 44ch; }
+    .home .hero__facts .facts { margin-top: var(--s-8); }
+    /* the display figure never outgrows its five columns (tokens.css: clamp from 1024 px) */
+    .home .hero .hero-n--display .hero-n__v { font-size: clamp(4rem, 6.4vw, 5rem); }
+  }
+
+  /* ---------- narrative: sections 2 to 4, and the desktop rail ---------- */
+  .home .narrative { padding-block: var(--s-7); }
+  .home .narrative__grid { display: grid; gap: var(--s-7); }
+  .home .narrative__main { min-width: 0; }
+  .home .rail { display: none; }
+  @media (min-width: 1024px) {
+    .home .narrative { padding-block: var(--s-9); }
+    .home .narrative__grid { grid-template-columns: repeat(12, minmax(0, 1fr)); column-gap: var(--s-5); align-items: start; }
+    .home .narrative__main { grid-column: 1 / span 8; }
+    .home .rail { display: block; grid-column: 10 / span 3; align-self: stretch; }
+    .home .rail__in { position: sticky; top: calc(var(--header-h) + var(--s-6)); display: grid; gap: var(--s-4); padding-top: var(--s-3); border-top: 2px solid var(--c-ink); }
+    .home .rail__h { font-size: var(--t-13); line-height: 20px; font-weight: var(--w-semi); }
+    .home .rail__list { display: grid; margin: 0; }
+    .home .rail__list > div { display: grid; gap: 2px; padding: var(--s-4) 0; border-top: 1px solid var(--c-line); justify-items: start; }
+    .home .rail__list dt { font-size: var(--t-13); line-height: 20px; color: var(--c-ink-2); }
+    .home .rail__list dd { margin: 0; }
+    .home .rail__list dd:first-of-type { font-size: var(--t-24); line-height: var(--lh-24); font-weight: var(--w-medium); letter-spacing: var(--track-num); }
+    .home .rail__list dd + dd { margin-top: var(--s-2); }
+  }
+
+  /* ---------- what changed: hits or the empty state, then latest moves ---------- */
+  .home .changed__wait .skel__row { border-top: 0; }
+  .home .hits { display: grid; gap: var(--s-2); }
+  /* the alert hits are a kept earlier answer (their refresh failed): the one sentence above them */
+  .home .sec > .old { display: flex; align-items: flex-start; gap: var(--s-2); margin-bottom: var(--s-3); font-size: var(--t-13); line-height: 20px; color: var(--c-ink-2); max-width: 60ch; }
+  .home .sec > .old .dot { margin-top: 6px; }
+  .home .hits__list { display: grid; list-style: none; padding: 0; margin: 0; }
+  .home .hit { display: grid; grid-template-columns: minmax(0, 1fr) auto; column-gap: var(--s-3); row-gap: 4px; align-items: baseline; padding: 12px 0; min-height: 64px; border-top: 1px solid var(--c-line); }
+  .home .hit:first-child { border-top: 2px solid var(--c-ink); }
+  .home .hit__t { font-size: var(--t-15); line-height: 22px; font-weight: var(--w-medium); }
+  .home .hit__n { font-size: var(--t-18); line-height: 22px; font-weight: var(--w-medium); text-align: right; white-space: nowrap; }
+  .home .hit__c { grid-column: 1 / -1; display: flex; flex-wrap: wrap; align-items: center; gap: var(--s-1) var(--s-3); font-size: var(--t-13); line-height: 20px; color: var(--c-ink-2); }
+  .home .empty__s p { max-width: 52ch; }
+  .home .empty__s .num .pdot { margin-left: 2px; }
+
+  .home .tape { display: grid; margin-top: var(--s-2); min-width: 0; }
+  .home .tape__h { display: flex; flex-wrap: wrap; align-items: baseline; justify-content: space-between; gap: var(--s-1) var(--s-3); padding-bottom: var(--s-3); }
+  .home .tape .old { display: flex; align-items: flex-start; gap: var(--s-2); margin-bottom: var(--s-3); font-size: var(--t-13); line-height: 20px; color: var(--c-ink-2); }
+  .home .tape .old .dot { margin-top: 6px; }
+  .home .tape__none { padding: var(--s-4) 0; border-top: 1px solid var(--c-line); font-size: var(--t-15); color: var(--c-ink-2); }
+  .home .tp__c .mono { font-size: inherit; font-family: var(--font-code); letter-spacing: 0; }
+  .home .tp__c [data-num] { color: inherit; }
+
+  /* ---------- who holds NAM: the sentences above the rows ---------- */
+  .home .hl__sentence { display: grid; gap: var(--s-1); font-size: var(--t-15); line-height: var(--lh-15); color: var(--c-ink-2); max-width: 60ch; }
+  .home .hl__sentence:empty { display: none; }
+  .home .hl__sentence .old { display: flex; align-items: flex-start; gap: var(--s-2); }
+  .home .hl__sentence .old .dot { margin-top: 7px; }
+  .home .holders__pwait { display: inline-block; width: 3.2em; height: 18px; vertical-align: middle; }
+  /* the holder's name opens its address sheet; the 44 px hit area is the ::after */
+
+  /* ---------- the path of a NAM (the second yellow field) ---------- */
+  .home .path { padding-block: var(--s-7); }
+  .home .path .h2 { margin-top: var(--s-2); max-width: 22ch; }
+  .home .path__lead { margin-top: var(--s-4); max-width: 52ch; font-size: var(--t-15); line-height: var(--lh-15); color: var(--c-ink-2); }
+  .home .steps-box { position: relative; margin-top: var(--s-6); view-timeline-name: --nt-path; }
+  .home .steps { position: relative; display: grid; gap: var(--s-6); margin: 0; padding: 0; list-style: none; }
+  .home .steps__nam { display: none; }
+  .home .steps::before, .home .steps::after { content: ""; position: absolute; left: 13px; top: 14px; bottom: 14px; width: 2px; pointer-events: none; }
+  .home .steps::before { background: var(--c-line); }
+  .home .steps::after { background: var(--c-ink); transform-origin: top; }
+  .home .step { position: relative; display: grid; grid-template-columns: 28px minmax(0, 1fr); column-gap: var(--s-4); align-content: start; }
+  .home .step__ring { position: relative; z-index: 1; width: 28px; height: 28px; background: var(--c-bg); color: var(--c-ink); border-radius: 50%; }
+  .home .step__ring svg { display: block; width: 28px; height: 28px; }
+  .home .step__ring .r1 { transform-origin: center; transform-box: fill-box; }
+  .home .step__body { display: grid; gap: var(--s-2); padding-bottom: var(--s-1); min-width: 0; }
+  .home .step__k { display: flex; align-items: baseline; gap: var(--s-3); font-size: var(--t-18); line-height: var(--lh-18); font-weight: var(--w-semi); }
+  .home .step__k .term { font-weight: var(--w-semi); }
+  .home .step__i { font: var(--w-medium) var(--t-12) / 16px var(--font-code); color: var(--c-ink-2); }
+  .home .step__copy { font-size: var(--t-15); line-height: var(--lh-15); max-width: 34ch; }
+  .home .step__fig { display: flex; align-items: baseline; gap: var(--s-2); margin-top: var(--s-1); min-height: var(--lh-24); }
+  .home .step__fig .num { display: inline-flex; flex-wrap: wrap; align-items: baseline; gap: 0 6px; }
+  .home .step__n, .home .step__fig [data-num] { font-size: var(--t-24); line-height: var(--lh-24); font-weight: var(--w-medium); letter-spacing: var(--track-num); }
+  .home .step__u { font: var(--w-medium) var(--t-12) / 16px var(--font-code); color: var(--c-ink-2); }
+  .home .step__note { display: flex; flex-wrap: wrap; align-items: center; gap: var(--s-1) var(--s-3); min-height: 24px; font-size: var(--t-13); line-height: 20px; color: var(--c-ink-2); }
+  .home .step__note [data-num] { color: var(--c-ink-2); }
+
+  .home .explore { margin-top: var(--s-7); padding-top: var(--s-5); border-top: 2px solid var(--c-ink); }
+  .home .explore__t { font-size: var(--t-18); line-height: var(--lh-18); }
+  .home .explore .src { margin-top: var(--s-2); }
+  .home .explore .home-none { margin-top: var(--s-4); }
+  .home .explore__wait { display: block; height: 560px; margin-top: var(--s-4); }
+  @container curvebox (min-width: 800px) { .home .explore .curve__plot { min-height: 248px; } }
+  @media (min-width: 900px) { .home .explore__wait { height: 340px; } }
+
+  .home .sidenote { position: relative; display: flex; flex-wrap: wrap; align-items: baseline; gap: 0 var(--s-2); margin-top: var(--s-7); padding: var(--s-4) 0 0 32px; border-top: 2px solid var(--c-ink); font-size: var(--t-15); line-height: 28px; }
+  .home .sidenote > .gly { position: absolute; left: 0; top: calc(var(--s-4) + 6px); }
+  .home .sidenote > span { max-width: 60ch; }
+
+  .home .path__more { margin-top: var(--s-6); }
+  .home .path__more-t { font-size: var(--t-13); line-height: 20px; font-weight: var(--w-medium); color: var(--c-ink-2); }
+  .home .path__more ul { display: flex; flex-wrap: wrap; gap: 0 var(--s-5); margin: var(--s-1) 0 0; padding: 0; list-style: none; }
+
+  @media (min-width: 900px) {
+    .home .sidenote { padding-right: 36%; }
+    .home .steps-box { margin-top: var(--s-7); }
+    .home .steps { grid-template-columns: repeat(4, minmax(0, 1fr)); gap: var(--s-5); }
+    .home .steps::before, .home .steps::after { left: 0; right: 0; top: 13px; bottom: auto; width: auto; height: 2px; }
+    .home .steps::after { transform-origin: left; }
+    .home .step { grid-template-columns: 1fr; row-gap: var(--s-5); }
+    .home .step__copy { max-width: 26ch; min-height: 66px; }
+    .home .path .h2 { max-width: none; }
+  }
+  @media (min-width: 1024px) { .home .path { padding-block: var(--s-9); } }
+
+  /* ---------- closing: the mini-ticket and why you can trust these numbers ---------- */
+  .home .closing { padding-block: var(--s-7); }
+  .home .closing__grid { display: grid; gap: var(--s-7); }
+  .home .closing__grid > .sec + .sec { margin-top: 0; }
+  .home .ticket__not { margin-top: calc(var(--s-2) * -1); }
+  .home .mini { display: grid; border-top: 2px solid var(--c-ink); }
+  .home .mini__row, .home .mini__get { display: flex; flex-wrap: wrap; justify-content: space-between; align-items: baseline; gap: var(--s-1) var(--s-3); padding: 14px 0; border-bottom: 1px solid var(--c-line); }
+  .home .mini__k { font-size: var(--t-13); line-height: 20px; color: var(--c-ink-2); }
+  .home .mini__k .field__state { color: var(--c-ink); }
+  .home .mini__amt, .home .mini__v { font-size: var(--t-24); line-height: var(--lh-24); font-weight: var(--w-medium); letter-spacing: var(--track-num); white-space: nowrap; }
+  .home .mini__mv { font-size: var(--t-18); line-height: var(--lh-18); font-weight: var(--w-medium); }
+  .home .mini__chip { flex-basis: 100%; min-height: 24px; }
+  .home .sec--ticket .notice { margin-top: var(--s-1); }
+
+  .home .why { display: grid; gap: var(--s-4); margin: 0; padding: 0; list-style: none; counter-reset: w; }
+  .home .why li { position: relative; padding-left: 36px; font-size: var(--t-15); line-height: var(--lh-15); counter-increment: w; max-width: 56ch; }
+  .home .why li::before { content: counter(w); position: absolute; left: 0; top: 0; width: 24px; height: 24px; display: grid; place-items: center; border: 1.5px solid var(--c-line-strong); border-radius: 50%; font: var(--w-medium) var(--t-12) / 1 var(--font-code); color: var(--c-ink-2); }
+  .home .why a { color: var(--c-ink); font-weight: var(--w-medium); text-decoration: underline; text-decoration-thickness: 1px; text-underline-offset: 3px; }
+  .home .proof { display: grid; gap: var(--s-2); justify-items: start; padding: var(--s-4); border: 1px solid var(--c-line-strong); border-radius: var(--r-1); }
+  .home .proof p { font-size: var(--t-15); line-height: var(--lh-15); max-width: 56ch; }
+  .home .chks { display: grid; margin: 0; padding: 0; list-style: none; }
+  .home .chk { display: grid; grid-template-columns: minmax(0, 1fr); row-gap: 2px; padding: 12px 0; border-top: 1px solid var(--c-line); }
+  .home .chk__t { display: flex; gap: 10px; align-items: baseline; font-size: var(--t-15); line-height: 22px; font-weight: var(--w-medium); }
+  .home .chk__t .dot { flex: none; transform: translateY(-1px); }
+  .home .chk__w { padding-left: 18px; font: var(--w-medium) var(--t-12) / 16px var(--font-code); color: var(--c-ink-2); }
+  .home .chk[data-status="old"] .chk__w, .home .chk[data-status="disagree"] .chk__w { color: var(--c-ink); }
+  .home .chk__d { padding-left: 18px; font-size: var(--t-13); line-height: 20px; color: var(--c-ink-2); }
+  .home .passes { border-top: 1px solid var(--c-line); }
+  .home .passes > summary { display: flex; align-items: center; justify-content: space-between; min-height: 52px; font-size: var(--t-13); font-weight: var(--w-medium); cursor: pointer; list-style: none; }
+  .home .passes > summary::-webkit-details-marker { display: none; }
+  .home .passes > summary .ico { width: 16px; height: 16px; transition: transform var(--d-2) var(--ease-state); }
+  .home .passes[open] > summary .ico { transform: rotate(180deg); }
+  @media (min-width: 1024px) {
+    .home .closing { padding-block: var(--s-9); }
+    .home .closing__grid { grid-template-columns: repeat(12, minmax(0, 1fr)); column-gap: var(--s-5); align-items: start; }
+    .home .closing__grid > .sec { margin: 0; padding: 0; border: 0; }
+    .home .sec--ticket { grid-column: 1 / span 5; }
+    .home .sec--trust { grid-column: 7 / span 6; }
+  }
+
+  /* ==========================================================================
+     MOTION: geometry only, never a number (system.md 7.1). Scroll-driven, and
+     only where it is supported AND motion is allowed; under reduced motion
+     tokens.css stops all of it. No reveal hides content: sections rise 16 px
+     and steps 8 px (no opacity), so a full-page capture, print or a frozen
+     timeline still shows every word at full contrast. The rail draws over its
+     own faint base line and each ring's dot grows from a small dot to full as
+     the step is reached ("not reached yet" is a readable state, not an empty
+     one). html.static (set by the screen when the page fits the window) shows
+     the finished state. The rises move in whole pixels (steps), so a control
+     inside a rising section never measures a fraction under its 44 px.
+     ========================================================================== */
+  @keyframes nt-home-rise { from { transform: translateY(16px); } to { transform: none; } }
+  @keyframes nt-home-rail-y { from { transform: scaleY(0); } to { transform: scaleY(1); } }
+  @keyframes nt-home-rail-x { from { transform: scaleX(0); } to { transform: scaleX(1); } }
+  @keyframes nt-home-step { from { transform: translateY(8px); } to { transform: none; } }
+  @keyframes nt-home-dot { from { transform: scale(.34); } to { transform: scale(1); } }
+  @keyframes nt-home-nam-y { from { transform: none; } to { transform: translateY(var(--rail-h, 0px)); } }
+  @keyframes nt-home-nam-x { from { transform: none; } to { transform: translateX(var(--rail-w, 0px)); } }
+  @media (prefers-reduced-motion: no-preference) {
+    @supports (animation-timeline: view()) {
+      .home .narrative .sec, .home .closing .sec, .home .explore, .home .sidenote { animation: nt-home-rise steps(16, end) both; animation-timeline: view(); animation-range: entry 0% entry 30%; }
+      /* The rail, its travelling NAM and the ring dots share one timeline (the steps box), so the NAM
+         rides the drawn line's leading edge. Phones: the edge tracks a reading line 60% down the window
+         (cover 18% to 74% for the box's usual height); each ring fills as the edge reaches it. */
+      .home .steps::after { animation: nt-home-rail-y linear both; animation-timeline: --nt-path; animation-range: cover 18% cover 74%; }
+      .home .steps__nam { display: block; position: absolute; z-index: 2; left: 7px; top: 7px; width: 14px; height: 14px; border-radius: 50%; background: var(--c-ink); box-shadow: 0 0 0 3px var(--c-bg); pointer-events: none; animation: nt-home-nam-y linear both; animation-timeline: --nt-path; animation-range: cover 18% cover 74%; }
+      .home .step__ring .r1 { animation: nt-home-dot linear both; animation-timeline: view(); animation-range: cover 37% cover 42%; }
+      .home .step__body { animation: nt-home-step steps(8, end) both; animation-timeline: view(); animation-range: entry 5% entry 55%; }
+      /* From 900 px the rail is horizontal: it draws while the steps cross the upper middle of the window,
+         and each ring fills when the NAM passes it (ring k sits at about k/4 of the rail). */
+      @media (min-width: 900px) {
+        .home .steps::after { animation-name: nt-home-rail-x; animation-range: cover 11% cover 49%; }
+        .home .steps__nam { left: 0; top: 7px; animation-name: nt-home-nam-x; animation-range: cover 11% cover 49%; }
+        .home .step .step__ring .r1 { animation-timeline: --nt-path; }
+        .home .step:nth-child(1) .step__ring .r1 { animation-range: cover 10% cover 12%; }
+        .home .step:nth-child(2) .step__ring .r1 { animation-range: cover 20% cover 22.5%; }
+        .home .step:nth-child(3) .step__ring .r1 { animation-range: cover 30% cover 32.5%; }
+        .home .step:nth-child(4) .step__ring .r1 { animation-range: cover 40% cover 42.5%; }
+      }
+    }
+  }
+  html.static .home .sec, html.static .home .explore, html.static .home .sidenote, html.static .home .steps::after, html.static .home .step__body, html.static .home .step__ring .r1 { animation: none !important; }
+  html.static .home .steps__nam { display: none; }
+  @media print {
+    .home .sec, .home .explore, .home .sidenote, .home .steps::after, .home .step__body, .home .step__ring .r1 { animation: none !important; }
+    .home .steps__nam { display: none; }
+  }
+}
