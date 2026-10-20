@@ -41,6 +41,7 @@ function network(net: Net | ((url: string) => boolean)) {
           : path.includes('/shell/prefix/') ? BAL.value
           : path.includes('/vp/pos/bonds_and_unbonds/to') ? BONDS.value
           : path.includes('delegations_at') ? null
+          : path.includes('balance/minted') ? u256(BigInt(BAL.expected.minted)) // the fixture's minted key: the gate checks the two agree
           : u256(path.includes('total_stake') ? 75338381473000n : 1000000n); // 0.3% under the fixture's bond sum
         res = json({ result: { response: { code: 0, value, height: '8343400' } } });
       }
@@ -202,11 +203,17 @@ describe('a hung Namada node', () => {
     let h = healthOf(db);
     expect(listedStakes(db)).toBe(12); // the bond listing ran before the sample
     expect(h['Namada RPC (stake sample)'].ok).toBe(false);
-    expect(h['Namada RPC (stake sample)'].note).toMatch(/^0 of 0 sampled stakes match.*reads failed.*left for the next tick \(time limit\)/);
-    // next tick: the sample is cut LISTING_RESERVE_MS before the deadline and the balance listing runs in the time kept
+    expect(h['Namada RPC (stake sample)'].note).toMatch(/^0 of 0 sampled stakes match.*6 reads failed, 6 left for the next tick \(time limit\); 0 full passes/);
+    // the sample was cut LISTING_RESERVE_MS before the deadline (two 8 s node timeouts a read, six reads at a time); its cursor stops at the
+    // last row it reached, so the six it did not read are the ones sampled next tick
+    expect(t1).toBeGreaterThanOrEqual(TICK_DEADLINE_MS - LISTING_RESERVE_MS);
+    const cursor = record<{ cursor: string; passes: number }>(db, 'stake.sample')!;
+    expect(cursor.passes).toBe(0);
+    expect(db.raw.prepare('SELECT COUNT(*) n FROM stakes WHERE bonded_num > 0 AND address > ?').get(cursor.cursor).n).toBe(6);
+    // next tick: the six left are read (and fail), the pass is counted, and the balance listing runs in the time kept
     const t2 = await virtualTick({ DB: db, KEPLR_KEY: 'k' }, PLAIN + 60000);
     expect(t2).toBeLessThanOrEqual(TICK_DEADLINE_MS + 1000);
-    expect(t2).toBeGreaterThanOrEqual(TICK_DEADLINE_MS - LISTING_RESERVE_MS);
+    expect(record<{ cursor: string; passes: number }>(db, 'stake.sample')).toMatchObject({ cursor: '', passes: 1 });
     expect(listedHolders(db)).toBe(18);
     h = healthOf(db);
     expect(h['Namada RPC (balance listing)']).toMatchObject({ ok: true });
