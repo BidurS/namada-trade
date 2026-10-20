@@ -10,6 +10,7 @@ import { BODY } from '../../../../shared/copy';
 import type { Holder, Overview } from '../../../../shared/types';
 import type { ScreenProps } from '../../app/index';
 import { REWIND_WORDS, navigate, useClock, useNow, useOverview, useOverviewFailed, useReplay, useRoute, useVisible } from '../../app/index';
+import { setTitleDetail } from '../../app/router';
 import { fetchHolders } from '../../api';
 import { Fact, Num, SkeletonBlock, derive, sourcesText, type FactItem, type Stamp } from '../../ui';
 import { NBSP, fmtAge, fmtCount, fmtNamRule, fmtNamSigned, fmtPctRule } from '../../lib/format';
@@ -17,7 +18,7 @@ import Holders, { H_DEFAULT, type HolderFilters } from './Holders';
 import Transactions, { TX_DEFAULT, type TxFilters } from './Transactions';
 import { holderFiguresStamp, serverHolderProv, type HolderChain } from './holderStamp';
 import { useWide } from './parts';
-import { pageHref, parsePage } from './paging';
+import { PAGE_SIZE, listHref, pageHref, parseBefore, parsePage, parseSize } from './paging';
 
 export default function ActivityScreen({ view, route }: ScreenProps) {
   const tab: 'activity' | 'holders' = view === 'holders' ? 'holders' : 'activity';
@@ -29,12 +30,31 @@ export default function ActivityScreen({ view, route }: ScreenProps) {
   const body = BODY[tab];
 
   // the page lives in the URL (?page=N, nav-search-plan 2.4): a page change is a history entry (the pager's links),
-  // a page 1 or an unreadable value is dropped without one; a filter change starts again from page 1
-  const raw = useRoute().params.get('page');
+  // a page 1 or an unreadable value is dropped without one; a filter change starts again from page 1.
+  // The rows per page too (?size=25|100, 50 when absent), and on Transactions the day the list starts before
+  // (?before=, unix ms of a UTC midnight); a default or unreadable value is dropped the same way.
+  const { params, path } = useRoute();
+  const raw = params.get('page');
   const page = parsePage(raw) ?? 1;
+  const rawSize = params.get('size');
+  const size = parseSize(rawSize) ?? PAGE_SIZE;
+  const rawBefore = tab === 'activity' ? params.get('before') : null;
+  const before = parseBefore(rawBefore);
   useEffect(() => {
     if (raw != null && (raw === '1' || parsePage(raw) == null)) navigate(pageHref(1), { replace: true, scroll: false });
   }, [raw]);
+  useEffect(() => {
+    if (rawSize != null && (parseSize(rawSize) == null || parseSize(rawSize) === PAGE_SIZE)) navigate(listHref({ size: PAGE_SIZE }), { replace: true, scroll: false });
+  }, [rawSize]);
+  useEffect(() => {
+    if (rawBefore != null && parseBefore(rawBefore) == null) navigate(listHref({ before: null }), { replace: true, scroll: false });
+  }, [rawBefore]);
+  // the title carries the page ("Holders, page 3 · NamadaTrade"); the H1 stays the route's
+  const name = tab === 'holders' ? 'Holders' : 'Transactions';
+  useEffect(() => {
+    setTitleDetail(path, page > 1 ? `${name}, page ${page}` : null);
+  }, [path, name, page]);
+  useEffect(() => () => setTitleDetail(path, null), [path]);
   const firstPage = () => {
     if (page !== 1) navigate(pageHref(1), { replace: true, scroll: false });
   };
@@ -62,7 +82,11 @@ export default function ActivityScreen({ view, route }: ScreenProps) {
 
       <section className="band ground-ink act-band" aria-label={tab === 'holders' ? 'Holders' : 'Transactions'}>
         <div className="wrap">
-          {tab === 'holders' ? <Holders filters={hf} setFilters={setH} wide={wide} overview={overview} page={page} /> : <Transactions filters={txf} setFilters={setTx} wide={wide} page={page} />}
+          {tab === 'holders' ? (
+            <Holders filters={hf} setFilters={setH} wide={wide} overview={overview} page={page} size={size} />
+          ) : (
+            <Transactions filters={txf} setFilters={setTx} wide={wide} page={page} size={size} before={before} />
+          )}
           {body?.paras[1] ? <p className="act-about">{body.paras[1]}</p> : null}
         </div>
       </section>

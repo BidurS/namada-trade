@@ -6,7 +6,10 @@
 // - Normalising (old #/… links, aliases, case, trailing slash) uses replaceState, never pushState.
 // - ?at= (Rewind) survives every navigation and every redirect unless the caller drops it.
 // - Unknown paths render the not-found view; they are never rewritten to another route.
-// - document.title follows the RouteDef (fullTitle), "Page not found · NamadaTrade" otherwise.
+// - document.title follows the RouteDef (fullTitle), "Page not found · NamadaTrade" otherwise; a screen may
+//   add a detail for its own path ("Holders, page 3 · NamadaTrade", setTitleDetail).
+// - Every history entry carries { scrollY } in history.state (written when scrolling stops and before every
+//   push), so Back and Forward restore the scroll offset as well as the URL (nav-search-plan 2.4).
 import { useSyncExternalStore, type MouseEvent as ReactMouseEvent } from 'react';
 import { ROUTES, ROUTE_ALIASES, SITE, classifyPath, fullTitle, legacyHashTarget, type RouteDef, type RouteId } from '../../../shared/routes';
 
@@ -130,18 +133,99 @@ export function startRouter() {
   started = true;
   normalizeUrl(true);
   current = readLoc();
+  try {
+    history.scrollRestoration = 'manual';
+  } catch {
+    /* an old browser: its own restoration stays */
+  }
+  seenY = window.scrollY;
+  window.addEventListener('scroll', onScroll, { passive: true });
+  // a reload keeps history.state: come back to where the reader was
+  const y0 = savedY();
+  if (y0 != null && y0 > 0) restoreScroll(y0);
   window.addEventListener('popstate', () => {
+    window.clearTimeout(saveT);
     const before = current.path;
     normalizeUrl();
     // Back and Forward to another page: the outlet announces it (and gives focus to the page if focus
     // was lost with the old one); a change of query or hash only is not a new page
     if (location.pathname !== before) lastNav = 'pop';
     emit();
+    // an entry never scrolled has no offset saved: it was at the top
+    const y = savedY() ?? (location.pathname !== before ? 0 : null);
+    if (y != null) restoreScroll(y);
   });
   window.addEventListener('hashchange', () => {
     if (normalizeUrl()) emit();
   });
   document.addEventListener('click', interceptAnchors);
+}
+
+// ---- scroll position per history entry ------------------------------------------------------
+/** The scroll offset as of the last scroll event (a scroll a click starts has not fired yet when it pushes). */
+let seenY = 0;
+let saveT = 0;
+let restoring: (() => void) | null = null;
+const SAVE_MS = 100;
+/** How long a restore keeps placing the page while its rows load (they arrive from the network). */
+const RESTORE_MS = 6_000;
+
+const savedY = (): number | null => {
+  const y = (history.state as { scrollY?: unknown } | null)?.scrollY;
+  return typeof y === 'number' && Number.isFinite(y) && y >= 0 ? y : null;
+};
+/** Write the offset into the current entry (the state is merged: nothing else in it is lost). */
+function saveScroll(y: number) {
+  try {
+    const st = history.state && typeof history.state === 'object' ? history.state : {};
+    history.replaceState({ ...st, scrollY: Math.round(y) }, '');
+  } catch {
+    /* Safari throttles replaceState: the next save catches up */
+  }
+}
+function onScroll() {
+  seenY = window.scrollY;
+  if (restoring) return;
+  window.clearTimeout(saveT);
+  saveT = window.setTimeout(() => saveScroll(window.scrollY), SAVE_MS);
+}
+
+/**
+ * Place the page at `y` once the content is tall enough, and keep it there while the page's lists load
+ * (`[aria-busy="true"]` in main); stop at once when the reader scrolls, taps or types.
+ */
+export function restoreScroll(y: number) {
+  restoring?.();
+  const t0 = performance.now();
+  let raf = 0;
+  let calm = 0;
+  const stop = () => {
+    cancelAnimationFrame(raf);
+    for (const ev of STOP_EVENTS) window.removeEventListener(ev, stop, true);
+    if (restoring === stop) restoring = null;
+    seenY = window.scrollY;
+    saveScroll(window.scrollY);
+  };
+  const tick = () => {
+    const max = document.documentElement.scrollHeight - window.innerHeight;
+    if (Math.abs(window.scrollY - y) > 1 && max >= y - 1) window.scrollTo({ top: y, left: 0, behavior: 'instant' as ScrollBehavior });
+    const busy = !!document.querySelector('main [aria-busy="true"], main .skel__b');
+    calm = Math.abs(window.scrollY - y) <= 1 && !busy ? calm + 1 : 0;
+    if (calm >= 3 || performance.now() - t0 > RESTORE_MS) stop();
+    else raf = requestAnimationFrame(tick);
+  };
+  restoring = stop;
+  for (const ev of STOP_EVENTS) window.addEventListener(ev, stop, { capture: true, passive: true });
+  raf = requestAnimationFrame(tick);
+}
+const STOP_EVENTS = ['wheel', 'touchstart', 'pointerdown', 'keydown'] as const;
+
+/** A new history entry: the offset the reader leaves is kept in the entry they leave. */
+function pushEntry(next: string, y: number) {
+  window.clearTimeout(saveT);
+  restoring?.();
+  saveScroll(seenY);
+  history.pushState({ scrollY: Math.round(y) }, '', next);
 }
 
 // ---- navigation ----------------------------------------------------------------------------
@@ -208,7 +292,8 @@ export function navigate(to: string, opts: NavOptions = {}) {
   const pathChanged = new URL(next, location.origin).pathname !== location.pathname;
   if (next !== now) {
     navs++;
-    history[replace ? 'replaceState' : 'pushState'](null, '', next);
+    if (replace) history.replaceState(history.state, '', next);
+    else pushEntry(next, pathChanged && scroll ? 0 : window.scrollY);
     normalizeUrl();
     emit();
   }
@@ -230,7 +315,7 @@ export function setAt(at: number | null) {
   else u.searchParams.delete('at');
   const next = `${u.pathname}${u.search}${u.hash}`;
   if (next === `${location.pathname}${location.search}${location.hash}`) return;
-  history.pushState(null, '', next);
+  pushEntry(next, window.scrollY);
   emit();
 }
 
@@ -297,8 +382,23 @@ export function useRoute(): Match {
   return lastMatch;
 }
 
-/** document.title for a match (fullTitle from shared/routes.ts). */
+let detail: { path: string; text: string } | null = null;
+/**
+ * A screen's detail in the title for its own path, such as a list page: setTitleDetail('/holders',
+ * 'Holders, page 3') gives "Holders, page 3 · NamadaTrade"; null goes back to the route's own title. The H1
+ * never changes. Set from an effect (the shell's title effect runs after the screen's, so both agree).
+ */
+export function setTitleDetail(path: string, text: string | null) {
+  const next = text ? { path, text } : null;
+  if (detail?.path === next?.path && detail?.text === next?.text) return;
+  if (!next && detail && detail.path !== path) return;
+  detail = next;
+  if (location.pathname === path) document.title = titleFor(matchPath(location.pathname, location.search));
+}
+
+/** document.title for a match (fullTitle from shared/routes.ts, or a screen's detail for its path). */
 export function titleFor(m: Match): string {
+  if (m.route && detail && detail.path === m.path) return `${detail.text} · ${SITE.name}`;
   if (m.route) return fullTitle(m.route);
   if (m.view === 'ui-demo') return `UI kit · ${SITE.name}`;
   return `Page not found · ${SITE.name}`;

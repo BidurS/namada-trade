@@ -8,18 +8,19 @@
 //
 // Data: GET /api/holders (chain, sort, search, pages). It does not take `at`: under Rewind the list
 // is current and says so ("Balances were not recorded over time; these are current, not as of …").
-import { useEffect, useMemo, useRef, useState, type KeyboardEvent } from 'react';
+import React, { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import type { Holder, HoldersResponse, Overview, SourceStatus } from '../../../../shared/types';
 import { fetchHolders, holdersCsvHref } from '../../api';
 import { REWIND_WORDS, navigate, useNow, useOverlays, useReplay } from '../../app/index';
-import { Button, DataList, EmptyState, HolderRow, Notice, Num, Pager, ProvDot, Segmented, SelectChip, Skeleton, SourceLine, Tag, WallClock, sourcesText, stepFor, type ScopeItem, type Stamp } from '../../ui';
+import { Button, DataList, EmptyState, HolderRow, Notice, Num, PageTools, Pager, ProvDot, Segmented, SelectChip, Skeleton, SourceLine, Tag, WallClock, sourcesText, stepFor, type ScopeItem, type Stamp } from '../../ui';
+import { useListKeys, type ListKey } from '../../app/keys';
 import { ageRange } from '../../lib/prov';
 import { holderCatKey as catKey, holderName, holderTag, isUserTag } from '../../lib/holder';
 import { category_plain } from '../../../../shared/labels';
 import { fmtAddr, fmtAge, fmtCount, fmtNamRule, fmtNamSigned, fmtPctRule } from '../../lib/format';
-import { ActivityBar, FilterPanel, FilterSet, SearchField } from './parts';
+import { ActivityBar, FilterPanel, FilterSet, KeysHint, SearchField, useRovingRows } from './parts';
 import { TECH } from './words';
-import { HOLDER_CSV_MAX, PAGE_SIZE as PAGE, focusFirstRow, pageCount, pageHref } from './paging';
+import { HOLDER_CSV_MAX, PAGE_SIZES, firstVisibleRow, flashRow, focusFirstRow, focusRow, listHref, pageCount, pageHref, pageOfRank, revealRow } from './paging';
 
 export interface HolderFilters {
   chain: 'namada' | 'osmosis' | 'all';
@@ -35,6 +36,11 @@ const H6 = 6 * 3_600_000;
 const H24 = 24 * 3_600_000;
 const BY_WORD: Record<HolderFilters['by'], string> = { total: 'total NAM', liquid: 'spendable NAM', bonded: 'staked NAM' };
 const CHAIN_WORD: Record<HolderFilters['chain'], string> = { namada: 'on Namada', osmosis: 'on Osmosis', all: 'on Namada and Osmosis' };
+
+/** The widest rank on the page, in characters of the rank's mono face ("1,204" is 5). */
+const rkChars = (ranks: number[]): number => Math.max(0, ...ranks.map((r) => fmtCount(r).length));
+/** One character of the rank's 12 px mono face, in px (0.6 em, plus a little room). */
+const RK_CH_PX = 7.6;
 
 const statusOf = (h: Holder): { status: SourceStatus; note: string | null } => ({ status: h.status, note: h.statusNote ?? null });
 
@@ -52,6 +58,7 @@ export default function Holders({
   wide,
   overview,
   page,
+  size,
 }: {
   filters: HolderFilters;
   setFilters: (f: HolderFilters) => void;
@@ -59,6 +66,8 @@ export default function Holders({
   overview: Overview | null;
   /** The page from ?page= (1 when absent). */
   page: number;
+  /** Rows per page, from ?size= (PAGE_SIZE when absent). */
+  size: number;
 }) {
   const { at, rewound } = useReplay();
   const wall = useNow(); // balances are current: their ages are measured from the wall clock, also under Rewind
@@ -69,55 +78,132 @@ export default function Holders({
   const by = filters.chain === 'osmosis' ? 'total' : filters.by;
   const category = filters.cat === 'all' ? '' : filters.cat;
   const key = JSON.stringify([filters.chain, by, filters.search, category]);
-  const [data, setData] = useState<{ key: string; rows: Holder[]; total: number; page: number; cats: CatCounts | null } | null>(null);
+  const [data, setData] = useState<{ key: string; rows: Holder[]; total: number; page: number; size: number; cats: CatCounts | null } | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [retry, setRetry] = useState(0);
   useEffect(() => {
     let live = true;
     setError(null);
-    fetchHolders(filters.chain, page, PAGE, filters.search, by, category)
-      .then((r) => live && setData({ key, rows: r.holders, total: r.total, page, cats: catCountsOf(r) }))
+    fetchHolders(filters.chain, page, size, filters.search, by, category)
+      .then((r) => live && setData({ key, rows: r.holders, total: r.total, page, size, cats: catCountsOf(r) }))
       .catch(() => live && setError(page > 1 ? 'This page of holders could not be fetched from this site’s server.' : 'The holder list could not be fetched from this site’s server.'));
     return () => {
       live = false;
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [key, page, retry]);
-  // the same query (any page): the count and the chips stay while another page loads
+  }, [key, page, size, retry]);
+  // the same query (any page, any size): the count and the chips stay while another page loads
   const fresh = data?.key === key ? data : null;
   const loaded = fresh?.rows ?? [];
-  const pages = fresh ? pageCount(fresh.total) : null;
+  const pages = fresh ? pageCount(fresh.total, size) : null;
+  /** The rows on screen are the ones the URL asks for. */
+  const current = !!fresh && fresh.page === page && fresh.size === size;
   // a page past the end (an old link, a list that shrank): the last page, without a history entry
-  const past = !!fresh && fresh.page === page && pages != null && page > pages;
+  const past = current && pages != null && page > pages;
   useEffect(() => {
     if (past && pages != null) navigate(pageHref(pages), { replace: true, scroll: false });
   }, [past, pages]);
 
-  // ---- a page change scrolls to the list's head and, once the rows are in, focuses the first row
+  // ---- after a page change, once the rows are in: the first row focused (a pager link, a key), or a rank
+  // reached (Go to rank: scrolled under the sticky stack, focused, highlighted; a size change: kept in view)
   const headRef = useRef<HTMLDivElement>(null);
   const listRef = useRef<HTMLDivElement>(null);
-  const focusNext = useRef(false);
-  const onGo = () => {
-    focusNext.current = true;
-    headRef.current?.scrollIntoView({ block: 'start', behavior: 'instant' as ScrollBehavior });
+  const pending = useRef<{ kind: 'first' } | { kind: 'rank'; rank: number; focus: boolean } | null>(null);
+  /** The row of a rank among the rows on screen (its rank cell says it). */
+  const rowOfRank = (rank: number): HTMLElement | null => {
+    const rows = [...(listRef.current?.querySelectorAll<HTMLElement>('.hrow') ?? [])];
+    const want = fmtCount(rank);
+    const guess = rows[rank - (page - 1) * size - 1];
+    if (guess?.querySelector('.hrow__rk')?.textContent === want) return guess;
+    return rows.find((r) => r.querySelector('.hrow__rk')?.textContent === want) ?? null;
+  };
+  const reachRank = (rank: number, focus: boolean) => {
+    const row = rowOfRank(rank);
+    if (!row) return;
+    revealRow(row, headRef.current, listRef.current, 'top');
+    if (focus) {
+      focusRow(row, listRef.current, '.hrow');
+      flashRow(row);
+    }
   };
   useEffect(() => {
-    if (!focusNext.current || !data || data.key !== key || data.page !== page) return;
-    focusNext.current = false;
-    requestAnimationFrame(() => focusFirstRow(headRef.current, listRef.current, '.hrow'));
-  }, [data, key, page]);
+    const p = pending.current;
+    if (!p || !current || !data || data.key !== key) return;
+    pending.current = null;
+    requestAnimationFrame(() => {
+      if (p.kind === 'first') focusFirstRow(headRef.current, listRef.current, '.hrow');
+      else reachRank(p.rank, p.focus);
+    });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [data, key, current]);
+  const onGo = () => {
+    pending.current = { kind: 'first' };
+    focusFirstRow(headRef.current, listRef.current, '.hrow', false);
+  };
   const goPage = (n: number) => {
     onGo();
     navigate(pageHref(n), { scroll: false });
   };
-  /** `[` and `]` on a list row step a page, as they do inside the pager. */
-  const onListKey = (e: KeyboardEvent) => {
-    if (e.altKey || e.ctrlKey || e.metaKey || (e.target as HTMLElement).closest('input, textarea, select')) return;
-    const to = stepFor(e.key, page, pages);
-    if (to == null) return;
-    e.preventDefault();
-    goPage(to);
+
+  /** Go to rank: the page that holds it (page = ceil(rank / size)), that row in view, focused and highlighted. */
+  const goRank = (value: string) => {
+    const t = value.replace(/[,\s]/g, '');
+    if (!/^\d+$/.test(t) || Number(t) < 1) return 'Type a rank as a whole number, as printed at the start of each row.';
+    const rank = Number(t);
+    if (fresh && rank > fresh.total) {
+      return fresh.total === 1 ? (
+        <>There is only one holder here; pick that rank.</>
+      ) : (
+        <>
+          There are <Num v={fresh.total} fmt={fmtCount} /> holders; pick a rank up to that.
+        </>
+      );
+    }
+    const to = pageOfRank(rank, size);
+    if (to === page && current) reachRank(rank, true);
+    else {
+      pending.current = { kind: 'rank', rank, focus: true };
+      navigate(pageHref(to), { scroll: false });
+    }
+    return null;
   };
+
+  /** Rows per page: a history entry; the page that holds the first row in view, kept in view. */
+  const onSize = (n: number) => {
+    if (n === size) return;
+    const seen = firstVisibleRow(headRef.current, listRef.current, '.hrow');
+    const rank = seen ? (busy ? data?.rows : rows)?.[seen.index]?.rank ?? null : null;
+    const to = rank ? pageOfRank(rank, n) : 1;
+    pending.current = rank && seen && seen.index > 0 ? { kind: 'rank', rank, focus: false } : null;
+    navigate(listHref({ page: to, size: n }), { scroll: false });
+  };
+
+  // ---- keys (app/keys.ts): j and k walk the rows, Enter opens the row's address, [ and ] change the page
+  useRovingRows(listRef, '.hrow', data);
+  useListKeys('.act-holders .hrow', (a: ListKey, row) => {
+    const list = listRef.current;
+    if (!list) return false;
+    if (a.kind === 'page') {
+      const to = stepFor(a.step < 0 ? '[' : ']', page, pages);
+      if (to == null) return false;
+      goPage(to);
+      return true;
+    }
+    if (a.kind === 'open') {
+      row?.querySelector<HTMLButtonElement>('.act-name')?.click();
+      return !!row;
+    }
+    const all = [...list.querySelectorAll<HTMLElement>('.hrow')];
+    if (!all.length) return false;
+    let to: HTMLElement | undefined;
+    if (a.kind === 'edge') to = a.to === 'first' ? all[0] : all[all.length - 1];
+    else if (row) to = all[all.indexOf(row) + a.step];
+    else to = firstVisibleRow(headRef.current, list, '.hrow')?.row ?? all[0];
+    if (!to) return true;
+    revealRow(to, headRef.current, list);
+    focusRow(to, list, '.hrow');
+    return true;
+  });
 
   // ---- the "What" chips, with counts (kept while a category is chosen, so the other chips stay).
   // A server that sends HoldersResponse.categories counts every holder the chain and search select, so a chip's
@@ -244,10 +330,47 @@ export default function Holders({
     </>
   );
 
-  const busy = !!data && (data.key !== key || data.page !== page || past);
+  const busy = !!data && (data.key !== key || data.page !== page || data.size !== size || past);
   const top = rows.length ? Math.max(...loaded.map((h) => h.total)) : 0;
   const full = filters.chain !== 'osmosis';
   const empty = !!fresh && !busy && rows.length === 0;
+
+  // ---- column heads on the desktop table: Total, Spendable and Staked sort the list (the "Biggest by" choice)
+  const sortHead = (v: HolderFilters['by'], word: string) => (
+    <button type="button" className="dl__sort" data-sort={v} aria-label={`${word}, biggest first`} onClick={() => set({ by: v })}>
+      <span className="dl__sorti" aria-hidden="true">↓</span>
+      <span>{word}</span>
+    </button>
+  );
+  const columns = full
+    ? [
+        { label: '#' },
+        { label: 'Holder' },
+        { label: sortHead('total', 'Total NAM'), align: 'r' as const },
+        { label: 'Share', align: 'r' as const },
+        { label: sortHead('liquid', 'Spendable'), align: 'r' as const },
+        { label: sortHead('bonded', 'Staked'), align: 'r' as const },
+        ...(anyChange ? [{ label: '7 days', align: 'r' as const }] : []),
+      ]
+    : undefined;
+  // aria-sort sits on the column head itself (the kit's DataList draws the heads; the state is set here)
+  useLayoutEffect(() => {
+    listRef.current?.querySelectorAll('.dl__head [role="columnheader"]').forEach((h) => {
+      const b = h.querySelector('[data-sort]');
+      if (!b) h.removeAttribute('aria-sort');
+      else h.setAttribute('aria-sort', b.getAttribute('data-sort') === by ? 'descending' : 'none');
+      b?.classList.toggle('is-on', b.getAttribute('data-sort') === by);
+    });
+  });
+
+  const csv =
+    fresh && fresh.total > 0 ? (
+      <a className="link act-csv" href={holdersCsvHref({ chain: filters.chain, by, category, search: filters.search })} download>
+        <span>Download page data</span>
+        {/* the export holds the biggest HOLDER_CSV_MAX of these holders (worker/src/api.ts /api/export/holders) */}
+        <span className="act-csv__n">{fresh.total > HOLDER_CSV_MAX ? `CSV, biggest ${fmtCount(HOLDER_CSV_MAX)}` : 'CSV, all of them'}</span>
+      </a>
+    ) : null;
 
   const pager = (where: 'head' | 'foot') =>
     fresh && pages != null ? (
@@ -293,16 +416,22 @@ export default function Holders({
             )}
           </p>
           <div className="act-head__end">
-            {fresh && fresh.total > 0 ? (
-              <a className="link act-csv" href={holdersCsvHref({ chain: filters.chain, by, category, search: filters.search })} download>
-                <span>Download page data</span>
-                {/* the export holds the biggest HOLDER_CSV_MAX of these holders (worker/src/api.ts /api/export/holders) */}
-                <span className="act-csv__n">{fresh.total > HOLDER_CSV_MAX ? `CSV, biggest ${fmtCount(HOLDER_CSV_MAX)}` : 'CSV, all of them'}</span>
-              </a>
-            ) : null}
+            {wide ? csv : null}
             {pager('head')}
           </div>
         </div>
+        {fresh && fresh.total > 0 ? (
+          <PageTools
+            className="act-tools"
+            size={size}
+            sizes={PAGE_SIZES}
+            onSize={onSize}
+            jump={{ label: 'Go to rank', kind: 'number', button: 'Go', placeholder: 'Rank', onJump: goRank }}
+            after={<KeysHint />}
+          >
+            {wide ? null : csv}
+          </PageTools>
+        ) : null}
 
         {error && fresh ? (
           <Notice tone="warning" title="This page did not load" action={<Button size="sm" onClick={() => setRetry((n) => n + 1)}>Try again</Button>}>
@@ -316,11 +445,12 @@ export default function Holders({
         ) : !data ? (
           <Skeleton rows={8} heights={[64]} label="holders" className="act-skel" />
         ) : empty ? null : (
-          <div className={busy ? 'is-busy' : undefined} ref={listRef} onKeyDown={onListKey}>
+          <div className={busy ? 'is-busy' : undefined} ref={listRef} style={{ ['--act-rk' as string]: `${Math.ceil(rkChars((busy ? data.rows : rows).map((h) => h.rank)) * RK_CH_PX)}px` } as React.CSSProperties}>
             <DataList
               kind="holders"
               full={full}
               change={full && anyChange}
+              columns={columns}
               label={`Biggest NAM holders ${CHAIN_WORD[filters.chain]}`}
               old={listOld}
               className="act-holders"

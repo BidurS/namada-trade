@@ -9,16 +9,20 @@
 // bot trades left out, each bridge crossing once, address or record search, pages). Under Rewind the
 // shell's fetch wrapper adds `at` (rows at or before that time) and nothing is streamed. While live,
 // moves that arrive through the stream are merged on top and animate in; nothing else animates.
-import { useEffect, useMemo, useRef, useState, type KeyboardEvent } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import type { Flow } from '../../../../shared/types';
 import { fetchFlows, flowsCsvHref, type FlowsQuery } from '../../api';
 import { navigate, osmosisStreaming, streamStamp, useClock, useOverlays, useOverview, useReplay } from '../../app/index';
-import { Button, EmptyState, Notice, Num, Pager, ProvScope, Segmented, SelectChip, Skeleton, SourceLine, TxList, stepFor, type ScopeItem, type Stamp } from '../../ui';
+import { Button, EmptyState, Notice, Num, PageTools, Pager, ProvScope, Segmented, SelectChip, Skeleton, SourceLine, TxList, stepFor, type ScopeItem, type Stamp } from '../../ui';
+import { useListKeys, type ListKey } from '../../app/keys';
 import { kindInfo, type TagKind } from '../../lib/kinds';
 import { applyFlowRules, isBot } from '../../lib/flows';
-import { fmtAge, fmtCount, fmtUtcLong } from '../../lib/format';
-import { ActivityBar, FilterPanel, FilterSet, SearchField } from './parts';
-import { FLOW_CSV_MAX as CSV_MAX, PAGE_SIZE as PAGE, focusFirstRow, pageCount, pageHref } from './paging';
+import { fmtAge, fmtCount, fmtDayMonthYear, fmtUtcLong } from '../../lib/format';
+import { ActivityBar, FilterPanel, FilterSet, KeysHint, SearchField, useRovingRows } from './parts';
+import { FLOW_CSV_MAX as CSV_MAX, PAGE_SIZES, firstVisibleRow, focusFirstRow, focusRow, listHref, pageCount, pageHref, pageOfRank, revealRow } from './paging';
+
+/** A unix-ms time as the date field's yyyy-mm-dd (UTC). */
+const isoDay = (ms: number) => new Date(ms).toISOString().slice(0, 10);
 
 // ---------------------------------------------------------------- filters
 export interface TxFilters {
@@ -81,12 +85,18 @@ export default function Transactions({
   setFilters,
   wide,
   page,
+  size,
+  before,
 }: {
   filters: TxFilters;
   setFilters: (f: TxFilters) => void;
   wide: boolean;
   /** The page from ?page= (1 when absent). */
   page: number;
+  /** Rows per page, from ?size= (PAGE_SIZE when absent). */
+  size: number;
+  /** ?before=: only moves before this time (a UTC midnight, unix ms), or null for the newest. */
+  before: number | null;
 }) {
   const { at, rewound } = useReplay();
   const now = useClock();
@@ -95,70 +105,129 @@ export default function Transactions({
   const [sheet, setSheet] = useState(false);
 
   // ---- the page from the URL for these filters; a page change replaces the rows
-  const key = JSON.stringify([filters, at]);
+  // ?before= reads the list as of the last moment before that day, through the same `at` the API takes for
+  // Rewind (rows at or before that time); under Rewind the earlier of the two
+  const until = before != null ? Math.min(before - 1, at ?? Infinity) : at;
+  const dated = before != null && until !== at;
+  const key = JSON.stringify([filters, until]);
   // exact: `total` is the count of these filters (false: an older server ignored a rule, and `total` is only an
   // upper bound); more: the server holds rows after this page
-  const [data, setData] = useState<{ key: string; flows: Flow[]; total: number; page: number; exact: boolean; more: boolean } | null>(null);
+  const [data, setData] = useState<{ key: string; flows: Flow[]; total: number; page: number; size: number; exact: boolean; more: boolean } | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [retry, setRetry] = useState(0);
-  const q: FlowsQuery = { asOf: at, chain: filters.chain, kind: filters.kind, search: filters.search, ...rulesOf(filters) };
+  const q: FlowsQuery = { asOf: until, chain: filters.chain, kind: filters.kind, search: filters.search, ...rulesOf(filters) };
   useEffect(() => {
     let live = true;
     setError(null);
-    fetchFlows({ ...q, page, limit: PAGE })
-      .then((r) => live && setData({ key, flows: r.flows, total: r.total, page, exact: r.exact, more: r.more }))
+    fetchFlows({ ...q, page, limit: size })
+      .then((r) => live && setData({ key, flows: r.flows, total: r.total, page, size, exact: r.exact, more: r.more }))
       .catch(() => live && setError(page > 1 ? 'This page of moves could not be fetched from this site’s server.' : 'The list of moves could not be fetched from this site’s server.'));
     return () => {
       live = false;
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [key, page, retry]);
+  }, [key, page, size, retry]);
 
-  // ---- streamed moves on top (live only, never the load-time seed)
+  // ---- streamed moves on top (live only, never the load-time seed, never under a date)
   // the same filters (any page): the count stays while another page loads
   const fresh = data?.key === key ? data : null;
   const rows = useMemo(() => {
     if (!fresh) return [];
-    if (rewound || fresh.page !== 1) return fresh.flows;
+    if (rewound || dated || fresh.page !== 1) return fresh.flows;
     const have = new Set(fresh.flows.map((x) => x.id));
     const newest = fresh.flows[0]?.ts ?? 0;
     const add = liveFlows.filter((x) => streamedIds.has(x.id) && !have.has(x.id) && x.ts >= newest && matches(x, filters));
     return add.length ? applyFlowRules([...add, ...fresh.flows], rulesOf(filters)) : fresh.flows;
-  }, [fresh, liveFlows, streamedIds, rewound, filters]);
+  }, [fresh, liveFlows, streamedIds, rewound, dated, filters]);
   const added = fresh ? rows.length - fresh.flows.length : 0;
   const exact = fresh?.exact ?? true;
   // not exact: the count of these filters is not known, only the rows listed
   const total = fresh ? (exact ? fresh.total + Math.max(0, added) : rows.length) : null;
   const streaming = osmosisStreaming(stream, now);
   // the number of pages only when the count is exact; otherwise "of —" and the next page while the server has more
-  const pages = fresh && exact && total != null ? pageCount(total) : null;
-  const past = !!fresh && fresh.page === page && pages != null && page > pages;
+  const pages = fresh && exact && total != null ? pageCount(total, size) : null;
+  const current = !!fresh && fresh.page === page && fresh.size === size;
+  const past = current && pages != null && page > pages;
   useEffect(() => {
     if (past && pages != null) navigate(pageHref(pages), { replace: true, scroll: false });
   }, [past, pages]);
 
-  // ---- a page change scrolls to the list's head and, once the rows are in, focuses the first row
+  // ---- after a page change, once the rows are in: the first row focused, or (a size change) the row that was
+  // first in view kept in view
   const headRef = useRef<HTMLDivElement>(null);
   const listRef = useRef<HTMLDivElement>(null);
-  const focusNext = useRef(false);
-  const onGo = () => {
-    focusNext.current = true;
-    headRef.current?.scrollIntoView({ block: 'start', behavior: 'instant' as ScrollBehavior });
-  };
+  const pending = useRef<{ kind: 'first' } | { kind: 'pos'; pos: number } | null>(null);
   useEffect(() => {
-    if (!focusNext.current || !data || data.key !== key || data.page !== page) return;
-    focusNext.current = false;
-    requestAnimationFrame(() => focusFirstRow(headRef.current, listRef.current, '.tx'));
-  }, [data, key, page]);
-  /** `[` and `]` on a list row step a page, as they do inside the pager. */
-  const onListKey = (e: KeyboardEvent) => {
-    if (e.altKey || e.ctrlKey || e.metaKey || (e.target as HTMLElement).closest('input, textarea, select')) return;
-    const to = stepFor(e.key, page, pages, fresh?.more);
-    if (to == null) return;
-    e.preventDefault();
-    onGo();
-    navigate(pageHref(to), { scroll: false });
+    const p = pending.current;
+    if (!p || !current || !data || data.key !== key) return;
+    pending.current = null;
+    requestAnimationFrame(() => {
+      if (p.kind === 'first') return focusFirstRow(headRef.current, listRef.current, '.tx');
+      const row = listRef.current?.querySelectorAll<HTMLElement>('.tx')[p.pos - (page - 1) * size - 1];
+      if (row) revealRow(row, headRef.current, listRef.current, 'top');
+    });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [data, key, current]);
+  const onGo = () => {
+    pending.current = { kind: 'first' };
+    focusFirstRow(headRef.current, listRef.current, '.tx', false);
   };
+  const goPage = (n: number) => {
+    onGo();
+    navigate(pageHref(n), { scroll: false });
+  };
+
+  /** Rows per page: a history entry; the page that holds the first move in view, kept in view. */
+  const onSize = (n: number) => {
+    if (n === size) return;
+    const seen = firstVisibleRow(headRef.current, listRef.current, '.tx');
+    const pos = seen ? (page - 1) * size + seen.index + 1 : 1;
+    pending.current = seen && seen.index > 0 ? { kind: 'pos', pos } : null;
+    navigate(listHref({ page: pageOfRank(pos, n), size: n }), { scroll: false });
+  };
+
+  /** Show moves from before a day: the list as of the end of the day before (UTC), from its first page. */
+  const today = isoDay(Date.now());
+  const goBefore = (value: string) => {
+    if (!value) {
+      if (before == null) return 'Pick a day.';
+      navigate(listHref({ before: null, page: 1 }), { scroll: false });
+      return null;
+    }
+    const ms = Date.parse(`${value}T00:00:00Z`);
+    if (!Number.isFinite(ms)) return 'Pick a day, such as one from the calendar.';
+    if (ms > Date.now()) return 'That day has not come yet; pick today or earlier.';
+    pending.current = { kind: 'first' };
+    navigate(listHref({ before: ms, page: 1 }), { scroll: false });
+    return null;
+  };
+
+  // ---- keys (app/keys.ts): j and k walk the rows, Enter opens the move's detail line, [ and ] change the page
+  useRovingRows(listRef, '.tx', data);
+  useListKeys('.act-txwide .tx', (a: ListKey, row) => {
+    const list = listRef.current;
+    if (!list) return false;
+    if (a.kind === 'page') {
+      const to = stepFor(a.step < 0 ? '[' : ']', page, pages, fresh?.more);
+      if (to == null) return false;
+      goPage(to);
+      return true;
+    }
+    if (a.kind === 'open') {
+      row?.querySelector<HTMLButtonElement>('.tx__tog')?.click();
+      return !!row;
+    }
+    const all = [...list.querySelectorAll<HTMLElement>('.tx')];
+    if (!all.length) return false;
+    let to: HTMLElement | undefined;
+    if (a.kind === 'edge') to = a.to === 'first' ? all[0] : all[all.length - 1];
+    else if (row) to = all[all.indexOf(row) + a.step];
+    else to = firstVisibleRow(headRef.current, list, '.tx')?.row ?? all[0];
+    if (!to) return true;
+    revealRow(to, headRef.current, list);
+    focusRow(to, list, '.tx');
+    return true;
+  });
 
   // ---- the list's provenance scope: the flow index per chain, the stream while live
   const scope: ScopeItem[] = [];
@@ -203,7 +272,15 @@ export default function Transactions({
     </>
   );
 
-  const busy = !!data && (data.key !== key || data.page !== page || past);
+  const busy = !!data && (data.key !== key || data.page !== page || data.size !== size || past);
+  const csv =
+    fresh && (total ?? 0) > 0 ? (
+      <a className="link act-csv" href={flowsCsvHref(q)} download>
+        <span>Download page data</span>
+        {/* the export holds at most the newest CSV_MAX moves (worker/src/api.ts /api/export/flows) */}
+        <span className="act-csv__n">{!exact || (total != null && total > CSV_MAX) ? `CSV, newest ${fmtCount(CSV_MAX)}` : 'CSV, all of them'}</span>
+      </a>
+    ) : null;
   const empty = !!fresh && !busy && rows.length === 0;
   const pager = (where: 'head' | 'foot') =>
     fresh ? (
@@ -239,8 +316,16 @@ export default function Transactions({
                 A total of {exact ? null : 'at least '}
                 <Num v={total} fmt={fmtCount} /> {total === 1 ? 'move' : 'moves'} found
                 {count ? (total === 1 ? ' that matches the filters' : ' that match the filters') : null}
-                {rewound && at ? <>, at or before {fmtUtcLong(at)}</> : null}, newest first.
-                {!rewound ? (
+                {dated && before != null ? <>, before {fmtDayMonthYear(before)} (UTC)</> : rewound && at ? <>, at or before {fmtUtcLong(at)}</> : null}, newest first.
+                {dated ? (
+                  <>
+                    {' '}
+                    <a className="link act-newest" href={listHref({ before: null, page: 1 })}>
+                      Show the newest
+                    </a>
+                  </>
+                ) : null}
+                {!rewound && !dated ? (
                   <span className="act-live" data-status={!stream.connected ? 'none' : streaming === false ? 'old' : 'fresh'}>
                     <i className="dot" data-status={!stream.connected ? 'none' : streaming === false ? 'old' : 'fresh'} aria-hidden="true" />
                     {!stream.connected ? 'Not streaming right now' : streaming === false ? 'Osmosis moves are not streaming right now; Namada moves are' : page > 1 ? 'New moves are added to the first page as they are recorded' : 'New moves appear as they are recorded'}
@@ -250,16 +335,22 @@ export default function Transactions({
             )}
           </p>
           <div className="act-head__end">
-            {fresh && (total ?? 0) > 0 ? (
-              <a className="link act-csv" href={flowsCsvHref(q)} download>
-                <span>Download page data</span>
-                {/* the export holds at most the newest CSV_MAX moves (worker/src/api.ts /api/export/flows) */}
-                <span className="act-csv__n">{!exact || (total != null && total > CSV_MAX) ? `CSV, newest ${fmtCount(CSV_MAX)}` : 'CSV, all of them'}</span>
-              </a>
-            ) : null}
+            {wide ? csv : null}
             {pager('head')}
           </div>
         </div>
+        {fresh ? (
+          <PageTools
+            className="act-tools"
+            size={size}
+            sizes={PAGE_SIZES}
+            onSize={onSize}
+            jump={{ label: 'Show moves from before', kind: 'date', button: 'Show', max: today, value: before != null ? isoDay(before) : '', onJump: goBefore }}
+            after={<KeysHint />}
+          >
+            {wide ? null : csv}
+          </PageTools>
+        ) : null}
         {covAt != null ? (
           <p className="scope__old act-lag">
             <i className="dot" data-status="old" aria-hidden="true" />
@@ -279,14 +370,14 @@ export default function Transactions({
         ) : !data ? (
           <Skeleton rows={8} heights={[72]} label="moves" className="act-skel" />
         ) : empty ? null : (
-          <div className="act-txwide" ref={listRef} onKeyDown={onListKey}>
-            <TxList rows={busy ? data.flows : rows} now={now} streamedIds={rewound || page > 1 ? undefined : streamedIds} onAddr={openAddress} busy={busy} />
+          <div className="act-txwide" ref={listRef}>
+            <TxList rows={busy ? data.flows : rows} now={now} streamedIds={rewound || dated || page > 1 ? undefined : streamedIds} onAddr={openAddress} busy={busy} />
           </div>
         )}
 
         {empty ? (
-          <EmptyState title="No recorded move matches these filters.">
-            {rewound && at ? <>The list holds moves at or before {fmtUtcLong(at)}. </> : null}
+          <EmptyState title={dated ? 'Nothing that early is recorded for these filters.' : 'No recorded move matches these filters.'}>
+            {dated && before != null ? <>The list holds moves before {fmtDayMonthYear(before)} (UTC). </> : rewound && at ? <>The list holds moves at or before {fmtUtcLong(at)}. </> : null}
             The chain, kind, size and search chosen above leave nothing to show.
           </EmptyState>
         ) : null}

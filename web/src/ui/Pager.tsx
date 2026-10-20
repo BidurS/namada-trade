@@ -9,10 +9,14 @@
 // - From 1024 px, with `run`, a short numbered run sits between ‹ and ›: the first page, the current one ±2 and
 //   the last, with an ellipsis as text (never a button).
 // - "of 1,288" is a figure (a Num, covered by the list's scope); the page numbers themselves are not data.
-// - Keyboard: `[` and `]` step a page while focus is inside the nav (stepFor lets a list do the same).
+// - Keyboard: `[` and `]` (and Left and Right on the links) step a page while focus is inside the nav; never
+//   inside the page field, where they are typing. A list does the same from its rows (app/keys.ts).
+// - PageTools, beside the pager: the rows-per-page choice (the Segmented range variant, 44 px targets) and a
+//   jump form ("Go to rank" on holders, "Show moves from before" on moves) whose answer is one sentence.
 import React, { useId, useRef, useState } from 'react';
 import { linkClick, useUiConfig } from './now';
 import { Num } from './Num';
+import { Segmented } from './Segmented';
 import { fmtCount } from '../lib/format';
 
 export interface PagerProps {
@@ -35,10 +39,10 @@ export interface PagerProps {
   className?: string;
 }
 
-/** The target page of a `[` or `]` key press, or null (also for any other key). */
-export function stepFor(key: string, page: number, pages: number | null, hasNext?: boolean): number | null {
-  if (key === '[') return page > 1 ? page - 1 : null;
-  if (key === ']') return (pages != null ? page < pages : !!hasNext) ? page + 1 : null;
+/** The target page of a `[` or `]` key press (or Left and Right with `arrows`), or null (also for any other key). */
+export function stepFor(key: string, page: number, pages: number | null, hasNext?: boolean, arrows = false): number | null {
+  if (key === '[' || (arrows && key === 'ArrowLeft')) return page > 1 ? page - 1 : null;
+  if (key === ']' || (arrows && key === 'ArrowRight')) return (pages != null ? page < pages : !!hasNext) ? page + 1 : null;
   return null;
 }
 
@@ -120,8 +124,9 @@ export function Pager({ label, page, pages, hrefFor, onGo, hasNext, run = false,
   };
 
   const onKeyDown = (e: React.KeyboardEvent) => {
-    if (e.altKey || e.ctrlKey || e.metaKey) return;
-    const to = stepFor(e.key, page, pages, hasNext);
+    // the page field is for typing: there `[`, `]` and the arrows are text and caret keys
+    if (e.altKey || e.ctrlKey || e.metaKey || (e.target as HTMLElement).tagName === 'INPUT') return;
+    const to = stepFor(e.key, page, pages, hasNext, true);
     if (to == null) return;
     e.preventDefault();
     go(to);
@@ -189,6 +194,94 @@ export function Pager({ label, page, pages, hrefFor, onGo, hasNext, run = false,
       </p>
       {pages == null && unknown ? <p className="pager__why">{unknown}</p> : null}
     </nav>
+  );
+}
+
+// ---------------------------------------------------------------- rows per page and the jump form
+
+export interface PageJump {
+  /** The field's visible label ("Go to rank", "Show moves from before"). */
+  label: string;
+  /** `number`: a whole number (commas and spaces allowed); `date`: a calendar day (the native picker). */
+  kind: 'number' | 'date';
+  /** The submit button's word. */
+  button: string;
+  placeholder?: string;
+  /** Date bounds, as yyyy-mm-dd. */
+  min?: string;
+  max?: string;
+  /** The field's value when it is set from the URL (a date). */
+  value?: string;
+  /** Use the value: return null when it went there, or one sentence saying why it cannot (shown under the field). */
+  onJump: (value: string) => React.ReactNode | null;
+}
+
+export interface PageToolsProps {
+  /** Rows per page now, and the choices (PAGE_SIZES from the screen's paging.ts, never literals in TSX). */
+  size?: number;
+  sizes?: readonly number[];
+  onSize?: (size: number) => void;
+  jump?: PageJump;
+  /** Before the controls (the CSV link on phones). */
+  children?: React.ReactNode;
+  /** After the controls (the keyboard hint). */
+  after?: React.ReactNode;
+  className?: string;
+}
+
+export function PageTools({ size, sizes, onSize, jump, children, after, className = '' }: PageToolsProps) {
+  const id = useId();
+  const [text, setText] = useState(jump?.value ?? '');
+  const [msg, setMsg] = useState<React.ReactNode | null>(null);
+  // a date set from the URL (or cleared) shows in the field
+  const [shown, setShown] = useState(jump?.value);
+  if (jump && shown !== jump.value) {
+    setShown(jump.value);
+    setText(jump.value ?? '');
+  }
+  const submit = (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!jump) return;
+    setMsg(jump.onJump(text.trim()));
+  };
+  return (
+    <div className={`pgtools ${className}`}>
+      {children}
+      {size != null && sizes?.length && onSize ? (
+        <div className="pgtools__size">
+          <span className="pgtools__l" id={`${id}s`} aria-hidden="true">Rows per page</span>
+          <Segmented label="Rows per page" variant="range" value={String(size)} onChange={(v) => onSize(Number(v))} options={sizes.map((n) => ({ value: String(n), label: fmtCount(n) }))} />
+        </div>
+      ) : null}
+      {jump ? (
+        <form className="pgtools__jump" onSubmit={submit} noValidate>
+          <label className="pgtools__l" htmlFor={`${id}j`}>{jump.label}</label>
+          <span className="pgtools__box">
+            <input
+              id={`${id}j`}
+              className={`pgtools__in pgtools__in--${jump.kind}`}
+              type={jump.kind === 'date' ? 'date' : 'text'}
+              inputMode={jump.kind === 'number' ? 'numeric' : undefined}
+              enterKeyHint="go"
+              autoComplete="off"
+              placeholder={jump.placeholder}
+              min={jump.min}
+              max={jump.max}
+              value={text}
+              aria-describedby={msg ? `${id}m` : undefined}
+              aria-invalid={msg ? true : undefined}
+              onChange={(e) => {
+                setText(e.target.value);
+                setMsg(null);
+              }}
+            />
+            <button type="submit" className="btn btn--secondary btn--sm pgtools__go">{jump.button}</button>
+          </span>
+          <p className="pgtools__msg" id={`${id}m`} role="status">{msg}</p>
+        </form>
+      ) : null}
+      {after}
+    </div>
   );
 }
 

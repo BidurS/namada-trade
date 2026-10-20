@@ -3,7 +3,7 @@
 // where the width matters (the filter sheet below 1024 px, inline filters from 1024 px).
 import type { Locator, Page } from '@playwright/test';
 import { BODY } from '../../shared/copy';
-import { ROUTES } from '../../shared/routes';
+import { ROUTES, SITE } from '../../shared/routes';
 import { REWIND_AT, animationsIn, apiUrls, expect, gotoRoute, isExempt, isLiveOnly, layoutAudit, onlyIn, test, trackRequests } from './helpers';
 
 const ACT = ROUTES.find((r) => r.id === 'activity')!;
@@ -460,5 +460,281 @@ test.describe('once', () => {
     await expect(row.locator('.tx__nam')).toContainText('12,346');
     await row.locator('.tx__tog').click();
     await expect(row.locator('.tx__more')).toContainText('from this trade itself');
+  });
+});
+
+// ---------------------------------------------------------------------------------------------
+// List controls (nav-search-plan 2.3 to 2.6, 3.3, 3.4): Go to rank, rows per page, Back with the scroll
+// offset, the title, the column-head sort, the keys, the sticky list head on phones.
+// ---------------------------------------------------------------------------------------------
+
+/** Where a row sits against what stays stuck at the top (header, banner, the list head when sticky). */
+async function rowPlacement(page: Page, row: Locator) {
+  return row.evaluate((el) => {
+    let stuck = 0;
+    for (const s of [document.querySelector('header.hdr'), document.querySelector('.rwb'), document.querySelector('.act-head'), document.querySelector('.dl__head, .txl__head')]) {
+      if (!(s instanceof HTMLElement)) continue;
+      const cs = getComputedStyle(s);
+      if (cs.display === 'none' || (cs.position !== 'sticky' && cs.position !== 'fixed')) continue;
+      const r = s.getBoundingClientRect();
+      // a sticky element counts only where it is stuck (at its `top`), or wherever it is when that is lower
+      if (r.bottom > 0 && r.top <= (parseFloat(cs.top) || 0) + 1) stuck = Math.max(stuck, r.bottom);
+    }
+    const r = el.getBoundingClientRect();
+    const tab = document.querySelector('nav.tabbar')?.getBoundingClientRect();
+    const floor = tab && getComputedStyle(document.querySelector('nav.tabbar')!).display !== 'none' ? tab.top : window.innerHeight;
+    return { top: r.top, bottom: r.bottom, stuck, floor };
+  });
+}
+
+async function listReady(page: Page, row = '.hrow') {
+  await expect(page.locator(`main ${row}`).first()).toBeVisible({ timeout: 30_000 });
+  await expect(page.locator('main .act-scope')).not.toHaveAttribute('aria-busy', 'true', { timeout: 30_000 });
+}
+
+test.describe('list controls', () => {
+  test('Go to rank 1,204 lands on ?page=25 with that row focused, highlighted and in view under the sticky stack (375, 1280)', async ({ page }, info) => {
+    test.skip(!['375x812', '1280x800'].includes(info.project.name), 'runs at 375 and 1280');
+    await gotoRoute(page, HOL.path);
+    await listReady(page);
+    const field = page.getByRole('textbox', { name: 'Go to rank' });
+    await field.fill('1,204');
+    await field.press('Enter');
+    await expect(page).toHaveURL(/\/holders\?page=25$/);
+    const row = page.locator('main .act-holders .hrow', { has: page.locator('.hrow__rk', { hasText: /^1,204$/ }) });
+    await expect(row).toBeFocused({ timeout: 30_000 });
+    await expect(row).toHaveClass(/is-hit/);
+    const p = await rowPlacement(page, row);
+    expect(p.top, `the row starts under the sticky stack (${p.stuck})`).toBeGreaterThanOrEqual(p.stuck - 1);
+    expect(p.bottom, 'the row ends above the tab bar or the window edge').toBeLessThanOrEqual(p.floor + 1);
+    // the same page: no history entry, the row is reached in place
+    await field.fill('1201');
+    await field.press('Enter');
+    await expect(page.locator('main .act-holders .hrow', { has: page.locator('.hrow__rk', { hasText: /^1,201$/ }) })).toBeFocused();
+    await expect(page).toHaveURL(/\/holders\?page=25$/);
+    // past the end: one plain sentence with the stamped count; the page stays
+    await field.fill('99999999');
+    await field.press('Enter');
+    const msg = page.locator('.act-tools .pgtools__msg');
+    await expect(msg).toContainText(/^There are [\d,]+ holders; pick a rank up to that\.$/);
+    await expect(msg.locator('[data-num]')).toHaveCount(1);
+    await expect(page).toHaveURL(/\/holders\?page=25$/);
+  });
+
+  test('rows per page: 100 gives 100 rows and ?size=100, the pages follow; 50 drops it from the URL', async ({ page }, info) => {
+    test.skip(onlyIn(info.project.name), 'runs once');
+    await gotoRoute(page, HOL.path);
+    await listReady(page);
+    const rows = page.locator('main .act-holders .hrow');
+    await expect(rows).toHaveCount(50);
+    const pages50 = Number((await page.locator('.act-pager--head .pager__of [data-num]').innerText()).replace(/\D/g, ''));
+    await page.locator('.act-tools .seg__opt', { hasText: /^100$/ }).click();
+    await expect(page).toHaveURL(/\/holders\?size=100$/);
+    await listReady(page);
+    await expect(rows).toHaveCount(100);
+    await expect(rows.nth(99).locator('.hrow__rk')).toHaveText('100');
+    const pages100 = Number((await page.locator('.act-pager--head .pager__of [data-num]').innerText()).replace(/\D/g, ''));
+    expect(pages100).toBe(Math.ceil(pages50 / 2));
+    // the size survives a page change and the pager's links carry it
+    await expect(page.locator('.act-pager--head').getByRole('link', { name: 'Next page' })).toHaveAttribute('href', '/holders?size=100&page=2');
+    await page.locator('.act-tools .seg__opt', { hasText: /^25$/ }).click();
+    await expect(page).toHaveURL(/\/holders\?size=25$/);
+    await expect(rows).toHaveCount(25, { timeout: 30_000 });
+    await page.locator('.act-tools .seg__opt', { hasText: /^50$/ }).click();
+    await expect(page).toHaveURL(/\/holders$/);
+    await expect(rows).toHaveCount(50, { timeout: 30_000 });
+    // a size in the address bar that is not offered falls back to 50 and is dropped
+    await gotoRoute(page, `${HOL.path}?size=7`);
+    await expect(page).toHaveURL(/\/holders$/);
+  });
+
+  test('Back after a page change restores the page and the scroll offset; the title carries the page', async ({ page }, info) => {
+    test.skip(!['375x812', '1280x800'].includes(info.project.name), 'runs at 375 and 1280');
+    await gotoRoute(page, HOL.path);
+    await listReady(page);
+    const foot = page.locator('.act-pager--foot');
+    await foot.scrollIntoViewIfNeeded();
+    await page.waitForTimeout(300);
+    const y1 = await page.evaluate(() => Math.round(window.scrollY));
+    expect(y1).toBeGreaterThan(500);
+    await foot.getByRole('link', { name: 'Next page' }).click();
+    await expect(page).toHaveURL(/\/holders\?page=2$/);
+    await listReady(page);
+    await expect(page.locator('main .act-holders .hrow').first().locator('.hrow__rk')).toHaveText('51');
+    await expect(page).toHaveTitle(`Holders, page 2 · ${SITE.name}`);
+    const y2 = await page.evaluate(() => Math.round(window.scrollY));
+    expect(y2).toBeLessThan(y1);
+    await page.goBack();
+    await expect(page).toHaveURL(/\/holders$/);
+    await expect(page.locator('main .act-holders .hrow').first().locator('.hrow__rk')).toHaveText('1', { timeout: 30_000 });
+    await expect.poll(() => page.evaluate(() => Math.round(window.scrollY)), { timeout: 10_000 }).toBeGreaterThanOrEqual(y1 - 2);
+    expect(Math.abs((await page.evaluate(() => Math.round(window.scrollY))) - y1)).toBeLessThanOrEqual(2);
+    await expect(page).not.toHaveTitle(/page/);
+    // Forward: page 2 again, at the offset it was left at
+    await page.goForward();
+    await expect(page).toHaveURL(/\/holders\?page=2$/);
+    await expect.poll(() => page.evaluate(() => Math.round(window.scrollY)), { timeout: 10_000 }).toBeLessThanOrEqual(y2 + 2);
+    await expect(page).toHaveTitle(`Holders, page 2 · ${SITE.name}`);
+  });
+
+  test('column heads sort the desktop holder list: aria-sort on the head, the order in the count line, page 1', async ({ page }, info) => {
+    test.skip(info.project.name !== '1280x800', 'the column heads show from 1024 px');
+    await gotoRoute(page, `${HOL.path}?page=3`);
+    await listReady(page);
+    const head = (name: string) => page.locator('.act-holders .dl__head [role="columnheader"]', { has: page.getByRole('button', { name }) });
+    await expect(head('Total NAM, biggest first')).toHaveAttribute('aria-sort', 'descending');
+    await expect(head('Spendable, biggest first')).toHaveAttribute('aria-sort', 'none');
+    // 7 days and the other heads are plain text, without aria-sort
+    await expect(page.locator('.act-holders .dl__head [role="columnheader"]:not([aria-sort])')).toHaveCount(await page.locator('.act-holders .dl__head [role="columnheader"]').count() - 3);
+    await page.getByRole('button', { name: 'Spendable, biggest first' }).click();
+    await expect(page.locator('.act-count')).toContainText('biggest first by spendable NAM');
+    await expect(page).toHaveURL(/\/holders$/);
+    await expect(head('Spendable, biggest first')).toHaveAttribute('aria-sort', 'descending');
+    await expect(head('Total NAM, biggest first')).toHaveAttribute('aria-sort', 'none');
+    await listReady(page);
+    await expect(page.locator('main .act-holders .hrow').first().locator('.hrow__rk')).toHaveText('1');
+    // the inline "Biggest by" choice follows
+    await expect(page.locator('.act-filters').getByRole('radio', { name: 'Spendable' })).toBeChecked();
+    await page.getByRole('button', { name: 'Staked, biggest first' }).click();
+    await expect(page.locator('.act-count')).toContainText('biggest first by staked NAM');
+  });
+
+  test('keys: j and k walk the rows, ] and [ change the page, Enter opens the address; nothing while typing', async ({ page }, info) => {
+    test.skip(!['375x812', '1280x800'].includes(info.project.name), 'runs at 375 and 1280');
+    await gotoRoute(page, `${HOL.path}?page=2`);
+    await listReady(page);
+    const rk = (s: string) => page.locator('main .act-holders .hrow', { has: page.locator('.hrow__rk', { hasText: new RegExp(`^${s}$`) }) });
+    await page.locator('main h1').click();
+    await page.keyboard.press('j');
+    await expect(rk('51')).toBeFocused();
+    await page.keyboard.press('j');
+    await page.keyboard.press('j');
+    await expect(rk('53')).toBeFocused();
+    const p = await rowPlacement(page, rk('53'));
+    expect(p.top).toBeGreaterThanOrEqual(p.stuck - 1);
+    await page.keyboard.press('k');
+    await expect(rk('52')).toBeFocused();
+    // one tab stop: the row walked to
+    await expect(rk('52')).toHaveAttribute('tabindex', '0');
+    await expect(rk('51')).toHaveAttribute('tabindex', '-1');
+    await page.keyboard.press(']');
+    await expect(page).toHaveURL(/\/holders\?page=3$/);
+    await expect(rk('101')).toBeFocused({ timeout: 30_000 });
+    const q = await rowPlacement(page, rk('101'));
+    expect(q.top, 'the sticky list head does not cover the focused row').toBeGreaterThanOrEqual(q.stuck - 1);
+    await page.keyboard.press('[');
+    await expect(page).toHaveURL(/\/holders\?page=2$/);
+    await expect(rk('51')).toBeFocused({ timeout: 30_000 });
+    await page.keyboard.press('Enter');
+    await expect(page).toHaveURL(/[?&]addr=tnam1/);
+    const sheet = page.locator('dialog[open]');
+    await expect(sheet).toBeVisible();
+    // while the sheet is open the list keys rest
+    await page.keyboard.press(']');
+    await expect(page).toHaveURL(/\/holders\?page=2&addr=/);
+    await sheet.getByRole('button', { name: /^Close/ }).first().click();
+    await expect(page).not.toHaveURL(/[?&]addr=/);
+    // typing: the keys are text in the rank field and in the page field
+    const field = page.getByRole('textbox', { name: 'Go to rank' });
+    await field.click();
+    await page.keyboard.type('j]k[');
+    await expect(field).toHaveValue('j]k[');
+    await expect(field).toBeFocused();
+    await expect(page).toHaveURL(/\/holders\?page=2$/);
+    const pf = page.locator('.act-pager--head').getByRole('textbox', { name: 'Page number' });
+    await pf.click();
+    await page.keyboard.press(']');
+    await expect(page).toHaveURL(/\/holders\?page=2$/);
+  });
+
+  test('keys do nothing inside the search field', async ({ page }, info) => {
+    test.skip(info.project.name !== '1280x800', 'the search field is inline from 1024 px');
+    await gotoRoute(page, HOL.path);
+    await listReady(page);
+    const search = page.getByRole('searchbox', { name: 'Search holders by address or name' }).or(page.getByRole('textbox', { name: 'Search holders by address or name' }));
+    await search.first().click();
+    await page.keyboard.press(']');
+    await page.keyboard.press('j');
+    await expect(search.first()).toBeFocused();
+    await expect(search.first()).toHaveValue(']j');
+    await expect(page).not.toHaveURL(/page=2/);
+  });
+
+  test('phones: the count line and the pager stay under the header; a page change leaves the first row clear of them', async ({ page }, info) => {
+    test.skip(!['360x780', '375x812'].includes(info.project.name), 'phones');
+    await gotoRoute(page, `${HOL.path}?page=3`);
+    await listReady(page);
+    await page.evaluate(() => window.scrollBy(0, 2400));
+    await page.waitForTimeout(200);
+    const head = page.locator('.act-head');
+    const hb = (await head.boundingBox())!;
+    const hdr = (await page.locator('header.hdr').boundingBox())!;
+    expect(Math.abs(hb.y - (hdr.y + hdr.height)), 'stuck under the header').toBeLessThanOrEqual(2);
+    await expect(head.getByRole('link', { name: 'Next page' })).toBeInViewport();
+    await head.getByRole('link', { name: 'Next page' }).click();
+    await expect(page).toHaveURL(/\/holders\?page=4$/);
+    const first = page.locator('main .act-holders .hrow').first();
+    await expect(first.locator('.hrow__rk')).toHaveText('151', { timeout: 30_000 });
+    await expect(first).toBeFocused();
+    const p = await rowPlacement(page, first);
+    expect(p.top).toBeGreaterThanOrEqual(p.stuck - 1);
+    expect(p.top - p.stuck, 'right under the stuck head').toBeLessThanOrEqual(24);
+  });
+
+  test('rewound on a phone: the list head sits under the banner', async ({ page }, info) => {
+    test.skip(info.project.name !== '375x812', 'runs at 375');
+    await gotoRoute(page, `${HOL.path}?at=${REWIND_AT}`);
+    await listReady(page);
+    await page.evaluate(() => window.scrollBy(0, 2400));
+    await page.waitForTimeout(200);
+    const hb = (await page.locator('.act-head').boundingBox())!;
+    const bb = (await page.locator('.rwb').boundingBox())!;
+    expect(hb.y).toBeGreaterThanOrEqual(bb.y + bb.height - 1);
+  });
+
+  test('Transactions: Show moves from before a day reads the list as of that day; Show the newest clears it', async ({ page }, info) => {
+    test.skip(onlyIn(info.project.name), 'runs once');
+    const reqs = trackRequests(page);
+    await gotoRoute(page, ACT.path);
+    await listReady(page, '.tx');
+    const day = page.getByLabel('Show moves from before');
+    await day.fill('2026-01-01');
+    await page.locator('.act-tools').getByRole('button', { name: 'Show' }).click();
+    const ms = Date.UTC(2026, 0, 1);
+    await expect(page).toHaveURL(new RegExp(`/activity\\?before=${ms}$`));
+    await expect(page.locator('.act-count')).toContainText('before 1 Jan 2026 (UTC)', { timeout: 30_000 });
+    await expect.poll(() => reqs.some((r) => r.url().includes('/api/flows?') && new URL(r.url()).searchParams.get('at') === String(ms - 1))).toBe(true);
+    await expect(page.locator('main .tx, main .empty').first()).toBeVisible({ timeout: 30_000 });
+    // a day to come is refused in words
+    await day.fill('2999-01-01');
+    await page.locator('.act-tools').getByRole('button', { name: 'Show' }).click();
+    await expect(page.locator('.act-tools .pgtools__msg')).toContainText('has not come yet');
+    await page.locator('.act-count').getByRole('link', { name: 'Show the newest' }).click();
+    await expect(page).toHaveURL(/\/activity$/);
+    await expect(page.locator('.act-count')).not.toContainText('before');
+  });
+
+  test('the new controls: 44 px targets, no sideways scroll (360, 375, 1280)', async ({ page }, info) => {
+    test.skip(!['360x780', '375x812', '1280x800'].includes(info.project.name), 'runs at 360, 375 and 1280');
+    for (const path of [`${HOL.path}?page=25`, `${ACT.path}?size=25`]) {
+      await gotoRoute(page, path);
+      await listReady(page, path.startsWith('/holders') ? '.hrow' : '.tx');
+      const boxes = await page.locator('.act-tools').evaluate((root) =>
+        [...root.querySelectorAll('a, input:not([type="radio"]), button, .seg__opt')].filter((el) => el.getBoundingClientRect().width > 0).map((el) => {
+          const r = el.getBoundingClientRect();
+          return { name: el.getAttribute('aria-label') ?? el.textContent ?? '', w: r.width, h: r.height, right: r.right };
+        }),
+      );
+      expect(boxes.length).toBeGreaterThanOrEqual(5);
+      for (const b of boxes) {
+        expect(b.w, `${path} ${b.name} width`).toBeGreaterThanOrEqual(44);
+        expect(b.h, `${path} ${b.name} height`).toBeGreaterThanOrEqual(44);
+        expect(b.right, `${path} ${b.name} inside the viewport`).toBeLessThanOrEqual(page.viewportSize()!.width);
+      }
+      const a = await layoutAudit(page, 'main');
+      expect(a.overflowX, `${path}: scrollWidth ${a.scrollWidth} > ${a.innerWidth}`).toBe(false);
+      expect(a.smallTargets).toEqual([]);
+      expect(a.smallText).toEqual([]);
+    }
   });
 });

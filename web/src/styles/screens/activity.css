@@ -77,8 +77,51 @@
   .act-foot { display: flex; margin: var(--s-4) 0 var(--s-2); min-width: 0; }
   .act-pager--ph { min-width: 1px; }
   @media (max-width: 639px) {
-    .act-head__end .act-csv { width: 100%; justify-content: center; padding: 0 var(--s-3); border: 1.5px solid var(--c-line-strong); border-radius: var(--r-pill); font-size: var(--t-13); }
+    .act-tools .act-csv { width: 100%; justify-content: center; padding: 0 var(--s-3); border: 1.5px solid var(--c-line-strong); border-radius: var(--r-pill); font-size: var(--t-13); }
   }
+
+  /* ---------- rows per page, Go to rank / Show moves from before, the keys (ui/Pager.tsx PageTools) ----------
+     under the list head: on phones the CSV link first (full width), then the two controls; from 1024 px one row
+     ending under the pager's end. */
+  .act-tools { margin: 0 0 var(--s-3); }
+  /* "Show the newest" in the count line under a date: a link in running text, on the line */
+  .act-count .act-newest { display: inline; min-height: 0; text-decoration-thickness: 1.5px; text-underline-offset: 3px; }
+  .act-keys { display: none; }
+  @media (min-width: 1024px) {
+    .act-tools { justify-content: flex-end; }
+  }
+  @media (min-width: 1024px) and (pointer: fine) {
+    .act-keys { display: flex; flex-wrap: wrap; justify-content: flex-end; gap: 4px var(--s-4); flex: 1 1 100%; margin: 0; font-size: var(--t-12); line-height: 20px; color: var(--c-ink-2); }
+    .act-keys__t { font-weight: var(--w-medium); }
+    .act-keys kbd { display: inline-block; min-width: 20px; margin-right: 4px; padding: 0 5px; border: 1px solid var(--c-line-strong); border-radius: 4px; font: var(--w-medium) var(--t-12) / 18px var(--font-code); color: var(--c-ink); text-align: center; }
+  }
+
+  /* ---------- phones and tablets (below 1024 px): the count line and the pager stay under the site header ----------
+     nav-search-plan 2.6 rule 1: sticky under the header (and the rewound banner when it shows), on the band's
+     own ground, under the sheets (they use the top layer). Rows are scrolled under it by measuring it
+     (paging.ts revealRow), so a page change or a key never leaves a row behind it. */
+  @media (max-width: 1023px) {
+    .act-head { position: sticky; top: var(--header-h); z-index: 3; margin: var(--s-2) 0 var(--s-3); padding-block: var(--s-2); background: var(--c-bg); box-shadow: 0 1px 0 var(--c-line); }
+    body:has(.rwb) .act-head { top: calc(var(--header-h) + var(--banner-h)); }
+  }
+
+  /* ---------- rows you can walk (j, k, Enter): the inset focus ring, and the row a jump reached ---------- */
+  .act-scope .hrow:focus-visible, .act-scope .tx:focus-visible { outline: var(--ring-w) solid var(--c-focus); outline-offset: -2px; }
+  .act-scope .hrow:focus:not(:focus-visible), .act-scope .tx:focus:not(:focus-visible) { outline: none; }
+  .act-scope .is-hit { background: color-mix(in srgb, var(--accent) 22%, transparent); }
+  @media (prefers-reduced-motion: no-preference) {
+    .act-scope .is-hit { animation: act-hit 1.6s var(--ease-state) forwards; }
+    @keyframes act-hit { 0%, 55% { background: color-mix(in srgb, var(--accent) 22%, transparent); } 100% { background: transparent; } }
+  }
+
+  /* ---------- the desktop holder table: Total, Spendable and Staked heads sort the list ---------- */
+  .act-holders .dl__sort { position: relative; display: inline; padding: 0; background: none; border: 0; color: inherit; font: inherit; line-height: inherit; text-align: right; cursor: pointer; white-space: nowrap; }
+  .act-holders .dl__sort::after { content: ""; position: absolute; inset: -14px -6px; }   /* a 44 px target over the 16 px line */
+  .act-holders .dl__sort:hover > span:last-child { text-decoration: underline; text-underline-offset: 3px; }
+  .act-holders .dl__sort:focus-visible { outline: var(--ring-w) solid var(--c-focus); outline-offset: var(--ring-o); }
+  .act-holders .dl__sorti { visibility: hidden; margin-right: 4px; font-size: var(--t-12); }
+  .act-holders .dl__sort.is-on { color: var(--c-ink); }
+  .act-holders .dl__sort.is-on .dl__sorti { visibility: visible; }
   @media (min-width: 640px) {
     .act-head__end { flex: 0 1 auto; justify-content: flex-end; }
     .act-head__end .act-pager { order: 2; }
@@ -90,6 +133,19 @@
   /* ---------- holders: the kit's DataList rows, plus the name button and the inline change ---------- */
   .act-holders .hrow__name .act-name { display: inline-block; max-width: 100%; }
   .act-chg [data-num] { color: var(--c-ink); }
+  /* ranks run past 1,000 on later pages: the rank column grows to hold them (the kit's 24 px fits three digits) */
+  /* --act-rk: the widest rank on the page in characters (Holders.tsx), so names line up and never touch it */
+  .act-holders .hrow { grid-template-columns: max(24px, var(--act-rk, 0px)) minmax(0, 1fr) auto; }
+  .act-holders .hrow__bar { left: calc(max(24px, var(--act-rk, 0px)) + var(--s-3)); }
+  @container dl (min-width: 620px) {
+    .act-holders.dl--holders:not(.dl--full) :is(.dl__head, .hrow) { grid-template-columns: max(28px, var(--act-rk, 0px)) minmax(0, 1fr) 128px 76px; }
+    .act-holders.dl--holders:not(.dl--full) .hrow__bar { left: calc(max(28px, var(--act-rk, 0px)) + 16px); }
+  }
+  @container dl (min-width: 930px) {
+    .act-holders.dl--full :is(.dl__head, .hrow) { grid-template-columns: max(32px, var(--act-rk, 0px)) minmax(160px, 1.5fr) 124px 72px 124px 190px; }
+    .act-holders.dl--full.dl--chg :is(.dl__head, .hrow) { grid-template-columns: max(32px, var(--act-rk, 0px)) minmax(160px, 1.5fr) 124px 72px 124px 190px 88px; }
+    .act-holders.dl--full .hrow__bar { left: calc(max(32px, var(--act-rk, 0px)) + var(--s-3)); }
+  }
   .is-old .act-chg [data-num] { color: var(--c-ink-2); }
   @container dl (min-width: 930px) { .dl--chg .act-chg { display: none; } }
 

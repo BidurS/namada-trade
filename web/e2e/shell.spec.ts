@@ -137,6 +137,23 @@ test.describe('once', () => {
     await expect(page).toHaveURL('/alerts');
   });
 
+  test('router: every entry keeps its scroll offset in history.state; Back and Forward restore it', async ({ page }, info) => {
+    test.skip(onlyIn(info.project.name), 'runs once');
+    await gotoRoute(page, '/');
+    await page.waitForTimeout(1500);
+    await page.evaluate(() => window.scrollTo(0, 1200));
+    await expect.poll(() => page.evaluate(() => (history.state as { scrollY?: number } | null)?.scrollY)).toBe(1200);
+    await page.keyboard.press('2');
+    await expect(page).toHaveURL('/trade');
+    await expect.poll(() => page.evaluate(() => window.scrollY)).toBe(0);
+    await page.goBack();
+    await expect(page).toHaveURL('/');
+    await expect.poll(() => page.evaluate(() => Math.round(window.scrollY)), { timeout: 10_000 }).toBe(1200);
+    await page.goForward();
+    await expect(page).toHaveURL('/trade');
+    await expect.poll(() => page.evaluate(() => Math.round(window.scrollY))).toBe(0);
+  });
+
   test('palette: "/" opens it, Escape closes it, focus returns; Ctrl or Cmd K toggles', async ({ page }) => {
     await gotoRoute(page, '/');
     await page.getByRole('button', { name: 'Search', exact: true }).focus();

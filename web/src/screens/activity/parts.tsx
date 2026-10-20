@@ -4,10 +4,12 @@
 // - ActivityBar: the page tabs (real links, /activity and /holders, ?at= carried) and the Filter
 //   button with its count badge (below 1024 px only).
 // - FilterSheet: the bottom sheet (kit Sheet) that holds the same controls on phones.
-import React, { useEffect, useState, useSyncExternalStore } from 'react';
+import React, { useEffect, useState, useSyncExternalStore, type RefObject } from 'react';
 import { Button, Sheet, Tabs } from '../../ui';
 export { SearchField } from '../../ui';
 import { hrefFor } from '../../app/index';
+import { SHORTCUTS } from '../../app/keys';
+import { rovingTo } from './paging';
 
 // ---------------------------------------------------------------- the 1024 px switch
 const WIDE = '(min-width: 1024px)';
@@ -124,5 +126,43 @@ export function FilterSet({ label, children, className = '' }: { label: string; 
       <legend className="fset__l">{label}</legend>
       {children}
     </fieldset>
+  );
+}
+
+// ---------------------------------------------------------------- rows you can walk (nav-search-plan 3.4)
+/**
+ * A roving tab stop over the list's rows: one row is in the tab order (the first, or the last one focused or
+ * walked to), the others take focus only from the keys. Re-applied when new rows arrive (`rows` changes).
+ */
+export function useRovingRows(list: RefObject<HTMLElement | null>, rowSel: string, rows: unknown) {
+  useEffect(() => {
+    const el = list.current;
+    if (!el) return;
+    const active = document.activeElement?.closest(rowSel) as HTMLElement | null;
+    rovingTo(active && el.contains(active) ? active : null, el, rowSel);
+    const onFocus = (e: FocusEvent) => {
+      const r = (e.target as Element | null)?.closest?.(rowSel) as HTMLElement | null;
+      if (r && el.contains(r) && r.getAttribute('tabindex') !== '0') rovingTo(r, el, rowSel);
+    };
+    el.addEventListener('focusin', onFocus);
+    return () => el.removeEventListener('focusin', onFocus);
+  }, [list, rowSel, rows]);
+}
+
+/** The list keys, in words, from the one table in app/keys.ts; only where there is a keyboard (pointer: fine). */
+export function KeysHint() {
+  const keys = SHORTCUTS.filter((k) => k.where === 'lists');
+  return (
+    <p className="act-keys">
+      <span className="act-keys__t">Keys</span>
+      {keys.map((k) => (
+        <span key={k.does} className="act-keys__k">
+          {k.keys.map((x) => (
+            <kbd key={x}>{x}</kbd>
+          ))}{' '}
+          {k.does}
+        </span>
+      ))}
+    </p>
   );
 }
