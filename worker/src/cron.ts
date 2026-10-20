@@ -11,7 +11,7 @@ import type { SourceHealth } from '../../shared/types';
 import type { Stmt } from './db';
 import { sweepAuth } from './auth';
 import { NOT_LEGACY_TWIN } from './flows-query';
-import { unbondAddresses, fetchUnbonds, type UnbondWithdrawCache } from './analytics';
+import { unbondAddresses, fetchUnbonds, buildUnbondTermStructure, cachedChainParams, type UnbondWithdrawCache } from './analytics';
 import { chainParams, indexState, NAMADA_CURSOR_MAX_LAG, NAMADA_CURSOR_STALE_MS, OSMOSIS_LIVE_STALE_MS, OSMOSIS_SWEEP_STALE_MS, timedOutSends, ibcRowOf } from './analytics';
 import type { LiveUnbondStatus, LiveScanStatus } from './live-hub';
 import type { AlertsSkipped } from './sources/discord';
@@ -235,6 +235,8 @@ export interface BondListingRecord {
   height: number; epoch: number; provider: string;
   /** sources listed (with or without bonds left), sources with bonds, the sum of every bond entry in NAM, decoded size */
   sources: number; stakers: number; totalNam: number; bytes: number;
+  /** sum of every unbond entry net of slashing (in-flight + withdrawable) decoded from the same listing */
+  unbondingNam?: number;
   written: number; zeroed: number; remaining: number; ticks: number; durationMs: number;
   failedAt?: number | null;
   error?: string;
@@ -468,9 +470,10 @@ export async function runBondListing(env: Env, health: SourceHealth[], now: numb
     return refused;
   }
   const ticks = (prev && prev.remaining > 0 ? prev.ticks : 0) + 1;
+  const unbondingNam = listing.unbondingBase != null ? Number(listing.unbondingBase) / 1e6 : 0;
   const rec: BondListingRecord = {
     at: now, completeAt: prev?.completeAt ?? null, height: listing.height, epoch, provider: listing.provider,
-    sources: listing.sources.size, stakers: 0, totalNam: Number(listing.totalBase) / 1e6, bytes: listing.bytes,
+    sources: listing.sources.size, stakers: 0, totalNam: Number(listing.totalBase) / 1e6, unbondingNam, bytes: listing.bytes,
     written: 0, zeroed: 0, remaining: 0, ticks, durationMs: 0, failedAt: null,
   };
   try {
@@ -495,6 +498,18 @@ export async function runBondListing(env: Env, health: SourceHealth[], now: numb
     if (rec.remaining === 0) {
       if (toZero.length) rec.zeroed = await runBatch(env.DB, stmt.stakesVerified(toZero.map((address) => ({ address, bondedNam: 0, delegations: [] })), epoch, listing.height, now, BOND_LISTING_SRC));
       rec.completeAt = now;
+      // Persist consensus unbond maturity schedule and withdraw cache directly from the decoded bond listing
+      try {
+        const params = await cachedChainParams(env.DB);
+        const epochSec = params ? Math.max(params.minEpochSec, params.epochSec ?? params.minEpochSec) : 21600;
+        const { termStructure, withdrawCache } = buildUnbondTermStructure(listing, listing.height, epoch, now, epochSec);
+        await Promise.all([
+          kvSet(env.DB, 'unbond.term_structure', termStructure).catch(() => {}),
+          kvSet(env.DB, 'unbond.withdraw', withdrawCache).catch(() => {}),
+        ]);
+      } catch (e) {
+        console.error('unbond term structure', e);
+      }
     }
     rec.durationMs = Date.now() - t0;
     health.push({ name, ok: true, at: now, latencyMs: rec.durationMs, note:
@@ -588,10 +603,12 @@ export async function bondedCoverageCheck(db: D1Database, now: number, stakeNam:
   const pct = (bond.totalNam / stakeNam) * 100;
   const recent = now - bond.at < 3 * BOND_LISTING_MS;
   const ok = Math.abs(100 - pct) < 2 && bond.remaining === 0 && recent && !bond.error;
+  const unbondingNam = bond.unbondingNam ?? null;
+  const posAccountedNam = unbondingNam != null ? bond.totalNam + unbondingNam : null;
   return stmt.check('bonded_coverage', ok ? 'ok' : 'warn', title, {
     ...common,
     coveragePct: pct.toFixed(1) + '%', stakers: bond.stakers, knownAddresses: bond.sources, pendingAddresses: bond.remaining,
-    listingTotalNam: bond.totalNam, listingAt: bond.at, listingHeight: bond.height, listingEpoch: bond.epoch, listingCompleteAt: bond.completeAt,
+    listingTotalNam: bond.totalNam, unbondingNam, posAccountedNam, listingAt: bond.at, listingHeight: bond.height, listingEpoch: bond.epoch, listingCompleteAt: bond.completeAt,
     note: !recent ? 'The bond listing is older than three of its intervals.' : bond.error ? `The last bond listing failed: ${bond.error}` : bond.remaining ? `${bond.remaining} addresses are still being written.` : undefined,
   }, now);
 }
@@ -927,8 +944,10 @@ export async function runCron(env: Env) {
     // pages never wait on the indexer.
     if (!late()) await chainParams(env.DB, signal).catch(() => {});
 
-    // The indexer's withdraw times of the unbonds the unlock list shows (every 10 minutes): exact where it has them.
-    if (now % 600000 < 60000 && !late()) {
+    // Unbond withdraw times: when the consensus bond listing is current, `runBondListing` already decoded every
+    // unbond on chain; fall back to the indexer only when the bond listing has not completed recently.
+    const consensusUnbondsFresh = !!bondRec?.completeAt && now - bondRec.completeAt < 3 * BOND_LISTING_MS;
+    if (!consensusUnbondsFresh && now % 600000 < 60000 && !late()) {
       const addrs = await unbondAddresses(env.DB, now);
       const byAddress: UnbondWithdrawCache['byAddress'] = {};
       let failedUnbonds = 0;

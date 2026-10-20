@@ -295,6 +295,42 @@ export interface OnDeckEntry {
   priorSells30d: number;    // NAM this address sold in the 30d before the window
   firstArrival: number;
   lastSeen: number;
+  /**
+   * When `linkedNamada` is an intermediate burner address that received its funds via a recent Namada transfer
+   * within 48h before bridging, the upstream Namada origin (2-hop attribution).
+   */
+  hopOriginNamada?: { address: string; label: string | null; labelPlain: string | null } | null;
+  /**
+   * When NAM arrived on Osmosis from the MASP (shielded IBC out) and matches a prior MASP shield leg within 24h
+   * by amount conservation and low anonymity-set entropy, the probabilistic turnstile origin.
+   */
+  passthroughFrom?: { address: string; dwellMs: number; anonymitySetK: number; confidence: 'high' | 'medium' | 'low' } | null;
+  /** Empirical Bayesian dump hazard score in [0, 1] based on this entity's prior sell propensity and origin cohort. */
+  dumpHazardScore?: number;
+}
+
+export interface UnbondMaturityBucket {
+  withdrawEpoch: number;
+  /** Estimated unix ms when this epoch becomes withdrawable (at or before `at` when `withdrawableNow` is true) */
+  estimatedAt: number | null;
+  withdrawableNow: boolean;
+  amountNam: number;
+  count: number;
+}
+
+/**
+ * Consensus-verified forward unlock schedule decoded directly from `/vp/pos/bonds_and_unbonds/to`.
+ * Distinguishes unbonds that have already passed their `withdrawEpoch` (`withdrawableNowNam`, liquid on demand)
+ * from unbonds still in the unbonding pipeline (`inFlightNam`).
+ */
+export interface UnbondTermStructure {
+  at: number;
+  height: number;
+  currentEpoch: number;
+  withdrawableNowNam: number;
+  inFlightNam: number;
+  totalUnbondingNam: number;
+  buckets: UnbondMaturityBucket[];
 }
 
 export interface UnlockEntry {
@@ -317,14 +353,14 @@ export interface UnlockEntry {
    */
   liquidAt: number | null;
   /**
-   * Where `liquidAt` came from: 'indexer' when indexer.namada.net lists this unbond with its withdraw time (matched
-   * by address, validator and amount), 'estimate' when it is ts + the measured wait. Absent on older servers.
+   * Where `liquidAt` came from: 'consensus' when matched against the ABCI bond/unbond listing, 'indexer' when
+   * indexer.namada.net lists this unbond with its withdraw time, 'estimate' when it is ts + the measured wait.
    */
-  liquidAtSource?: 'indexer' | 'estimate' | null;
+  liquidAtSource?: 'consensus' | 'indexer' | 'estimate' | null;
   /**
-   * For withdrawals: what the address did with the NAM in the following 48 h (sales: 7 days). The address's later
-   * moves are shared out over its withdrawals in time order, each withdrawal getting at most its own amount, so
-   * one restake is never credited to several withdrawals.
+   * For withdrawals: what the address did with the NAM in the following 48 h (sales: 7 days), including 2-hop
+   * burner transfers. The address's later moves are shared out over its withdrawals in time order, each withdrawal
+   * getting at most its own amount, so one restake is never credited to several withdrawals.
    */
   outcome?: { kind: 'rebonded' | 'bridged_out' | 'sold' | 'shielded' | 'liquid'; amountNam: number } | null;
 }
@@ -342,6 +378,10 @@ export interface MoverEntry {
   buys: number;
   sells: number;
   lastTs: number;
+  /** Rolling volume turnaround ratio in [0, 1]: 1 means equal buy and sell volume (cross-block arbitrage / market making). */
+  turnaroundRatio?: number;
+  /** True when the trader's rolling activity matches a cross-block non-atomic arbitrage or solver pattern. */
+  crossBlockArb?: boolean;
 }
 
 /** Namada staking parameters from the indexer (worker/src/analytics.ts chainParams). */
@@ -394,6 +434,8 @@ export interface Pressure {
   unbondingProv?: Provenance;
   /** the chain parameters themselves, null when they could not be read (absent on servers before 2026-10-17) */
   chainParams?: ChainParams | null;
+  /** Consensus-verified epoch-by-epoch unlock term structure decoded from the ABCI bond/unbond listing. */
+  unbondTermStructure?: UnbondTermStructure | null;
   /** NAM staked (the chain's total stake), last reading of each 6-hour period over 14 days */
   bondedTrend: { ts: number; value: number }[];
   movers: MoverEntry[];
@@ -414,6 +456,20 @@ export interface Pressure {
 }
 
 // ---------------------------------------------------------------- blind spot (D5)
+
+export interface MaspPassthroughLink {
+  inTs: number;
+  outTs: number;
+  dwellMs: number;
+  inFrom: string | null;
+  outTo: string | null;
+  inAmount: number;
+  outAmount: number;
+  relDiff: number;
+  /** Number of candidate inflows in the window matching the outflow amount within tolerance (k-anonymity) */
+  anonymitySetK: number;
+  confidence: 'high' | 'medium' | 'low';
+}
 
 export interface BlindSpot {
   asOf: number;
@@ -440,6 +496,12 @@ export interface BlindSpot {
   ibcShielded7d: number;
   /** the largest recent moves out of the pool to an address (unshields and bridge crossings out), 30 days */
   unshields: Flow[];
+  /** Probabilistic timing/amount-correlated MASP round-trips (<24h dwell time) in the last 7 days */
+  passthroughs7d?: MaspPassthroughLink[];
+  /** Total NAM that entered and exited the MASP as a matched <24h turnstile passthrough in the last 7 days */
+  turnstileNam7d?: number;
+  /** Share of 7d MASP activity that remained sticky (not rapid round-trip transit), in [0, 100] */
+  stickySharePct7d?: number | null;
   coverage: Provenance;
   coverageByChain?: { osmosis: Provenance; namada: Provenance };
 }
@@ -571,6 +633,12 @@ export interface SlippageCurvePoint {
   buyOutNam?: number | null;
   /** true when `buyOutNam` is within 0.5% of `amountNam` */
   buyExact?: boolean;
+  /** Marginal execution price (ΔUSDC / ΔNAM) for the incremental slice from the previous tier to `amountNam` */
+  marginalSellUsd?: number | null;
+  /** Marginal sell price impact (%) for the incremental slice against `spotUsd` */
+  marginalSellImpactPct?: number | null;
+  /** Marginal buy price (ΔUSDC / ΔNAM) for the incremental slice from the previous tier to `amountNam` */
+  marginalBuyUsd?: number | null;
 }
 
 /** How a safe-size figure was made (QuoteCurveResponse.safeClip1Pct / safeClip3Pct). */
@@ -606,6 +674,12 @@ export interface QuoteCurveResponse {
   /** the same figures with how each was made; nam is null (never scaled down from 0) below the smallest size */
   safeClip1Pct?: SafeClipInfo | null;
   safeClip3Pct?: SafeClipInfo | null;
+  /**
+   * Order size (NAM) above which Concentrated Liquidity tick boundaries cause a >2.5x jump in marginal slippage
+   * (or liquidity exhaustion); null when marginal slippage progresses smoothly across all quoted tiers.
+   */
+  liquidityCliffNam?: number | null;
+  cliffNote?: string | null;
   curve: SlippageCurvePoint[];
   prov: Provenance;
 }

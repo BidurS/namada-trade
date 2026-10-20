@@ -1,0 +1,275 @@
+import { describe, it, expect } from 'vitest';
+import { readFileSync } from 'node:fs';
+import { parseBondListing } from '../worker/src/sources/namada';
+import { runBondListing } from '../worker/src/cron';
+import {
+  buildUnbondTermStructure,
+  matchMaspPassthroughs,
+  blindSpot,
+  pressure,
+  type PoolLeg,
+} from '../worker/src/analytics';
+import {
+  DEFAULT_THRESHOLDS,
+  liquidityNormalizedThresholds,
+  detectCrossBlockArbTraders,
+  detectTwapBursts,
+  reconstructIntentChains,
+  INTERNAL_ADDRESSES,
+} from '../shared/alerts';
+import { annotateSlippageCurve } from '../worker/src/sources/sqs';
+import { testD1, insert } from './d1-sqlite';
+import type { Flow, SlippageCurvePoint, SourceHealth } from '../shared/types';
+
+const fx = (n: string) => JSON.parse(readFileSync(new URL(`./fixtures/${n}`, import.meta.url), 'utf8'));
+const BONDS = fx('bonds_listing.json');
+const H = 3600_000, D = 86400_000, M = 60_000;
+const NOW = Date.UTC(2026, 9, 20, 12, 0);
+const MASP = INTERNAL_ADDRESSES.masp;
+const POS = INTERNAL_ADDRESSES.pos;
+
+describe('1. Consensus unbonds & slashes decoded from /vp/pos/bonds_and_unbonds/to', () => {
+  const l = parseBondListing(BONDS.value);
+  const e = BONDS.expected;
+
+  it('decodes every unbond and slash vector in the mainnet fixture without skipping bytes', () => {
+    expect(l.entriesWithUnbonds).toBe(e.withUnbonds); // 15 entries carry unbonds in the mainnet fixture
+    expect(l.entriesWithSlashes).toBe(e.withSlashes); // 3 entries carry slashes in the mainnet fixture
+    expect(l.unbondingBase > 0n).toBe(true);
+    expect(l.slashes.length).toBeGreaterThanOrEqual(e.withSlashes);
+
+    // Sources with bondedBase === 0n that exist only because of pending/withdrawable unbonds now expose their unbonds
+    const unbondOnly1 = l.sources.get('tnam1q98jzz306gldxvtg5quwnej4zvna6pgnquk2t4dc')!;
+    const unbondOnly2 = l.sources.get('tnam1q9mnn2qkg3fzuw8hzwgnuxa42rvdjhkn5s065aa3')!;
+    expect(unbondOnly1.bondedBase).toBe(0n);
+    expect(unbondOnly1.unbondingBase > 0n).toBe(true);
+    expect(unbondOnly1.unbonds.length).toBeGreaterThan(0);
+    expect(unbondOnly2.bondedBase).toBe(0n);
+    expect(unbondOnly2.unbondingBase > 0n).toBe(true);
+    expect(unbondOnly2.unbonds.length).toBeGreaterThan(0);
+  });
+
+  it('builds an epoch-by-epoch forward unlock term structure and consensus liquidAt lookup', async () => {
+    const { termStructure, withdrawCache } = buildUnbondTermStructure(l, 8343327, 2690, NOW, 21600);
+    expect(termStructure.totalUnbondingNam).toBeCloseTo(Number(l.unbondingBase) / 1e6, 5);
+    expect(termStructure.withdrawableNowNam + termStructure.inFlightNam).toBeCloseTo(termStructure.totalUnbondingNam, 5);
+    expect(termStructure.buckets.length).toBeGreaterThan(0);
+    // Buckets are sorted by withdrawEpoch ascending
+    expect(termStructure.buckets.map((b) => b.withdrawEpoch)).toEqual(
+      [...termStructure.buckets.map((b) => b.withdrawEpoch)].sort((a, b) => a - b),
+    );
+    expect(Object.keys(withdrawCache.byAddress).length).toBeGreaterThan(0);
+
+    // Running runBondListing persists unbond.term_structure and unbond.withdraw so pressure() serves consensus liquidAt
+    const db = testD1();
+    const health: SourceHealth[] = [];
+    await runBondListing({ DB: db } as any, health, NOW, 2690, {}, async () => ({
+      ...l,
+      height: 8343327,
+      provider: 'TestNode',
+    }));
+
+    const sampleAddr = Object.keys(withdrawCache.byAddress)[0];
+    const sampleUnbond = withdrawCache.byAddress[sampleAddr][0];
+    insert(db, 'flows', [
+      {
+        id: 'namada:U1:pos',
+        chain: 'namada',
+        height: 8343000,
+        ts: NOW - 2 * D,
+        tx_hash: 'U1',
+        kind: 'unbond',
+        from_addr: POS,
+        to_addr: sampleAddr,
+        amount_num: sampleUnbond.amountNam,
+        meta: JSON.stringify({ validator: sampleUnbond.validator }),
+      },
+    ]);
+
+    const p = await pressure(db as any, NOW, false);
+    expect(p.unbondTermStructure).toBeDefined();
+    expect(p.unbondTermStructure?.totalUnbondingNam).toBeCloseTo(termStructure.totalUnbondingNam, 5);
+    const hit = p.unlocks.find((u) => u.txHash === 'U1');
+    if (sampleUnbond.amountNam >= 100_000) {
+      expect(hit?.liquidAtSource).toBe('consensus');
+      expect(hit?.liquidAt).toBe(sampleUnbond.withdrawTime);
+    }
+  });
+});
+
+describe('2. MASP Turnstile & Timing/Amount Correlation Linker', () => {
+  it('links low-entropy <24h MASP passthroughs while computing k-anonymity set size', () => {
+    const legs: PoolLeg[] = [
+      // Whale shields 250,000 NAM and unshields 249,995 NAM (fee ~5 NAM) 25 minutes later to osmo1_dump
+      { ts: NOW - 3 * H, amount: 250_000, dir: 'in', bridge: false, from: 'tnam1qwhalevault', to: MASP },
+      { ts: NOW - 3 * H + 25 * M, amount: 249_995, dir: 'out', bridge: true, from: MASP, to: 'osmo1freshdumper' },
+      // Two different users shield 50,000 NAM within an hour of a 50,000 NAM exit -> k = 2 (medium confidence)
+      { ts: NOW - 10 * H, amount: 50_000, dir: 'in', bridge: false, from: 'tnam1quser1', to: MASP },
+      { ts: NOW - 9 * H, amount: 50_000, dir: 'in', bridge: false, from: 'tnam1quser2', to: MASP },
+      { ts: NOW - 8 * H, amount: 49_990, dir: 'out', bridge: false, from: MASP, to: 'tnam1qrecipient' },
+      // Sticky shield with no matching outflow
+      { ts: NOW - 5 * D, amount: 1_000_000, dir: 'in', bridge: false, from: 'tnam1qlongterm', to: MASP },
+    ];
+
+    const links = matchMaspPassthroughs(legs);
+    expect(links).toHaveLength(2);
+    const whaleLink = links.find((x) => x.outTo === 'osmo1freshdumper')!;
+    expect(whaleLink).toMatchObject({
+      inFrom: 'tnam1qwhalevault',
+      outTo: 'osmo1freshdumper',
+      anonymitySetK: 1,
+      confidence: 'high',
+      dwellMs: 25 * M,
+    });
+
+    const k2Link = links.find((x) => x.outTo === 'tnam1qrecipient')!;
+    expect(k2Link.anonymitySetK).toBe(2);
+    expect(k2Link.confidence).toBe('medium');
+  });
+
+  it('exposes passthroughs7d, turnstileNam7d, and stickySharePct7d in blindSpot()', async () => {
+    const db = testD1();
+    insert(db, 'flows', [
+      { id: 'n1', chain: 'namada', height: 100, ts: NOW - 4 * H, tx_hash: 'T1', kind: 'shield', from_addr: 'tnam1qwhale', to_addr: MASP, amount_num: 100_000, meta: null },
+      { id: 'n2', chain: 'namada', height: 110, ts: NOW - 3 * H, tx_hash: 'T2', kind: 'ibc_out', from_addr: MASP, to_addr: 'osmo1dumper', amount_num: 99_990, meta: null },
+      { id: 'n3', chain: 'namada', height: 120, ts: NOW - 2 * D, tx_hash: 'T3', kind: 'shield', from_addr: 'tnam1qsaver', to_addr: MASP, amount_num: 300_000, meta: null },
+    ]);
+
+    const bs = await blindSpot(db as any, NOW, false);
+    expect(bs.shields7d).toBe(400_000);
+    expect(bs.unshields7d).toBe(99_990);
+    expect(bs.passthroughs7d).toHaveLength(1);
+    expect(bs.passthroughs7d?.[0]).toMatchObject({
+      inFrom: 'tnam1qwhale',
+      outTo: 'osmo1dumper',
+      confidence: 'high',
+    });
+    expect(bs.turnstileNam7d).toBe(99_990);
+    expect(bs.stickySharePct7d).toBeCloseTo((1 - 99_990 / 400_000) * 100, 3);
+  });
+});
+
+describe('3. 2-Hop Burner Transfer Attribution in unlocks and onDeck', () => {
+  it('traces withdraw -> Namada burner transfer -> IBC bridge -> Osmosis sell back to the withdrawing vault', async () => {
+    const db = testD1();
+    const vault = 'tnam1qbacker_vault';
+    const burner = 'tnam1qdisposable_burner';
+    const osmoSeller = 'osmo1seller_acct';
+
+    insert(db, 'labels', [
+      { address: vault, chain: 'namada', label: 'Genesis: af_backers', category: 'backer', source: 'genesis' },
+    ]);
+    insert(db, 'address_links', [
+      { osmo_addr: osmoSeller, namada_addr: burner, first_seen: NOW - 10 * H, last_seen: NOW - 10 * H, transfers: 1, volume_num: 400_000 },
+    ]);
+    insert(db, 'flows', [
+      // 1. Vault withdraws 400,000 NAM from PoS
+      { id: 'f1', chain: 'namada', height: 1, ts: NOW - 12 * H, tx_hash: 'W_TX', kind: 'withdraw', from_addr: POS, to_addr: vault, amount_num: 400_000, meta: null },
+      // 2. Vault transfers 400,000 NAM to an unlabeled burner 1 hour later
+      { id: 'f2', chain: 'namada', height: 2, ts: NOW - 11 * H, tx_hash: 'HOP_TX', kind: 'transfer', from_addr: vault, to_addr: burner, amount_num: 400_000, meta: null },
+      // 3. Burner bridges 400,000 NAM to Osmosis
+      { id: 'f3', chain: 'namada', height: 3, ts: NOW - 10 * H, tx_hash: 'IBC_OUT_TX', kind: 'ibc_out', from_addr: burner, to_addr: osmoSeller, amount_num: 400_000, meta: null },
+      { id: 'f4', chain: 'osmosis', height: 4, ts: NOW - 10 * H + 2 * M, tx_hash: 'IBC_IN_TX', kind: 'ibc_in', from_addr: burner, to_addr: osmoSeller, amount_num: 400_000, meta: null },
+      // 4. Osmosis seller dumps 250,000 NAM on DEX
+      { id: 'f5', chain: 'osmosis', height: 5, ts: NOW - 9 * H, tx_hash: 'SELL_TX', kind: 'sell', from_addr: osmoSeller, to_addr: 'osmo1pool', amount_num: 250_000, meta: null },
+    ]);
+
+    const p = await pressure(db as any, NOW, false);
+    // Unlocks: the withdrawal's outcome is attributed through the burner hop (400k bridged_out / 250k sold) instead of 'liquid'
+    const w = p.unlocks.find((u) => u.txHash === 'W_TX')!;
+    expect(w).toBeDefined();
+    expect(w.outcome).toEqual({ kind: 'bridged_out', amountNam: 400_000 });
+
+    // OnDeck: osmoSeller's linkedNamada is `burner`, and `hopOriginNamada` surfaces `vault` with its label!
+    const deck = p.onDeck.find((d) => d.address === osmoSeller)!;
+    expect(deck.linkedNamada).toBe(burner);
+    expect(deck.hopOriginNamada).toMatchObject({
+      address: vault,
+      label: 'Genesis: af_backers',
+    });
+    expect(deck.dumpHazardScore).toBeGreaterThan(0.5);
+  });
+});
+
+describe('4. Sub-Threshold TWAP Burst Detection & Cross-Block Arbitrage Filtering', () => {
+  it('flags cross-block non-atomic arbitrageurs and detects sub-threshold TWAP splitters', () => {
+    const flows: Flow[] = [
+      // Cross-block arb bot: 4 buys and 4 sells of 8,000 NAM across different blocks (not flagged as single-tx meta.arb)
+      ...Array.from({ length: 4 }, (_, i) => ({
+        id: `arb-buy-${i}`, chain: 'osmosis' as const, height: 100 + i * 2, ts: NOW - 60 * M + i * 5 * M,
+        txHash: `AB${i}`, kind: 'buy' as const, from: 'pool', to: 'osmo1arbbot', amount: 8_000,
+      })),
+      ...Array.from({ length: 4 }, (_, i) => ({
+        id: `arb-sell-${i}`, chain: 'osmosis' as const, height: 101 + i * 2, ts: NOW - 58 * M + i * 5 * M,
+        txHash: `AS${i}`, kind: 'sell' as const, from: 'osmo1arbbot', to: 'pool', amount: 8_000,
+      })),
+      // Whale TWAP splitter: 5 sells of 4,500 NAM each (each < 10,000 NAM bigSwap threshold, sum = 22,500 NAM) within 25m
+      ...Array.from({ length: 5 }, (_, i) => ({
+        id: `twap-sell-${i}`, chain: 'osmosis' as const, height: 200 + i, ts: NOW - 30 * M + i * 5 * M,
+        txHash: `TW${i}`, kind: 'sell' as const, from: 'osmo1twapwhale', to: 'pool', amount: 4_500,
+      })),
+    ];
+
+    const turnarounds = detectCrossBlockArbTraders(flows);
+    expect(turnarounds.get('osmo1arbbot')?.crossBlockArb).toBe(true);
+    expect(turnarounds.get('osmo1arbbot')?.turnaroundRatio).toBe(1);
+    expect(turnarounds.get('osmo1twapwhale')?.crossBlockArb).toBe(false);
+
+    const bursts = detectTwapBursts(flows, DEFAULT_THRESHOLDS);
+    expect(bursts).toHaveLength(1);
+    expect(bursts[0]).toMatchObject({
+      ruleId: 'twap_burst',
+      address: 'osmo1twapwhale',
+      amountNam: 22_500,
+    });
+  });
+
+  it('scales liquidity-normalized thresholds with reference pool reserve and reconstructs multi-stage intent chains', () => {
+    const thinTh = liquidityNormalizedThresholds(120_000, DEFAULT_THRESHOLDS);
+    expect(thinTh.bigSwap).toBe(3_000); // 2.5% of 120k NAM
+    expect(thinTh.ibcInventory).toBe(7_200); // 6% of 120k NAM
+
+    const deepTh = liquidityNormalizedThresholds(2_000_000, DEFAULT_THRESHOLDS);
+    expect(deepTh.bigSwap).toBe(50_000);
+    expect(deepTh.ibcInventory).toBe(120_000);
+
+    const flows: Flow[] = [
+      { id: '1', chain: 'namada', height: 1, ts: NOW - 5 * H, txHash: 'H1', kind: 'withdraw', from: POS, to: 'tnam1qorigin', amount: 150_000 },
+      { id: '2', chain: 'namada', height: 2, ts: NOW - 4 * H, txHash: 'H2', kind: 'transfer', from: 'tnam1qorigin', to: 'tnam1qburner', amount: 150_000 },
+      { id: '3', chain: 'osmosis', height: 3, ts: NOW - 3 * H, txHash: 'H3', kind: 'ibc_in', from: 'tnam1qburner', to: 'osmo1exec', amount: 150_000 },
+      { id: '4', chain: 'osmosis', height: 4, ts: NOW - 2 * H, txHash: 'H4', kind: 'sell', from: 'osmo1exec', to: 'pool', amount: 60_000 },
+    ];
+    const chains = reconstructIntentChains(flows, new Map([['osmo1exec', 'tnam1qburner']]));
+    expect(chains).toHaveLength(1);
+    expect(chains[0]).toMatchObject({
+      entityAddress: 'tnam1qorigin',
+      namadaOrigin: 'tnam1qorigin',
+      osmosisTarget: 'osmo1exec',
+      stage: 4,
+      unlockedOrUnshieldedNam: 150_000,
+      bridgedNam: 150_000,
+      soldNam: 60_000,
+    });
+    expect(chains[0].stagesSeen).toEqual(expect.arrayContaining(['withdraw_or_unshield', 'burner_hop', 'ibc_bridge', 'dex_sell']));
+    expect(chains[0].dumpHazardScore).toBeGreaterThanOrEqual(0.95);
+  });
+});
+
+describe('5. Concentrated Liquidity Tick-Cliff Detector on Slippage Curve', () => {
+  it('computes marginal slice execution prices and flags a >2.5x marginal slippage cliff', () => {
+    const spot = 0.001;
+    const raw: SlippageCurvePoint[] = [
+      { amountNam: 1_000, usdSize: 1, buyImpactPct: 0.2, sellImpactPct: 0.2, buyEffectiveUsd: 0.001002, sellEffectiveUsd: 0.000998, sellOutUsdc: 0.998, buyInUsdc: 1.002, buyOutNam: 1_000, buyExact: true },
+      { amountNam: 5_000, usdSize: 5, buyImpactPct: 0.5, sellImpactPct: 0.5, buyEffectiveUsd: 0.001005, sellEffectiveUsd: 0.000995, sellOutUsdc: 4.975, buyInUsdc: 5.025, buyOutNam: 5_000, buyExact: true },
+      { amountNam: 10_000, usdSize: 10, buyImpactPct: 0.8, sellImpactPct: 0.8, buyEffectiveUsd: 0.001008, sellEffectiveUsd: 0.000992, sellOutUsdc: 9.92, buyInUsdc: 10.08, buyOutNam: 10_000, buyExact: true },
+      // Above 10,000 NAM, active CL tick liquidity is exhausted: next 15,000 NAM only gets $12.00 ($0.0008/NAM -> 20% marginal impact!)
+      { amountNam: 25_000, usdSize: 25, buyImpactPct: 12.0, sellImpactPct: 12.3, buyEffectiveUsd: 0.00112, sellEffectiveUsd: 0.0008768, sellOutUsdc: 21.92, buyInUsdc: 28.0, buyOutNam: 25_000, buyExact: true },
+    ];
+
+    const res = annotateSlippageCurve(raw, spot);
+    expect(res.liquidityCliffNam).toBe(10_000);
+    expect(res.cliffNote).toMatch(/Concentrated Liquidity cliff above 10,000 NAM/);
+    expect(res.curve[2].marginalSellImpactPct).toBeCloseTo(1.1, 2); // (9.92 - 4.975) / 5000 = 0.000989 -> 1.1%
+    expect(res.curve[3].marginalSellImpactPct).toBeCloseTo(20.0, 2); // (21.92 - 9.92) / 15000 = 0.0008 -> 20%
+  });
+});
