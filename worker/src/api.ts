@@ -32,7 +32,7 @@ import {
 import { NAM_AMOUNT, NOT_LEGACY_TWIN as NOT_TWIN } from './flows-query';
 import { INTERNAL_ADDRESSES } from '../../shared/alerts';
 import { alertRules, DEFAULT_THRESHOLDS, type AlertThresholds } from '../../shared/alerts';
-import { issueNonce, login, logout, sessionFromRequest, createPairCode, claimPairCode, listSessions, revokeSession, revokeAllSessions, createSession } from './auth';
+import { issueNonce, login, logout, sessionFromRequest, createPairCode, claimPairCode, listSessions, revokeSession, revokeAllSessions, createSession, tokenHash } from './auth';
 import { loadSettings, saveSettings, deleteSettings, defaultPrefs, publicView, applyUpdate, requireKey, type StoredSettings } from './settings';
 import { clampLimit, prefixRange, decodeHolderCursor, encodeHolderCursor, encodeFlowCursor, parseBeforeParam, type HolderCursor, type BeforeParam } from '../../shared/paging';
 import { parse, isWholeAddress, INPUT_MAX, type Parsed } from '../../shared/search-grammar';
@@ -1159,12 +1159,16 @@ app.post('/api/auth/logout', async (c) => {
 
 /**
  * The requests only a signed-in device may make, never an API key: making API keys and pairing a device (a paired
- * device gets a full session, which can make keys). Otherwise a leaked key could make fresh keys and sessions that
- * outlive revoking it. One rule, in one place; everything else accepts a key ("same rights as a session").
+ * device gets a full session, which can make keys), and deleting the account. Otherwise a leaked key could make
+ * fresh keys and sessions that outlive revoking it, or erase the owner's account. A key also cannot end a
+ * signed-in or paired device (revokeSession), so the owner can always sign in and revoke a leaked key. Everything
+ * else accepts a key.
  */
 export const FULL_SESSION_ONLY = {
   pair: 'an API key cannot pair a device',
   apikey: 'an API key cannot mint API keys',
+  deleteAll: 'an API key cannot delete the account; do it from a signed-in device',
+  revokeDevice: 'an API key can end API keys only; end a device from a signed-in device',
 } as const;
 async function requireFullSession(c: any, action: keyof typeof FULL_SESSION_ONLY): Promise<Awaited<ReturnType<typeof sessionFromRequest>> | Response> {
   const s = await sessionFromRequest(c.env.DB, c.req.raw);
@@ -1239,14 +1243,16 @@ app.get('/api/me/sessions', async (c) => {
 app.delete('/api/me/sessions/:id', async (c) => {
   const s = await sessionFromRequest(c.env.DB, c.req.raw);
   if (!s) return c.json({ error: 'sign in first' }, 401);
-  return c.json({ success: await revokeSession(c.env.DB, s.address, c.req.param('id')) });
+  const r = await revokeSession(c.env.DB, s.address, c.req.param('id'), s.via === 'api');
+  return r === 'forbidden' ? c.json({ error: FULL_SESSION_ONLY.revokeDevice }, 403) : c.json({ success: r });
 });
 
-/** A long-lived bearer token for scripts: same rights as a session, shown once. */
+/** A long-lived bearer token for scripts: the rights of a session except FULL_SESSION_ONLY, shown once. */
 app.post('/api/me/apikey', async (c) => {
   const s = await requireFullSession(c, 'apikey');
   if (s instanceof Response) return s;
-  const k = await createSession(c.env.DB, s!.address, s!.chain, 'api');
+  // made from this device's session: a revoke that ends it while this request runs ends the new key too
+  const k = await createSession(c.env.DB, s!.address, s!.chain, 'api', null, tokenHash(s!.token));
   if ('error' in k) return c.json({ error: k.error }, 409);
   return c.json({ token: k.token, expiresAt: k.expiresAt });
 });
@@ -1261,10 +1267,10 @@ app.get('/api/me/export', async (c) => {
 
 /** Delete everything: settings (incl. webhook), all sessions and API keys. */
 app.delete('/api/me', async (c) => {
-  const s = await sessionFromRequest(c.env.DB, c.req.raw);
-  if (!s) return c.json({ error: 'sign in first' }, 401);
-  await deleteSettings(c.env.DB, s.address);
-  await revokeAllSessions(c.env.DB, s.address);
+  const s = await requireFullSession(c, 'deleteAll');
+  if (s instanceof Response) return s;
+  await deleteSettings(c.env.DB, s!.address);
+  await revokeAllSessions(c.env.DB, s!.address);
   return c.json({ success: true });
 });
 

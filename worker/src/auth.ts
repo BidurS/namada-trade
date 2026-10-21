@@ -213,8 +213,13 @@ async function sessionRows(db: D1Database, address: string): Promise<{ key: stri
  * pairing this one, which the cap never ends. Over MAX_SESSIONS the oldest other device sessions are ended (their
  * rows deleted, never left valid and unlisted); API keys are not touched by that cap. Over MAX_API_KEYS a new key
  * is refused instead.
+ *
+ * `parentHash`: the token hash of the session this one is made from (the device minting a key, the device whose
+ * pair code is claimed). It is checked again after the write: a revoke that ran while this request was in flight
+ * (logout, Revoke, Delete everything) has deleted the parent, so the new row is deleted too and nothing outlives
+ * the revoke. A revoke that runs after the check deletes the new row with the rest of the address's rows.
  */
-export async function createSession(db: D1Database, address: string, chain: Chain, via: Session['via'], keepHash?: string | null): Promise<Session | { error: string }> {
+export async function createSession(db: D1Database, address: string, chain: Chain, via: Session['via'], keepHash?: string | null, parentHash?: string | null): Promise<Session | { error: string }> {
   const now = Date.now();
   const live = (await sessionRows(db, address)).filter((x) => x.s.expiresAt >= now && !x.s.token);
   if (via === 'api' && live.filter((x) => x.s.via === 'api').length >= MAX_API_KEYS) {
@@ -223,6 +228,10 @@ export async function createSession(db: D1Database, address: string, chain: Chai
   const s: Session = { token: rand(32), address, chain, linked: await linkedCounterpart(db, address), via, createdAt: now, expiresAt: now + (via === 'api' ? API_KEY_TTL : SESSION_TTL), lastUsedAt: null };
   const { token, ...stored } = s;
   await kvSet(db, sessionKey(token), stored);
+  if (parentHash && !(await liveSession(db, parentHash, address))) {
+    await db.prepare('DELETE FROM kv WHERE key = ?').bind(sessionKey(token)).run().catch(() => {});
+    return { error: PARENT_ENDED };
+  }
   if (via !== 'api') {
     const keep = new Set([sessionKey(token), ...(keepHash ? [`session:${keepHash}`] : [])]);
     const devices = [{ key: sessionKey(token) }, ...live.filter((x) => x.s.via !== 'api')];
@@ -233,9 +242,18 @@ export async function createSession(db: D1Database, address: string, chain: Chai
   return s;
 }
 
-/** createSession for a device sign-in or pairing, which the caps never refuse. */
-async function newDeviceSession(db: D1Database, address: string, chain: Chain, via: 'namada' | 'keplr' | 'pair', keepHash?: string | null): Promise<Session> {
-  const r = await createSession(db, address, chain, via, keepHash);
+/** Why a key or a pairing is refused when the session it comes from was ended meanwhile. */
+export const PARENT_ENDED = 'The device this came from was signed out. Sign in again.';
+
+/** A signed-in device or paired session (never an API key) of `address`, by its token hash, still live. */
+async function liveSession(db: D1Database, hash: string, address: string): Promise<boolean> {
+  const p = await kvGetJson<Stored>(db, `session:${hash}`).catch(() => null);
+  return !!p && !p.token && p.address === address && p.via !== 'api' && p.expiresAt >= Date.now();
+}
+
+/** createSession for a device sign-in, which the caps never refuse. */
+async function newDeviceSession(db: D1Database, address: string, chain: Chain, via: 'namada' | 'keplr'): Promise<Session> {
+  const r = await createSession(db, address, chain, via);
   if ('error' in r) throw new Error(r.error);
   return r;
 }
@@ -252,15 +270,27 @@ export async function listSessions(db: D1Database, address: string, currentToken
   return out;
 }
 
-export async function revokeSession(db: D1Database, address: string, id: string): Promise<boolean> {
+/**
+ * End the sessions of `address` whose id (a prefix of the token hash) is `id`, and the pair codes they made.
+ * `byApiKey`: the request came with an API key, which may end API keys only (never a signed-in or paired
+ * device): otherwise a leaked key could end every session its owner signs in with, before the owner reaches
+ * Revoke, and keep the owner out (the key is then ended from a device the key cannot touch).
+ */
+export async function revokeSession(db: D1Database, address: string, id: string, byApiKey = false): Promise<boolean | 'forbidden'> {
   if (!/^[0-9a-f]{8,64}$/.test(id)) return false;
+  if (byApiKey) {
+    const kinds = await db.prepare(`SELECT json_extract(value, '$.via') via FROM kv WHERE key LIKE ? AND json_extract(value, '$.address') = ?`).bind(`session:${id}%`, address).all<{ via: string }>().catch(() => null);
+    if (!kinds || (kinds.results || []).some((k) => k.via !== 'api')) return 'forbidden';
+  }
   const r = await db.prepare(`DELETE FROM kv WHERE key LIKE ? AND json_extract(value, '$.address') = ?`).bind(`session:${id}%`, address).run().catch(() => null);
+  await db.prepare(`DELETE FROM kv WHERE ${keyPrefix('pair')} AND json_extract(value, '$.address') = ? AND json_extract(value, '$.by') LIKE ?`).bind(address, `${id}%`).run().catch(() => {});
   return Number(r?.meta?.changes ?? 0) > 0;
 }
 
-/** Every session and API key of the address, wherever it was created, plus the old per-address index row. */
+/** Every session, API key and pending pair code of the address, wherever it was made, plus the old per-address index row. */
 export async function revokeAllSessions(db: D1Database, address: string) {
   await db.prepare(`DELETE FROM kv WHERE ${keyPrefix('session')} AND json_extract(value, '$.address') = ?`).bind(address).run().catch(() => {});
+  await db.prepare(`DELETE FROM kv WHERE ${keyPrefix('pair')} AND json_extract(value, '$.address') = ?`).bind(address).run().catch(() => {});
   await db.prepare('DELETE FROM kv WHERE key = ?').bind(`sessions:${address}`).run().catch(() => {});
 }
 
@@ -294,13 +324,22 @@ export async function sessionFromRequest(db: D1Database, req: Request): Promise<
   // Touch at most once per 10 minutes so the devices list can show "last used".
   if (!stored.lastUsedAt || Date.now() - stored.lastUsedAt > 600000) {
     stored.lastUsedAt = Date.now();
-    kvSet(db, key, stored).catch(() => {});
+    touchSession(db, key, stored.lastUsedAt).catch(() => {});
   }
   return { ...stored, token } as Session;
 }
 
+/**
+ * Set lastUsedAt on a session row that still exists. An update, never a write of the whole row read earlier: a
+ * logout or revoke that deletes the row while this request runs must not have the row written back.
+ */
+export async function touchSession(db: D1Database, key: string, at: number) {
+  await db.prepare(`UPDATE kv SET value = json_set(value, '$.lastUsedAt', ?), updated_at = ? WHERE key = ?`).bind(at, at, key).run();
+}
+
 export async function logout(db: D1Database, token: string) {
   await db.prepare('DELETE FROM kv WHERE key = ? OR key = ?').bind(sessionKey(token), `session:${token}`).run().catch(() => {});
+  await db.prepare(`DELETE FROM kv WHERE ${keyPrefix('pair')} AND json_extract(value, '$.by') = ?`).bind(tokenHash(token)).run().catch(() => {});
 }
 
 // ---------------------------------------------------------------- pairing
@@ -328,7 +367,11 @@ export async function claimPairCode(db: D1Database, codeIn: string): Promise<{ s
   // One use: only the claim whose delete removed the row goes on (two claims of one code cannot both pair).
   const r = await db.prepare('DELETE FROM kv WHERE key = ?').bind(`pair:${code}`).run().catch(() => null);
   if (Number(r?.meta?.changes ?? 0) !== 1 || row.expiresAt < Date.now()) return { error: 'code expired or already used' };
-  return { session: await newDeviceSession(db, row.address, row.chain, 'pair', row.by ?? null) };
+  // A code lives only as long as the device that made it: once that device is signed out, revoked or the account
+  // deleted, its codes pair nothing (they are deleted then too; this also catches a code made during the revoke).
+  if (!row.by || !(await liveSession(db, row.by, row.address))) return { error: PARENT_ENDED };
+  const s = await createSession(db, row.address, row.chain, 'pair', row.by, row.by);
+  return 'error' in s ? { error: s.error } : { session: s };
 }
 
 /**
@@ -341,5 +384,8 @@ export async function sweepAuth(db: D1Database) {
   await db.prepare(`DELETE FROM kv WHERE (${keyPrefix('session')} OR ${keyPrefix('authnonce')} OR ${keyPrefix('pair')}) AND CAST(json_extract(value, '$.expiresAt') AS INTEGER) < ?`).bind(Date.now()).run().catch(() => {});
   await db.prepare(`DELETE FROM kv WHERE ${keyPrefix('sessions')}`).run().catch(() => {});
   await db.prepare(`DELETE FROM kv WHERE ${LEGACY_SESSION_SQL}`).run().catch(() => {});
+  // Plaintext alert settings from before sign-in existed (`webhook:user:<address>`): never read since 2026-10-21;
+  // a row brought back by a restore of an old copy is deleted here.
+  await db.prepare(`DELETE FROM kv WHERE ${keyPrefix('webhook:user')}`).run().catch(() => {});
   await db.prepare(`DELETE FROM kv WHERE ${keyPrefix('alert')} AND updated_at < ?`).bind(Date.now() - ALERT_CLAIM_KEEP_MS).run().catch(() => {});
 }

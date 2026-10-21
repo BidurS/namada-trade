@@ -574,7 +574,7 @@ function DevelopersPanel({ sessions }: { sessions: ReturnType<typeof useSessions
   const keys = (list ?? []).filter((x) => x.via === 'api');
   const origin = typeof location === 'undefined' ? '' : location.origin;
   return (
-    <Panel id="developers" title="For developers" lead="An API key is a bearer token for scripts, bots or a spreadsheet. It has the rights of a signed-in session, except making API keys or pairing a device. It is shown once.">
+    <Panel id="developers" title="For developers" lead="An API key is a bearer token for scripts, bots or a spreadsheet. It has the rights of a signed-in session, except making API keys, pairing a device, ending a signed-in device or deleting your data. It is shown once.">
       <div className="st-btns">
         <Button
           busy={st.busy}

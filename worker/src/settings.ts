@@ -81,20 +81,10 @@ export function requireKey(env: { SETTINGS_KEY?: string }): string {
 
 export async function loadSettings(db: D1Database, secret: string, address: string): Promise<StoredSettings | null> {
   const blob = await kvGetJson<{ blob: string }>(db, `user:${address}`);
-  if (blob?.blob) return (await open(secret, blob.blob)) as StoredSettings;
-  // One-time migration from the pre-login plaintext config.
-  const legacy = await kvGetJson<any>(db, `webhook:user:${address}`);
-  if (!legacy) return null;
-  const p = defaultPrefs();
-  p.watchlist = (legacy.watchAddresses || []).filter((a: string) => a !== address);
-  p.forumAndGov = !!legacy.alertForumAndGov;
-  p.rules.big_swap = { on: legacy.alertWhales !== false, thresholdNam: Number(legacy.minWhaleNam) || p.rules.big_swap.thresholdNam };
-  p.rules.ibc_inventory.on = legacy.alertIbc !== false;
-  p.rules.unshield.on = legacy.alertMasp !== false;
-  const s: StoredSettings = { address, notifications: p, channels: { discord: { enabled: !!legacy.webhookUrl, webhookUrl: legacy.webhookUrl || null } }, createdAt: legacy.updatedAt || Date.now(), updatedAt: Date.now() };
-  await saveSettings(db, secret, s);
-  await db.prepare('DELETE FROM kv WHERE key = ?').bind(`webhook:user:${address}`).run().catch(() => {});
-  return s;
+  // The plaintext alert settings from before sign-in existed (`webhook:user:<address>`) are not read: nothing
+  // proves a row there belongs to whoever signs in as the address, and its webhook URL never passed applyUpdate's
+  // check. None existed in production on 2026-10-21; sweepAuth deletes any a restore brings back.
+  return blob?.blob ? ((await open(secret, blob.blob)) as StoredSettings) : null;
 }
 
 export async function saveSettings(db: D1Database, secret: string, s: StoredSettings): Promise<void> {
