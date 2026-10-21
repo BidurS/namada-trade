@@ -2,6 +2,9 @@ import { NAM, OSMOSIS } from '../config';
 import { namFromCoins, parseCoins, isRealAddress } from '../util';
 import type { Flow, Move } from '../../../shared/types';
 
+/** A swap's cuts (fees other accounts keep) may be at most 1/20 of the swap's NAM for its trader to be matched. */
+export const CUT_SHARE_MAX_DIV = 20n;
+
 export interface RawEvent {
   type: string;
   attributes: { key: string; value: string }[];
@@ -278,10 +281,16 @@ export function parseOsmosisTx(tx: NormTx, ctx: OsmoCtx): OsmoParsed {
     if (!top || tie) return null;
     const [t, tv] = top;
     const passOn = (x: string) => canTrade(x) && n.get(x) === 0n;
+    // The signer is a cut only when the trader paid it directly (a bot's fee from the granter). NAM the signer got
+    // through a router or an entry point is its own share of the swap, so the signer took part in it and is the trader.
     const cuts = new Set(namTransfers
-      .filter((l) => l.msg === m && !swapLegIdx.has(l.idx) && l.to !== t && canTrade(l.to) && (n.get(l.to) ?? 0n) > 0n && (l.from === t || passOn(l.from)))
+      .filter((l) => l.msg === m && !swapLegIdx.has(l.idx) && l.to !== t && canTrade(l.to) && (n.get(l.to) ?? 0n) > 0n
+        && (l.from === t || (passOn(l.from) && l.to !== signer)))
       .map((l) => l.to));
-    return [...cuts].reduce((s, x) => s + n.get(x)!, tv) === want ? t : null;
+    const cut = [...cuts].reduce((s, x) => s + n.get(x)!, 0n);
+    // A cut is a fee (Skip's affiliate fee, a bot's service fee: a fraction of a percent), never a share of the swap. A
+    // larger split between accounts says nothing about who traded, so the signer stays the trader.
+    return tv + cut === want && cut * CUT_SHARE_MAX_DIV <= size(want) ? t : null;
   };
   const traderOf = new Map<string, string | null>();
   for (const m of swapMsgs) {

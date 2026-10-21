@@ -126,3 +126,49 @@ describe('a swap whose trader is not the signer and pays a cut is one swap row: 
     });
   });
 });
+
+// ------------------------------------------------------------------ round-3 verifier: the trader match never takes a share for a cut
+describe('a share of the swap is never a cut: the signer stays the trader when it took part, or when the split is ambiguous', () => {
+  const S = 'osmo1signer', E = 'osmo1entry', A = 'osmo1adapter', F = 'osmo1friend', V = 'osmo1vault', Z = 'osmo1zap';
+  const buyVia = (hash: string, after: RawEvent[]) => tx(hash, [
+    ev('tx', { fee: '1000uosmo', fee_payer: S }),
+    ev('message', { action: '/cosmwasm.wasm.v1.MsgExecuteContract', sender: S, msg_index: '0' }),
+    xfer(S, E, usdc(1000), '0'),
+    xfer(E, A, usdc(1000), '0'),
+    xfer(A, OSMOSIS.takerFeeCollector, usdc(1), '0'),
+    xfer(A, P, usdc(999), '0'),
+    xfer(P, A, nam(50000), '0'),
+    ev('token_swapped', { module: 'concentratedliquidity', sender: A, pool_id: '3005', tokens_in: usdc(999), tokens_out: nam(50000), msg_index: '0' }),
+    xfer(A, E, nam(50000), '0'),
+    ...after,
+  ]);
+
+  it('P4: the signer pays and gets 20,000 of the 50,000 it bought, a friend 30,000: the buy is the signer\'s, the friend\'s share a transfer', () => {
+    const p = parseOsmosisTx(buyVia('P4', [xfer(E, S, nam(20000), '0'), xfer(E, F, nam(30000), '0')]), ctx);
+    expect(p.flows[0]).toMatchObject({ kind: 'buy', to: S, amount: 50000 });
+    expect(rows(p.flows)).toContainEqual(['transfer', E, F, 30000]);
+    expect(p.flows.some((f) => f.kind === 'buy' && f.to === F)).toBe(false);
+  });
+
+  it('P3: 25,001 and 24,999 to two other accounts: neither is named the buyer of the whole 50,000 (the signer is, as before)', () => {
+    const p = parseOsmosisTx(buyVia('P3', [xfer(E, 'osmo1one', nam(25001), '0'), xfer(E, 'osmo1two', nam(24999), '0')]), ctx);
+    expect(p.flows[0]).toMatchObject({ kind: 'buy', to: S, amount: 50000 });
+    expect(p.flows.filter((f) => f.kind === 'buy').map((f) => f.to)).toEqual([S]);
+  });
+
+  it('P6: a vault funds a zap that sells 20,000 and returns 10,000 to the signer: the sale is the signer\'s, never the vault\'s', () => {
+    const p = parseOsmosisTx(tx('P6', [
+      ev('tx', { fee: '1000uosmo', fee_payer: S }),
+      ev('message', { action: '/cosmwasm.wasm.v1.MsgExecuteContract', sender: S, msg_index: '0' }),
+      xfer(V, Z, nam(30000), '0'),
+      xfer(Z, OSMOSIS.takerFeeCollector, nam(20), '0'),
+      xfer(Z, P, nam(19980), '0'),
+      xfer(P, Z, usdc(15), '0'),
+      ev('token_swapped', { module: 'concentratedliquidity', sender: Z, pool_id: '3005', tokens_in: nam(19980), tokens_out: usdc(15), msg_index: '0' }),
+      xfer(Z, S, nam(10000), '0'),
+    ]), ctx);
+    const sell = p.flows.find((f) => f.kind === 'sell');
+    expect(sell).toMatchObject({ from: S, amount: 19980 });
+    expect(p.flows.some((f) => f.kind === 'sell' && f.from === V)).toBe(false);
+  });
+});

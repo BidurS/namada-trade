@@ -94,7 +94,8 @@ export function flowsFilterError(q: (k: string) => string | undefined): string |
 
 /** The receiving side of a crossing whose sending side is also recorded (see ?pairs=one). */
 export const RECEIVED_TWIN = `(f.kind = 'ibc_in' AND EXISTS (SELECT 1 FROM flows p WHERE p.kind = 'ibc_out' AND p.chain != f.chain
-  AND p.from_addr = f.from_addr AND p.to_addr = f.to_addr AND p.amount_num = f.amount_num AND p.ts BETWEEN f.ts - 900000 AND f.ts + 900000))`;
+  AND p.to_addr = f.to_addr AND p.amount_num = f.amount_num AND p.ts BETWEEN f.ts - 900000 AND f.ts + 900000
+  AND (p.from_addr = f.from_addr OR CAST(json_extract(p.meta, '$.packetSequence') AS TEXT) = CAST(json_extract(f.meta, '$.packetSequence') AS TEXT))))`;
 
 /** Not a bot trade, the same rule as shared/flow-rules.ts isBotFlow (bridge refunds are kind 'other' and stay). */
 export const NOT_BOT = `((f.meta IS NULL OR f.meta NOT LIKE '%"arb":true%') AND (f.kind != 'other' OR f.meta LIKE '%"ibcTimeoutRefund":true%'))`;

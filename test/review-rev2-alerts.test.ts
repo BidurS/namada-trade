@@ -76,7 +76,7 @@ describe('an Osmosis stream transaction whose failed write left rows stored is w
     }));
     const hub: any = Object.assign(Object.create(LiveHub.prototype), {
       env: { DB: db, DISCORD_WEBHOOK_URL: OP },
-      seenOsmoTx: new Set<string>(), osmoRetryTx: new Set<string>(), osmoRetryFrom: null, osmoRetryGen: 0, osmoHeight: 0, sessions: new Set(), lastPriceUsd: null,
+      seenOsmoTx: new Set<string>(), osmoRetryTx: new Map<string, number>(), osmoRetryFrom: null, osmoRetryGen: 0, osmoHeight: 0, sessions: new Set(), lastPriceUsd: null,
       osmoCtx: { poolAddrs: new Map(), priceUsd: null, assets: new Map() },
     });
     await real.prepare("INSERT INTO kv (key, value, updated_at) VALUES ('osmosis.cursor', ?, 0)").bind(JSON.stringify({ height: 50, at: 0 })).run();
@@ -117,6 +117,28 @@ describe('an Osmosis stream transaction whose failed write left rows stored is w
     // a later search posts nothing more
     await hub.sweepOsmosis();
     expect(posts).toHaveLength(1);
+  });
+
+  it('a search whose head is below the failed transaction keeps it queued, and the next search alerts it', async () => {
+    // the verifier's race: the public node's /status lags the stream, so the first complete search reads a head of 90
+    // and never sees the transaction at height 100; its retry entry must survive that search
+    const { hub, msg, posts, count } = await setup('r2h001', [transfer(0, 1_000_000)], { 1: 'committed' });
+    await expect(hub.handleOsmosisMessage(msg)).rejects.toThrow(/D1_ERROR/);
+    const real = (globalThis.fetch as any).getMockImplementation();
+    vi.stubGlobal('fetch', vi.fn(async (u: string, init?: RequestInit) => (String(u).endsWith('/status')
+      ? Response.json({ result: { sync_info: { latest_block_height: '90' } } })
+      : real(u, init))));
+    await hub.sweepOsmosis();
+    expect(posts).toHaveLength(0);
+    expect(hub.osmoRetryTx.has('R2H001')).toBe(true);
+    expect(hub.osmoRetryFrom).toBe(100);
+    vi.stubGlobal('fetch', vi.fn(real));
+    await hub.sweepOsmosis();
+    expect(count('flows')).toBe(1);
+    expect(posts).toHaveLength(1);
+    expect(posts[0].embeds[0].title).toBe('🐋 Flow [TRANSFER]: 1,000,000 NAM');
+    expect(hub.osmoRetryTx.size).toBe(0);
+    expect(hub.osmoRetryFrom).toBeNull();
   });
 
   it('30 transfers whose write committed and then threw: all 60 moves are stored and each whale posted once', async () => {

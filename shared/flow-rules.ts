@@ -3,7 +3,7 @@
 import type { Flow } from './types';
 
 type FlowLike = Pick<Flow, 'kind'> & { meta?: Record<string, unknown> | null };
-type CrossingLike = Pick<Flow, 'kind' | 'chain' | 'from' | 'to' | 'amount' | 'ts'>;
+type CrossingLike = Pick<Flow, 'kind' | 'chain' | 'from' | 'to' | 'amount' | 'ts'> & { meta?: Record<string, unknown> | null };
 
 /** A flow whose amount is another coin than NAM (shielded USDC, OSMO…): it carries `meta.tokenSymbol`. */
 /**
@@ -22,11 +22,19 @@ export const isOtherCoin = (f: { meta?: Record<string, unknown> | null }): boole
 /** A crossing's two records (sent on one chain, received on the other) are at most this far apart. */
 export const CROSSING_PAIR_MS = 15 * 60_000;
 
+/** The packet sequence a bridge record carries (both chains' records of one crossing carry the same one), or null. */
+const sequenceOf = (f: CrossingLike): string | null => {
+  const s = f.meta?.packetSequence;
+  return typeof s === 'string' || typeof s === 'number' ? String(s) : null;
+};
+
 /**
  * Each bridge crossing once. A crossing is recorded on both chains: sent (ibc_out) on one, received (ibc_in) on the
  * other. The receiving record is left out when the sending record of the same transfer is in the list: another
- * chain, the same addresses and amount, within 15 minutes. Order is kept. The server's ?pairs=one
- * (worker/src/flows-query.ts RECEIVED_TWIN) is the same rule over the whole table.
+ * chain, the same receiver and amount, within 15 minutes, and either the same sender or the same packet sequence (a
+ * withdrawal from the shielded pool is sent by the pool on Namada while the packet, and so Osmosis's record, names
+ * the refund address). Order is kept. The server's ?pairs=one (worker/src/flows-query.ts RECEIVED_TWIN) is the same
+ * rule over the whole table.
  */
 export function onePerCrossing<T extends CrossingLike>(rows: readonly T[]): T[] {
   const sent = rows.filter((f) => f.kind === 'ibc_out');
@@ -34,7 +42,8 @@ export function onePerCrossing<T extends CrossingLike>(rows: readonly T[]): T[] 
     (f) =>
       !(
         f.kind === 'ibc_in' &&
-        sent.some((p) => p.chain !== f.chain && p.from === f.from && p.to === f.to && Math.abs(p.amount - f.amount) < 1e-6 && Math.abs(p.ts - f.ts) <= CROSSING_PAIR_MS)
+        sent.some((p) => p.chain !== f.chain && p.to === f.to && Math.abs(p.amount - f.amount) < 1e-6 && Math.abs(p.ts - f.ts) <= CROSSING_PAIR_MS
+          && (p.from === f.from || (sequenceOf(p) !== null && sequenceOf(p) === sequenceOf(f))))
       ),
   );
 }

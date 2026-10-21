@@ -62,7 +62,7 @@ export class LiveHub extends DurableObject<Env> {
    * batch can commit and then lose its answer): the search reads such a hash again even when its rows are stored,
    * writes it only when they are not, and alerts it (the alert claims keep a move from being posted twice).
    */
-  private osmoRetryTx = new Set<string>();
+  private osmoRetryTx = new Map<string, number>(); // hash -> block height
   /**
    * The lowest height of a stream transaction whose rows could not be written since the last catch-up search that
    * covered it, and a count of such failures: the next search reads from below that height, and a complete search
@@ -244,9 +244,9 @@ export class LiveHub extends DurableObject<Env> {
   private noteOsmoWriteFailed(hash: string, height: number) {
     if (hash) {
       this.seenOsmoTx.delete(hash);
-      this.osmoRetryTx.add(hash);
+      this.osmoRetryTx.set(hash, Number.isFinite(height) && height > 0 ? height : 0);
       if (this.osmoRetryTx.size > 1000) {
-        const oldest = this.osmoRetryTx.values().next().value;
+        const oldest = this.osmoRetryTx.keys().next().value;
         if (oldest) this.osmoRetryTx.delete(oldest);
       }
     }
@@ -540,7 +540,13 @@ export class LiveHub extends DurableObject<Env> {
       if (recent.length) await this.alertFlows(recent).catch((e) => console.error('late alert:', e));
     }
     if (head > this.osmoHeight) this.osmoHeight = head;
-    if (complete && this.osmoRetryGen === retryGen) { this.osmoRetryFrom = null; this.osmoRetryTx.clear(); }
+    if (complete && this.osmoRetryGen === retryGen) {
+      // Only what this search could have read is done: a transaction above the head it read (the public node can lag
+      // the stream) stays queued, with the height the next search starts below.
+      for (const [hash, h] of this.osmoRetryTx) if (h <= head) this.osmoRetryTx.delete(hash);
+      const left = [...this.osmoRetryTx.values()];
+      this.osmoRetryFrom = left.length ? Math.min(...left) : null;
+    }
     const next: OsmosisCursor = complete
       ? { height: head, at: Date.now(), added }
       : { height: prev?.height ?? 0, at: prev?.at ?? 0, added, error: 'The last catch-up search did not finish; it is retried.' };
