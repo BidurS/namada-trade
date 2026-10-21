@@ -13,7 +13,7 @@
 import { mkdirSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { d1 } from './lib';
-import { normFromTxSearch, parseOsmosisTx, type OsmoCtx } from '../worker/src/parse/osmosis';
+import { normFromTxSearch, osmoAssets, parseOsmosisTx, type OsmoCtx } from '../worker/src/parse/osmosis';
 import { fetchNamPools } from '../worker/src/sources/sqs';
 import { OSMOSIS } from '../worker/src/config';
 import { settleOf, quotesNeeded, type SettleMeta } from '../shared/settle';
@@ -42,10 +42,7 @@ const pools = await fetchNamPools();
 const ctx: OsmoCtx = {
   poolAddrs: new Map(pools.pools.map((p) => [p.address, p.id])),
   priceUsd: null,
-  assets: new Map([
-    [OSMOSIS.usdcDenom, { symbol: 'USDC', decimals: 6, stable: true }],
-    ['uosmo', { symbol: 'OSMO', decimals: 6 }],
-  ]),
+  assets: osmoAssets(),
 };
 console.error(`${rows.length} swap rows without a settle record since ${new Date(since).toISOString()}; ${ctx.poolAddrs.size} pool addresses`);
 

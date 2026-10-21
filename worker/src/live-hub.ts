@@ -2,7 +2,7 @@ import { DurableObject } from 'cloudflare:workers';
 import type { Env } from './util';
 import type { LiveMessage, Flow } from '../../shared/types';
 import { OSMOSIS, NAM, NAMADA } from './config';
-import { normFromWs, normFromTxSearch, parseOsmosisTx, type OsmoCtx, type OsmoParsed } from './parse/osmosis';
+import { normFromWs, normFromTxSearch, osmoAssets, parseOsmosisTx, type OsmoCtx, type OsmoParsed } from './parse/osmosis';
 import { parseNamadaBlock } from './parse/namada';
 import { blockHasUnbond, parseNamadaUnbonds } from './parse/namada-unbond';
 import { feePayersOf } from './parse/namada-tx';
@@ -81,10 +81,7 @@ export class LiveHub extends DurableObject<Env> {
   private osmoCtx: OsmoCtx = {
     poolAddrs: new Map(),
     priceUsd: null,
-    assets: new Map([
-      [OSMOSIS.usdcDenom, { symbol: 'USDC', decimals: 6, stable: true }],
-      ['uosmo', { symbol: 'OSMO', decimals: 6 }],
-    ]),
+    assets: osmoAssets(),
   };
 
   constructor(ctx: DurableObjectState, env: Env) {

@@ -7,7 +7,7 @@
 import { describe, it, expect } from 'vitest';
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
-import { normFromTxSearch, parseOsmosisTx, type OsmoCtx } from '../worker/src/parse/osmosis';
+import { normFromTxSearch, osmoAssets, parseOsmosisTx, type OsmoCtx } from '../worker/src/parse/osmosis';
 import { settleOf, quotesNeeded, type SettleMeta } from '../shared/settle';
 import { alertsBetween } from '../worker/src/analytics';
 import { DEFAULT_THRESHOLDS } from '../shared/alerts';
@@ -17,10 +17,7 @@ const raw = JSON.parse(readFileSync(join(__dirname, 'fixtures', 'osmo_split_rout
 const ctx: OsmoCtx = {
   poolAddrs: new Map(),
   priceUsd: 0.000847,
-  assets: new Map([
-    ['ibc/498A0751C798A0D9A389AA3691123DADA57DAA4FE165D5C75894505B876BA6E4', { symbol: 'USDC', decimals: 6, stable: true }],
-    ['uosmo', { symbol: 'OSMO', decimals: 6 }],
-  ]),
+  assets: osmoAssets(),
 };
 const T = 1_792_609_409_646;
 const ownRate = 9.950747 / 208.383389; // the trader's own USDC → OSMO hop through pool 1464
@@ -60,6 +57,25 @@ describe('a trade\'s settle record (meta.settle)', () => {
     const old = JSON.parse(JSON.stringify(raw));
     for (const e of old.tx_result.events) e.attributes = e.attributes.filter((a: any) => a.key !== 'msg_index');
     expect(swapOf(old).meta.settle).toBeUndefined();
+  });
+});
+
+describe('a buy paid in allUSDC', () => {
+  // 4E8F93F0… (test/fixtures/osmo_buy_allusdc.json): 7.2 allUSDC to Noble USDC 1:1 (pool 3497) and on to NAM through
+  // pool 3005, 4.788005 allUSDC to OSMO (pool 3499) and on to NAM through pool 3368; 12 allUSDC left the trader, the
+  // other 0.011995 in taker fees; gas 0.004426 allUSDC.
+  const raw2 = JSON.parse(readFileSync(join(__dirname, 'fixtures', 'osmo_buy_allusdc.json'), 'utf8'));
+  it('settles at the allUSDC it paid, counted at a dollar, plus its gas, per NAM it got', () => {
+    const f = swapOf(raw2);
+    expect(f.kind).toBe('buy');
+    const s = f.meta.settle as SettleMeta;
+    expect(s.coins).toEqual({ allUSDC: -12 });
+    expect(s.gas).toEqual({ allUSDC: 0.004426 });
+    expect(s.unknown).toBeUndefined();
+    const p = settleOf('buy', s)!;
+    expect(p.coins[0].rate).toBe('stable');
+    expect(p.usdPerNam).toBeCloseTo((12 + 0.004426) / s.nam, 12);
+    expect(s.nam).toBeCloseTo(f.amount, 6);
   });
 });
 

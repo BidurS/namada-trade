@@ -19,8 +19,11 @@ export interface SettleMeta {
   unknown?: true;
 }
 
-/** The stable coin a settle price is counted in: one of it is one dollar. */
-export const SETTLE_STABLE = 'USDC';
+/**
+ * The coins counted at a dollar: Noble USDC, and allUSDC, Osmosis's alloyed USDC (1:1 with the USDCs it holds; the
+ * Osmosis quote service prices every coin in it).
+ */
+export const SETTLE_STABLES: readonly string[] = ['USDC', 'allUSDC'];
 
 /** The metric that holds a coin's Osmosis quote each minute (worker/src/cron.ts), for a coin with no rate in its transaction. */
 export const QUOTE_KEYS: Record<string, string> = { OSMO: 'price.osmo_usd' };
@@ -29,7 +32,7 @@ export interface SettledCoin {
   symbol: string;
   /** what the trader's balance changed by (negative: paid) */
   amount: number;
-  /** USD per unit, and where it came from: USDC itself, the transaction's own swap, or the minute's Osmosis quote */
+  /** USD per unit, and where it came from: a dollar (SETTLE_STABLES), the transaction's own swap, or the minute's Osmosis quote */
   usdEach: number;
   rate: 'stable' | 'tx' | 'quote';
 }
@@ -49,7 +52,7 @@ export interface Settle {
 /** The coins of a settle record that need the minute's quote (no USDC, no rate in the transaction). */
 export function quotesNeeded(s: SettleMeta): string[] {
   const all = [...Object.keys(s.coins), ...Object.keys(s.gas ?? {})];
-  return [...new Set(all.filter((c) => c !== SETTLE_STABLE && !(s.rates?.[c] && s.rates[c] > 0)))];
+  return [...new Set(all.filter((c) => !SETTLE_STABLES.includes(c) && !(s.rates?.[c] && s.rates[c] > 0)))];
 }
 
 /** A plain-object check: meta comes from the database. */
@@ -69,7 +72,7 @@ export function settleOf(side: 'buy' | 'sell', s: SettleMeta, quotes: Record<str
   const nam = Math.abs(s.nam);
   if (!(nam > 0) || (side === 'sell' ? s.nam >= 0 : s.nam <= 0)) return null;
   const rateOf = (c: string): Pick<SettledCoin, 'usdEach' | 'rate'> | null => {
-    if (c === SETTLE_STABLE) return { usdEach: 1, rate: 'stable' };
+    if (SETTLE_STABLES.includes(c)) return { usdEach: 1, rate: 'stable' };
     const tx = s.rates?.[c];
     if (tx != null && tx > 0) return { usdEach: tx, rate: 'tx' };
     const q = quotes[c];

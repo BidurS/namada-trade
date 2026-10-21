@@ -28,6 +28,19 @@ export interface OsmoCtx {
   assets: Map<string, { symbol: string; decimals: number; stable?: boolean }>;
 }
 
+/**
+ * The coins the parser names: Noble USDC (the stable a trade's own price may be set in), OSMO, and allUSDC, Osmosis's
+ * alloyed USDC (one fixed denom, 1:1 with the USDCs it holds; the Osmosis quote service prices everything in it).
+ * Any other coin is labelled by shortDenom and has no USD settle price.
+ */
+export function osmoAssets(): OsmoCtx['assets'] {
+  return new Map([
+    [OSMOSIS.usdcDenom, { symbol: 'USDC', decimals: 6, stable: true }],
+    ['uosmo', { symbol: 'OSMO', decimals: 6 }],
+    [OSMOSIS.allUsdc, { symbol: 'allUSDC', decimals: 6 }],
+  ]);
+}
+
 /** Normalize a tx_search result entry */
 export function normFromTxSearch(t: any, ts: number): NormTx {
   return {

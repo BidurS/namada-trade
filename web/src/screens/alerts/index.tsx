@@ -319,8 +319,8 @@ function HitPrice({ h }: { h: AlertHit }) {
 }
 
 function Settled({ s }: { s: Settle }) {
-  const coin = (c: SettledCoin) => `${fmtCoin(Math.abs(c.amount), c.symbol === 'USDC' ? 2 : 4)} ${c.symbol}`;
-  const valued = (c: SettledCoin) => c.rate === 'stable' ? ''
+  const coin = (c: SettledCoin) => `${fmtCoin(Math.abs(c.amount), c.rate === 'stable' ? 2 : 4)} ${c.symbol}`;
+  const valued = (c: SettledCoin) => c.rate === 'stable' ? (c.symbol === 'USDC' ? '' : `, Osmosis's alloyed USDC, at a dollar`)
     : ` (${fmtUsdRule(Math.abs(c.amount) * c.usdEach)} at ${fmtUsdRule(c.usdEach)} per ${c.symbol}, ${c.rate === 'tx' ? `this transaction's own ${c.symbol}/USDC rate` : `the Osmosis ${c.symbol} quote for that minute`})`;
   const list = (cs: SettledCoin[]) => cs.map((c) => coin(c) + valued(c)).join(' and ');
   const got = s.coins.filter((c) => c.amount > 0), paid = s.coins.filter((c) => c.amount < 0);
