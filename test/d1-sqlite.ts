@@ -32,6 +32,12 @@ class Stmt {
     return { success: true, meta: { changes: Number(r.changes) } };
   }
   runSync() { return this.db.prepare(this.sql).run(...this.params); }
+  /** As D1's batch answers a statement: a query's rows in `results`, a write's changes in `meta`. */
+  batchSync(): { success: true; results?: unknown[]; meta: { changes: number } } {
+    const st = this.db.prepare(this.sql);
+    if (/^\s*(SELECT|WITH)\b/i.test(this.sql)) return { success: true, results: st.all(...this.params).map(plain), meta: { changes: 0 } };
+    return { success: true, meta: { changes: Number(st.run(...this.params).changes) } };
+  }
 }
 
 export interface TestD1 {
@@ -52,9 +58,9 @@ export function testD1(): TestD1 {
     prepare(sql: string) { d1.queries++; return new Stmt(db, sql); },
     async batch(stmts: Stmt[]) {
       db.exec('BEGIN');
-      const out: { success: true; meta: { changes: number } }[] = [];
+      const out: { success: true; results?: unknown[]; meta: { changes: number } }[] = [];
       try {
-        for (const s of stmts) out.push({ success: true as const, meta: { changes: Number(s.runSync().changes) } });
+        for (const s of stmts) out.push(s.batchSync());
         db.exec('COMMIT');
       } catch (e) {
         db.exec('ROLLBACK');

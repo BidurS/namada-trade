@@ -37,7 +37,7 @@ describe('alert rules in plain words (W9)', () => {
     expect(hits.map((h) => h.title)).toEqual([
       '1,111,257 NAM started unstaking (spendable when the wait ends)',
       '1,111,257 NAM unlocked and withdrawn from staking',
-      'Sold 20,000 NAM at $0.001025',
+      'Sold 20,000 NAM',
       '60,000 NAM moved out of the shielded set',
       '2,000,000 NAM staked',
       '30,000 NAM bridged to Osmosis',

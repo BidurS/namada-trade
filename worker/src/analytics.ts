@@ -1220,7 +1220,30 @@ export async function alertsBetween(db: D1Database, from: number, to: number, th
     .prepare(`${FLOW_SELECT} WHERE f.ts >= ? AND f.ts < ? AND f.amount_num >= ? AND f.kind IN ('ibc_in','withdraw','unbond','buy','sell','unshield','bond') AND ${NAM_AMOUNT} AND ${NOT_LEGACY_TWIN} ORDER BY f.ts DESC LIMIT 500`)
     .bind(from, to, minAmt)
     .all<any>();
-  return evaluateFlows((rows.results || []).map(rowToFlow), th);
+  return withQuotes(db, evaluateFlows((rows.results || []).map(rowToFlow), th));
+}
+
+/** A quote this much older than a trade is no longer the price of its minute. */
+export const QUOTE_MATCH_MS = 5 * 60_000;
+
+/**
+ * A trade hit without a price of its own (paid in another coin, or several) takes the Osmosis quote stored for its
+ * minute: the latest price.usd reading at or before the trade, at most QUOTE_MATCH_MS before it, labelled 'quote' so
+ * it is never read as what the trade paid. None found: the hit says no price is on record. One key seek each.
+ */
+export async function withQuotes(db: D1Database, hits: AlertHit[]): Promise<AlertHit[]> {
+  const need = hits.filter((h) => h.ruleId === 'big_swap' && !h.price);
+  for (let i = 0; i < need.length; i += 50) {
+    const part = need.slice(i, i + 50);
+    const res = await db
+      .batch(part.map((h) => db.prepare(`SELECT ts, value FROM metrics WHERE key = 'price.usd' AND ts <= ? AND ts >= ? ORDER BY ts DESC LIMIT 1`).bind(h.ts, h.ts - QUOTE_MATCH_MS)))
+      .catch(() => null);
+    res?.forEach((r, j) => {
+      const row = (r.results?.[0] ?? null) as { ts: number; value: number } | null;
+      if (row && row.value > 0) part[j].price = { usd: row.value, source: 'quote', at: Number(row.ts) };
+    });
+  }
+  return hits;
 }
 
 /**
@@ -1246,7 +1269,7 @@ export async function lastAlertBefore(db: D1Database, to: number, th: AlertThres
       .all<any>();
     const list = rows.results || [];
     const hits = evaluateFlows(list.map(rowToFlow), th);
-    if (hits.length) return hits[0];
+    if (hits.length) return (await withQuotes(db, [hits[0]]))[0];
     if (list.length < pageSize) return null;
   }
   return undefined;

@@ -694,6 +694,12 @@ export interface AlertHit {
   detail: string;
   amountNam: number;
   address: string | null;
+  /**
+   * Trades only: the price the trade itself settled at, USDC paid or received per NAM from its own coins ('paid',
+   * `at` = the trade's time); when the trade has no USD price of its own (paid in another coin, or several), the
+   * Osmosis quote stored for that minute ('quote', `at` = the quote's time). null when neither is on record.
+   */
+  price?: { usd: number; source: 'paid' | 'quote'; at: number } | null;
 }
 
 export interface AlertRuleInfo {

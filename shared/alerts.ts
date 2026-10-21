@@ -51,7 +51,7 @@ interface Rule {
   decision: string;
   key: keyof AlertThresholds;
   condition: (t: number) => string;
-  test: (f: Flow, t: number) => { title: string; detail: string; address: string | null } | null;
+  test: (f: Flow, t: number) => { title: string; detail: string; address: string | null; price?: AlertHit['price'] } | null;
 }
 
 const fmt = (n: number) => Math.round(n).toLocaleString('en-US');
@@ -93,9 +93,10 @@ const RULES: Rule[] = [
     test: (f, t) =>
       f.chain === 'osmosis' && (f.kind === 'buy' || f.kind === 'sell') && f.amount >= t && !f.meta?.arb
         ? {
-            title: `${f.kind === 'buy' ? 'Bought' : 'Sold'} ${fmt(f.amount)} NAM${f.priceUsd ? ` at $${f.priceUsd.toFixed(6)}` : ''}`,
+            title: `${f.kind === 'buy' ? 'Bought' : 'Sold'} ${fmt(f.amount)} NAM`,
             detail: f.kind === 'buy' ? to(f) : from(f),
             address: f.kind === 'buy' ? f.to : f.from,
+            price: paidPerNam(f) != null ? { usd: paidPerNam(f)!, source: 'paid' as const, at: f.ts } : null,
           }
         : null,
   },
@@ -123,6 +124,23 @@ const RULES: Rule[] = [
   },
 ];
 
+/**
+ * Swap rows written from this time on carry the USDC of every leg of the trade, and 'USDC' only for real USDC
+ * (worker/src/parse/osmosis.ts, deployed 2026-10-21 15:33 UTC). Earlier rows kept the first leg's coin, which is the
+ * whole trade's only for a trade through pool 3005 alone (whose other coin can only be USDC).
+ */
+export const SUMMED_LEGS_FROM = Date.UTC(2026, 9, 21, 15, 40);
+
+/**
+ * What a trade settled at: USDC paid or received per NAM, from its own coins. null when the trade's other coin is
+ * not USDC (another coin, or several), or for an older row whose coin is not known to be the whole trade's.
+ */
+export function paidPerNam(f: Pick<Flow, 'ts' | 'amount' | 'counterDenom' | 'counterAmount' | 'poolId'>): number | null {
+  if (f.counterDenom !== 'USDC' || !(f.counterAmount != null && f.counterAmount > 0) || !(f.amount > 0)) return null;
+  if (f.ts < SUMMED_LEGS_FROM && f.poolId !== '3005') return null;
+  return f.counterAmount / f.amount;
+}
+
 export function alertRules(th: AlertThresholds = DEFAULT_THRESHOLDS): AlertRuleInfo[] {
   return RULES.map((r) => ({ id: r.id, title: r.title, decision: r.decision, condition: r.condition(th[r.key]), thresholdNam: th[r.key] }));
 }
@@ -134,7 +152,7 @@ export function evaluateFlow(f: Flow, th: AlertThresholds = DEFAULT_THRESHOLDS):
   const hits: AlertHit[] = [];
   for (const r of RULES) {
     const m = r.test(f, th[r.key]);
-    if (m) hits.push({ ruleId: r.id, ts: f.ts, flowId: f.id, chain: f.chain, explorerHash: explorerHashOf(f), title: m.title, detail: m.detail, amountNam: f.amount, address: m.address });
+    if (m) hits.push({ ruleId: r.id, ts: f.ts, flowId: f.id, chain: f.chain, explorerHash: explorerHashOf(f), title: m.title, detail: m.detail, amountNam: f.amount, address: m.address, ...(m.price !== undefined ? { price: m.price } : {}) });
   }
   return hits;
 }

@@ -30,10 +30,11 @@
 
   /* hits: two lines per row (title and age; tag, who, transaction), 64 px and up */
   .al-list { display: grid; }
-  .al-hit { display: grid; grid-template-columns: minmax(0, 1fr) auto; grid-template-areas: "t age" "l2 l2"; column-gap: var(--s-3); row-gap: 2px; align-items: baseline; padding: 12px 0 4px; min-height: 64px; border-top: 1px solid var(--c-line); }
+  .al-hit { display: grid; grid-template-columns: minmax(0, 1fr) auto; grid-template-areas: "t age" "pr pr" "l2 l2"; column-gap: var(--s-3); row-gap: 2px; align-items: baseline; padding: 12px 0 4px; min-height: 64px; border-top: 1px solid var(--c-line); }
   .al-hit:last-child { border-bottom: 1px solid var(--c-line); }
   .al-hit__t { grid-area: t; font-size: var(--t-15); line-height: var(--lh-15); font-weight: var(--w-medium); overflow-wrap: anywhere; }
   .al-hit__age { grid-area: age; font: var(--w-medium) var(--t-12) / 16px var(--font-code); color: var(--c-ink-2); white-space: nowrap; }
+  .al-hit__pr { grid-area: pr; margin: 2px 0 0; font-size: var(--t-13); line-height: var(--lh-13); color: var(--c-ink-2); }
   .al-hit__l2 { grid-area: l2; display: flex; flex-wrap: wrap; align-items: center; gap: 0 var(--s-3); min-width: 0; }
   .al-hit__who { display: inline-flex; align-items: center; min-height: 44px; max-width: 100%; padding: 0; background: none; border: 0; color: var(--c-ink-2); font: var(--w-regular) var(--t-12) / 16px var(--font-code); text-align: left; text-decoration: underline; text-decoration-thickness: 1px; text-underline-offset: 3px; overflow-wrap: anywhere; cursor: pointer; }
   .al-hit__who:hover { color: var(--c-ink); }

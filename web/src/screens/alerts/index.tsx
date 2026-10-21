@@ -274,6 +274,7 @@ function HitRow({ h, now }: { h: AlertHit; now: number }) {
       <time className="al-hit__age" dateTime={new Date(h.ts).toISOString()} title={fmtUtcLong(h.ts)}>
         {fmtAgo(h.ts, now)}
       </time>
+      {h.ruleId === 'big_swap' ? <HitPrice h={h} /> : null}
       <div className="al-hit__l2">
         <Tag kind={hitKind(h)} />
         {h.address ? (
@@ -292,6 +293,24 @@ function HitRow({ h, now }: { h: AlertHit; now: number }) {
         ) : null}
       </div>
     </li>
+  );
+}
+
+/**
+ * What a trade settled at: the USDC it paid or got per NAM, from its own coins; or, when it has no USD price of its
+ * own, the Osmosis quote stored for that minute, said as a quote; or that no price is on record.
+ */
+function HitPrice({ h }: { h: AlertHit }) {
+  const p = h.price;
+  const total = p ? fmtUsdRule(p.usd * h.amountNam) : null;
+  return (
+    <p className="al-hit__pr">
+      {!p
+        ? 'No price is on record for this trade.'
+        : p.source === 'paid'
+          ? <>Settled at {fmtUsdRule(p.usd)} a NAM, {total} in USDC.</>
+          : <>Paid in another coin, so no USD settle price; the Osmosis quote at {fmtUtcLong(p.at)} was {fmtUsdRule(p.usd)} a NAM (about {total}).</>}
+    </p>
   );
 }
 
