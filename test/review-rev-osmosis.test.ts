@@ -1,5 +1,5 @@
 // Review of the review C Osmosis change (42971be..7f1dd3c): each block names the confirmed finding it guards
-// (security-audit run-2 fixes/review-rev-osmosis.json).
+// (security review, 2026-10-21).
 import { describe, it, expect } from 'vitest';
 import { parseOsmosisTx, type NormTx, type OsmoCtx, type RawEvent } from '../worker/src/parse/osmosis';
 import { NAM, OSMOSIS } from '../worker/src/config';

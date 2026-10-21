@@ -1,5 +1,5 @@
 // Review C (2026-10-21), the Osmosis parser and the executed price: each block names the lead it guards
-// (security-audit run-2 findings.json fingerprints).
+// (security review, 2026-10-21).
 import { describe, it, expect } from 'vitest';
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
