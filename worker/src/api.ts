@@ -38,6 +38,7 @@ import { clampLimit, prefixRange, decodeHolderCursor, encodeHolderCursor, encode
 import { parse, isWholeAddress, INPUT_MAX, type Parsed } from '../../shared/search-grammar';
 import { EXPLORERS, NAMADA as NAMADA_SHARED } from '../../shared/config';
 import { seriesApp } from './api-series';
+import { SINGLE_POOL_USDC_SWAP } from './cron';
 
 /** A check that has not run for this long is served as 'stale': its last result is kept, but it no longer counts as
  *  passing (on 2026-10-19 the supply check kept a green "Passes" for 3.5 h after its source went quiet). */
@@ -1478,18 +1479,18 @@ app.get('/api/metrics/history', async (c) => {
     }
   }
   // For long-term price.swap_1h history (>30 days), backfill any earlier swap buckets directly from D1 swap flows if metrics are sparse.
+  // Only the swaps price.swap_1h itself is made of (cron.ts SINGLE_POOL_USDC_SWAP: the trusted pool, against USDC), at
+  // their own price: a trade priced at the quote, or one in a pool anyone could have created, is not an executed
+  // NAM/USDC price.
   if (key === 'price.swap_1h' && hours > 24 * 30) {
     const earliest = history[0]?.ts ?? asOf;
     if (earliest > from + D) {
       const flowRows = await c.env.DB.prepare(
         `SELECT CAST(ts / ? AS INTEGER) * ? AS ts,
-                AVG(CASE WHEN price_usd > 0 THEN price_usd WHEN counter_denom='USDC' AND counter_amount > 0 AND amount_num > 0 THEN counter_amount / amount_num ELSE NULL END) AS value,
-                MIN(CASE WHEN price_usd > 0 THEN price_usd WHEN counter_denom='USDC' AND counter_amount > 0 AND amount_num > 0 THEN counter_amount / amount_num ELSE NULL END) AS lo,
-                MAX(CASE WHEN price_usd > 0 THEN price_usd WHEN counter_denom='USDC' AND counter_amount > 0 AND amount_num > 0 THEN counter_amount / amount_num ELSE NULL END) AS hi,
+                AVG(counter_amount / amount_num) AS value, MIN(counter_amount / amount_num) AS lo, MAX(counter_amount / amount_num) AS hi,
                 COUNT(*) AS n
          FROM flows
-         WHERE chain='osmosis' AND kind IN ('buy','sell') AND ts >= ? AND ts < ?
-           AND (price_usd > 0 OR (counter_denom='USDC' AND counter_amount > 0 AND amount_num >= 50))
+         WHERE ${SINGLE_POOL_USDC_SWAP} AND ts >= ? AND ts < ?
          GROUP BY CAST(ts / ? AS INTEGER)
          ORDER BY ts ASC`,
       )

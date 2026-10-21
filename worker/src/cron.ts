@@ -137,12 +137,14 @@ export const SAMPLE_KEEP_MS = 24 * 3600_000;
  */
 export const LISTING_RETRY_MS = 5 * 60_000;
 /**
- * Executed swaps the price check trusts: buys and sells of at least 50 NAM against USDC through a single pool. A routed
- * trade is left out: its counter amount is not the price of the NAM leg (on 2026-10-20 routed buys through pools
- * 3005 and 3368 worked out at about half the market price).
+ * Executed swaps the price check trusts: buys and sells of at least 50 NAM against USDC through one pool trusted for
+ * the price (OSMOSIS.pricePoolIds, the reference NAM/USDC pool). A routed trade is left out: its counter amount is not
+ * the price of the NAM leg (on 2026-10-20 routed buys through pools 3005 and 3368 worked out at about half the market
+ * price). A trade in any other pool is left out too: anyone can create a pool at a price of their choosing, and the
+ * stored 'USDC' is a label, which only the reference pool's other coin (Noble USDC) is sure to deserve.
  */
 export const SINGLE_POOL_USDC_SWAP = `chain='osmosis' AND counter_denom='USDC' AND kind IN ('buy','sell')
-       AND amount_num >= 50 AND counter_amount > 0 AND pool_id IS NOT NULL AND pool_id NOT LIKE '%,%'`;
+       AND amount_num >= 50 AND counter_amount > 0 AND pool_id IN (${OSMOSIS.pricePoolIds.map((p) => `'${p}'`).join(',')})`;
 /** How old the last hour with such a trade may be for the price check to compare against it. */
 export const PRICE_CHECK_WINDOW_MS = 6 * 3600000;
 

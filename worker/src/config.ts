@@ -26,6 +26,17 @@ export const OSMOSIS = {
   transferModule: 'osmo1yl6hdjhmkf37639730gffanpzndzdpmhxy9ep3',
   /** Main NAM pool used as the price reference (NAM/USDC concentrated-liquidity pool) */
   refPoolId: '3005',
+  /**
+   * The pools whose swaps may set an executed price: price.swap_1h (and its open/high/low/close/vwap), the price check
+   * and a trade's own price on the tape. The reference pool only. Anyone can create an Osmosis pool, give it any price
+   * and trade NAM through it, so a swap in any other pool is recorded as a trade but priced at the quote.
+   */
+  pricePoolIds: ['3005'] as readonly string[],
+  /**
+   * The poolmanager's taker-fee collector (module account 'taker_fee_collector': the first 20 bytes of the sha256 of
+   * that name). A swap pays its taker fee here, in the coin it puts in, just before it pays the pool.
+   */
+  takerFeeCollector: 'osmo1r9jc2234fljy93z80cevqjt3nmjycec8aj4cc6',
   /** Noble USDC on Osmosis */
   usdcDenom: 'ibc/498A0751C798A0D9A389AA3691123DADA57DAA4FE165D5C75894505B876BA6E4',
   allUsdc: 'factory/osmo147h5x9pcj7lm0cttlaefx6sqq5vdfnmwfcqxkmjd7exqm9gc7grqhr75m0/alloyed/allUSDC',

@@ -89,9 +89,9 @@ export function medianOf(sorted: number[]): number {
   return sorted.length % 2 ? sorted[sorted.length >> 1] : (sorted[sorted.length / 2 - 1] + sorted[sorted.length / 2]) / 2;
 }
 
-/** A swap the executed price trusts (cron.ts SINGLE_POOL_USDC_SWAP, in code). */
+/** A swap the executed price trusts (cron.ts SINGLE_POOL_USDC_SWAP, in code): one pool, and a pool trusted for the price. */
 export const singlePoolUsdc = (r: SwapRow) =>
-  r.counter_denom === 'USDC' && (r.kind === 'buy' || r.kind === 'sell') && r.amount_num >= 50 && (r.counter_amount ?? 0) > 0 && r.pool_id != null && !r.pool_id.includes(',');
+  r.counter_denom === 'USDC' && (r.kind === 'buy' || r.kind === 'sell') && r.amount_num >= 50 && (r.counter_amount ?? 0) > 0 && r.pool_id != null && OSMOSIS.pricePoolIds.includes(r.pool_id);
 
 const metaOf = (m: SwapRow['meta']): Record<string, any> => (typeof m === 'string' ? safeParseJson(m, {}) ?? {} : m ?? {});
 

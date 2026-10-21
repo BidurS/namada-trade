@@ -464,8 +464,20 @@ describe('6. Dune-Grade Live Charts & Long-Term Multi-Year Analytics', () => {
     insert(db, 'flows', [
       {
         id: 'old-swap', chain: 'osmosis', height: 1, ts: NOW - 180 * D, tx_hash: 'OS1', kind: 'buy',
-        from_addr: 'pool', to_addr: 'osmo1early', amount_num: 10_000, price_usd: 0.12, value_usd: 1_200,
-        meta: JSON.stringify({ effectivePriceUsd: 0.12, singlePool: true, counterSymbol: 'USDC' }),
+        from_addr: 'pool', to_addr: 'osmo1early', amount_num: 10_000, counter_denom: 'USDC', counter_amount: 1_200, pool_id: '3005',
+        price_usd: 0.12, value_usd: 1_200, meta: null,
+      },
+      // Not executed NAM/USDC prices, so never stitched in: a trade priced at the quote, and a USDC trade in a pool
+      // anyone could have created at any price.
+      {
+        id: 'spot-swap', chain: 'osmosis', height: 1, ts: NOW - 150 * D, tx_hash: 'OS2', kind: 'sell',
+        from_addr: 'osmo1early', to_addr: null, amount_num: 10_000, counter_denom: 'OSMO', counter_amount: 3, pool_id: '3368',
+        price_usd: 0.5, value_usd: 5_000, meta: null,
+      },
+      {
+        id: 'foreign-pool', chain: 'osmosis', height: 1, ts: NOW - 120 * D, tx_hash: 'OS3', kind: 'sell',
+        from_addr: 'osmo1early', to_addr: null, amount_num: 50, counter_denom: 'USDC', counter_amount: 0.5, pool_id: '999999',
+        price_usd: 0.01, value_usd: 0.5, meta: null,
       },
     ]);
 
