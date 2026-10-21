@@ -169,7 +169,27 @@ export function changeCells<W extends PriceChangeWindow | PoolChangeWindow>(map:
       if (note && !notes.includes(note)) notes.push(note);
     }
   }
-  return { shown, notYet: { words, notes } };
+  return { shown, notYet: { words, notes: joinRecordedSince(notes) } };
+}
+
+const RECORDED_SINCE = /^(The .+ has been recorded since [^,]+, so its) (.+) change is known from (.+)\.$/;
+
+/**
+ * "The quoted price has been recorded since 15 Oct 2026, so its 7-day change is known from 21 Oct 2026 and its
+ * 30-day change from 12 Nov 2026." in place of the same opening said once per window.
+ */
+function joinRecordedSince(notes: string[]): string[] {
+  const out: string[] = [];
+  const parts = new Map<string, { at: number; tails: string[] }>();
+  for (const n of notes) {
+    const m = RECORDED_SINCE.exec(n);
+    if (!m) { out.push(n); continue; }
+    const p = parts.get(m[1]);
+    if (p) p.tails.push(`its ${m[2]} change from ${m[3]}`);
+    else { parts.set(m[1], { at: out.length, tails: [`${m[2]} change is known from ${m[3]}`] }); out.push(''); }
+  }
+  for (const [open, p] of parts) out[p.at] = `${open} ${listWords(p.tails)}.`;
+  return out;
 }
 
 /** "1 h, 6 h and 24 h" */

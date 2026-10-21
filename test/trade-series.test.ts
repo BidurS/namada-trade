@@ -93,6 +93,12 @@ describe('price changes', () => {
     expect(listWords(c.notYet.words)).toBe('7 days and 30 days');
     expect(listWords(['1 h', '6 h', '24 h'])).toBe('1 h, 6 h and 24 h');
   });
+  it('says "recorded since" once when several windows wait for the same start', () => {
+    const n = (w: string, d: string) => `The quoted price has been recorded since 15 Oct 2026, so its ${w} change is known from ${d}.`;
+    const c = changeCells({ h1: ch(1), d7: ch(null, n('7-day', '21 Oct 2026')), d30: ch(null, n('30-day', '12 Nov 2026')) }, ['h1', 'd7', 'd30']);
+    expect(c.notYet.notes).toEqual(['The quoted price has been recorded since 15 Oct 2026, so its 7-day change is known from 21 Oct 2026 and its 30-day change from 12 Nov 2026.']);
+    expect(changeCells({ d7: ch(null, n('7-day', '21 Oct 2026')), d30: ch(null, 'A gap.') }, ['d7', 'd30']).notYet.notes).toEqual([n('7-day', '21 Oct 2026'), 'A gap.']);
+  });
   it('a window missing from the answer is not covered', () => {
     expect(changeCells({}, ['y1']).notYet.words).toEqual(['1 year']);
   });
