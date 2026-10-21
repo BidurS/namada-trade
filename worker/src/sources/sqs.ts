@@ -49,14 +49,20 @@ async function edgeCached<T>(key: string, ttlSec: number, make: () => Promise<T>
   }
 }
 
-export async function fetchNamPrice(): Promise<{ usd: number | null; at: number; error?: string }> {
+/**
+ * The NAM quote in USD, and in the same answer OSMO's (`osmoUsd`, stored each minute as price.osmo_usd so a trade
+ * paid in OSMO with no OSMO/USDC swap of its own can be valued at its minute: shared/settle.ts).
+ */
+export async function fetchNamPrice(): Promise<{ usd: number | null; osmoUsd?: number | null; at: number; error?: string }> {
   const at = Date.now();
   try {
-    const url = `${OSMOSIS.sqs}/tokens/prices?base=${encodeURIComponent(NAM.osmoDenom)}`;
+    const url = `${OSMOSIS.sqs}/tokens/prices?base=${encodeURIComponent(NAM.osmoDenom)},uosmo`;
     const res = await sqsGet(url, 10000);
-    const p = res[NAM.osmoDenom]?.[OSMOSIS.allUsdc];
+    const p = res[NAM.osmoDenom]?.[OSMOSIS.allUsdc], o = res.uosmo?.[OSMOSIS.allUsdc];
     const usd = p ? parseFloat(p) : null;
-    return usd && usd > 0 ? { usd, at } : { usd: null, at, error: quoteErrorText('no_price') };
+    const osmo = o ? parseFloat(o) : null;
+    const osmoUsd = osmo != null && Number.isFinite(osmo) && osmo > 0 ? osmo : null;
+    return usd && usd > 0 ? { usd, osmoUsd, at } : { usd: null, osmoUsd, at, error: quoteErrorText('no_price') };
   } catch (e) {
     return { usd: null, at, error: quoteErrorText(classify(e)) };
   }

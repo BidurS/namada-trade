@@ -8,6 +8,7 @@
 // offered; the rule list and your own choices are current (they are not recorded over time).
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import type { AlertHit, AlertRuleId, AlertsRecentResponse } from '../../../../shared/types';
+import type { Settle, SettledCoin } from '../../../../shared/settle';
 import { BODY } from '../../../../shared/copy';
 import type { ScreenProps } from '../../app/index';
 import { useClock, useHeaderPrice, useOverlays, useOverview, useReplay, useSession } from '../../app/index';
@@ -17,7 +18,7 @@ import {
   SourceLine, Switch, Tag, derive, uiStatus, type SegOption, type Stamp,
 } from '../../ui/index';
 import { Icon } from '../../ui/Icon';
-import { explorerTx, fmtAge, fmtAgo, fmtCount, fmtDateline, fmtNamRule, fmtUsdRule, fmtUtcLong } from '../../lib/format';
+import { explorerTx, fmtAge, fmtAgo, fmtCoin, fmtCount, fmtDateline, fmtNamRule, fmtUsdRule, fmtUtcLong } from '../../lib/format';
 import { useUserSettings } from '../settings/account';
 import { plainError } from '../sheets/util';
 import { hitKind, hitTx, useAlertRules, type RuleView } from './rules';
@@ -297,8 +298,9 @@ function HitRow({ h, now }: { h: AlertHit; now: number }) {
 }
 
 /**
- * What a trade settled at: the USDC it paid or got per NAM, from its own coins; or, when it has no USD price of its
- * own, the Osmosis quote stored for that minute, said as a quote; or that no price is on record.
+ * What a trade settled at for its trader: every coin their balance changed by, fees and gas in, with the rate each
+ * non-USDC coin was valued at; for an older row, the USDC it paid or got per NAM from its own coins; or, when it has
+ * no USD price of its own, the Osmosis quote stored for that minute, said as a quote; or that no price is on record.
  */
 function HitPrice({ h }: { h: AlertHit }) {
   const p = h.price;
@@ -307,11 +309,28 @@ function HitPrice({ h }: { h: AlertHit }) {
     <p className="al-hit__pr">
       {!p
         ? 'No price is on record for this trade.'
-        : p.source === 'paid'
-          ? <>Settled at {fmtUsdRule(p.usd)} a NAM, {total} in USDC.</>
-          : <>Paid in another coin, so no USD settle price; the Osmosis quote at {fmtUtcLong(p.at)} was {fmtUsdRule(p.usd)} a NAM (about {total}).</>}
+        : p.source === 'settled' && p.settle
+          ? <Settled s={p.settle} />
+          : p.source === 'paid'
+            ? <>Settled at {fmtUsdRule(p.usd)} a NAM, {total} in USDC.</>
+            : <>Paid in another coin, so no USD settle price; the Osmosis quote at {fmtUtcLong(p.at)} was {fmtUsdRule(p.usd)} a NAM (about {total}).</>}
     </p>
   );
+}
+
+function Settled({ s }: { s: Settle }) {
+  const coin = (c: SettledCoin) => `${fmtCoin(Math.abs(c.amount), c.symbol === 'USDC' ? 2 : 4)} ${c.symbol}`;
+  const valued = (c: SettledCoin) => c.rate === 'stable' ? ''
+    : ` (${fmtUsdRule(Math.abs(c.amount) * c.usdEach)} at ${fmtUsdRule(c.usdEach)} per ${c.symbol}, ${c.rate === 'tx' ? `this transaction's own ${c.symbol}/USDC rate` : `the Osmosis ${c.symbol} quote for that minute`})`;
+  const list = (cs: SettledCoin[]) => cs.map((c) => coin(c) + valued(c)).join(' and ');
+  const got = s.coins.filter((c) => c.amount > 0), paid = s.coins.filter((c) => c.amount < 0);
+  const sale = got.length > 0 && s.coins.reduce((a, c) => a + c.amount * c.usdEach, 0) > 0;
+  const nam = `${fmtNamRule(s.nam)} NAM`;
+  const trade = sale
+    ? `gave ${nam}, fees in, for ${list(got)}${paid.length ? `, and paid ${list(paid)}` : ''}`
+    : `paid ${list(paid)} for ${nam}, after fees${got.length ? `, and got ${list(got)}` : ''}`;
+  const gas = s.gasUsd != null ? `, ${sale ? 'less' : 'plus'} ${fmtUsdRule(s.gasUsd)} of gas` : '';
+  return <>Settled at {fmtUsdRule(s.usdPerNam)} a NAM: {trade}{gas}.{s.gasLeftOut ? ' Its gas is left out: its coin has no price for that minute.' : ''}</>;
 }
 
 function LastOne({ hit, now }: { hit: AlertHit; now: number }) {

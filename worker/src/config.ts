@@ -38,6 +38,12 @@ export const OSMOSIS = {
    * just after the pool has swapped (its token_swapped event) on an exact-out hop.
    */
   takerFeeCollector: 'osmo1r9jc2234fljy93z80cevqjt3nmjycec8aj4cc6',
+  /**
+   * The pools a coin other than NAM may be priced in, against Noble USDC: pool id to that coin's denom. A trade paid in
+   * OSMO is valued at its own transaction's OSMO/USDC swap through one of these (pool 1464, OSMO/USDC). Any other pool
+   * is anyone's and could be given any rate.
+   */
+  ratePools: { '1464': 'uosmo' } as Readonly<Record<string, string>>,
   /** Noble USDC on Osmosis */
   usdcDenom: 'ibc/498A0751C798A0D9A389AA3691123DADA57DAA4FE165D5C75894505B876BA6E4',
   allUsdc: 'factory/osmo147h5x9pcj7lm0cttlaefx6sqq5vdfnmwfcqxkmjd7exqm9gc7grqhr75m0/alloyed/allUSDC',

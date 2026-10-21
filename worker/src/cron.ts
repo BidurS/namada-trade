@@ -2,6 +2,7 @@ import type { Env } from './util';
 import { runBatch, stmt, kvGet, kvSet, kvGetJson } from './db';
 import { fetchOsmosisHolderList, fetchOsmosisSupplyBase, OSMOSIS_HOLDER_PAGES } from './sources/osmosis';
 import { fetchNamPools, fetchNamPrice } from './sources/sqs';
+import { QUOTE_KEYS } from '../../shared/settle';
 import { namBalance, namTotalSupply, namTotalStake, namadaEpoch, namadaStatusAll, delegationsAt, answeringRpcs, QUICK, RpcBreaker, allNamBalances, allBonds, type BalanceListing, type BondListing, type ReadOpts, type Rpc } from './sources/namada';
 import { fetchIntel } from './sources/intel';
 import { sendDiscordForumAlert, sendDiscordGovAlert } from './sources/discord';
@@ -945,6 +946,7 @@ export async function runCron(env: Env) {
     }
     if (epoch != null && epoch > 0) metricStmts.push(stmt.metric(now, 'epoch', epoch));
     if (price.usd) metricStmts.push(stmt.metric(now, 'price.usd', price.usd));
+    if (price.osmoUsd) metricStmts.push(stmt.metric(now, QUOTE_KEYS.OSMO, price.osmoUsd));
     if (poolRes.pools.length) {
       // Pool depth is recorded so replay can show what liquidity looked like at the time.
       metricStmts.push(stmt.metric(now, 'dex.liquidity_usd', poolRes.pools.reduce((a, p) => a + p.liquidityUsd, 0)), stmt.metric(now, 'dex.pool_count', poolRes.pools.length));

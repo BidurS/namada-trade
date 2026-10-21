@@ -1,6 +1,7 @@
 import { NAM, OSMOSIS } from '../config';
-import { namFromCoins, parseCoins, isRealAddress } from '../util';
+import { namFromCoins, parseCoins, isRealAddress, toNam } from '../util';
 import type { Flow, Move } from '../../../shared/types';
+import type { SettleMeta } from '../../../shared/settle';
 
 /** A swap's cuts (fees other accounts keep) may be at most 1/20 of the swap's NAM for its trader to be matched. */
 export const CUT_SHARE_MAX_DIV = 20n;
@@ -169,14 +170,14 @@ export function parseOsmosisTx(tx: NormTx, ctx: OsmoCtx): OsmoParsed {
 
   // ---- 1. Raw ledger from bank events ----
   // Every bank transfer in order (any coin: a swap's legs are told apart by their neighbours); `base` is its NAM.
-  const transfers: { from: string; to: string; amount: number; base: bigint; idx: number; ev: number; msg: string }[] = [];
+  const transfers: { from: string; to: string; amount: number; base: bigint; coins: string; idx: number; ev: number; msg: string }[] = [];
   tx.events.forEach((e, i) => {
     if (e.type === 'transfer') {
       attrGroups(e, 'recipient').forEach((g, j) => {
         if (!g.sender || !g.recipient) return;
         const idx = i * 100 + j;
         const base = namBase(g.amount), amt = namFromCoins(g.amount);
-        transfers.push({ from: g.sender, to: g.recipient, amount: amt, base, idx, ev: i, msg: g.msg_index ?? '' });
+        transfers.push({ from: g.sender, to: g.recipient, amount: amt, base, coins: g.amount ?? '', idx, ev: i, msg: g.msg_index ?? '' });
         if (base > 0n) out.moves.push(mv(tx, g.sender, -amt, idx), mv(tx, g.recipient, amt, idx));
       });
     } else if (e.type === 'coinbase' || e.type === 'burn') {
@@ -307,6 +308,61 @@ export function parseOsmosisTx(tx: NormTx, ctx: OsmoCtx): OsmoParsed {
   const userLegs = legs.filter((l) => !isPost(l)), postLegs = legs.filter(isPost);
   const onlyOne = <T>(xs: T[]) => (new Set(xs).size === 1 ? xs[0] : null);
 
+  // What the trader's balance changed by in the swap's own messages, in every coin (meta.settle, shared/settle.ts): the
+  // NAM they gave or got with the taker fee and the pools' spread in, the coins they got or paid (a coin routed through
+  // them, as USDC between two hops, nets to 0), and the transaction fee when they paid it. Only for a transaction whose
+  // events carry msg_index: without it the fee's and the post-handler's transfers cannot be told from the swap's.
+  const feeEv = ev.find((a, k) => tx.events[k].type === 'tx' && a.fee !== undefined);
+  const feePayer = ev.find((a, k) => tx.events[k].type === 'tx' && a.fee_payer)?.fee_payer ?? signer;
+  const assetOf = (denom: string) => (denom === NAM.osmoDenom ? null : ctx.assets.get(denom) ?? null);
+  const settleFor = (legs: Leg[], trader: string): SettleMeta | null => {
+    const msgs = new Set(legs.map((l) => l.msg));
+    const net = new Map<string, bigint>();
+    for (const t of transfers) {
+      if (!msgs.has(t.msg) || t.from === t.to || (t.from !== trader && t.to !== trader)) continue;
+      for (const c of parseCoins(t.coins)) net.set(c.denom, (net.get(c.denom) ?? 0n) + (t.to === trader ? BigInt(c.amount) : -BigInt(c.amount)));
+    }
+    const namNet = net.get(NAM.osmoDenom) ?? 0n;
+    if (namNet === 0n) return null;
+    const s: SettleMeta = { nam: namNet < 0n ? -toNam(-namNet) : toNam(namNet), coins: {} };
+    for (const [denom, v] of net) {
+      if (denom === NAM.osmoDenom || v === 0n) continue;
+      const a = assetOf(denom);
+      if (!a) { s.unknown = true; continue; }
+      s.coins[a.symbol] = (s.coins[a.symbol] ?? 0) + Number(v) / 10 ** a.decimals;
+    }
+    // The trader's other side moved through another account (a router's or an entry point's: Skip's IBC'd-in coin, a
+    // bot's funding): nothing of theirs to settle against.
+    if (!Object.keys(s.coins).length && !s.unknown) return null;
+    if (feeEv && feePayer === trader) {
+      for (const c of parseCoins(feeEv.fee)) {
+        const a = assetOf(c.denom);
+        const sym = a?.symbol ?? shortDenom(c.denom);
+        (s.gas ??= {})[sym] = (s.gas[sym] ?? 0) + Number(c.amount) / 10 ** (a?.decimals ?? 6);
+      }
+    }
+    // A coin other than USDC is priced at this transaction's own swap of it against USDC in a pool trusted for its
+    // price: the trader's own hop when there is one, else the first in the transaction.
+    const usdc = ctx.assets.get(OSMOSIS.usdcDenom);
+    for (const sym of new Set([...Object.keys(s.coins), ...Object.keys(s.gas ?? {})])) {
+      const denom = [...ctx.assets].find(([, a]) => a.symbol === sym && !a.stable)?.[0];
+      if (!denom || !usdc) continue;
+      let own: number | null = null, other: number | null = null;
+      tx.events.forEach((e, i) => {
+        if (e.type !== 'token_swapped' || OSMOSIS.ratePools[ev[i].pool_id] !== denom) return;
+        const coins = [...parseCoins(ev[i].tokens_in), ...parseCoins(ev[i].tokens_out)];
+        const u = coins.find((c) => c.denom === OSMOSIS.usdcDenom), x = coins.find((c) => c.denom === denom);
+        if (!u || !x || x.amount === '0') return;
+        const r = (Number(u.amount) / 10 ** usdc.decimals) / (Number(x.amount) / 10 ** ctx.assets.get(denom)!.decimals);
+        if (msgs.has(msgOf[i])) own ??= r;
+        else other ??= r;
+      });
+      const rate = own ?? other;
+      if (rate != null) (s.rates ??= {})[sym] = rate;
+    }
+    return s;
+  };
+
   const swapRow = (suffix: string, legs: Leg[], trader: string | null, postHandler: boolean) => {
     const namSold = legs.filter((l) => l.side === 'sell').reduce((s, l) => s + l.nam, 0);
     const namBought = legs.filter((l) => l.side === 'buy').reduce((s, l) => s + l.nam, 0);
@@ -329,6 +385,7 @@ export function parseOsmosisTx(tx: NormTx, ctx: OsmoCtx): OsmoParsed {
     const trusted = !!counter?.stable && mine.every((l) => OSMOSIS.pricePoolIds.includes(l.pool));
     let priceUsd = ctx.priceUsd;
     if (counter && trusted && amount > 0 && !isArb) priceUsd = counter.amount / amount;
+    const settle = !isArb && !postHandler && trader && indexed ? settleFor(legs, trader) : null;
     out.flows.push({
       id: `osmosis:${tx.hash}:${suffix}`,
       chain: 'osmosis',
@@ -344,7 +401,7 @@ export function parseOsmosisTx(tx: NormTx, ctx: OsmoCtx): OsmoParsed {
       poolId: [...pools].join(','),
       priceUsd,
       valueUsd: priceUsd != null ? priceUsd * amount : null,
-      meta: { ...(isArb ? { arb: true, namSold, namBought } : { trader }), ...(postHandler ? { postHandler: true } : {}) },
+      meta: { ...(isArb ? { arb: true, namSold, namBought } : { trader }), ...(postHandler ? { postHandler: true } : {}), ...(settle ? { settle } : {}) },
     });
   };
   // The signer's row is its messages' trader's when they all have the same one.

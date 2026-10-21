@@ -1,4 +1,5 @@
 // API contract shared by the Worker and the web UI.
+import type { Settle } from './settle';
 
 export type Chain = 'osmosis' | 'namada';
 
@@ -695,11 +696,13 @@ export interface AlertHit {
   amountNam: number;
   address: string | null;
   /**
-   * Trades only: the price the trade itself settled at, USDC paid or received per NAM from its own coins ('paid',
-   * `at` = the trade's time); when the trade has no USD price of its own (paid in another coin, or several), the
-   * Osmosis quote stored for that minute ('quote', `at` = the quote's time). null when neither is on record.
+   * Trades only, its USD per NAM. 'settled': what the trade settled at for its trader, every coin their balance changed
+   * by with the fees and the transaction fee in (`settle` says which coins, at what rates; shared/settle.ts). 'paid':
+   * for a row recorded before the parser kept those coins, its own USDC per NAM. 'quote': the trade has neither (paid
+   * in a coin with no price at that minute), so the Osmosis NAM quote stored for that minute (`at` = the quote's
+   * time). `at` is otherwise the trade's time. null when none is on record.
    */
-  price?: { usd: number; source: 'paid' | 'quote'; at: number } | null;
+  price?: { usd: number; source: 'settled' | 'paid' | 'quote'; at: number; settle?: Settle } | null;
 }
 
 export interface AlertRuleInfo {

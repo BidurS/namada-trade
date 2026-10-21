@@ -6,6 +6,7 @@ import type {
 } from '../../shared/types';
 import type { BondListing } from './sources/namada';
 import { evaluateFlows, INTERNAL_ADDRESSES, isInternal, type AlertThresholds } from '../../shared/alerts';
+import { QUOTE_KEYS, quotesNeeded, settleMetaOf, settleOf } from '../../shared/settle';
 import { SELLS_MOST_CUT } from '../../shared/supply-thresholds';
 import { kvGetJson, kvSet } from './db';
 import { NAM_AMOUNT, NOT_LEGACY_TWIN } from './flows-query';
@@ -1220,24 +1221,51 @@ export async function alertsBetween(db: D1Database, from: number, to: number, th
     .prepare(`${FLOW_SELECT} WHERE f.ts >= ? AND f.ts < ? AND f.amount_num >= ? AND f.kind IN ('ibc_in','withdraw','unbond','buy','sell','unshield','bond') AND ${NAM_AMOUNT} AND ${NOT_LEGACY_TWIN} ORDER BY f.ts DESC LIMIT 500`)
     .bind(from, to, minAmt)
     .all<any>();
-  return withQuotes(db, evaluateFlows((rows.results || []).map(rowToFlow), th));
+  const flows = (rows.results || []).map(rowToFlow);
+  return withQuotes(db, evaluateFlows(flows, th), flows);
 }
 
 /** A quote this much older than a trade is no longer the price of its minute. */
 export const QUOTE_MATCH_MS = 5 * 60_000;
 
+const quoteAt = (db: D1Database, key: string, ts: number) =>
+  db.prepare(`SELECT ts, value FROM metrics WHERE key = ? AND ts <= ? AND ts >= ? ORDER BY ts DESC LIMIT 1`).bind(key, ts, ts - QUOTE_MATCH_MS);
+
 /**
- * A trade hit without a price of its own (paid in another coin, or several) takes the Osmosis quote stored for its
- * minute: the latest price.usd reading at or before the trade, at most QUOTE_MATCH_MS before it, labelled 'quote' so
- * it is never read as what the trade paid. None found: the hit says no price is on record. One key seek each.
+ * Each trade hit's price. First what it settled at for its trader (shared/settle.ts): every coin their balance changed
+ * by, fees and gas in, USDC at a dollar and any other coin at the transaction's own rate for it or, without one, its
+ * Osmosis quote stored for the trade's minute ('settled'). Else, for a row recorded before the parser kept those coins,
+ * its own USDC per NAM ('paid', set by the rule). Else the NAM quote stored for its minute: the latest price.usd
+ * reading at or before the trade, at most QUOTE_MATCH_MS before it, labelled 'quote' so it is never read as what the
+ * trade paid. None found: the hit says no price is on record. One key seek per quote.
  */
-export async function withQuotes(db: D1Database, hits: AlertHit[]): Promise<AlertHit[]> {
-  const need = hits.filter((h) => h.ruleId === 'big_swap' && !h.price);
+export async function withQuotes(db: D1Database, hits: AlertHit[], flows: Flow[] = []): Promise<AlertHit[]> {
+  const byId = new Map(flows.map((f) => [f.id, f]));
+  const trades = hits.filter((h) => h.ruleId === 'big_swap');
+  // the coin quotes the settle records need, one seek each
+  const asks: { h: AlertHit; f: Flow; sym: string }[] = [];
+  for (const h of trades) {
+    const f = byId.get(h.flowId), s = f && settleMetaOf(f.meta);
+    if (f && s) for (const sym of quotesNeeded(s)) if (QUOTE_KEYS[sym]) asks.push({ h, f, sym });
+  }
+  const quotes = new Map<AlertHit, Record<string, number>>();
+  for (let i = 0; i < asks.length; i += 50) {
+    const part = asks.slice(i, i + 50);
+    const res = await db.batch(part.map((a) => quoteAt(db, QUOTE_KEYS[a.sym], a.f.ts))).catch(() => null);
+    res?.forEach((r, j) => {
+      const row = (r.results?.[0] ?? null) as { value: number } | null;
+      if (row && row.value > 0) quotes.set(part[j].h, { ...quotes.get(part[j].h), [part[j].sym]: row.value });
+    });
+  }
+  for (const h of trades) {
+    const f = byId.get(h.flowId), s = f && settleMetaOf(f.meta);
+    const settle = f && s && (f.kind === 'buy' || f.kind === 'sell') ? settleOf(f.kind, s, quotes.get(h)) : null;
+    if (settle) h.price = { usd: settle.usdPerNam, source: 'settled', at: f!.ts, settle };
+  }
+  const need = trades.filter((h) => !h.price);
   for (let i = 0; i < need.length; i += 50) {
     const part = need.slice(i, i + 50);
-    const res = await db
-      .batch(part.map((h) => db.prepare(`SELECT ts, value FROM metrics WHERE key = 'price.usd' AND ts <= ? AND ts >= ? ORDER BY ts DESC LIMIT 1`).bind(h.ts, h.ts - QUOTE_MATCH_MS)))
-      .catch(() => null);
+    const res = await db.batch(part.map((h) => quoteAt(db, 'price.usd', h.ts))).catch(() => null);
     res?.forEach((r, j) => {
       const row = (r.results?.[0] ?? null) as { ts: number; value: number } | null;
       if (row && row.value > 0) part[j].price = { usd: row.value, source: 'quote', at: Number(row.ts) };
@@ -1268,8 +1296,9 @@ export async function lastAlertBefore(db: D1Database, to: number, th: AlertThres
       .bind(to, th.ibcInventory, th.unlock, th.bigSwap, th.unshield, th.bond, pageSize, p * pageSize)
       .all<any>();
     const list = rows.results || [];
-    const hits = evaluateFlows(list.map(rowToFlow), th);
-    if (hits.length) return (await withQuotes(db, [hits[0]]))[0];
+    const flows = list.map(rowToFlow);
+    const hits = evaluateFlows(flows, th);
+    if (hits.length) return (await withQuotes(db, [hits[0]], flows))[0];
     if (list.length < pageSize) return null;
   }
   return undefined;
