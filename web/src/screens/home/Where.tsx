@@ -78,7 +78,7 @@ export function Where({ o, supplyP, osmoP, osmoShareP, bridgeCheck, failed, why 
               }
             >
               <p>
-                Namada holds <Num v={s.ibcEscrow} prov={supplyP} fmt={fmtNamRule} showAge={false} />{NBSP}NAM in escrow for Osmosis. Osmosis counts{' '}
+                Namada holds <Num v={s.ibcEscrow} prov={supplyP} fmt={fmtNamRule} showAge={false} />{NBSP}NAM in its bridge escrow, for Osmosis and every other chain it bridges to. Osmosis counts{' '}
                 <Num v={s.osmosis} prov={osmoP} fmt={fmtNamRule} showAge={false} />. The gap is{' '}
                 <Derived inputs={[{ value: s.ibcEscrow, prov: supplyP }, { value: s.osmosis, prov: osmoP }]} label="gap / NAM on Osmosis" name="Gap as a share of NAM on Osmosis" compute={(a, b) => (Math.abs(a - b) / b) * 100} fmt={gapPct} showAge={false} /> of what
                 is on Osmosis, and one of the cross-checks that needs a look.

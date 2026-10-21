@@ -59,7 +59,7 @@ export default function HomeScreen({ route }: ScreenProps) {
   // the Osmosis figure carries the disagree state (wavy underline) and the sheet says why.
   const osmoP: Stamp | null =
     osmoBase && bridgeCheck && bridgeCheck.status !== 'ok' && osmoBase.status !== 'missing'
-      ? { ...osmoBase, status: 'conflict', note: 'Namada’s escrow for Osmosis and Osmosis’s own count differ; the bridge cross-check needs a look.' }
+      ? { ...osmoBase, status: 'conflict', note: 'Namada’s bridge escrow (it holds NAM for every chain, not only Osmosis) and Osmosis’s own count differ; the bridge cross-check needs a look.' }
       : osmoBase;
   const priceP: Stamp | null = o?.price.usd.prov ?? null;
   const ov = o;

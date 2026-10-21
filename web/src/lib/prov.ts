@@ -146,7 +146,7 @@ export const ageRange = (stamps: Stamp[], now: number): string => {
  * operator text and appear only under "How it is computed").
  */
 export const CHECK_TITLES: Record<string, string> = {
-  ibc_conservation: 'NAM locked at the Namada bridge matches NAM on Osmosis',
+  ibc_conservation: 'NAM locked at the Namada bridge (for every chain) matches NAM on Osmosis',
   bonded_coverage: 'Staked NAM is traced to the addresses that staked it',
   rpc_consensus: 'Two Namada nodes agree on the latest block',
   supply_integrity: 'NAM in staking, the bridge, the shielded pool and public funding never exceeds all NAM',
@@ -179,17 +179,24 @@ export function checkDetail(c: Check): string | null {
       // `driftNam` is the difference once the packets stuck in the escrow are counted. Each packet carries its
       // own note ("stuck in a transfer to Noble that was refused and never refunded") and send date, so the
       // sentence names what it counts: "Equal, counting 1,614 NAM stuck in a transfer to Noble … (26 Jun 2026)".
+      // `over` names the larger side once the gap is past the check's tolerance (a result from before 2026-10-21
+      // has none). The bridge holds NAM for every chain and only Osmosis is read, so the bridge holding more is
+      // said as that, with what it may be, never as a plain mismatch.
       const x = detailNum(d.driftNam);
       if (x == null) return null;
       const stuck = detailNum(d.stuckNam) ?? 0;
-      const gap = Math.abs(x) < 1 ? 'Equal' : `${fmtNamRule(Math.abs(x))} NAM apart`;
-      if (!(stuck > 0)) return gap;
+      const amt = fmtNamRule(Math.abs(x));
+      const gap = d.over === 'escrow' ? `The Namada bridge holds ${amt} NAM more than Osmosis counts`
+        : d.over === 'osmosis' ? `Osmosis counts ${amt} NAM more than the Namada bridge holds`
+        : Math.abs(x) < 1 ? 'Equal' : `${amt} NAM apart`;
+      const why = d.over === 'escrow' ? '; the bridge holds NAM for every chain and only Osmosis is read, so the difference may be NAM sent to another chain' : '';
+      if (!(stuck > 0)) return `${gap}${why}`;
       const packets = Array.isArray(d.stuckPackets) ? (d.stuckPackets as { sentAt?: unknown; note?: unknown }[]) : [];
       const dates = packets.map((p) => p.sentAt).filter((v): v is string => typeof v === 'string').map((v) => Date.parse(v)).filter(Number.isFinite).sort();
       const when = dates.length ? ` (${packets.length === 1 ? '' : 'since '}${fmtDayMonthYear(dates[0])})` : '';
       const note = packets.length === 1 && typeof packets[0].note === 'string' ? packets[0].note : null;
       const what = note ?? (packets.length <= 1 ? 'stuck in a transfer that was never delivered and never refunded' : `stuck in ${fmtCount(packets.length)} transfers never delivered and never refunded`);
-      return `${gap}, counting ${fmtNamRule(stuck)} NAM ${what}${when}`;
+      return `${gap}, counting ${fmtNamRule(stuck)} NAM ${what}${when}${why}`;
     }
     case 'bonded_coverage': {
       const x = detailNum(d.coveragePct);

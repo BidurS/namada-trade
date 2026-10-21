@@ -187,6 +187,36 @@ export function priceVsExecution(
   return { status: 'idle', detail: { sqsUsd: quoteUsd, noTrades: true, windowHours: PRICE_CHECK_WINDOW_MS / 3600000, lastTradeAt } };
 }
 
+/** Within this many NAM the escrow and the Osmosis supply count as equal (the two are read a few blocks apart). */
+export const IBC_TOLERANCE_NAM = 100;
+/** Osmosis counting this many NAM more than the escrow holds is a fault, not a look. */
+export const IBC_FAIL_NAM = 10_000;
+/** What the bridge check compares and what it cannot, in its detail (the escrow is one for every channel). */
+export const IBC_COMPARED = 'The Namada IBC escrow (one account for every channel), less the NAM in packets stuck in it, against the NAM voucher supply on Osmosis.';
+export const IBC_NOT_COMPARED = 'NAM held for any other channel: it is in the escrow, and no other chain is read. It shows as the escrow over Osmosis, and an Osmosis shortfall of the same size would cancel it out.';
+
+/**
+ * The bridge conservation check: Namada's IBC escrow, less the NAM in packets stuck in it (ibc-stuck.ts), against
+ * the NAM voucher supply on Osmosis. Namada keeps one escrow for every channel and this site reads no chain's NAM
+ * supply but Osmosis's: NAM delivered over another channel stays in the escrow and adds nothing on Osmosis. So the
+ * two sides of the gap do not say the same thing:
+ * - Osmosis over (it counts more than the escrow holds): a shortfall that nothing on another chain can explain, as
+ *   NAM held for other chains only adds to the escrow. 'warn', then 'fail' from IBC_FAIL_NAM.
+ * - Escrow over (it holds more than Osmosis counts): NAM held for another chain, or NAM stuck for Osmosis that the
+ *   stuck list does not have, which the check cannot tell apart. 'warn': never a pass, as a real Osmosis drift must
+ *   not pass, and never a fault, as any holder can send NAM to another chain.
+ * An Osmosis shortfall as large as the NAM held for other chains cancels out and reads as equal; the detail says so.
+ */
+export function ibcConservation(escrowNam: number, osmosisNam: number, stuckNam: number): {
+  status: 'ok' | 'warn' | 'fail'; over: 'escrow' | 'osmosis' | null; rawGapNam: number; driftNam: number;
+} {
+  const rawGapNam = escrowNam - osmosisNam;
+  const driftNam = rawGapNam - stuckNam;
+  const over = driftNam >= IBC_TOLERANCE_NAM ? 'escrow' : driftNam <= -IBC_TOLERANCE_NAM ? 'osmosis' : null;
+  const status = over == null ? 'ok' : over === 'escrow' ? 'warn' : -driftNam < IBC_FAIL_NAM ? 'warn' : 'fail';
+  return { status, over, rawGapNam, driftNam };
+}
+
 /**
  * One deadline for the whole tick. Cloudflare stops a scheduled run after 15 minutes and the trigger fires every
  * minute, so a tick that waits on a node that accepts requests and never answers must end well inside a minute:
@@ -1066,7 +1096,8 @@ export async function runCron(env: Env) {
 
     // IBC conservation: the escrow, less the packets stuck in it (ibc-stuck.ts: each one's status re-read from the
     // indexer every tick, so a relayed acknowledgement or timeout drops it on its own), against the Osmosis supply.
-    // Namada keeps one escrow for every channel; NAM on other chains is 0 (checked 2026-10-19).
+    // Namada keeps one escrow for every channel and no other chain is read (other chains held no NAM when the owner
+    // looked on 2026-10-19, but any holder can change that): ibcConservation says which side of the gap is a finding.
     if (ibcEscrowNam != null && osmoSupply != null) {
       const prevStuck = await kvGetJson<StuckList>(env.DB, STUCK_PACKETS_KV).catch(() => null);
       const lookup = (inner: string) => fetchJson<any>(INDEXER_IBC_STATUS(inner), { timeoutMs: 6000, retries: 0, signal })
@@ -1074,12 +1105,11 @@ export async function runCron(env: Env) {
       const stuck = await reconcileStuckPackets(prevStuck, stuckCandidates, lookup, now);
       await kvSet(env.DB, STUCK_PACKETS_KV, stuck).catch(() => {});
       const stuckNam = stuckTotalNam(stuck);
-      const rawGap = ibcEscrowNam - osmoSupply;
-      const drift = rawGap - stuckNam;
-      const ibcDiff = Math.abs(drift);
-      checkStmts.push(stmt.check('ibc_conservation', ibcDiff < 100 ? 'ok' : ibcDiff < 10000 ? 'warn' : 'fail',
-        'IBC conservation: Namada escrow = Osmosis voucher supply + packets stuck in the escrow',
-        { namadaIbcEscrow: ibcEscrowNam, osmosisSupply: osmoSupply, rawGapNam: rawGap, stuckNam, driftNam: drift,
+      const bridge = ibcConservation(ibcEscrowNam, osmoSupply, stuckNam);
+      checkStmts.push(stmt.check('ibc_conservation', bridge.status,
+        'IBC conservation: Namada escrow (one for every channel) vs Osmosis voucher supply + packets stuck in the escrow; no other chain is read',
+        { namadaIbcEscrow: ibcEscrowNam, osmosisSupply: osmoSupply, rawGapNam: bridge.rawGapNam, stuckNam, driftNam: bridge.driftNam, over: bridge.over,
+          compared: IBC_COMPARED, notCompared: IBC_NOT_COMPARED, otherChainsNam: null,
           stuckPackets: stuck.packets.map((p) => ({ innerTx: p.innerTx, nam: p.nam, sentAt: p.sentAt, height: p.height, channel: p.channel, sequence: p.sequence, counterparty: p.counterparty, note: p.note, status: p.status, verifiedAt: p.verifiedAt, stale: !!p.stale, timeout: p.timeout, evidence: p.evidence })),
           stuckDropped: stuck.dropped.slice(-3),
           sources: ['Namada RPC abci_query', 'Keplr Osmosis bank/supply', 'indexer.namada.net /ibc/{tx}/status'] }, now));
