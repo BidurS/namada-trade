@@ -4,12 +4,13 @@
 // - ActivityBar: the page tabs (real links, /activity and /holders, ?at= carried) and the Filter
 //   button with its count badge (below 1024 px only).
 // - FilterSheet: the bottom sheet (kit Sheet) that holds the same controls on phones.
-import React, { useEffect, useState, useSyncExternalStore, type RefObject } from 'react';
-import { Button, Sheet, Tabs } from '../../ui';
+import React, { useEffect, useId, useLayoutEffect, useRef, useState, useSyncExternalStore, type RefObject } from 'react';
+import { Button, SearchField, Sheet, Tabs } from '../../ui';
 export { SearchField } from '../../ui';
 import { hrefFor } from '../../app/index';
-import { SHORTCUTS } from '../../app/keys';
+import { SHORTCUTS, useSlashTarget } from '../../app/keys';
 import { rovingTo } from './paging';
+import { listPath } from './urlState';
 
 // ---------------------------------------------------------------- the 1024 px switch
 const WIDE = '(min-width: 1024px)';
@@ -44,8 +45,9 @@ export function ActivityBar({
       label="Activity views"
       className="act-bar"
       items={[
-        { label: 'Transactions', href: hrefFor('/activity'), current: view === 'activity' },
-        { label: 'Holders', href: hrefFor('/holders'), current: view === 'holders' },
+        // each tab's link leads back to that list as it was left (its filters, page and size; urlState.ts)
+        { label: 'Transactions', href: hrefFor(view === 'activity' ? '/activity' : listPath('/activity')), current: view === 'activity' },
+        { label: 'Holders', href: hrefFor(view === 'holders' ? '/holders' : listPath('/holders')), current: view === 'holders' },
       ]}
     >
       {wide ? (
@@ -59,10 +61,18 @@ export function ActivityBar({
           onClick={onFilter}
           aria-haspopup="dialog"
           aria-expanded={filterOpen}
-          aria-label={filterCount ? `Filter, ${filterCount} on` : 'Filter'}
+          // the name starts with what the button shows ("Filter 2"), so speech input can say it (WCAG 2.5.3)
+          aria-label={filterCount ? `Filter ${filterCount} on` : 'Filter'}
         >
           Filter
-          {filterCount ? <span className="badge" aria-hidden="true">{filterCount}</span> : null}
+          {filterCount ? (
+            <>
+              {' '}
+              <span className="badge" aria-hidden="true">
+                {filterCount}
+              </span>
+            </>
+          ) : null}
         </Button>
       )}
     </Tabs>
@@ -164,5 +174,89 @@ export function KeysHint() {
         </span>
       ))}
     </p>
+  );
+}
+
+// ---------------------------------------------------------------- the list's search field (nav-search-plan 4.3)
+/**
+ * The kit's SearchField with the list's two moments: `onType` while the reader types (the field applies its text a
+ * moment after typing stops), `onCommit` on Enter or when focus leaves the field (the screen then moves the filter
+ * words out of the text into their own parameters, urlState.ts). `hint` is the line under the field (phones).
+ */
+export function ListSearch({
+  label,
+  compact,
+  value,
+  placeholder,
+  hint,
+  onType,
+  onCommit,
+}: {
+  label: string;
+  compact?: boolean;
+  value: string;
+  placeholder?: string;
+  hint?: string;
+  onType: (v: string) => void;
+  onCommit: (v: string) => void;
+}) {
+  const id = useId();
+  const ref = useRef<HTMLDivElement>(null);
+  // "/" focuses this field while it is on screen (app/keys.ts)
+  useSlashTarget(ref);
+  // After a commit the screen may take words out of the text (they became chips). The kit's field follows its `value`
+  // only when that changes, and a commit can end on the value it started from (typed and committed in one go), so the
+  // field is drawn again from `value` when what it shows no longer matches; focus stays in it.
+  const [gen, setGen] = useState(0);
+  const pending = useRef<{ focused: boolean } | null>(null);
+  useLayoutEffect(() => {
+    const p = pending.current;
+    if (!p) return;
+    pending.current = null;
+    const input = ref.current?.querySelector('input');
+    if (input && input.value.replace(/\s+/g, ' ').trim() !== value) {
+      setGen((g) => g + 1);
+      if (p.focused) requestAnimationFrame(() => ref.current?.querySelector('input')?.focus());
+    }
+  });
+  // the hint describes the input (the kit's SearchField takes no aria-describedby yet; ui/Field.tsx is F3's)
+  useEffect(() => {
+    const input = ref.current?.querySelector('input');
+    if (!input) return;
+    if (hint) input.setAttribute('aria-describedby', `${id}h`);
+    else input.removeAttribute('aria-describedby');
+  }, [hint, id, gen]);
+  const typed = (e: React.SyntheticEvent) => (e.target instanceof HTMLInputElement ? e.target.value.replace(/\s+/g, ' ').trim() : null);
+  const commit = (v: string, focused: boolean) => {
+    pending.current = { focused };
+    onCommit(v);
+  };
+  return (
+    <div
+      ref={ref}
+      className={`act-search${compact ? ' act-search--bar' : ''}`}
+      data-list-search=""
+      onInput={() => {
+        pending.current = null;
+      }}
+      onKeyDown={(e) => {
+        const v = e.key === 'Enter' ? typed(e) : null;
+        if (v != null) commit(v, true);
+      }}
+      onBlur={(e) => {
+        // leaving for the field's own clear button is not leaving the field; leaving for a chip lets the chip decide
+        if (e.relatedTarget instanceof Node && e.currentTarget.contains(e.relatedTarget)) return;
+        if (e.relatedTarget instanceof Element && e.relatedTarget.closest('.fchips')) return;
+        const v = typed(e);
+        if (v != null) commit(v, false);
+      }}
+    >
+      <SearchField key={gen} label={label} compact={compact} value={value} onChange={onType} placeholder={placeholder} />
+      {hint ? (
+        <p className="act-hint" id={`${id}h`}>
+          {hint}
+        </p>
+      ) : null}
+    </div>
   );
 }

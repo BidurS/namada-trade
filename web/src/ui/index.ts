@@ -19,6 +19,7 @@ export { Segmented, type SegmentedProps, type SegOption } from './Segmented';
 export { Tabs, type TabItem } from './Tabs';
 export { Pager, PageTools, stepFor, type PagerProps, type PageToolsProps, type PageJump } from './Pager';
 export { SelectChip, type SelectChipProps, type ChipOption } from './SelectChip';
+export { FilterChips, type FilterChip, type FilterChipsProps } from './FilterChips';
 export { Field, SearchField, type FieldProps } from './Field';
 export { Switch, type SwitchProps } from './Switch';
 export { Notice, type NoticeProps, type NoticeTone } from './Notice';
@@ -26,13 +27,16 @@ export { EmptyState, type EmptyStateProps } from './EmptyState';
 export { Skeleton, SkeletonBlock, type SkeletonProps } from './Skeleton';
 
 // data display and charts (F4)
-export { DataList, HolderRow, LadderRow, PoolRow, PoolRestRow, MoveRow, type DataListProps, type DataListKind, type HolderRowProps, type LadderRowProps, type PoolRowProps, type MoveRowProps } from './DataList';
+export { DataList, HolderRow, LadderRow, PoolRow, PoolRestRow, MoveRow, type Column, type DataListProps, type DataListKind, type HolderRowProps, type LadderRowProps, type PoolRowProps, type MoveRowProps } from './DataList';
 export { TxList } from './TxList';
 export { AddrName, RecordLink, YouTag, useShowAll, isMineIn } from './ListBits';
 export { SupplyBar, type SupplyBarProps, type SupplySegment, type SupplyKey } from './SupplyBar';
 export { HeroNumber, type HeroNumberProps } from './HeroNumber';
 export { Fact, type FactProps, type FactItem } from './Fact';
-export { PriceChart, compactNam, RANGE_MS, RANGES, type PriceChartProps, type ChartRange, type ChartEvent, type SeriesPoint } from './PriceChart';
+export { PriceChart, compactNam, RANGE_MS, RANGES, type PriceChartProps, type ChartRange, type ChartEvent, type SeriesPoint, type BandPoint, type ChartStart } from './PriceChart';
+export { Bars, BarsPlot, barsScale, SLOT_MARK_MIN_PX, type BarsProps, type BarsPlotProps, type BarPoint } from './Bars';
+export { PairsList, type PairsListProps } from './PairsList';
+export { TradesTape, type TradesTapeProps, type TapeGroup } from './TradesTape';
 export { OrderflowChart, type OrderflowChartProps } from './OrderflowChart';
 export { SeriesChart, namTick, namShort, type SeriesChartProps, type SeriesRange } from './SeriesChart';
 export { OrderSizeCurve, type OrderSizeCurveProps } from './OrderSizeCurve';

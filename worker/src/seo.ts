@@ -212,9 +212,12 @@ export function robotsTxt(): Response {
   // The app's public read-only data endpoints stay crawlable so Google can render the page the way users see it;
   // account, export and operator endpoints do not. Rules match by prefix (RFC 9309), so '/api/me/' keeps its
   // slash: '/api/me' would also block '/api/metrics/history', the price chart's data. test/routes.test.ts checks
-  // that no rule covers a public read path.
+  // that no rule covers a public read path. The two lists' numbered pages are left out: each one a crawler opens
+  // costs the server a walk to that page (the first page and the list itself stay crawlable).
   const body = `User-agent: *
 Allow: /
+Disallow: /activity?*page=
+Disallow: /holders?*page=
 Disallow: /api/me/
 Disallow: /api/auth
 Disallow: /api/export

@@ -142,3 +142,130 @@
     .cstats--3 dd small { display: block; margin-left: 0; }
   }
 }
+
+/* ==========================================================================
+   The screener basics (screener-plan 2.4 to 2.6): the price chart's quoted band, pool price, flat
+   marks, hourly volume strip and start line; the standalone Bars; the pairs list; the trades tape.
+   Phone first: rows of short lines under a container width, columns above it (container queries);
+   every hit 44 px; text at least 11 px; never buy or sell hues on a series except the stacked
+   daily bars, whose parts are buys and sells.
+   ========================================================================== */
+@layer components {
+  /* ---------- PriceChart additions ---------- */
+  .chart-box--bars { height: 262px; }
+  @media (min-width: 640px) { .chart-box--bars { height: 342px; } }
+  .c-band { fill: var(--c-ink-3); opacity: .12; stroke: none; }
+  .c-pool { fill: none; stroke: var(--c-ink-3); stroke-width: 1.25; stroke-linejoin: round; }
+  .c-pool-dot { fill: var(--c-ink-3); }
+  .c-flat { stroke: var(--c-ink-3); stroke-width: 1; }
+  .c-bar { fill: var(--c-ink-2); opacity: .4; }
+  .c-bar.is-pick { opacity: .9; }
+  .c-bars-base { stroke: var(--c-line-strong); stroke-width: 1; }
+  .c-slot { fill: var(--c-ink-3); opacity: .45; }
+  .key__dot { position: relative; }
+  .key__dot::after { content: ""; position: absolute; left: 50%; top: -4px; width: 6px; height: 6px; margin-left: -3px; border-radius: 50%; background: var(--c-ink); }
+  .key__ln--pool { border-top-width: 1px; border-top-color: var(--c-ink-3); }
+  .key__ln--flat { width: 0; height: 6px; margin-right: var(--s-2); border-top: 0; border-left: 1px solid var(--c-ink-3); vertical-align: -1px; }
+  .key__sw--band { background: color-mix(in srgb, var(--c-ink-3) 24%, transparent); }
+  .key__sw--bar { background: color-mix(in srgb, var(--c-ink-2) 40%, transparent); }
+  .key__miss { color: var(--c-ink-2); }
+  .key__miss [data-num] { margin-right: var(--s-1); }
+  .c-starts { max-width: 70ch; }
+  .c-starts__k { color: var(--c-ink); font-weight: var(--w-medium); }
+  .c-starts [data-num] { color: var(--c-ink); }
+
+  /* ---------- Bars, standalone (ui/Bars.tsx) ---------- */
+  .chart-box--bars-only { height: 184px; }
+  @media (min-width: 640px) { .chart-box--bars-only { height: 220px; } }
+  .bars .cap [data-num] { color: var(--c-ink); }
+
+  /* ---------- PairsList (ui/PairsList.tsx): four short lines on phones, eight columns from a 720 px container ---------- */
+  .pa-notes { display: grid; gap: var(--s-1); list-style: none; padding: 0; font-size: var(--t-13); line-height: var(--lh-13); color: var(--c-ink-2); }
+  .pa-notes [data-num] { margin-right: var(--s-1); }
+  .pa { container: pa / inline-size; display: grid; min-width: 0; margin-top: var(--s-2); }
+  .pa__head { display: none; }
+  .pa__row { position: relative; display: grid; grid-template-columns: minmax(0, 1fr) auto; grid-template-areas: "id liq" "id share" "o24 here" "o7 here" "nam fee"; column-gap: var(--s-3); row-gap: 2px; padding: 14px 0 16px; border-top: 1px solid var(--c-line); min-width: 0; }
+  .pa__id { grid-area: id; display: grid; align-content: start; gap: 2px; min-width: 0; }
+  .pa__pair { font-size: var(--t-15); line-height: 22px; font-weight: var(--w-medium); overflow-wrap: anywhere; }
+  .pa__sub { display: block; font: var(--w-regular) var(--t-12) / 18px var(--font-code); color: var(--c-ink-2); overflow-wrap: anywhere; }
+  .pa__liq { grid-area: liq; text-align: right; font-size: var(--t-18); line-height: 22px; font-weight: var(--w-medium); }
+  .pa__share { grid-area: share; text-align: right; font-size: var(--t-13); line-height: 20px; color: var(--c-ink-2); }
+  .pa__o24 { grid-area: o24; }
+  .pa__o7 { grid-area: o7; }
+  .pa__here { grid-area: here; text-align: right; align-self: start; }
+  .pa__nam { grid-area: nam; }
+  .pa__fee { grid-area: fee; text-align: right; }
+  .pa__o24, .pa__o7, .pa__here, .pa__nam, .pa__fee { font-size: var(--t-13); line-height: 20px; color: var(--c-ink-2); min-width: 0; }
+  .pa__o24 [data-num], .pa__o7 [data-num], .pa__here [data-num] { color: var(--c-ink); }
+  .pa__bar { position: absolute; left: 0; right: 0; bottom: 0; height: 2px; background: linear-gradient(90deg, var(--c-ink-2) var(--w), transparent var(--w)); }
+  .pa__row--rest { display: flex; flex-wrap: wrap; justify-content: space-between; align-items: baseline; gap: var(--s-1) var(--s-3); grid-template-areas: none; color: var(--c-ink-2); font-size: var(--t-13); line-height: 20px; min-height: 56px; }
+  .pa__row--rest [data-num] { color: var(--c-ink); }
+  .pa__row--rest b { font-weight: var(--w-medium); }
+  @container pa (min-width: 720px) {
+    .pa__head, .pa__row:not(.pa__row--rest) { display: grid; grid-template-columns: minmax(0, 1.8fr) repeat(7, minmax(0, 1fr)); column-gap: var(--s-3); }
+    .pa__head { color: var(--c-ink-2); font-size: var(--t-12); line-height: 16px; font-weight: var(--w-medium); padding: 0 0 var(--s-2); }
+    .pa__head .r { text-align: right; }
+    .pa__row:not(.pa__row--rest) { grid-template-areas: "id liq share o24 o7 here nam fee"; align-items: center; padding: 12px 0 14px; }
+    .pa__liq, .pa__share, .pa__o24, .pa__o7, .pa__here, .pa__nam, .pa__fee { font-size: var(--t-13); text-align: right; color: var(--c-ink); align-self: center; }
+    .pa__liq { font-size: var(--t-15); }
+    .pa__w, .pa .u { display: none; }
+  }
+
+  /* ---------- TradesTape (ui/TradesTape.tsx): short rows on phones, six columns from an 880 px container ----------
+     Phone row: line 1 the kind tag, the age (it opens the details) and the signed NAM; a folded run's words under
+     it; then the maker (it opens the Address sheet) and the value at the trade. */
+  .tape { container: tape / inline-size; display: grid; min-width: 0; --tr-cols: 112px 112px 112px minmax(0, 1fr) minmax(0, 200px) 156px; }
+  .tape__head { display: none; }
+  /* four tracks: the age takes what the NAM leaves on line 1, the value what the maker leaves on line 2 */
+  .tr { position: relative; display: grid; grid-template-columns: max-content minmax(0, 1fr) auto auto; grid-template-areas: "what act act nam" "fold fold fold fold" "who who val val" "more more more more"; column-gap: var(--s-2); row-gap: 6px; align-items: center; min-height: 72px; padding: 12px 0; border-top: 1px solid var(--c-line); }
+  .tr:not(.tr--fold) { grid-template-areas: "what act act nam" "who who val val" "more more more more"; }
+  .tr__time { display: none; }
+  .tr__what { grid-area: what; display: flex; align-items: center; gap: var(--s-2); min-width: 0; }
+  .tr__act { grid-area: act; min-width: 0; }
+  .tr__nam { grid-area: nam; text-align: right; white-space: nowrap; font-size: var(--t-18); line-height: var(--lh-18); font-weight: var(--w-medium); letter-spacing: var(--track-num); }
+  .tr__nam .u { font: var(--w-regular) var(--t-12) / 16px var(--font-code); color: var(--c-ink-2); }
+  .tr__fold { grid-area: fold; display: flex; flex-wrap: wrap; align-items: center; gap: 4px var(--s-2); font-size: var(--t-13); line-height: var(--lh-13); color: var(--c-ink); min-width: 0; }
+  .tr__who { grid-area: who; min-width: 0; font-size: var(--t-13); line-height: 18px; color: var(--c-ink); }
+  .tr__who .xaddr__n { font: var(--w-regular) var(--t-12) / 18px var(--font-code); }
+  /* the value never takes the line from the maker: it wraps inside its own share of the row */
+  .tr__val { grid-area: val; max-width: 12rem; justify-self: end; text-align: right; font-size: var(--t-13); line-height: var(--lh-13); color: var(--c-ink-2); min-width: 0; }
+  .tr__val [data-num][data-status="fresh"] { color: var(--c-ink); }
+  .tr__avg [data-num] { color: var(--c-ink-2); }
+  .tr__why { font: var(--w-regular) var(--t-12) / 16px var(--font-code); color: var(--c-ink-2); }
+  .tr__live { font: var(--w-regular) var(--t-12) / 16px var(--font-code); color: var(--c-ink-2); }
+  .tr__tog { position: relative; z-index: 1; display: inline-flex; align-items: center; gap: 2px; height: 24px; max-width: 100%; padding: 0 4px; border: 0; border-radius: var(--r-1); background: none; color: var(--c-ink-2); font: var(--w-regular) var(--t-12) / 16px var(--font-code); cursor: pointer; text-align: left; }
+  .tr__tog::after { content: ""; position: absolute; inset: -10px -4px; }
+  .tr__tog:hover, .tr__tog[aria-expanded="true"] { color: var(--c-ink); background: var(--c-hover); }
+  .tr__togN { text-decoration: underline dotted; text-decoration-thickness: 1px; text-underline-offset: 3px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .tr__togW { display: none; }
+  .tr__tog .ico { width: 14px; height: 14px; flex: none; stroke-width: 2.3; transition: transform var(--d-2) var(--ease-state); }
+  .tr__tog[aria-expanded="true"] .ico { transform: rotate(180deg); }
+  .tr__more { grid-area: more; display: grid; gap: var(--s-2); padding-top: var(--s-1); font-size: var(--t-13); line-height: var(--lh-13); color: var(--c-ink-2); min-width: 0; }
+  .tr__list { display: grid; list-style: none; padding: 0; margin: 0; }
+  .tr__one { display: grid; grid-template-columns: minmax(0, 1fr) auto; grid-template-areas: "t n" "v rec"; column-gap: var(--s-3); align-items: center; padding: 4px 0; border-top: 1px dashed var(--c-line); }
+  .tr__one:first-child { border-top: 0; }
+  .tr__oneT { grid-area: t; font: var(--w-regular) var(--t-12) / 18px var(--font-code); color: var(--c-ink-2); }
+  .tr__oneN { grid-area: n; text-align: right; color: var(--c-ink); white-space: nowrap; }
+  .tr__oneV { grid-area: v; min-width: 0; }
+  .tr__oneV [data-num] { color: var(--c-ink); }
+  .tr__one .xrec { grid-area: rec; }
+  .tr__counts { margin: 0; }
+  .tr__only { margin: 0; }
+  .tr.is-new { animation: tr-row-in var(--d-2) var(--ease-enter); }
+  @keyframes tr-row-in { from { opacity: 0; transform: translateY(4px); } }
+  @container tape (min-width: 880px) {
+    .tape__head { display: grid; grid-template-columns: var(--tr-cols); column-gap: var(--s-3); padding: var(--s-2) 0; color: var(--c-ink-2); font-size: var(--t-12); line-height: 16px; font-weight: var(--w-medium); }
+    .tape__head .r { text-align: right; }
+    .tr, .tr:not(.tr--fold) { grid-template-columns: var(--tr-cols); column-gap: var(--s-3); grid-template-areas: "time what nam who val act" "more more more more more more"; min-height: 56px; padding: 8px 0; }
+    .tr.tr--fold { grid-template-areas: "time what nam who val act" ". fold fold fold fold fold" "more more more more more more"; }
+    .tr__time { grid-area: time; display: block; font: var(--w-regular) var(--t-13) / 20px var(--font-text); color: var(--c-ink); white-space: nowrap; }
+    .tr__nam { font-size: var(--t-15); line-height: 22px; }
+    .tr__nam .u { display: none; }
+    .tr__act { justify-self: end; }
+    .tr__val { max-width: none; }
+    .tr__togN { display: none; }
+    .tr__togW { display: inline; }
+    .tr__one { grid-template-columns: 180px 140px minmax(0, 1fr) auto; grid-template-areas: "t n v rec"; }
+    .tr__oneN { text-align: left; }
+  }
+}

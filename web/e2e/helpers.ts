@@ -109,7 +109,9 @@ export async function layoutAudit(page: Page, scope = 'body'): Promise<LayoutAud
       }
     }
     return {
-      overflowX: de.scrollWidth > window.innerWidth,
+      // against the visual viewport: a phone (isMobile) stretches the layout viewport, and so innerWidth, to fit content
+      // wider than the screen (a 369 px header on a 360 px phone read innerWidth 369, scrollWidth 369: no overflow)
+      overflowX: de.scrollWidth > Math.round(window.visualViewport?.width ?? window.innerWidth),
       scrollWidth: de.scrollWidth,
       innerWidth: window.innerWidth,
       h1: [...document.querySelectorAll('h1')].map((x) => (x.textContent ?? '').trim()),

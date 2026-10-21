@@ -52,7 +52,7 @@
   .notice--thin .notice__t .term { font-weight: inherit; }
 
   /* ---------- chart block (the PriceChart section sits inside .tk-chart) ---------- */
-  .tk-chartskel { display: grid; gap: var(--s-4); align-content: start; min-height: 853px; }   /* the loaded block's height at 375 */
+  .tk-chartskel { display: grid; gap: var(--s-4); align-content: start; min-height: 1085px; }   /* the loaded block's height at 375 (with the volume strip, the key and the start dates) */
   .tk-chartskel .skel__b { max-width: 100%; }
   .tk-chartfail { display: grid; gap: var(--s-5); align-content: start; max-width: 640px; }   /* the history failed to load: the reason and Try again, never an empty chart */
 
@@ -99,14 +99,14 @@
     .tk-chart { padding-block: var(--s-8); }
     .split__b > .ladder { padding-block: var(--s-8); border-top: 1px solid var(--c-line); }
     .ladder > .wrap { padding-inline: 0; max-width: none; margin: 0; }
-    .tk-chartskel { min-height: 703px; }
+    .tk-chartskel { min-height: 923px; }
     .pools { padding-block: var(--s-8); }
   }
   @media (min-width: 640px) {
     .tk-sizeskel { min-height: 1058px; }
   }
   @media (min-width: 640px) and (max-width: 1023px) {
-    .tk-chartskel { min-height: 675px; }
+    .tk-chartskel { min-height: 855px; }
   }
 }
 
@@ -132,5 +132,95 @@
   @media (max-width: 639px) {
     .tk-chart .seg--range, .tk-size .seg--range { width: 100%; max-width: none; }
     .tk-chart .seg--range .seg__opt > span, .tk-size .seg--range .seg__opt > span { padding: 0 6px; }
+  }
+}
+
+/* ==========================================================================
+   Trade, the screener basics (screener-plan 2 and 4.2): the token header at the top of the black
+   chart block, what recent buyers paid and how much trades against how little after the chart,
+   the pools' volume line, and "The latest trades" band under the pools. Black grounds only (the
+   screen keeps its two yellow fields); 44 px hits; text at least 11 px.
+   ========================================================================== */
+@layer components {
+  /* ---------- the token header ---------- */
+  .tk-head { container: tkhead / inline-size; display: grid; gap: var(--s-4); align-content: start; padding: var(--s-7) var(--gutter) var(--s-6); min-width: 0; }
+  .tk-head + .tk-chart { border-top: 1px solid var(--c-line); }
+  .tk-price { display: grid; gap: var(--s-1); }
+  .tk-price__k { font-size: var(--t-13); line-height: 18px; font-weight: var(--w-medium); color: var(--c-ink-2); }
+  .tk-price__v { display: flex; flex-wrap: wrap; align-items: baseline; gap: var(--s-2) var(--s-3); min-height: 32px; font-size: var(--t-24); line-height: var(--lh-24); font-weight: var(--w-medium); letter-spacing: var(--track-num); }
+  .tk-price__v .num { display: inline-flex; flex-wrap: wrap; align-items: baseline; gap: var(--s-2) var(--s-3); }
+  .tk-price__v .pdot { font-size: var(--t-12); letter-spacing: 0; }
+
+  .tk-chg { display: grid; gap: var(--s-2); min-width: 0; }
+  .tk-chg__row { display: grid; grid-template-columns: repeat(auto-fill, minmax(96px, 1fr)); gap: var(--s-2); }
+  .tk-chg__c { display: grid; gap: 0; justify-items: start; min-height: 52px; padding: 6px var(--s-3); border: 1.5px solid var(--c-line-strong); border-radius: var(--r-1); background: none; color: var(--c-ink); font: inherit; text-align: left; cursor: pointer; }
+  .tk-chg__c:hover { background: var(--c-hover); }
+  .tk-chg__c.is-on { background: var(--c-sel-bg); color: var(--c-sel-ink); border-color: var(--c-sel-bg); }
+  .tk-chg__c.is-on [data-num] { color: inherit; }
+  .tk-chg__c:focus-visible { outline: var(--ring-w) solid var(--c-focus); outline-offset: var(--ring-o); }
+  .tk-chg__w { font: var(--w-medium) var(--t-12) / 16px var(--font-code); color: inherit; opacity: .8; }
+  .tk-chg__c .num { font-size: var(--t-15); line-height: 22px; font-weight: var(--w-medium); letter-spacing: var(--track-num); }
+  .tk-chg__base, .tk-chg__not, .tk-chg__none, .tk-chg__k { font-size: var(--t-13); line-height: var(--lh-13); color: var(--c-ink-2); max-width: 64ch; }
+  .tk-chg__base [data-num] { color: var(--c-ink); }
+  .tk-chg__k { margin-top: var(--s-2); color: var(--c-ink); font-weight: var(--w-medium); }
+  .tk-chg__none .num__x--why { display: inline; margin-left: var(--s-1); }
+
+  .tk-facts { margin-top: var(--s-2); }
+  /* the header sits in the 7/12 column on desktop: two columns until its own width fits four eight-figure sums */
+  @media (min-width: 640px) {
+    .tk-facts.facts--4 { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+    .tk-facts.facts--4 .fact:nth-child(odd) { padding-left: 0; border-left: 0; }
+    .tk-facts.facts--4 .fact:nth-child(n+3) { border-top: 1px solid var(--c-line); }
+  }
+  @container tkhead (min-width: 760px) {
+    .tk-facts.facts--4 { grid-template-columns: repeat(4, minmax(0, 1fr)); }
+    .tk-facts.facts--4 .fact:nth-child(odd) { padding-left: var(--s-5); border-left: 1px solid var(--c-line); }
+    .tk-facts.facts--4 .fact:first-child { padding-left: 0; border-left: 0; }
+    .tk-facts.facts--4 .fact:nth-child(n+3) { border-top: 0; }
+  }
+  .tk-facts .fact__n { min-height: 32px; }
+  .fact__s { font-size: var(--t-12); line-height: 16px; color: var(--c-ink-2); overflow-wrap: anywhere; }
+  .fact__s [data-num] { color: var(--c-ink); }
+  .tk-facts .num__x--why { font-size: var(--t-12); line-height: 16px; }
+  .tk-def { color: var(--c-ink-2); text-align: left; }
+  .tk-def::after { top: -13px; bottom: -13px; }   /* the 18 px label line still gets a 44 px hit box */
+  .tk-retry { margin-top: 0; }
+
+  /* ---------- what recent buyers paid; how much trades against how little ---------- */
+  .tk-buyers { display: grid; padding: 0 var(--gutter) var(--s-6); min-width: 0; }
+  .tk-sub { display: grid; gap: var(--s-4); align-content: start; padding-top: var(--s-6); border-top: 1px solid var(--c-line); min-width: 0; }
+  .tk-sub + .tk-sub { margin-top: var(--s-6); }
+  .tk-sub .lead b, .tk-sub .lead [data-num] { font-weight: var(--w-medium); }
+  .tk-sub .cap { font-size: var(--t-13); line-height: var(--lh-13); color: var(--c-ink-2); max-width: 64ch; }
+  .tk-sub .cap [data-num] { color: var(--c-ink); }
+  .tk-paid { display: grid; border-top: 2px solid var(--c-ink); }
+  .tk-paid__r { display: grid; grid-template-columns: minmax(0, 1fr); gap: 2px; padding: 10px 0 12px; border-bottom: 1px solid var(--c-line); min-height: 56px; }
+  .tk-paid__w { font-size: var(--t-13); line-height: 18px; font-weight: var(--w-medium); color: var(--c-ink-2); }
+  .tk-paid__b, .tk-paid__s { font-size: var(--t-15); line-height: var(--lh-15); min-width: 0; overflow-wrap: anywhere; }
+  .tk-paid__n { font-size: var(--t-13); color: var(--c-ink-2); }
+  .tk-paid__n [data-num] { color: var(--c-ink-2); }
+  @media (min-width: 640px) {
+    .tk-paid__r { grid-template-columns: 120px minmax(0, 1fr) minmax(0, 1fr); column-gap: var(--s-4); align-items: baseline; }
+  }
+  .tk-turn { display: grid; gap: var(--s-2); }
+  .tk-sub .bars { margin-top: var(--s-3); }
+
+  /* ---------- pools: the volume line when the pairs route does not answer ---------- */
+  .tk-pairsmiss .num__x--why, .tk-miss .num__x--why { display: inline; margin-left: var(--s-1); }
+  .tk-sub .tk-miss { font-size: var(--t-15); line-height: var(--lh-15); }
+
+  /* ---------- the latest trades ---------- */
+  .tk-tape { padding-block: var(--s-7); border-top: 1px solid var(--c-line); }
+  .tk-maker { display: flex; flex-wrap: wrap; align-items: center; gap: var(--s-2) var(--s-3); }
+  .tk-tape__note .num__x--why { display: inline; margin-left: var(--s-1); }
+  /* one sentence that wraps as text (a flex row split it into items with gaps and lost the no-break space) */
+  .tk-rule { display: block; }
+  .tk-rule .tag { margin-right: var(--s-2); }
+  .tk-all { margin: 0; }
+
+  @media (min-width: 1024px) {
+    .tk-head, .tk-buyers { padding-inline: var(--s-6) max(var(--gutter), calc((100vw - var(--max)) / 2 + var(--gutter))); }
+    .tk-head { padding-top: var(--s-8); }
+    .tk-tape { padding-block: var(--s-8); }
   }
 }

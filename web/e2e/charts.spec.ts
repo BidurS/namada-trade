@@ -246,7 +246,8 @@ test.describe('charts, at 375 px', () => {
     // the series' stamps come with the overview; the line holds its place until then
     await expect(chart.locator('.srcb')).toBeVisible({ timeout: 30_000 });
     await expect(chart.locator('.chartsec__title .cap')).toHaveText(/^USDC paid per NAM in real trades: each point is the middle price of one hour’s trades, [\d,]+ points?\.$/);
-    const caps = chart.locator(':scope > .cap');
+    // the sparse sentence (the start dates are their own line under it, .c-starts)
+    const caps = chart.locator(':scope > .cap:not(.c-starts)');
     await expect(caps).toContainText(/of the [\d,]+ hours since \d+ \w+ had/);
     await expect(caps).not.toContainText('bucketed');
     await chart.getByRole('radio', { name: '90d' }).click();
@@ -267,5 +268,108 @@ test.describe('charts, at 375 px', () => {
     expect(a.smallText).toEqual([]);
     expect(a.smallTargets).toEqual([]);
     await chart.screenshot({ path: test.info().outputPath('price-90d-375.png') });
+  });
+});
+
+// ---------------------------------------------------------------------------------------------------
+// The price chart with the series route answering (screener-plan 2.6): production does not serve /api/series
+// yet, so the chart's three requests are answered with SeriesResponse shapes (shared/types.ts). The full
+// screener fixtures and the Trade panels' tests are in trade.spec.ts; these check the chart grammar only.
+// ---------------------------------------------------------------------------------------------------
+type Sample = { t: number; v: number; lo?: number; hi?: number; n?: number; flat?: boolean };
+function seriesAnswer(key: string, unit: 'usd_per_nam' | 'nam', points: Sample[], stepMs: number, start: number) {
+  const last = points[points.length - 1];
+  const source = key === 'price.pool_1h' ? 'Osmosis data API' : key === 'price.usd' ? 'Osmosis SQS' : 'executed NAM/USDC swaps (hourly median)';
+  return {
+    key, from: points[0]?.t ?? start, to: Date.now(), step: stepMs === H ? '1h' : stepMs === 6 * H ? '6h' : '1d', stepMs, agg: unit === 'nam' ? 'sum' : 'last', unit, points,
+    sources: [{ source, from: points[0]?.t ?? null, to: last?.t ?? null, start, startNote: '', backfilled: false }], start,
+    sparse: key !== 'price.usd', coverage: { steps: 0, withPoint: points.length }, gaps: [],
+    prov: { source, at: last?.t ?? null, status: last ? 'live' : 'missing' }, asOf: Date.now(),
+  };
+}
+async function mockChartSeries(page: Page) {
+  const now = Date.now();
+  const h0 = Math.floor(now / H) * H;
+  await page.route(/\/api\/series\?/, (r) => {
+    const u = new URL(r.request().url());
+    const key = u.searchParams.get('key')!;
+    const stepMs = u.searchParams.get('step') === '6h' ? 6 * H : u.searchParams.get('step') === '1d' ? 24 * H : H;
+    const hours = [2, 3, 4, 9, 30, 31, 55, 80, 140, 300].map((k) => h0 - k * H);
+    if (key === 'price.swap_1h') return r.fulfill({ json: seriesAnswer(key, 'usd_per_nam', hours.map((t, i) => ({ t, v: 0.0011 + (i % 4) * 0.00002, n: 1 })).sort((a, b) => a.t - b.t), stepMs, h0 - 2000 * H) });
+    if (key === 'price.usd') {
+      const pts: Sample[] = [];
+      for (let t = h0 - 120 * H; t <= h0; t += stepMs) pts.push({ t, v: 0.00112, lo: 0.00111, hi: 0.00114, n: 60 });
+      return r.fulfill({ json: seriesAnswer(key, 'usd_per_nam', pts, stepMs, h0 - 130 * H) });
+    }
+    if (key === 'dex.swaps_1h.nam') return r.fulfill({ json: seriesAnswer(key, 'nam', hours.map((t, i) => ({ t, v: 300 + i * 90, n: 1 })).sort((a, b) => a.t - b.t), stepMs, h0 - 2000 * H) });
+    if (key === 'price.pool_1h') {
+      const pts: Sample[] = [];
+      for (let t = h0 - 400 * 24 * H, i = 0; t <= h0; t += stepMs, i++) pts.push({ t, v: 0.0011 + (i % 11) * 0.00001, ...(i % 3 === 0 ? { flat: true } : {}) });
+      return r.fulfill({ json: seriesAnswer(key, 'usd_per_nam', pts, stepMs, h0 - 486 * 24 * H) });
+    }
+    return r.fulfill({ status: 404, json: { error: 'This figure is not served yet.', reason: 'Unknown key.', endpoint: '/api/series' } });
+  });
+}
+
+test.describe('the price chart with the series route, at 375 px', () => {
+  test.beforeEach(({}, info) => test.skip(onlyIn(info.project.name), 'viewport-independent: runs in 375x812'));
+
+  test('one axis per plot: prices on the price plot, NAM on the bars strip under it; no buy or sell hue on any series; plain words; every figure in scope', async ({ page }) => {
+    await mockChartSeries(page);
+    await gotoRoute(page, '/trade');
+    const chart = page.locator('.tk-chart .chartsec').first();
+    await expect(chart.locator('g.c-bars')).toBeVisible({ timeout: 30_000 });
+    const ticks = await chart.locator('.chart-box svg > g > text.c-tick, .chart-box svg > g.c-bars > text.c-tick').allTextContents();
+    const strip = await chart.locator('g.c-bars text.c-tick').allTextContents();
+    expect(strip.length).toBe(2);
+    expect(strip[0]).toMatch(/^[\d.]+k? NAM$/);
+    expect(strip[1]).toBe('0');
+    // the price plot's own labels are all prices; none of them is a NAM figure
+    const priceTicks = ticks.filter((t) => !strip.includes(t));
+    expect(priceTicks.length).toBeGreaterThanOrEqual(3);
+    for (const t of priceTicks) expect(t).toMatch(/^0\.\d+$/);
+    // series colours: never the buy or sell hue
+    const fills = await chart.locator('.chart-box').evaluate((el) => {
+      const hue = (v: string) => getComputedStyle(document.documentElement).getPropertyValue(v).trim();
+      const used = [...el.querySelectorAll('rect.c-bar, path.c-exec, path.c-quote, path.c-band, path.c-pool, circle.c-exec-dot')].map((n) => [getComputedStyle(n).fill, getComputedStyle(n).stroke]).flat();
+      const probe = document.createElement('i');
+      document.body.append(probe);
+      const rgb = (v: string) => { probe.style.color = `var(${v})`; return getComputedStyle(probe).color; };
+      const banned = [rgb('--buy'), rgb('--sell')];
+      probe.remove();
+      return { used: [...new Set(used)], banned, hue: hue('--buy') };
+    });
+    for (const b of fills.banned) expect(fills.used).not.toContain(b);
+    const text = await wordsIn(page, '.tk-chart');
+    expect(offending(text, BANNED)).toEqual([]);
+    expect(offending(text, JARGON)).toEqual([]);
+    expect(await orphansIn(page, '.tk-chart')).toEqual([]);
+    const a = await layoutAudit(page, '.tk-chart');
+    expect(a.overflowX).toBe(false);
+    expect(a.smallText).toEqual([]);
+    expect(a.smallTargets).toEqual([]);
+    await chart.screenshot({ path: test.info().outputPath('price-served-30d-375.png') });
+  });
+
+  test('the long ranges read the pool price by keyboard and say it is not a trade; the arrow keys walk it', async ({ page }) => {
+    await mockChartSeries(page);
+    await gotoRoute(page, '/trade');
+    const chart = page.locator('.tk-chart .chartsec').first();
+    await expect(chart.locator('#h-chart')).toBeVisible({ timeout: 30_000 });
+    await chart.getByRole('radio', { name: '1y' }).click();
+    await expect(chart.locator('path.c-pool').first()).toBeVisible({ timeout: 30_000 });
+    const box = chart.locator('.chart-box');
+    await box.focus();
+    await page.keyboard.press('Home');
+    const first = await chart.locator('.readout').innerText();
+    expect(first).toContain('Pool price, not a trade');
+    await page.keyboard.press('ArrowRight');
+    await expect(chart.locator('.readout')).not.toHaveText(first);
+    await page.keyboard.press('Escape');
+    await expect(chart.locator('.readout')).toContainText('Last trade');
+    const text = await wordsIn(page, '.tk-chart');
+    expect(offending(text, JARGON)).toEqual([]);
+    expect(await orphansIn(page, '.tk-chart')).toEqual([]);
+    await chart.screenshot({ path: test.info().outputPath('price-served-1y-375.png') });
   });
 });

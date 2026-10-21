@@ -12,10 +12,29 @@ import { tagByline } from '../../../shared/labels';
 import { Icon } from './Icon';
 import { Tag } from './Tag';
 
-export function TxList({ rows, now, streamedIds, onAddr, busy }: { rows: Flow[]; now: number; streamedIds?: ReadonlySet<string>; onAddr: (a: string) => void; busy?: boolean }) {
+export interface TxListProps {
+  rows: Flow[];
+  now: number;
+  streamedIds?: ReadonlySet<string>;
+  /** An address button was pressed: the address, and the move it is on (the screen says where the sheet came from). */
+  onAddr: (a: string, f: Flow) => void;
+  busy?: boolean;
+  /**
+   * Every move the filters select, when that is known (the rows on screen are one page of them): the table then says
+   * `aria-rowcount` = total + 1 (the head row) and each row its place, so a screen reader hears "row 52 of 53,935".
+   * null: the length is not known (-1). Absent: the rows on screen are the whole list.
+   */
+  total?: number | null;
+  /** The place in the whole list of the move before the first row here (page 3 of 50: 100). */
+  offset?: number;
+}
+
+export function TxList({ rows, now, streamedIds, onAddr, busy, total, offset = 0 }: TxListProps) {
+  const paged = total !== undefined;
+  const rowCount = !paged ? rows.length + 1 : total == null ? -1 : Math.max(total, offset + rows.length) + 1;
   return (
-    <div className={`txl${busy ? ' is-busy' : ''}`} role="table" aria-label="NAM moves, newest first" aria-rowcount={rows.length + 1}>
-      <div className="txl__head" role="row">
+    <div className={`txl${busy ? ' is-busy' : ''}`} role="table" aria-label="NAM moves, newest first" aria-rowcount={rowCount}>
+      <div className="txl__head" role="row" aria-rowindex={paged ? 1 : undefined}>
         <span role="columnheader">Time (UTC)</span>
         <span role="columnheader">What</span>
         <span role="columnheader" className="r">NAM</span>
@@ -24,8 +43,8 @@ export function TxList({ rows, now, streamedIds, onAddr, busy }: { rows: Flow[];
         <span role="columnheader">Time and price source</span>
         <span role="columnheader" className="r">Record</span>
       </div>
-      {rows.map((f) => (
-        <TxRow key={f.id} f={f} now={now} isNew={!!streamedIds?.has(f.id)} onAddr={onAddr} />
+      {rows.map((f, i) => (
+        <TxRow key={f.id} f={f} now={now} isNew={!!streamedIds?.has(f.id)} onAddr={onAddr} rowIndex={paged ? offset + i + 2 : undefined} />
       ))}
     </div>
   );
@@ -61,7 +80,7 @@ function Who({ addr, label, byline, poolId, onAddr }: { addr: string | null; lab
   );
 }
 
-function TxRow({ f, now, isNew, onAddr }: { f: Flow; now: number; isNew: boolean; onAddr: (a: string) => void }) {
+function TxRow({ f, now, isNew, onAddr, rowIndex }: { f: Flow; now: number; isNew: boolean; onAddr: (a: string, f: Flow) => void; rowIndex?: number }) {
   const [open, setOpen] = useState(false);
   const id = useId();
   const tk = tagOf(f);
@@ -75,7 +94,7 @@ function TxRow({ f, now, isNew, onAddr }: { f: Flow; now: number; isNew: boolean
   const ref = useRef<HTMLDivElement>(null);
 
   return (
-    <div ref={ref} className={`tx${isNew ? ' is-new' : ''}${open ? ' is-open' : ''}`} role="row" data-kind={f.kind}>
+    <div ref={ref} className={`tx${isNew ? ' is-new' : ''}${open ? ' is-open' : ''}`} role="row" data-kind={f.kind} aria-rowindex={rowIndex}>
       <span className="tx__time" role="cell">
         <time dateTime={new Date(f.ts).toISOString()}>{dayHm(f.ts)}</time>
         <span className="tx__ago">{age}</span>
@@ -103,9 +122,9 @@ function TxRow({ f, now, isNew, onAddr }: { f: Flow; now: number; isNew: boolean
         )}
       </span>
       <span className="tx__who" role="cell">
-        <Who addr={f.from} label={fromL} byline={tagByline(f.fromLabelSource, f.fromLabelAuthor)} poolId={f.poolId} onAddr={onAddr} />
+        <Who addr={f.from} label={fromL} byline={tagByline(f.fromLabelSource, f.fromLabelAuthor)} poolId={f.poolId} onAddr={(a) => onAddr(a, f)} />
         <Icon name="arrow" className="ico tx__arrow" />
-        <Who addr={f.to} label={toL} byline={tagByline(f.toLabelSource, f.toLabelAuthor)} poolId={f.poolId} onAddr={onAddr} />
+        <Who addr={f.to} label={toL} byline={tagByline(f.toLabelSource, f.toLabelAuthor)} poolId={f.poolId} onAddr={(a) => onAddr(a, f)} />
       </span>
       <span className="tx__src" role="cell">
         <span className="tx__srcw">

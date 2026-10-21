@@ -17,7 +17,7 @@ import { INDEXER_IBC_STATUS, innerTxOfRow, reconcileStuckPackets, stuckTotalNam,
 import type { LiveUnbondStatus, LiveScanStatus } from './live-hub';
 import type { AlertsSkipped } from './sources/discord';
 import {
-  INTERNAL_ADDRS, BALANCE_LISTING_SRC, BOND_LISTING_SRC, SPAN_EXTEND_MS, listingTimes, readHolderFigures, refreshHolderFigures, figuresDue,
+  INTERNAL_ADDRS, BALANCE_LISTING_SRC, BOND_LISTING_SRC, SPAN_EXTEND_MS, HAS_READING, listingTimes, readHolderFigures, refreshHolderFigures, figuresDue,
   osmosisDroppedStmt, spanStmts, listingBalanceStmts, listingZeroStmts, listingSpanStmts, pruneSpansStmt, type ListedBalance,
 } from './holders';
 import * as series from './series';
@@ -508,8 +508,11 @@ export async function runBalanceListing(env: Env, health: SourceHealth[], now: n
     written: 0, zeroed: 0, remaining: 0, ticks, durationMs: 0, spansAt: prev?.spansAt ?? null, extendedAt: prev?.extendedAt ?? null, failedAt: null, failures: 0, refusedProvider: null,
   };
   try {
+    // Rows with a reading only: since migration 0008 a staker with no spendable NAM has a row with none (its place on
+    // the stored totals); to the listing such an address is not stored, as before (no '0' is written over it, a
+    // first NAM is a new holder).
     const stored = await pagedRows<{ address: string; balance: string; balance_num: number; updated_height: number | null; verified_src: string | null; updated_at: number | null; first_seen: number | null }>(
-      env.DB, `SELECT address, balance, balance_num, updated_height, verified_src, updated_at, first_seen FROM holders WHERE chain = 'namada'`);
+      env.DB, `SELECT address, balance, balance_num, updated_height, verified_src, updated_at, first_seen FROM holders WHERE chain = 'namada' AND ${HAS_READING('')}`);
     const storedBy = new Map(stored.map((r) => [r.address, r]));
     const toWrite: ListedBalance[] = [];
     let totalBase = 0n;

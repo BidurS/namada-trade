@@ -34,13 +34,15 @@
   },
   "migrations": [{ "tag": "v1", "new_sqlite_classes": ["LiveHub"] }],
 
-  // Exports, search, address reports, searched lists, quotes, and every write (sign-in, pairing, tags, settings):
-  // 30 a minute per client address and path family (worker/src/http.ts rateLimited). Rewound reads and metric
-  // histories, which miss the edge cache by design: 120 a minute (replayLimited). namespace_id is any number
-  // unique to this account.
+  // Exports, address reports, quotes, and every write (sign-in, pairing, tags, settings): 30 a minute per client
+  // address and path family (worker/src/http.ts rateLimited). The search and the lists searched by text: 120 a
+  // minute (SEARCH_LIMITER; typing in the palette sends one request per pause). Rewound reads, metric histories and
+  // the list variants with many values (a size, a page past the first, a cursor), which miss the edge cache by
+  // design: 120 a minute (replayLimited). namespace_id is any number unique to this account.
   "ratelimits": [
     { "name": "HEAVY_LIMITER", "namespace_id": "1001", "simple": { "limit": 30, "period": 60 } },
-    { "name": "REPLAY_LIMITER", "namespace_id": "1002", "simple": { "limit": 120, "period": 60 } }
+    { "name": "REPLAY_LIMITER", "namespace_id": "1002", "simple": { "limit": 120, "period": 60 } },
+    { "name": "SEARCH_LIMITER", "namespace_id": "1003", "simple": { "limit": 120, "period": 60 } }
   ],
 
   // Every minute: holders refresh, prices, supply split, integrity checks, gap-fill.

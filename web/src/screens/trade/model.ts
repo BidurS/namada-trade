@@ -166,13 +166,14 @@ export function depthOf(pools: { pools: PoolInfo[]; prov: Provenance } | null, o
   return null;
 }
 
-/** "NAM / coin 0FA923…", "NAM / allBTC": the counter coin in plain words. */
-export function pairName(p: PoolInfo): string {
+/** "NAM / coin 0FA923…", "NAM / allBTC": the counter coin in plain words (a pool from /api/pools or a pair from /api/series/pairs). */
+export function pairName(p: { pair: string; counterSymbol?: string | null }): string {
   const parts = p.pair.split('/').map((s) => s.trim());
   const base = parts[0] || 'NAM';
   const sym = p.counterSymbol || parts.slice(1).join('/');
   let counter = sym;
-  if (/^ibc\//i.test(sym)) counter = `coin ${sym.slice(4)}`;
+  // a bridged coin's denomination hash: its first six characters, enough to tell two apart in a row
+  if (/^ibc\//i.test(sym)) counter = `coin ${sym.length > 14 ? `${sym.slice(4, 10)}…` : sym.slice(4)}`;
   else if (/^factory\//i.test(sym)) counter = sym.split('/').pop() || sym;
   else if (!sym || /^unknown$/i.test(sym)) counter = 'unknown coin';
   return `${base} / ${counter}`;
@@ -182,11 +183,11 @@ export function pairName(p: PoolInfo): string {
 export const POOL_ROW_SHARE = 0.005;
 export const POOL_ROW_MAX = 12;
 
-export function splitPools(list: PoolInfo[]): { shown: PoolInfo[]; rest: PoolInfo[]; total: number } {
+export function splitPools<T extends { liquidityUsd: number | null }>(list: T[]): { shown: T[]; rest: T[]; total: number } {
   const sorted = [...list].sort((a, b) => (b.liquidityUsd || 0) - (a.liquidityUsd || 0));
   const total = sorted.reduce((a, p) => a + (fin(p.liquidityUsd) ? p.liquidityUsd : 0), 0);
-  const shown: PoolInfo[] = [];
-  const rest: PoolInfo[] = [];
+  const shown: T[] = [];
+  const rest: T[] = [];
   for (const p of sorted) {
     if (shown.length < POOL_ROW_MAX && (shown.length === 0 || (total > 0 && (p.liquidityUsd || 0) / total >= POOL_ROW_SHARE))) shown.push(p);
     else rest.push(p);

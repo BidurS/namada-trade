@@ -93,7 +93,8 @@ export function category_plain(category: string | null | undefined, label?: stri
   if (!category) return null;
   const c = category.trim().toLowerCase();
   if (label && CATEGORY_HIDDEN.some((h) => h.category === c && h.label.test(label))) return null;
-  return CATEGORY_PLAIN[c] ?? cap(c.replace(/_/g, ' '));
+  // own keys only: `constructor` or `__proto__` (a category typed into a link) must not read Object's members
+  return (Object.prototype.hasOwnProperty.call(CATEGORY_PLAIN, c) ? CATEGORY_PLAIN[c] : null) ?? cap(c.replace(/_/g, ' '));
 }
 
 /**

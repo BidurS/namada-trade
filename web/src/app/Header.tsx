@@ -2,6 +2,10 @@
 // 64 px from 1024 px, one row. Mark (44 px target) · six text tabs (from 1024) · the NAM price
 // with its 24 h change in a fixed-width slot · Rewind (from 1024; the banner is the only replay
 // control below) · the status pill · search · account.
+//
+// Search (nav-search-plan 3.1): the icon button below 1024 px; from 1024 px the same button is field-shaped, with the
+// words "Search an address, a name or a page" and, where there is a keyboard, the "/" hint. It is a button that opens
+// the palette, never a second input whose text would have to be mirrored into the palette's.
 import { lazy, Suspense, useState } from 'react';
 import { TABS } from '../../../shared/routes';
 import { Icon } from '../ui/Icon';
@@ -109,8 +113,11 @@ export function Header() {
 
         <StatusPill onOpen={openSources} />
 
-        <button type="button" className="ibtn" aria-label="Search" aria-keyshortcuts="/ Control+K Meta+K" onClick={() => openPalette()} onPointerEnter={prefetchPalette} onFocus={prefetchPalette}>
+        <button type="button" className="ibtn hsearch" aria-label="Search" aria-keyshortcuts="/ Control+K Meta+K" onClick={() => openPalette()} onPointerEnter={prefetchPalette} onFocus={prefetchPalette}>
           <Icon name="search" />
+          <span className="hsearch__t" aria-hidden="true">Search an address, a name or a page</span>
+          <span className="hsearch__w" aria-hidden="true">Search</span>
+          <kbd className="hsearch__k" aria-hidden="true">/</kbd>
         </button>
         <button
           type="button"

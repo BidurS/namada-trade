@@ -44,7 +44,8 @@ Import the shell from `'../../app/index'` (the barrel).
 | Ages | `useClock()` returns the rewound time under Rewind, else a clock that ticks every 5 s. `useNow()` is the wall clock. Compute ages on render from `at`; never store an age. The UI kit's `useUiNow()` follows the same rule (the shell wires it). |
 | Rewind | `const { at, rewound, setAt, backToNow } = useReplay()`. |
 | Navigation | `<Link to="/trade">` (a real `<a href>`; plain left clicks navigate client-side, Ctrl/Cmd/middle clicks open a tab; the current `?at=` is carried). `navigate(to, { replace?, keepAt? })` from code. A plain `<a href="/supply">` also works through a document-level delegate, but prefer `Link`. `useRoute()` gives `{ view, route, path, params, at }`. |
-| Sheets | `const { openSources, openAddress, openSignIn, openSheet, closeSheet, openPalette } = useOverlays()`. `openAddress(addr)` also writes `?addr=` (shareable); `openPalette({ focus: 'rewind' })` opens search on the Rewind row. |
+| Sheets | `const { openSources, openAddress, openSignIn, openSheet, closeSheet, openPalette } = useOverlays()`. `openAddress(addr)` also writes `?addr=` (shareable); `openPalette({ focus: 'rewind' })` opens search on the Rewind row. `openKeys()` opens the Keys sheet; `openSheet({ kind: 'address', address, label })` takes the plain name, when known, for this browser's Recent list (nothing else uses it). |
+| Cancellable requests | `useQuery(key, (signal) => fetchX(…, { signal }), { debounceMs, keepPrevious, staleMs })` from `lib/useQuery.ts`: a newer key aborts the older request, and an answer for an older key is never shown. |
 | Session | `const { session, setSession, signOut } = useSession()` (wraps `lib/auth.ts`, unchanged). |
 | Theme | `const [pref, theme, setPref] = useTheme()`; `pref` is `'dark' | 'light' | 'system'`, stored in `localStorage['nt.theme']`. Dark is `<html>` without `data-theme`; light is `data-theme="light"`. |
 | The header price, the check count | `useHeaderPrice()`, `useCheckCount()` (if a screen needs the same reading as the header). |
@@ -72,7 +73,7 @@ The host (`app/overlays.tsx`) mounts one of these only while it is open and unmo
 
 ## 6. Keys and focus
 
-`1` to `6` switch tabs, `/` opens search, Ctrl or Cmd `K` toggles it; the shell ignores digits and `/` while typing, while a `<dialog>` or popover is open, and whenever Meta, Ctrl or Alt is held. Do not bind these keys in a screen. After a client-side navigation the shell scrolls to the top, focuses `<main>` and announces the new title.
+`1` to `6` switch tabs, `/` opens search, Ctrl or Cmd `K` toggles it; the shell ignores digits and `/` while typing, while a `<dialog>` or popover is open, and whenever Meta, Ctrl or Alt is held. Do not bind these keys in a screen. After a client-side navigation the shell scrolls to the top, focuses `<main>` and announces the new title. `?` opens the Keys sheet (every binding is listed from SHORTCUTS in app/keys.ts). On the two lists `/` focuses the list's own search field while it is on screen: a list registers it with `useSlashTarget(ref)` (activity/parts.tsx ListSearch does).
 
 ## 7. CSS
 

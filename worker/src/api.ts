@@ -5,7 +5,7 @@ import { bodyLimit } from 'hono/body-limit';
 import type { Env } from './util';
 import type {
   Overview, Holder, AddressReport, SearchResult, Check, IntelResponse, DonationConfig, SourceHealth, Provenance, Sourced,
-  AlertsRecentResponse, HoldersResponse, FlowsResponse,
+  AlertsRecentResponse, HoldersResponse, FlowsResponse, HolderCountsKv, SearchGroup, SearchMatch, SearchResponse, Chain, Flow,
 } from '../../shared/types';
 import { fetchNamPools, fetchNamPrice, quoteNamTrade, quoteSlippageCurve } from './sources/sqs';
 import { namBalance, namadaEpoch, delegationsAt, QUICK, type ReadOpts } from './sources/namada';
@@ -14,21 +14,30 @@ import { sendDiscordTestAlert } from './sources/discord';
 import { stmt, kvGet, kvSet, kvGetJson } from './db';
 import { toNam, chainOf } from './util';
 import { OSMOSIS, INTERNAL_LABELS } from './config';
-import { flowsWhere, flowsFilterFromQuery, FLOWS_ORDER } from './flows-query';
 import {
-  HOLDERS_BASE, LIQUID_STALE_MS, BALANCE_LISTING_SRC, BOND_LISTING_SRC, holderStatus, liquidChanges, chunks, listingTimes, confirmedAt, stakeNum,
-  holderFigureValues, readHolderFigures, usableFigures, figuresCount, figuresTopRows, type ListingTimes, type HolderBaseRow,
+  flowsFilterFromQuery, flowsFilterError, flowsMode, flowsPageSql, flowsRowsSql, flowsCountSql, flowsLastSql, flowOrder, afterPosition,
+  FEW_ROWS, FIRST_TS_SQL, HASH_COLUMNS, type FlowsFilter,
+} from './flows-query';
+import {
+  LIQUID_STALE_MS, BALANCE_LISTING_SRC, BOND_LISTING_SRC, holderStatus, liquidChanges, chunks, listingTimes, confirmedAt,
+  holderFigureValues, readHolderCounts, walkCountSql, walkCategorySql, holderPageSql, holderCandidatesSql, holderOrder, holderAfter,
+  labelWords, wordKeys, wordCond, labelMatches, labelMatch, LISTED, SORT_COL, CANDIDATES_MAX, sqlWordKeys, wordCondCost, D1_MAX_PARAMS, HOLDER_CHAINS_OF,
+  type ListingTimes, type HolderBaseRow, type HolderChain, type HolderSort, type HolderWalk, type WordKeys,
 } from './holders';
-import { label_plain, category_plain, labelSearchTerms, labelAuthorShort, tagByline } from './labels';
+import { label_plain, category_plain, labelAuthorShort, tagByline } from './labels';
 import { counterpartiesOf } from '../../shared/flow-rules';
 import {
-  FLOW_SELECT, rowToFlow, safeParseJson, provAt, metricAt, coverageOf, pressure, blindSpot, alertsBetween, lastAlertBefore, metricSeries, osmosisNetIbc, orderflowSeries,
+  FLOW_SELECT, flowSelect, rowToFlow, safeParseJson, provAt, metricAt, coverageOf, pressure, blindSpot, alertsBetween, lastAlertBefore, metricSeries, osmosisNetIbc, orderflowSeries,
 } from './analytics';
 import { NAM_AMOUNT, NOT_LEGACY_TWIN as NOT_TWIN } from './flows-query';
 import { INTERNAL_ADDRESSES } from '../../shared/alerts';
 import { alertRules, DEFAULT_THRESHOLDS, type AlertThresholds } from '../../shared/alerts';
 import { issueNonce, login, logout, sessionFromRequest, createPairCode, claimPairCode, listSessions, revokeSession, revokeAllSessions, createSession } from './auth';
 import { loadSettings, saveSettings, deleteSettings, defaultPrefs, publicView, applyUpdate, requireKey, type StoredSettings } from './settings';
+import { clampLimit, prefixRange, decodeHolderCursor, encodeHolderCursor, encodeFlowCursor, parseBeforeParam, type HolderCursor, type BeforeParam } from '../../shared/paging';
+import { parse, isWholeAddress, INPUT_MAX, type Parsed } from '../../shared/search-grammar';
+import { EXPLORERS, NAMADA as NAMADA_SHARED } from '../../shared/config';
+import { seriesApp } from './api-series';
 
 /** A check that has not run for this long is served as 'stale': its last result is kept, but it no longer counts as
  *  passing (on 2026-10-19 the supply check kept a green "Passes" for 3.5 h after its source went quiet). */
@@ -299,64 +308,51 @@ app.get('/api/alerts/recent', async (c) => {
   return c.json(res);
 });
 
-// ---------------------------------------------------------------- holder list query (shared by /api/holders and its export)
-// Namada rows are the union of liquid holders and bonded stakers; Osmosis rows have no stake. A stake is the
-// chain's figure, or the flow estimate only while no bond listing has gone through (holders.ts stakeNum).
-// Module accounts (PoS, PGF, MASP, IBC escrow, governance, the Osmosis transfer module) are not holders.
-// The rows: holders.ts HOLDERS_BASE.
+// ---------------------------------------------------------------- the holder list (shared by /api/holders and its export)
+// One population: Namada rows hold spendable or staked NAM (a stake is the chain's figure, or the flow estimate only
+// while no bond listing has gone through: holders.ts stakeNum, stored per row since migration 0008), Osmosis rows
+// spendable NAM; module accounts (PoS, PGF, MASP, IBC escrow, governance, the Osmosis transfer module) and pools are
+// not holders. Every page walks the stored totals' index of its order (holders.ts walkKeysSql); a search or a small
+// category reads the few rows it names on their own index and puts them in order here.
 
 /**
- * WHERE and ORDER BY for the holder list. `category`: a raw category (genesis, foundation, backer…), or `none`
- * for rows without a label; anything else that is not a plain word is ignored. `by`: total, liquid or bonded.
- * `filtered`: a search or a category narrows the list (else its count is the chain's holder count).
+ * `?by=`: total (also when left out), liquid or bonded; anything else is refused (400), never read as the default: a
+ * value the route ignored would be one more cached copy of the same list under a key of its own (a 400 is never cached).
  */
-function holdersWhere(chain: string, search: string, category: string, by: 'total' | 'liquid' | 'bonded') {
-  const conds: string[] = [];
-  const params: unknown[] = [];
-  let filtered = false;
-  if (chain !== 'all') { conds.push('x.chain = ?'); params.push(chain); }
-  if (search) {
-    const terms = labelSearchTerms(search);
-    conds.push(`(x.address LIKE ? OR ${terms.map(() => 'l.label LIKE ?').join(' OR ')})`);
-    params.push(`%${search}%`, ...terms.map((t) => `%${t}%`));
-    filtered = true;
-  }
-  const cat = category.trim().toLowerCase();
-  if (cat === 'none') { conds.push('l.label IS NULL'); filtered = true; }
-  else if (/^[a-z_]{1,24}$/.test(cat)) { conds.push('LOWER(l.category) = ?'); params.push(cat); filtered = true; }
-  const where = conds.length ? `WHERE ${conds.join(' AND ')}` : '';
-  const order = by === 'liquid' ? 'balance_num DESC' : by === 'bonded' ? `${stakeNum('s.')} DESC` : 'total_num DESC';
-  return { where, params, order, filtered };
-}
-
-/**
- * The labels of rows taken from the stored figures, read now (a tag written since they were computed shows at once):
- * one primary-key lookup per row, never more than the page.
- */
-async function withCurrentLabels(db: D1Database, rows: HolderBaseRow[]): Promise<HolderBaseRow[]> {
-  if (!rows.length) return rows;
-  const parts = await Promise.all(chunks(rows.map((r) => r.address), 0).map((part) =>
-    db.prepare(`SELECT address, label, category, source, author FROM labels WHERE address IN (${part.map(() => '?').join(',')})`).bind(...part).all<any>()));
-  const by = new Map(parts.flatMap((p) => p.results || []).map((l: any) => [l.address, l]));
-  return rows.map((r) => { const l = by.get(r.address); return { ...r, label: l?.label ?? null, category: l?.category ?? null, label_source: l?.source ?? null, label_author: l?.author ?? null }; });
-}
-const holdersBy = (v: string | undefined) => (['total', 'liquid', 'bonded'].includes(v || '') ? v : 'total') as 'total' | 'liquid' | 'bonded';
-/** `?chain=` is one of these or the request is refused (the value also names the export file). */
+const HOLDER_SORTS = ['total', 'liquid', 'bonded'] as const;
+const holdersBy = (v: string | undefined): HolderSort | null => (v == null || v === '' ? 'total' : (HOLDER_SORTS as readonly string[]).includes(v) ? (v as HolderSort) : null);
+/** `?chain=` is exactly one of these (all when left out) or the request is refused (the value also names the export file). */
 const HOLDER_CHAINS = ['all', 'namada', 'osmosis'] as const;
 const holderChain = (v: string | undefined): (typeof HOLDER_CHAINS)[number] | null => {
-  const c = (v || 'all').trim().toLowerCase();
+  const c = v == null || v === '' ? 'all' : v;
   return (HOLDER_CHAINS as readonly string[]).includes(c) ? (c as (typeof HOLDER_CHAINS)[number]) : null;
 };
+/** `?category=`: a raw category in lower case, or `none` (no label); anything else is ignored, as it always was. */
+const holderCategory = (v: string | undefined): string | null => {
+  const c = (v || '').trim().toLowerCase();
+  return c === 'none' || /^[a-z_]{1,24}$/.test(c) ? c : null;
+};
+/** Eight or more bech32 data characters (the alphabet after `tnam1` / `osmo1`). */
+const ADDRESS_RUN = /^[02-9ac-hj-np-z]{8,}$/;
+/** A stored count by category: own keys only (`?category=constructor` must not read Object's own members). */
+const countOf = (byCategory: Record<string, number> | undefined, category: string): number | undefined =>
+  byCategory && Object.hasOwn(byCategory, category) ? byCategory[category] : undefined;
+/** `?min=` / `?max=`: NAM on the sort's figure. A value that is not an amount is refused, never dropped (a size asked for is a filter the reader sees). */
+function holderSize(raw: string | undefined, name: string): number | null | { error: string } {
+  if (raw == null || raw.trim() === '') return null;
+  const n = Number(raw);
+  return Number.isFinite(n) && n >= 0 ? n : { error: `${name} must be an amount of NAM (a number of 0 or more).` };
+}
 /**
  * The stake a holder row shows: the chain's figure; the flow estimate only while no bond listing has gone through
- * (the same rule as the list's SQL, holders.ts stakeNum). The estimate itself is always carried beside it.
+ * (the same rule as the stored stake, holders.ts stakeNum). The estimate itself is always carried beside it.
  */
 const stakeShown = (r: { chain: string; bonded_num: number | null; estimated_num: number | null }, listed: ListingTimes) =>
   r.chain === 'namada' ? r.bonded_num ?? (listed.bond == null ? r.estimated_num : null) ?? null : null;
 /**
- * A Namada address with a stakes row and no holders row after a complete balance listing: the listing read every
- * balance on the chain and had none for it, so its spendable balance is a confirmed 0 as of the listing, not
- * "not read yet" (M1, 2026-10-20).
+ * A Namada holder with no spendable reading after a complete balance listing (a staker with no spendable NAM: since
+ * migration 0008 it has a row with no reading, before it had none): the listing read every balance on the chain and
+ * had none for it, so its spendable balance is a confirmed 0 as of the listing, not "not read yet" (M1, 2026-10-20).
  */
 const listedWithNoNam = (r: { chain: string; has_row: unknown }, listed: ListingTimes) => r.chain === 'namada' && !r.has_row && listed.balance != null;
 const NO_NAM_NOTE = 'The chain lists no spendable NAM for this address.';
@@ -366,45 +362,230 @@ const labelOrigin = (source: string | null | undefined, author: string | null | 
   label_author: labelAuthorShort(source, author),
 });
 
+/** A category with at most this many labels is read from its labels (labels_cat) and put in order here; a larger one is walked on the sort's index. */
+export const SMALL_CATEGORY = 2000;
+/** The categories the chips count when the stored counts are not there to name them. */
+const DEFAULT_CATEGORIES = ['genesis', 'backer', 'foundation', 'validator', 'watch', 'whale', 'bot', 'other'];
+const maxOf = (a: number | null, b: number | null) => (a == null ? b : b == null ? a : Math.max(a, b));
+const minOf = (a: number | null, b: number | null) => (a == null ? b : b == null ? a : Math.min(a, b));
+
+interface HolderAsk { chain: HolderChain; by: HolderSort; category: string | null; search: string; min: number | null; max: number | null }
+interface HolderSelection {
+  /** the page's rows, in the list's order */
+  rows: HolderBaseRow[];
+  /** the rank of rows[0] */
+  firstRank: number;
+  /** the page these rows fall on */
+  page: number;
+  total: number;
+  next: string | null;
+  countsAt: number | null;
+  categories: HoldersResponse['categories'];
+}
+
+/** The chips' counts from a tally: every category, 'none' for no label, `total` all of them. */
+const categoriesOf = (total: number, tally: Record<string, number>): NonNullable<HoldersResponse['categories']> => ({
+  total, counts: Object.entries(tally).filter(([, n]) => n > 0).map(([category, n]) => ({ category, n })).sort((a, b) => b.n - a.n || (a.category < b.category ? -1 : 1)),
+});
+
+/**
+ * The rows of one page of the holder list, its count and its chips' counts. The search text is read with the search
+ * grammar (shared/search-grammar.ts, list 'holders'): an address start or end and words of a name select rows; a chain,
+ * a group ("foundation") and sizes (">100k") narrow, joined with the parameters (a conflict selects nothing).
+ */
+async function selectHolders(db: D1Database, ask: HolderAsk, pg: { page: number; limit: number; after: HolderCursor | null }, now: number): Promise<HolderSelection | { error: string }> {
+  const none = (): HolderSelection => ({ rows: [], firstRank: 1, page: pg.page, total: 0, next: null, countsAt: null, categories: { total: 0, counts: [] } });
+  const p = ask.search ? parse(ask.search, { list: 'holders', now }) : null;
+  let chain = ask.chain;
+  let category = ask.category;
+  let empty = false;
+  if (p?.chain) { if (chain === 'all') chain = p.chain; else if (chain !== p.chain) empty = true; }
+  if (p?.what) { if (category && category !== p.what) empty = true; else category = p.what; }
+  const address = p?.address ?? null;
+  const tail = p?.tail ?? null;
+  if (address) {
+    const ac = address.startsWith('osmo1') ? 'osmosis' : 'namada';
+    if (chain === 'all') chain = ac; else if (chain !== ac) empty = true;
+  }
+  const min = maxOf(ask.min, p?.min ?? null);
+  const max = minOf(ask.max, p?.max ?? null);
+  if (min != null && max != null && min > max) empty = true;
+  if (empty) return none();
+  const words = (p?.text ?? []).flatMap((t) => labelWords(t));
+  const keys = words.map(wordKeys);
+  const col = SORT_COL[ask.by];
+  const order = holderOrder(ask.by);
+  const counts = await readHolderCounts(db, now);
+  const sized = min != null || max != null;
+  const inSize = (r: Record<string, any>) => (min == null || Number(r[col]) >= min) && (max == null || Number(r[col]) <= max);
+  const catOf = (r: HolderBaseRow) => (r.label ? (r.category ?? '').toLowerCase() || 'none' : 'none');
+
+  // ---- a narrow selection: the rows it names, on their own index, put in order here
+  const hasIdents = !!address || !!tail || keys.length > 0;
+  let smallCategory = false;
+  if (!hasIdents && category && category !== 'none') {
+    const known = countOf(counts?.byChain.all.byCategory, category);
+    const n = known ?? (await db.prepare('SELECT COUNT(*) n FROM labels INDEXED BY labels_cat WHERE category = ?').bind(category).first<{ n: number }>())?.n ?? 0;
+    smallCategory = n <= SMALL_CATEGORY;
+  }
+  if (hasIdents || smallCategory) {
+    const conds: string[] = [];
+    const params: unknown[] = [];
+    if (address) {
+      if (isWholeAddress(address)) { conds.push('h.address = ?'); params.push(address); }
+      else { const [lo, hi] = prefixRange(address)!; conds.push('h.address >= ? AND h.address < ?'); params.push(lo, hi); }
+    }
+    if (tail) { conds.push('substr(h.address, -4) = ? AND substr(h.address, ?) = ?'); params.push(tail.slice(-4), -tail.length, tail); }
+    if (smallCategory) { conds.push('h.address IN (SELECT l1.address FROM labels l1 WHERE l1.category = ?)'); params.push(category); }
+    const reads: { sql: string; params: unknown[]; byText: boolean }[] = [];
+    // the words the statement selects by, within D1's bound parameters (the chains and the LIMIT come after them)
+    const sqlKeys = sqlWordKeys(keys, D1_MAX_PARAMS - params.length - HOLDER_CHAINS_OF[chain].length - 1, wordCondCost);
+    const named = sqlKeys.map((k) => wordCond(k, 'h.address'));
+    reads.push({ ...holderCandidatesSql([...conds, ...named.map((n) => n.sql)].join(' AND ') || '1 = 1', [...params, ...named.flatMap((n) => n.params)], chain), byText: false });
+    // A run of 8 or more address characters that is not an address start: anywhere in an address (a pass over the
+    // holder index's addresses, the slow path, rate-limited with the searches). Only text that could be part of an
+    // address: the bech32 data characters (never b, i, o or 1) with a digit in it, so a name ("knowable",
+    // "everstake") never walks every holder for a match it cannot have.
+    if (words.length === 1 && ADDRESS_RUN.test(words[0]) && /\d/.test(words[0]) && !address && !tail) {
+      reads.push({ ...holderCandidatesSql([...conds, 'h.address LIKE ?'].join(' AND '), [...params, `%${words[0]}%`], chain), byText: true });
+    }
+    const got = await Promise.all(reads.map((r) => db.prepare(r.sql).bind(...r.params).all<HolderBaseRow>().then((x) => ({ rows: x.results || [], byText: r.byText }))));
+    if (got.some((g) => g.rows.length > CANDIDATES_MAX)) return { error: 'This search matches too many holders; type more of the address or the name.' };
+    const seen = new Map<string, HolderBaseRow>();
+    for (const g of got) for (const r of g.rows) {
+      const ok = g.byText ? r.address.includes(words[0]) : !keys.length || labelMatches(r.label, r.address, r.label_source, keys);
+      if (ok) seen.set(`${r.chain}:${r.address}`, r);
+    }
+    const sizedRows = [...seen.values()].filter(inSize);
+    const tally: Record<string, number> = Object.create(null);
+    for (const r of sizedRows) tally[catOf(r)] = (tally[catOf(r)] ?? 0) + 1;
+    const all = (category && !smallCategory ? sizedRows.filter((r) => catOf(r) === category) : sizedRows).sort(order);
+    let start = (pg.page - 1) * pg.limit;
+    if (pg.after) { const i = all.findIndex((r) => holderAfter(ask.by, r, pg.after!)); start = i < 0 ? all.length : i; }
+    const rows = all.slice(start, start + pg.limit);
+    const last = rows[rows.length - 1];
+    let categories: HoldersResponse['categories'] = categoriesOf(sizedRows.length, tally);
+    // A category on its own: the chips are the chain's (the stored counts, or a pass over the size range).
+    if (smallCategory) categories = sized ? await walkCategories(db, { chain, by: ask.by, min, max }, counts) : storedCategories(counts, chain);
+    return {
+      rows, firstRank: start + 1, page: Math.floor(start / pg.limit) + 1, total: all.length,
+      next: last && start + rows.length < all.length ? encodeHolderCursor({ value: Number(last[col as keyof HolderBaseRow]) || 0, address: last.address, rank: start + rows.length }) : null,
+      countsAt: null, categories,
+    };
+  }
+
+  // ---- a walk of the sort's index (the default list, 'none', a large category, a size range)
+  const w: HolderWalk = { chain, by: ask.by, min, max, category };
+  let rankBase = (pg.page - 1) * pg.limit;
+  if (pg.after) {
+    // The cursor's position is read again on the index (rows at or ahead of it), so a rank is never taken from the URL.
+    rankBase = (await db.prepare(walkCountSql(w, pg.after).sql).bind(...walkCountSql(w, pg.after).params).first<{ n: number }>())?.n ?? 0;
+  }
+  const pageSql = holderPageSql(w, { after: pg.after, limit: pg.limit + 1, offset: pg.after ? 0 : rankBase });
+  const stored = counts && !sized ? counts.byChain[chain] : null;
+  const [rowsRes, countRes, categories] = await Promise.all([
+    db.prepare(pageSql.sql).bind(...pageSql.params).all<HolderBaseRow>(),
+    stored ? Promise.resolve(null) : db.prepare(walkCountSql(w).sql).bind(...walkCountSql(w).params).first<{ n: number }>(),
+    stored ? Promise.resolve(storedCategories(counts, chain)) : walkCategories(db, { chain, by: ask.by, min, max }, counts),
+  ]);
+  const got = (rowsRes.results || []).sort(order);
+  const rows = got.slice(0, pg.limit);
+  const total = stored ? (category === 'none' ? stored.none : category ? countOf(stored.byCategory, category) ?? 0 : stored.all) : Number(countRes?.n ?? 0);
+  const last = rows[rows.length - 1];
+  return {
+    rows, firstRank: rankBase + 1, page: Math.floor(rankBase / pg.limit) + 1, total,
+    next: last && got.length > pg.limit ? encodeHolderCursor({ value: Number(last[col as keyof HolderBaseRow]) || 0, address: last.address, rank: rankBase + rows.length }) : null,
+    countsAt: stored ? counts!.at : null, categories,
+  };
+}
+
+/** The chips' counts of a chain from the stored counts (null without them). */
+function storedCategories(counts: HolderCountsKv | null, chain: HolderChain): HoldersResponse['categories'] {
+  const c = counts?.byChain[chain];
+  return c ? categoriesOf(c.all, { ...c.byCategory, none: c.none }) : null;
+}
+/** The chips' counts over a walk (a size range, or no stored counts): one pass, one sum per category. */
+async function walkCategories(db: D1Database, w: HolderWalk, counts: HolderCountsKv | null): Promise<HoldersResponse['categories']> {
+  const cats = Object.keys(counts?.byChain.all.byCategory ?? {}).filter((c) => /^[a-z_]{1,24}$/.test(c));
+  const list = cats.length ? cats : DEFAULT_CATEGORIES;
+  const q = walkCategorySql(w, list);
+  const rows = (await db.prepare(q.sql).bind(...q.params).all<Record<string, number>>()).results || [];
+  const tally: Record<string, number> = Object.assign(Object.create(null), { none: 0 });
+  let total = 0;
+  for (const r of rows) {
+    total += Number(r.n ?? 0);
+    tally.none += Number(r.c_none ?? 0);
+    list.forEach((c, i) => { tally[c] = (tally[c] ?? 0) + Number(r[`c${i}`] ?? 0); });
+  }
+  return categoriesOf(total, tally);
+}
+
+/** A list row as the API sends it. */
+function holderOut(r: HolderBaseRow, rank: number, listed: ListingTimes, supplyTotal: number | null, now: number, changes: Map<string, { d24: number | null; d7: number | null }>, links: Map<string, string[]>): Holder {
+  const fallback = INTERNAL_LABELS[r.address];
+  const label = r.label || fallback?.label || null;
+  const category = r.category || fallback?.category || null;
+  const source = r.label ? r.label_source ?? null : fallback ? 'auto' : null;
+  // Owner decision 7: the chain read of the stake is authoritative when it exists. A reading a chain listing
+  // confirmed (its source, unchanged since) is as fresh as the last complete listing (holders.ts confirmedAt).
+  const bonded = stakeShown(r, listed);
+  const noNam = listedWithNoNam(r, listed);
+  const verifiedAt = noNam ? listed.balance : r.has_row ? confirmedAt(r.verified_at, r.liquid_src, BALANCE_LISTING_SRC, listed.balance) : null;
+  const bondedVerifiedAt = confirmedAt(r.bonded_verified_at, r.bonded_src, BOND_LISTING_SRC, listed.bond);
+  const st = holderStatus({
+    chain: r.chain, verifiedAt, hasLiquidRow: !!r.has_row || noNam,
+    bondedRead: r.bonded_num ?? null, bondedVerifiedAt, bondedEstimated: r.estimated_num ?? null,
+  }, now);
+  if (noNam) st.statusNote = st.statusNote ? `${NO_NAM_NOTE} ${st.statusNote}` : NO_NAM_NOTE;
+  const ch = changes.get(r.address);
+  return {
+    rank, chain: r.chain as Holder['chain'], address: r.address, balance: r.balance_num,
+    bonded, bondedEstimated: r.estimated_num ?? null, bondedVerifiedAt,
+    total: r.total_num,
+    pctSupply: supplyTotal ? (r.total_num / supplyTotal) * 100 : null,
+    change24h: ch?.d24 ?? null, change7d: ch?.d7 ?? null,
+    label, category, label_plain: label_plain(label, r.address, source), category_plain: category_plain(category, label),
+    ...labelOrigin(source, r.label_author),
+    linked: [...new Set(links.get(r.address) || [])], updatedAt: r.updated_at ?? null, verifiedAt,
+    status: st.status, statusNote: st.statusNote,
+  };
+}
+
 // ---------------------------------------------------------------- GET /api/holders
-// ?chain=all|namada|osmosis &by=total|liquid|bonded &category=<raw category>|none &search= &page= &limit= (10…100)
+// ?chain=all|namada|osmosis &by=total|liquid|bonded &category=<raw category>|none &search= &min= &max= &page= &after= &limit= (10…100)
 // Current balances only: no `at` (balances were not recorded over time before W13). Each row carries a
 // server status (owner decision 7), real 24 h / 7 d changes or null, and plain label words (owner decision 6).
+// The count and the chips' counts come from the stored counts (kv holders.counts, `countsAt`) unless the request
+// narrows by a search or a size, when they are counted here (`countsAt` null). `asOf`: when the order was read.
 app.get('/api/holders', async (c) => {
   const db = c.env.DB;
   const chain = holderChain(c.req.query('chain'));
   if (!chain) return c.json({ error: 'chain must be all, namada or osmosis' }, 400);
-  const search = (c.req.query('search') || '').trim();
   const by = holdersBy(c.req.query('by'));
+  if (!by) return c.json({ error: 'by must be total, liquid or bonded' }, 400);
   const page = pageParam(c);
   if (page instanceof Response) return page;
-  const limit = Math.min(100, Math.max(10, parseInt(c.req.query('limit') || '50', 10) || 50));
-  const offset = (page - 1) * limit;
-
-  const base = HOLDERS_BASE;
-  const { where, params, order, filtered } = holdersWhere(chain, search, c.req.query('category') || '', by);
-
+  const min = holderSize(c.req.query('min'), 'min');
+  const max = holderSize(c.req.query('max'), 'max');
+  for (const v of [min, max]) if (v && typeof v === 'object') return c.json({ error: v.error }, 400);
+  // A cursor that is not one of ours is ignored (the page by number is served), never guessed at.
+  const after = decodeHolderCursor(c.req.query('after'));
+  const limit = clampLimit(c.req.query('limit'));
   const now = Date.now();
-  // Without a search or a category the count is the chain's holder count, and the first HOLDER_TOP_ROWS rows by
-  // total are kept with it (holders.ts, kv holders.figures, written by the cron after each complete listing): Home's
-  // top 10 and the list's first pages cost one kv row instead of the union sort (about 940,000 rows read for the
-  // page and its count on 2026-10-20). Anything else, or figures older than HOLDER_FIGURES_SERVE_MS, is queried.
-  const fig = filtered ? null : usableFigures(await readHolderFigures(db), now);
-  const storedTotal = fig ? figuresCount(fig, chain) : null;
-  const storedRows = fig && by === 'total' ? figuresTopRows(fig, chain, offset, limit) : null;
-  const [totalRes, rows, supplyRow, listed] = await Promise.all([
-    storedTotal != null ? { total: storedTotal } : db.prepare(`SELECT COUNT(*) total FROM (${base} ${where})`).bind(...params).first<{ total: number }>(),
-    storedRows ? withCurrentLabels(db, storedRows).then((results) => ({ results })) : db.prepare(`${base} ${where} ORDER BY ${order}, x.address LIMIT ? OFFSET ?`).bind(...params, limit, offset).all<any>(),
+  const ask: HolderAsk = { chain, by, category: holderCategory(c.req.query('category')), search: (c.req.query('search') || '').trim(), min: min as number | null, max: max as number | null };
+  const [sel, supplyRow, listed] = await Promise.all([
+    selectHolders(db, ask, { page, limit, after }, now),
     metricAt(db, 'supply.total', now),
     listingTimes(db),
   ]);
-  const rawHolders: any[] = rows.results || [];
+  if ('error' in sel) return c.json({ error: sel.error }, 400);
+  const raw = sel.rows;
 
   const linksMap = new Map<string, string[]>();
   const changes = new Map<string, { d24: number | null; d7: number | null }>();
-  if (rawHolders.length > 0) {
-    const addrs = rawHolders.map((r: any) => r.address);
-    const byChain = (ch: string) => new Map<string, number | null>(rawHolders.filter((r: any) => r.chain === ch).map((r: any) => [r.address, r.has_row ? r.balance_num : null]));
+  if (raw.length > 0) {
+    const addrs = raw.map((r) => r.address);
+    const byChain = (ch: string) => new Map<string, number | null>(raw.filter((r) => r.chain === ch).map((r) => [r.address, r.has_row ? r.balance_num : null]));
     // D1 takes at most 100 bound parameters per query: the address list is split to fit.
     const [linkParts, namCh, osmoCh] = await Promise.all([
       Promise.all(chunks(addrs, 0, 2).map((part) => {
@@ -420,57 +601,86 @@ app.get('/api/holders', async (c) => {
       (linksMap.get(l.namada_addr) ?? linksMap.set(l.namada_addr, []).get(l.namada_addr)!).push(l.osmo_addr);
     }
   }
-
   const supplyTotal = supplyRow?.value ?? null;
-  const holders: Holder[] = rawHolders.map((r: any, i: number) => {
-    const fallback = INTERNAL_LABELS[r.address];
-    const label = r.label || fallback?.label || null;
-    const category = r.category || fallback?.category || null;
-    const source = r.label ? r.label_source ?? null : fallback ? 'auto' : null;
-    // Owner decision 7: the chain read of the stake is authoritative when it exists. A reading a chain listing
-    // confirmed (its source, unchanged since) is as fresh as the last complete listing (holders.ts confirmedAt).
-    const bonded = stakeShown(r, listed);
-    const noNam = listedWithNoNam(r, listed);
-    const verifiedAt = noNam ? listed.balance : confirmedAt(r.verified_at, r.liquid_src, BALANCE_LISTING_SRC, listed.balance);
-    const bondedVerifiedAt = confirmedAt(r.bonded_verified_at, r.bonded_src, BOND_LISTING_SRC, listed.bond);
-    const st = holderStatus({
-      chain: r.chain, verifiedAt, hasLiquidRow: !!r.has_row || noNam,
-      bondedRead: r.bonded_num ?? null, bondedVerifiedAt, bondedEstimated: r.estimated_num ?? null,
-    }, now);
-    if (noNam) st.statusNote = st.statusNote ? `${NO_NAM_NOTE} ${st.statusNote}` : NO_NAM_NOTE;
-    const ch = changes.get(r.address);
-    return {
-      rank: offset + i + 1, chain: r.chain, address: r.address, balance: r.balance_num,
-      bonded, bondedEstimated: r.estimated_num ?? null, bondedVerifiedAt,
-      total: r.total_num,
-      pctSupply: supplyTotal ? (r.total_num / supplyTotal) * 100 : null,
-      change24h: ch?.d24 ?? null, change7d: ch?.d7 ?? null,
-      label, category, label_plain: label_plain(label, r.address, source), category_plain: category_plain(category, label),
-      ...labelOrigin(source, r.label_author),
-      linked: [...new Set(linksMap.get(r.address) || [])], updatedAt: r.updated_at ?? null, verifiedAt,
-      status: st.status, statusNote: st.statusNote,
-    };
-  });
-  const res: HoldersResponse = { total: totalRes?.total || 0, page, limit, holders };
+  const holders = raw.map((r, i) => holderOut(r, sel.firstRank + i, listed, supplyTotal, now, changes, linksMap));
+  const res: HoldersResponse = { total: sel.total, page: sel.page, limit, holders, next: sel.next, asOf: now, countsAt: sel.countsAt, categories: sel.categories };
   return c.json(res);
 });
 
 // ---------------------------------------------------------------- GET /api/flows
-// ?chain= &kind= &whale=true &minNam=<n> &arb=false &pairs=one &search= &at= &page= &limit= (10…100). Newest first. (W1)
+// ?chain= &kind= &whale=true &minNam=<n> &arb=false &pairs=one &search= &since= &addr= &hash= &height= &at= &before= &page= &limit= (10…100)
+// &count=none. Newest first (FLOWS_ORDER), keyset paged: `next` is the cursor for the older rows, sent back as
+// `?before=`; `?before=<unix ms>` jumps to a date. The count (`total`) is taken on the head page only (no `before`),
+// and not at all with `count=none` (Home's latest moves and the live feed's first rows show rows, not a count);
+// behind a cursor it is null (the head page said it). `?page=` still pages by offset for links made before (W1).
+const flowSelectOf = (hint: string) => flowSelect(hint);
+interface FlowsRead { flows: Flow[]; total: number | null; next: string | null; rows: number }
+
+async function readFlows(db: D1Database, f: FlowsFilter, before: BeforeParam | null, limit: number, offset: number, count: boolean): Promise<FlowsRead> {
+  let mode = flowsMode(f);
+  if (mode === 'rows') {
+    const q = flowsRowsSql(flowSelectOf, f);
+    const all = (await db.prepare(q.sql).bind(...q.params).all<any>()).results || [];
+    // An address start that matches too many rows for this is walked in time order instead (below).
+    if (!(all.length > FEW_ROWS && f.addr)) {
+      const ordered = all.sort(flowOrder).filter((r) => afterPosition(r, before));
+      const shown = ordered.slice(offset, offset + limit);
+      const last = shown[shown.length - 1];
+      return {
+        flows: shown.map(rowToFlow), total: count ? all.length : null, rows: all.length,
+        next: last && ordered.length > offset + limit ? encodeFlowCursor({ ts: last.ts, height: last.height, id: last.id }) : null,
+      };
+    }
+    mode = 'time';
+  }
+  const pageQ = flowsPageSql(flowSelectOf, f, mode, before, limit + 1, offset);
+  const countQ = count ? flowsCountSql(f, mode) : null;
+  const [rowsRes, countRes] = await Promise.all([
+    db.prepare(pageQ.sql).bind(...pageQ.params).all<any>(),
+    countQ ? db.prepare(countQ.sql).bind(...countQ.params).first<{ total: number }>() : Promise.resolve(null),
+  ]);
+  const got = rowsRes.results || [];
+  const shown = got.slice(0, limit);
+  const last = shown[shown.length - 1];
+  return {
+    flows: shown.map(rowToFlow), total: countQ ? Number(countRes?.total ?? 0) : null, rows: got.length,
+    next: last && got.length > limit ? encodeFlowCursor({ ts: last.ts, height: last.height, id: last.id }) : null,
+  };
+}
+
 app.get('/api/flows', async (c) => {
   const db = c.env.DB;
   const { asOf } = asOfParam(c);
   const page = pageParam(c);
   if (page instanceof Response) return page;
-  const limit = Math.min(100, Math.max(10, parseInt(c.req.query('limit') || '50', 10) || 50));
-  const offset = (page - 1) * limit;
-  const { where, params } = flowsWhere(flowsFilterFromQuery((k) => c.req.query(k), asOf));
-
-  const [totalRes, rows] = await Promise.all([
-    db.prepare(`SELECT COUNT(*) total FROM flows f ${where}`).bind(...params).first<{ total: number }>(),
-    db.prepare(`${FLOW_SELECT} ${where} ${FLOWS_ORDER} LIMIT ? OFFSET ?`).bind(...params, limit, offset).all<any>(),
-  ]);
-  const res: FlowsResponse = { total: totalRes?.total || 0, page, limit, flows: (rows.results || []).map(rowToFlow) };
+  const limit = clampLimit(c.req.query('limit'));
+  const bad = flowsFilterError((k) => c.req.query(k));
+  if (bad) return c.json({ error: bad }, 400);
+  const f = flowsFilterFromQuery((k) => c.req.query(k), asOf);
+  // A cursor that is not one of ours, or a time out of range, is the head page (shared/paging.ts parseBeforeParam).
+  const before = parseBeforeParam(c.req.query('before'));
+  const head = before == null;
+  // `count` is `none` or left out: any other value would be read as "count" and stored as a copy of its own
+  const countQ = c.req.query('count');
+  if (countQ != null && countQ !== '' && countQ !== 'none') return c.json({ error: 'count must be none (rows only), or left out.' }, 400);
+  const count = head && countQ !== 'none';
+  const r = await readFlows(db, f, before, limit, head ? (page - 1) * limit : 0, count);
+  const res: FlowsResponse = { total: r.total, page: head ? page : 1, limit, flows: r.flows, next: r.next, asOf };
+  // The oldest move for this chain filter (for "The flow index starts on …"), on the head page and on a date jump.
+  if (head || before?.kind === 'time') {
+    const chains: ('namada' | 'osmosis')[] = f.chain === 'namada' || f.chain === 'osmosis' ? [f.chain] : ['namada', 'osmosis'];
+    const fr = await db.prepare(`SELECT MIN(t) t FROM (${chains.map((ch) => `SELECT ${FIRST_TS_SQL(ch)} t`).join(' UNION ALL ')})`).first<{ t: number | null }>().catch(() => null);
+    res.firstTs = fr?.t ?? null;
+  }
+  // An empty head page: the newest move that matches every filter but the time window, of any age.
+  if (head && page === 1 && !r.flows.length) {
+    if (f.since == null) res.last = null;
+    else {
+      const q = flowsLastSql(f, flowsMode(f));
+      const rows = ((await db.prepare(q.sql).bind(...q.params).all<{ id: string; ts: number; chain: Chain; height: number }>().catch(() => null))?.results ?? []).sort(flowOrder);
+      res.last = rows[0] ? { id: rows[0].id, ts: rows[0].ts, chain: rows[0].chain } : null;
+    }
+  }
   return c.json(res);
 });
 
@@ -504,10 +714,12 @@ app.get('/api/address/:addr', async (c) => {
   if (!chain) return c.json({ error: 'Invalid Osmosis or Namada address' }, 400);
 
   const now = Date.now();
-  const [labelRow, holder] = await Promise.all([
+  const [labelRow, holderRow] = await Promise.all([
     db.prepare('SELECT * FROM labels WHERE address = ?').bind(addr).first<any>(),
     db.prepare('SELECT * FROM holders WHERE chain = ? AND address = ?').bind(chain, addr).first<any>(),
   ]);
+  // A row with no reading is a staker's place on the stored totals (migration 0008), not a spendable balance.
+  const holder = holderRow && (holderRow.updated_at != null || holderRow.verified_at != null) ? holderRow : null;
 
   const fallbackInternal = INTERNAL_LABELS[addr];
   const resolvedLabel = labelRow
@@ -559,19 +771,38 @@ app.get('/api/address/:addr', async (c) => {
     }
   }
 
+  // Its places in the holder list's two orders, as the list ranks it (the stored row, protocol accounts and pools
+  // left out): the entries at or ahead of it on holders_total and on holders_rank, index entries only (the cost
+  // grows with the place: about 1 ms per 10,000). An address the list does not hold yet is placed by its live
+  // spendable balance (no total: its stake is not on the index).
+  const onList = !!holderRow && Number(holderRow.total_num) > 0 && !INTERNAL_LABELS[addr] && labelRow?.category !== 'pool';
+  const placeOf = async (by: HolderSort, value: number) => {
+    const q = walkCountSql({ chain, by }, { value, address: addr });
+    return (await db.prepare(q.sql).bind(...q.params).first<{ n: number }>().catch(() => null))?.n ?? null;
+  };
   let rank: number | null = null;
-  if (liveBal > 0) {
-    const rk = await db.prepare('SELECT COUNT(*) + 1 rk FROM holders WHERE chain = ? AND balance_num > ?').bind(chain, liveBal).first<{ rk: number }>().catch(() => null);
+  let rankTotal: number | null = null;
+  if (onList) {
+    [rankTotal, rank] = await Promise.all([placeOf('total', Number(holderRow.total_num)), Number(holderRow.balance_num) > 0 ? placeOf('liquid', Number(holderRow.balance_num)) : Promise.resolve(null)]);
+  } else if (liveBal > 0 && !INTERNAL_LABELS[addr] && labelRow?.category !== 'pool') {
+    const rk = await db.prepare(`SELECT COUNT(*) + 1 rk FROM holders h INDEXED BY holders_rank WHERE h.chain = ? AND ${LISTED('h.')} AND h.balance_num > ?`).bind(chain, liveBal).first<{ rk: number }>().catch(() => null);
     rank = rk?.rk ?? null;
   }
 
-  const [links, totalFlowsRow, flowRows] = await Promise.all([
+  // Its newest 300 moves and their count: a whole address reads its sending rows on flows_from and its receiving
+  // rows on flows_to, each in the feed's order, merged (at most 301 rows a side; before, every move of the address was
+  // read and sorted: thousands for the busiest accounts). Any other address form keeps the plain read.
+  const [links, moves] = await Promise.all([
     db.prepare(`SELECT osmo_addr, namada_addr, transfers, volume_num, last_seen FROM address_links WHERE osmo_addr = ? OR namada_addr = ? ORDER BY volume_num DESC`).bind(addr, addr).all<any>(),
-    db.prepare(`SELECT COUNT(*) c FROM flows f WHERE (f.from_addr = ? OR f.to_addr = ?) AND ${NOT_TWIN}`).bind(addr, addr).first<{ c: number }>().catch(() => ({ c: 0 })),
-    db.prepare(`${FLOW_SELECT} WHERE (f.from_addr = ? OR f.to_addr = ?) AND ${NOT_TWIN} ORDER BY f.ts DESC, f.height DESC LIMIT 300`).bind(addr, addr).all<any>(),
+    isWholeAddress(addr)
+      ? readFlows(db, { asOf: now, addr }, null, 300, 0, true)
+      : Promise.all([
+          db.prepare(`SELECT COUNT(*) c FROM flows f WHERE (f.from_addr = ? OR f.to_addr = ?) AND ${NOT_TWIN}`).bind(addr, addr).first<{ c: number }>().catch(() => ({ c: 0 })),
+          db.prepare(`${FLOW_SELECT} WHERE (f.from_addr = ? OR f.to_addr = ?) AND ${NOT_TWIN} ORDER BY f.ts DESC, f.height DESC LIMIT 300`).bind(addr, addr).all<any>(),
+        ]).then(([n, r]) => ({ flows: (r.results || []).map(rowToFlow), total: n?.c ?? null })),
   ]);
-
-  const flows = (flowRows.results || []).map(rowToFlow);
+  const flows = moves.flows;
+  const totalFlowsRow = { c: moves.total ?? flows.length };
 
   // 24 h / 7 d changes: the balance now (the live read, else the indexed one) minus the recorded chain read
   // at the start of each window; null when no reading covers it.
@@ -579,7 +810,7 @@ app.get('/api/address/:addr', async (c) => {
 
   const report: AddressReport = {
     address: addr, chain, label, balance,
-    indexedBalance: holder?.balance_num ?? null, staking, rank,
+    indexedBalance: holder?.balance_num ?? null, staking, rank, rankTotal,
     change24h: ch?.d24 ?? null, change7d: ch?.d7 ?? null,
     links: (links.results || []).map((l: any) => ({ address: addr === l.osmo_addr ? l.namada_addr : l.osmo_addr, chain: (addr === l.osmo_addr ? 'namada' : 'osmosis') as any, transfers: l.transfers, volume: l.volume_num, lastSeen: l.last_seen })),
     totalFlowsCount: totalFlowsRow?.c ?? flows.length,
@@ -603,36 +834,304 @@ app.get('/api/intel', async (c) => {
 });
 
 // ---------------------------------------------------------------- GET /api/search
-app.get('/api/search', async (c) => {
-  const q = (c.req.query('q') || '').trim();
-  if (!q) return c.json({ results: [] });
-  const results: SearchResult[] = [];
-  const db = c.env.DB;
+// ?q=<text>&limit=<1…10, default 6>. Current data, grouped (SearchGroup order: addresses, records, names, pools,
+// blocks), at most `limit` per group, best first inside a group (exact, then the start of the value, then its end,
+// then a word start). The text is read with the search grammar (shared/search-grammar.ts): an address start of 8 or
+// more characters, an address end, a record's hash start, a block height, a pool number and words of a name. Every
+// group reads one index range: the holder rows by address (primary key) or by their last four characters
+// (holders_tail), records on the three hash indexes, names on label_tokens, blocks on flows_chain_height; validator
+// names come from the stored validator list (kv validators.names, one row) and the protocol accounts' names from
+// config. Pages, views and glossary words are found in the app itself. Edge-cached on (q, limit).
+export const SEARCH_LIMIT = 6;
+export const SEARCH_LIMIT_MAX = 10;
+/** Candidates a group reads before it ranks them (the biggest holders first among equal matches). */
+const SEARCH_CANDIDATES = 50;
+/** The addresses of one start or end read before they are ranked by what they hold (searchAddresses). */
+const ADDRESS_CANDIDATES = 1000;
+/** The labels a name's words select in key order (nameRows); a word that matches more also reads the biggest holders among them. */
+const NAME_CANDIDATES = SEARCH_CANDIDATES * 2;
+/**
+ * The names' holdings read (nameRows): the matches it takes, and the deepest it walks the stored totals' index (the
+ * largest holders; No. 2,000 held about 6,500 NAM on 2026-10-20), whatever it finds.
+ */
+const NAME_WALK_TAKE = SEARCH_LIMIT_MAX * 2;
+const NAME_WALK_MAX = 2000;
 
-  if (q.startsWith('osmo1') || q.startsWith('tnam1')) {
-    const chain = q.startsWith('osmo1') ? 'osmosis' : 'namada';
-    const row = await db.prepare('SELECT label, category, source FROM labels WHERE address = ?').bind(q).first<{ label: string; category: string; source: string }>();
-    const raw = row?.label ?? INTERNAL_LABELS[q]?.label ?? null;
-    const plain = label_plain(raw, q, row?.source);
-    results.push({
-      type: 'address', chain, value: q, title: plain ? `${plain} (${q.slice(0, 10)}…)` : q, subtitle: `${chain === 'osmosis' ? 'Osmosis' : 'Namada'} address`,
-      label: raw, label_plain: plain, category_plain: category_plain(row?.category ?? INTERNAL_LABELS[q]?.category ?? null, raw),
+const H_MS = 3_600_000;
+const MONTH = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+const utcWords = (ms: number) => {
+  const d = new Date(ms);
+  return `${d.getUTCDate()} ${MONTH[d.getUTCMonth()]} ${d.getUTCFullYear()} ${String(d.getUTCHours()).padStart(2, '0')}:${String(d.getUTCMinutes()).padStart(2, '0')} UTC`;
+};
+/** An amount in words for a subtitle ("1.2 million", "12,345", "0.5"). */
+/** " · 50.0 million NAM, 12.0 million of it staked" from the stored totals; nothing when it holds none. */
+const holdsWords = (total: number | null | undefined, stake: number | null | undefined) =>
+  total != null && total > 0 ? ` · ${namWords(total)} NAM${stake != null && stake > 0 ? `, ${namWords(stake)} of it staked` : ''}` : '';
+const namWords = (n: number) => (n >= 1e9 ? `${(n / 1e9).toFixed(2)} billion` : n >= 1e6 ? `${(n / 1e6).toFixed(1)} million` : n >= 1 ? Math.round(n).toLocaleString('en-US') : String(Number(n.toFixed(6))));
+const chainWord = (c: string) => (c === 'osmosis' ? 'Osmosis' : 'Namada');
+const shortAddr = (a: string) => (a.length <= 18 ? a : `${a.slice(0, 10)}…${a.slice(-5)}`);
+/** What a move is, in the site's words. */
+const KIND_WORDS: Record<string, string> = {
+  buy: 'Bought', sell: 'Sold', transfer: 'Sent', ibc_in: 'Bridged in', ibc_out: 'Bridged out', bond: 'Staked', unbond: 'Unstaking',
+  withdraw: 'Unlocked', rewards: 'Staking rewards', shield: 'Shielded', unshield: 'Unshielded', lp_add: 'Added to a pool', lp_remove: 'Removed from a pool',
+  pgf: 'Public funding', pos_balance: 'Staking account transfer', other: 'Other move',
+};
+const MATCH_RANK: Record<SearchMatch, number> = { exact: 0, start: 1, end: 2, word: 3, contains: 4 };
+/** Where a name came from, as a stamp (the label's source; a name states no figure). */
+const LABEL_SOURCE_WORDS: Record<string, string> = { genesis: 'Namada genesis file', valopers: 'Validator list', auto: 'NamadaTrade labels', user: 'A signed-in wallet\'s tag' };
+
+/** label_tokens is absent until migration 0008 runs: the names group then reads the labels with LIKE (once per isolate the absence is noted). */
+let labelTokensMissing = false;
+
+type Hit = SearchResult & { rankKey: number[] };
+function grouped(group: SearchGroup, hits: Hit[], limit: number): { list: SearchResult[]; meta: { group: SearchGroup; n: number; more: boolean } } {
+  const list = hits.sort((a, b) => { for (let i = 0; i < Math.max(a.rankKey.length, b.rankKey.length); i++) { const d = (a.rankKey[i] ?? 0) - (b.rankKey[i] ?? 0); if (d) return d; } return 0; })
+    .slice(0, limit).map(({ rankKey, ...r }) => r);
+  return { list, meta: { group, n: list.length, more: hits.length > limit } };
+}
+
+/** Holder rows the addresses group reads (an address start, an address end, or both), with their label. */
+interface AddrRow { chain: string; address: string; balance_num: number; stake_num: number; total_num: number; updated_at: number | null; verified_at: number | null; verified_src: string | null; label: string | null; category: string | null; source: string | null; author: string | null }
+const ADDR_COLS = `h.chain, h.address, h.balance_num, h.stake_num, h.total_num, h.updated_at, h.verified_at, h.verified_src, l.label, l.category, l.source, l.author`;
+
+async function searchAddresses(db: D1Database, p: Parsed, limit: number, listed: ListingTimes, now: number): Promise<Hit[]> {
+  const hits: Hit[] = [];
+  const stampOf = (r: AddrRow): Provenance | null => {
+    if (!(r.total_num > 0)) return null;
+    const read = r.updated_at != null || r.verified_at != null ? confirmedAt(r.verified_at ?? r.updated_at, r.verified_src, BALANCE_LISTING_SRC, listed.balance) : listed.balance;
+    return read == null ? { source: 'NamadaTrade holder index', at: null, status: 'missing', note: 'Not read from the chain yet.' }
+      : { source: 'NamadaTrade holder index', at: read, status: now - read > LIQUID_STALE_MS ? 'stale' : 'live' };
+  };
+  const hitOf = (r: AddrRow | null, address: string, match: SearchMatch): Hit => {
+    const chain = (address.startsWith('osmo1') ? 'osmosis' : 'namada') as Chain;
+    const raw = r?.label ?? INTERNAL_LABELS[address]?.label ?? null;
+    const source = r?.label ? r.source : INTERNAL_LABELS[address] ? 'auto' : null;
+    const plain = label_plain(raw, address, source);
+    const cat = source === 'user' ? tagByline(source, labelAuthorShort(source, r?.author)) : category_plain(r?.category ?? INTERNAL_LABELS[address]?.category ?? null, raw);
+    const holds = r ? holdsWords(r.total_num, r.stake_num) : '';
+    return {
+      type: 'address', group: 'addresses', kind: 'address', match, chain, value: address,
+      title: plain ? `${plain} (${shortAddr(address)})` : address, subtitle: `${chainWord(chain)} address${cat ? ` · ${cat}` : ''}${holds}`,
+      label: raw, label_plain: plain, category_plain: cat, href: `/holders?addr=${address}`, external: null, stamp: stampOf(r ?? ({ total_num: 0 } as AddrRow)),
+      rankKey: [MATCH_RANK[match], -(r?.total_num ?? 0)],
+    };
+  };
+  const a = p.address;
+  if (a && isWholeAddress(a)) {
+    const chain = a.startsWith('osmo1') ? 'osmosis' : 'namada';
+    const r = await db.prepare(`SELECT ${ADDR_COLS} FROM holders h LEFT JOIN labels l ON l.address = h.address WHERE h.chain = ? AND h.address = ?`).bind(chain, a).first<AddrRow>();
+    const lab = r ? null : await db.prepare('SELECT label, category, source, author FROM labels WHERE address = ?').bind(a).first<any>();
+    // A whole address is always a result: its sheet reads it from the chain even when this site has no row for it.
+    hits.push(hitOf(r ?? (lab ? ({ ...lab, total_num: 0, stake_num: 0 } as AddrRow) : null), a, 'exact'));
+    return hits;
+  }
+  const conds: string[] = [];
+  const params: unknown[] = [];
+  if (a) {
+    const [lo, hi] = prefixRange(a)!;
+    conds.push('h.chain = ? AND h.address >= ? AND h.address < ?');
+    params.push(a.startsWith('osmo1') ? 'osmosis' : 'namada', lo, hi);
+  }
+  if (p.tail) {
+    conds.push('substr(h.address, -4) = ? AND substr(h.address, ?) = ?');
+    params.push(p.tail.slice(-4), -p.tail.length, p.tail);
+    if (p.chain && !a) { conds.push('h.chain = ?'); params.push(p.chain); }
+  }
+  if (!conds.length) return hits;
+  // Every address of the start or end (up to ADDRESS_CANDIDATES, in key order), ranked here by what each holds: the
+  // biggest holders first is then true for any start of 8 characters (the largest bucket on 2026-10-20, tnam1qqx,
+  // held 565 addresses; it is read whole, 565 rows). No sort in SQL: the key order is the index's own.
+  const rows = (await db.prepare(`SELECT ${ADDR_COLS} FROM holders h LEFT JOIN labels l ON l.address = h.address WHERE ${conds.join(' AND ')} LIMIT ?`).bind(...params, ADDRESS_CANDIDATES).all<AddrRow>()).results || [];
+  for (const r of rows) hits.push(hitOf(r, r.address, a ? 'start' : 'end'));
+  return hits;
+}
+
+async function searchRecords(db: D1Database, p: Parsed, limit: number): Promise<Hit[]> {
+  if (!p.hash) return [];
+  const [lo, hi] = prefixRange(p.hash)!;
+  // One range on each hash index; a record found under two of its hashes is one result.
+  const rows = (await Promise.all(HASH_COLUMNS.map((col) =>
+    db.prepare(`SELECT f.id, f.chain, f.height, f.ts, f.kind, f.amount_num, f.tx_hash, f.meta FROM flows f WHERE ${col} >= ? AND ${col} < ? LIMIT ?`).bind(lo, hi, limit + 1).all<any>().then((r) => r.results || [])))).flat();
+  const by = new Map<string, any>();
+  for (const r of rows) by.set(r.id, r);
+  return [...by.values()].map((r): Hit => {
+    const meta = safeParseJson(r.meta, null) as Record<string, unknown> | null;
+    const hashes = [r.tx_hash, meta?.wrapper, meta?.innerTxHash].filter((h): h is string => typeof h === 'string').map((h) => h.toUpperCase());
+    const match: SearchMatch = hashes.includes(p.hash!) ? 'exact' : 'start';
+    const value = explorerHashOf({ txHash: r.tx_hash, meta });
+    const otherCoin = typeof meta?.tokenSymbol === 'string' ? meta.tokenSymbol : null;
+    return {
+      type: 'tx', group: 'records', kind: 'record', match, chain: r.chain, value,
+      title: `${KIND_WORDS[r.kind] ?? 'Move'} ${namWords(r.amount_num)} ${otherCoin ?? 'NAM'}`,
+      subtitle: `Block ${Number(r.height).toLocaleString('en-US')} on ${chainWord(r.chain)} · ${utcWords(r.ts)} · ${value.slice(0, 12)}…`,
+      href: `/activity?q=${value}`, external: r.chain === 'osmosis' ? EXPLORERS.osmoTx(value) : NAMADA_SHARED.explorerTx(value),
+      stamp: { source: 'NamadaTrade flow index', at: r.ts, status: 'live' },
+      rankKey: [MATCH_RANK[match], -r.ts],
+    };
+  });
+}
+
+interface NameRow { address: string; chain: string; label: string; category: string; source: string; author: string | null; updated_at: number | null; total_num: number | null; stake_num: number | null }
+
+/**
+ * Labels whose words start with every typed word (label_tokens), or by LIKE before migration 0008.
+ *
+ * Cost per call: the token range of each word read into a list once (a few dozen entries for a specific name; about
+ * 5,300 to 5,900 for the broadest starts, "gen", "pub", "all", "com", "genesis", on the 2026-10-20 label mix), then
+ * the labels found by primary key, at most NAME_CANDIDATES. When a word matches more labels than that (thousands of
+ * genesis allocations share their words), the first NAME_CANDIDATES in key order say nothing about who holds the most,
+ * so the biggest Namada holders among the matches are read too: a walk of the stored totals' index, largest first
+ * (index entries only), that stops at the NAME_WALK_TAKE-th match and never goes past the NAME_WALK_MAX largest
+ * holders, whatever it finds (at production's proportions: about 100 entries for "genesis", the cap for a word whose
+ * labels hold little). Both reads are merged; the ranking is searchNames' (match tier, then holdings).
+ */
+async function nameRows(db: D1Database, keys: WordKeys[]): Promise<NameRow[]> {
+  // what each named address holds, by primary key (one row per name found), so six "Anoma Foundation" wallets differ
+  const cols = 'l.address, l.chain, l.label, l.category, l.source, l.author, l.updated_at, h.total_num, h.stake_num';
+  const from = 'labels l LEFT JOIN holders h ON h.chain = l.chain AND h.address = l.address';
+  if (!labelTokensMissing) {
+    // the words the statement selects by, within D1's bound parameters (the LIMIT after them); the caller checks every word
+    const sqlKeys = sqlWordKeys(keys, D1_MAX_PARAMS - 1, wordCondCost);
+    if (!sqlKeys.length) return [];
+    const conds = sqlKeys.map((k) => wordCond(k, 'l.address'));
+    try {
+      const r = await db.prepare(`SELECT ${cols} FROM ${from} WHERE ${conds.map((c) => c.sql).join(' AND ')} LIMIT ?`).bind(...conds.flatMap((c) => c.params), NAME_CANDIDATES).all<NameRow>();
+      const byLabel = r.results || [];
+      if (byLabel.length < NAME_CANDIDATES) return byLabel;
+      const walk = sqlKeys.map((k) => wordCond(k, 'k.address'));
+      const big = await db.prepare(`SELECT ${cols} FROM (SELECT h2.address FROM holders h2 INDEXED BY holders_total WHERE h2.chain = 'namada' AND +h2.total_num > 0
+          ORDER BY h2.total_num DESC, h2.address LIMIT ${NAME_WALK_MAX}) k CROSS JOIN labels l ON l.address = k.address
+          LEFT JOIN holders h ON h.chain = l.chain AND h.address = l.address WHERE ${walk.map((c) => c.sql).join(' AND ')} LIMIT ?`)
+        .bind(...walk.flatMap((c) => c.params), NAME_WALK_TAKE).all<NameRow>();
+      const out = new Map<string, NameRow>();
+      for (const row of [...(big.results || []), ...byLabel]) if (!out.has(row.address)) out.set(row.address, row);
+      return [...out.values()];
+    } catch (e) {
+      if (!/no such table/i.test(String(e))) throw e;
+      labelTokensMissing = true;
+    }
+  }
+  // each word, or one of the raw fragments it stands for, anywhere in the label (labelMatches keeps the word starts)
+  const terms = sqlWordKeys(keys, D1_MAX_PARAMS - 1, (k) => 1 + k.fragments.length).map((k) => [k.word, ...k.fragments]);
+  const like = terms.map((t) => `(${t.map(() => 'l.label LIKE ?').join(' OR ')})`);
+  if (!terms.length) return [];
+  const r = await db.prepare(`SELECT ${cols} FROM ${from} WHERE ${like.join(' AND ')} LIMIT ?`).bind(...terms.flat().map((t) => `%${t}%`), NAME_CANDIDATES * 2).all<NameRow>();
+  return r.results || [];
+}
+
+/**
+ * The words a name is searched by, in the order typed: the text with every identifier, size and date the grammar read
+ * left out. The words it read as a kind, a chain or a holder group stay ("shielded pool" is a filter for the lists and
+ * also the name of the shielded pool's account).
+ */
+const NAME_FIELDS = new Set(['text', 'kind', 'chain', 'what', 'bots', 'crossings']);
+function nameWordsOf(q: string, p: Parsed): string[] {
+  // the spans are UTF-16 offsets into the input, as split('') indexes it
+  const text = q.slice(0, INPUT_MAX).split('');
+  for (const ch of p.chips) if (ch.fields.some((f) => !NAME_FIELDS.has(f))) for (let i = ch.span[0]; i < ch.span[1]; i++) text[i] = ' ';
+  return labelWords(text.join(''));
+}
+
+async function searchNames(db: D1Database, q: string, p: Parsed, now: number): Promise<{ names: Hit[]; pools: Hit[] }> {
+  const words = nameWordsOf(q, p);
+  const names: Hit[] = [];
+  const pools: Hit[] = [];
+  const poolHit = (r: { address: string; label: string; updated_at?: number | null }, match: SearchMatch): Hit | null => {
+    const id = /#(\d+)/.exec(r.label)?.[1];
+    if (!id) return null;
+    return {
+      type: 'pool', group: 'pools', kind: 'pool', match, chain: 'osmosis', value: id, title: r.label.replace(/^Osmosis Pool #/, 'Osmosis pool '),
+      subtitle: `An Osmosis pool holding NAM · ${shortAddr(r.address)}`, label: r.label, label_plain: r.label, href: '/trade', external: null,
+      stamp: null, rankKey: [MATCH_RANK[match], Number(id)],
+    };
+  };
+  // A pool by its number (1 to 4 digits): the pool labels (28 rows on labels_cat).
+  if (p.pool != null) {
+    const rows = (await db.prepare(`SELECT address, label, updated_at FROM labels INDEXED BY labels_cat WHERE category = 'pool'`).all<{ address: string; label: string; updated_at: number | null }>()).results || [];
+    for (const r of rows) if (new RegExp(`#${p.pool}\\b`).test(r.label)) { const h = poolHit(r, 'exact'); if (h) pools.push(h); }
+  }
+  if (!words.length) return { names, pools };
+  const keys = words.map(wordKeys);
+  const text = words.join(' ');
+  const seen = new Set<string>();
+  for (const r of await nameRows(db, keys)) {
+    if (!labelMatches(r.label, r.address, r.source, keys) || seen.has(r.address)) continue;
+    seen.add(r.address);
+    const match = labelMatch(r.label, r.address, r.source, text);
+    if (r.category === 'pool') { const h = poolHit(r, match); if (h) pools.push(h); continue; }
+    const plain = label_plain(r.label, r.address, r.source);
+    const cat = r.source === 'user' ? tagByline(r.source, labelAuthorShort(r.source, r.author)) : category_plain(r.category, r.label);
+    names.push({
+      type: 'label', group: 'names', kind: r.category === 'validator' ? 'validator' : 'name', match, chain: r.chain as Chain, value: r.address,
+      // the address is not repeated here: every client prints it beside the name (it is `value`)
+      title: plain ?? r.label, subtitle: `${cat ? `${cat} · ` : ''}${chainWord(r.chain)} address${holdsWords(r.total_num, r.stake_num)}`,
+      label: r.label, label_plain: plain, category_plain: cat, href: `/holders?addr=${r.address}`, external: null,
+      stamp: { source: LABEL_SOURCE_WORDS[r.source] ?? r.source, at: r.updated_at ?? null, status: r.updated_at ? 'live' : 'missing', ...(r.updated_at ? {} : { note: 'When this name was written is not recorded.' }) },
+      // the names of one account first, then a wallet's own tag, then a shared allocation name (thousands of genesis addresses)
+      rankKey: [MATCH_RANK[match], r.source === 'user' ? 1 : r.source === 'genesis' && /^genesis\s*:/i.test(r.label) ? 2 : 0, -(r.total_num ?? 0)],
     });
   }
-  if (q.length >= 16 && /^[A-Fa-f0-9]+$/.test(q)) {
-    const upperQ = q.toUpperCase();
-    const flow = await db.prepare('SELECT chain, height, kind, amount_num, tx_hash, meta FROM flows WHERE tx_hash = ? OR tx_hash LIKE ? LIMIT 1').bind(upperQ, `${upperQ}%`).first<any>();
-    if (flow) results.push({ type: 'tx', chain: flow.chain, value: explorerHashOf({ txHash: flow.tx_hash, meta: safeParseJson(flow.meta, null) }), title: `${flow.kind} ${Math.round(flow.amount_num).toLocaleString()} NAM`, subtitle: `block ${flow.height} on ${flow.chain} · ${flow.tx_hash.slice(0, 12)}…` });
+  // The protocol accounts by the names the site gives them (config.ts), and validators by the stored list's names.
+  for (const [address, l] of Object.entries(INTERNAL_LABELS)) {
+    const plain = label_plain(l.label, address, 'auto');
+    if (seen.has(address) || !labelMatches(plain, address, 'auto', keys)) continue;
+    seen.add(address);
+    const match = labelMatch(plain ?? l.label, address, 'auto', text);
+    names.push({
+      type: 'label', group: 'names', kind: 'name', match, chain: (address.startsWith('osmo1') ? 'osmosis' : 'namada') as Chain, value: address,
+      title: plain ?? l.label, subtitle: `Protocol account on ${address.startsWith('osmo1') ? 'Osmosis' : 'Namada'}`, label: l.label, label_plain: plain, category_plain: category_plain(l.category, l.label),
+      href: `/holders?addr=${address}`, external: null, stamp: { source: 'NamadaTrade labels', at: null, status: 'missing', note: 'A protocol account named in the site\'s configuration.' },
+      rankKey: [MATCH_RANK[match], 0],
+    });
   }
-  if (/^\d+$/.test(q)) results.push({ type: 'pool', chain: 'osmosis', value: q, title: `Osmosis pool #${q}`, subtitle: 'pool depth and reserves' });
-  const terms = labelSearchTerms(q);
-  const labelMatches = await db.prepare(`SELECT address, chain, label, category, source, author FROM labels WHERE ${terms.map(() => 'label LIKE ?').join(' OR ')} LIMIT 6`).bind(...terms.map((t) => `%${t}%`)).all<any>();
-  for (const l of labelMatches.results || []) {
-    const plain = label_plain(l.label, l.address, l.source);
-    const cat = l.source === 'user' ? tagByline(l.source, labelAuthorShort(l.source, l.author)) : category_plain(l.category, l.label);
-    results.push({ type: 'label', chain: l.chain, value: l.address, title: plain ?? l.label, subtitle: `${cat ? `${cat} · ` : ''}${l.address.slice(0, 12)}…`, label: l.label, label_plain: plain, category_plain: cat });
+  const vals = await kvGetJson<{ at: number; validators: { address: string; name: string | null; commission: number | null; state: string | null }[] }>(db, 'validators.names').catch(() => null);
+  for (const v of vals?.validators ?? []) {
+    if (!v.name || seen.has(v.address)) continue;
+    const vw = labelWords(v.name);
+    if (!words.every((w) => vw.some((x) => x.startsWith(w)))) continue;
+    seen.add(v.address);
+    const vt = vw.join(' ');
+    const match: SearchMatch = vt === text ? 'exact' : vt.startsWith(text) ? 'start' : 'word';
+    names.push({
+      type: 'validator', group: 'names', kind: 'validator', match, chain: 'namada', value: v.address, title: v.name,
+      subtitle: `Validator${v.state === 'jailed' ? ' (jailed)' : ''} · Namada address`, label: v.name, label_plain: v.name, category_plain: 'Validator',
+      href: `/holders?addr=${v.address}`, external: null,
+      stamp: { source: 'Namada indexer validator list', at: vals!.at, status: now - vals!.at > 36 * H_MS ? 'stale' : 'live' },
+      rankKey: [MATCH_RANK[match], 0],
+    });
   }
-  return c.json({ results });
+  return { names, pools };
+}
+
+async function searchBlocks(db: D1Database, p: Parsed): Promise<Hit[]> {
+  if (p.height == null) return [];
+  const rows = (await db.prepare(`SELECT chain, COUNT(*) n, MIN(ts) ts FROM flows INDEXED BY flows_chain_height WHERE chain IN ('namada', 'osmosis') AND height = ? GROUP BY chain`).bind(p.height).all<{ chain: Chain; n: number; ts: number }>()).results || [];
+  return rows.filter((r) => r.n > 0 && (!p.chain || r.chain === p.chain)).map((r): Hit => ({
+    type: 'block', group: 'blocks', kind: 'block', match: 'exact', chain: r.chain, value: String(p.height),
+    title: `Block ${p.height!.toLocaleString('en-US')} on ${chainWord(r.chain)}`, subtitle: `${r.n.toLocaleString('en-US')} ${r.n === 1 ? 'move' : 'moves'} recorded · ${utcWords(r.ts)}`,
+    href: `/activity?q=${encodeURIComponent(`block ${p.height}`)}${r.chain ? `&chain=${r.chain}` : ''}`, external: null,
+    stamp: { source: 'NamadaTrade flow index', at: r.ts, status: 'live' }, rankKey: [0, r.chain === 'namada' ? 0 : 1],
+  }));
+}
+
+app.get('/api/search', async (c) => {
+  const q = (c.req.query('q') || '').trim().slice(0, INPUT_MAX);
+  const lim = Number(c.req.query('limit'));
+  const limit = Number.isInteger(lim) && lim >= 1 ? Math.min(SEARCH_LIMIT_MAX, lim) : SEARCH_LIMIT;
+  const now = Date.now();
+  if (!q) return c.json({ results: [], asOf: now, groups: [] } satisfies SearchResponse);
+  const db = c.env.DB;
+  const p = parse(q, { now });
+  const listed = p.address || p.tail ? await listingTimes(db) : { balance: null, bond: null };
+  const [addresses, records, named, blocks] = await Promise.all([
+    searchAddresses(db, p, limit, listed, now), searchRecords(db, p, limit), searchNames(db, q, p, now), searchBlocks(db, p),
+  ]);
+  const groups = [
+    grouped('addresses', addresses, limit), grouped('records', records, limit), grouped('names', named.names, limit),
+    grouped('pools', named.pools, limit), grouped('blocks', blocks, limit),
+  ];
+  const res: SearchResponse = { results: groups.flatMap((g) => g.list), asOf: now, groups: groups.map((g) => g.meta) };
+  return c.json(res);
 });
 
 // ---------------------------------------------------------------- auth (signed-message login, sessions, pairing)
@@ -824,20 +1323,23 @@ app.get('/api/export/holders', async (c) => {
   const format = (c.req.query('format') || 'csv').toLowerCase();
   if (format !== 'csv' && format !== 'json') return c.json({ error: 'format must be csv or json' }, 400);
   const by = holdersBy(c.req.query('by'));
+  if (!by) return c.json({ error: 'by must be total, liquid or bonded' }, 400);
   const limit = Math.min(HOLDER_EXPORT_MAX, Math.max(100, parseInt(c.req.query('limit') || String(HOLDER_EXPORT_MAX), 10) || HOLDER_EXPORT_MAX));
-  const { where, params, order, filtered } = holdersWhere(chain, (c.req.query('search') || '').trim(), c.req.query('category') || '', by);
-  const fig = filtered ? null : usableFigures(await readHolderFigures(db), Date.now());
-  const storedTotal = fig ? figuresCount(fig, chain) : null;
-  const [rows, totalRes, supplyRow, listed] = await Promise.all([
-    db.prepare(`${HOLDERS_BASE} ${where} ORDER BY ${order}, x.address LIMIT ?`).bind(...params, limit).all<any>(),
-    storedTotal != null ? { total: storedTotal } : db.prepare(`SELECT COUNT(*) total FROM (${HOLDERS_BASE} ${where})`).bind(...params).first<{ total: number }>(),
-
-    metricAt(db, 'supply.total', Date.now()),
+  const min = holderSize(c.req.query('min'), 'min');
+  const max = holderSize(c.req.query('max'), 'max');
+  for (const v of [min, max]) if (v && typeof v === 'object') return c.json({ error: v.error }, 400);
+  const now = Date.now();
+  // The same rows and order as /api/holders: the first `limit` of the list, one walk of the sort's index.
+  const ask: HolderAsk = { chain, by, category: holderCategory(c.req.query('category')), search: (c.req.query('search') || '').trim(), min: min as number | null, max: max as number | null };
+  const [sel, supplyRow, listed] = await Promise.all([
+    selectHolders(db, ask, { page: 1, limit, after: null }, now),
+    metricAt(db, 'supply.total', now),
     listingTimes(db),
   ]);
-  const matching = totalRes?.total ?? 0;
+  if ('error' in sel) return c.json({ error: sel.error }, 400);
+  const matching = sel.total;
   const total = supplyRow?.value ?? null;
-  const list = (rows.results || []).map((r: any, idx: number) => {
+  const list = sel.rows.map((r, idx) => {
     const label = r.label || INTERNAL_LABELS[r.address]?.label || null;
     const category = r.category || INTERNAL_LABELS[r.address]?.category || null;
     const source = r.label ? r.label_source ?? null : INTERNAL_LABELS[r.address] ? 'auto' : null;
@@ -848,12 +1350,12 @@ app.get('/api/export/holders', async (c) => {
       totalNam: r.total_num, pctTotalSupply: total ? ((r.total_num / total) * 100).toFixed(6) : '',
       label: label_plain(label, r.address, source) ?? '', category: category_plain(category, label) ?? '',
       labelSource: source ?? '',
-      spendableCheckedAt: isoOrBlank(listedWithNoNam(r, listed) ? listed.balance : confirmedAt(r.verified_at, r.liquid_src, BALANCE_LISTING_SRC, listed.balance)),
+      spendableCheckedAt: isoOrBlank(listedWithNoNam(r, listed) ? listed.balance : r.has_row ? confirmedAt(r.verified_at, r.liquid_src, BALANCE_LISTING_SRC, listed.balance) : null),
       stakeCheckedAt: isoOrBlank(confirmedAt(r.bonded_verified_at, r.bonded_src, BOND_LISTING_SRC, listed.bond)),
     };
   });
   const cut = list.length < matching;
-  const name = `namada-trade-holders-${chain}-${cut ? `first-${list.length}-of-${matching}-` : ''}${Date.now()}`;
+  const name = `namada-trade-holders-${chain}-${cut ? `first-${list.length}-of-${matching}-` : ''}${now}`;
   if (format === 'json') return c.json({ count: list.length, total: matching, truncated: cut, supplyTotal: total, by, holders: list }, 200, { 'X-Total-Count': String(matching), 'X-Truncated': String(cut) });
   const csv = csvOf(
     ['rank', 'chain', 'address', 'spendable_nam', 'staked_nam', 'staked_is_estimate', 'total_nam', 'pct_total_supply', 'label', 'category', 'label_source', 'spendable_checked_at', 'stake_checked_at'],
@@ -872,13 +1374,12 @@ app.get('/api/export/flows', async (c) => {
   const format = (c.req.query('format') || 'csv').toLowerCase();
   if (format !== 'csv' && format !== 'json') return c.json({ error: 'format must be csv or json' }, 400);
   const limit = Math.min(FLOW_EXPORT_MAX, Math.max(100, parseInt(c.req.query('limit') || String(FLOW_EXPORT_MAX), 10) || FLOW_EXPORT_MAX));
-  const { where, params } = flowsWhere(flowsFilterFromQuery((k) => c.req.query(k), asOf));
-  const [rows, totalRes] = await Promise.all([
-    db.prepare(`${FLOW_SELECT} ${where} ${FLOWS_ORDER} LIMIT ?`).bind(...params, limit).all<any>(),
-    db.prepare(`SELECT COUNT(*) total FROM flows f ${where}`).bind(...params).first<{ total: number }>(),
-  ]);
-  const flows = (rows.results || []).map(rowToFlow);
-  const matching = totalRes?.total ?? flows.length;
+  const bad = flowsFilterError((k) => c.req.query(k));
+  if (bad) return c.json({ error: bad }, 400);
+  // The same rows and order as the moves list's head page (readFlows: the index its filters walk), newest first.
+  const r = await readFlows(db, flowsFilterFromQuery((k) => c.req.query(k), asOf), null, limit, 0, true);
+  const flows = r.flows;
+  const matching = r.total ?? flows.length;
   const cut = flows.length < matching;
   if (format === 'json') return c.json({ count: flows.length, total: matching, truncated: cut, asOf, flows }, 200, { 'X-Total-Count': String(matching), 'X-Truncated': String(cut) });
   const meta = (f: { meta?: Record<string, unknown> | null }, k: string) => (f.meta && typeof f.meta[k] === 'string' ? (f.meta[k] as string) : '');
@@ -997,6 +1498,8 @@ app.get('/api/metrics/history', async (c) => {
   }
   return c.json({ key, bucketMs: bucket, history });
 });
+
+app.route('/api/series', seriesApp); // the series and Trade-basics routes (worker/src/api-series.ts, screener-plan 2.12)
 
 // Compact for `kvGet` import to stay used by future routes
 void kvGet;

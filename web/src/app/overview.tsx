@@ -7,7 +7,7 @@
 // nt.lastSeen. Nothing here invents a value: a figure the API did not send stays null.
 import React, { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react';
 import type { AlertHit, Flow, LiveMessage, Overview } from '../../../shared/types';
-import { fetchAlertsRecent, fetchFlows, fetchOverview } from '../api';
+import { fetchAlertsRecent, fetchLiveSeed, fetchOverview } from '../api';
 import { useReplay } from './replay';
 import { useWallNow } from '../ui/now';
 import { useRoute } from './router';
@@ -247,7 +247,7 @@ export function OverviewProvider({ children }: { children: React.ReactNode }) {
       return;
     }
     let alive = true;
-    fetchFlows({ limit: 30 })
+    fetchLiveSeed(30)
       .then((r) => {
         if (!alive) return;
         setLiveFlows((prev) => {

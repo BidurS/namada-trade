@@ -151,7 +151,7 @@ test.describe('sheets, once', () => {
       return c.textContent ?? '';
     });
     expect(outside).not.toMatch(BANNED);
-    await expect(d.locator('li[data-key]').first().locator('.sh-chk__w')).toHaveText(/^(Passes|Needs a look)/);
+    await expect(d.locator('li[data-key]').first().locator('.sh-chk__w')).toHaveText(/^(Passes|Needs a look|Nothing to compare)/); // the price check is idle when no trade it trusts fell in its window (lib/prov.ts)
     await d.getByText('How it is computed').click();
     await expect(d.locator('details.sh-how')).toHaveAttribute('open', '');
     await expect(d.locator('details.sh-how .sh-raw dt').first()).toBeVisible();
@@ -213,5 +213,114 @@ test.describe('sheets, once', () => {
     await page.locator('dialog.sh-acct').getByRole('button', { name: 'Sign out on this device' }).click();
     await expect(page.locator('header .ibtn[aria-label="Account: sign in"]')).toBeVisible();
     expect(loggedOut).toBe(true);
+  });
+});
+
+// ---------------------------------------------------------------- where the Address sheet was opened from (S7, nav-search-plan 3.2)
+// The list answers and the address report are route mocks shaped like shared/types.ts (the stored-totals server's
+// HoldersResponse and FlowsResponse, an AddressReport with `rankTotal`); the stream is mocked silent.
+const FX_B32 = 'qpzry9x8gf2tvdw0s3jn54khce6mua7l';
+const fxAddress = (i: number, prefix: 'tnam1' | 'osmo1' = 'tnam1') => {
+  let s = '';
+  for (let k = 0, n = i; k < 8; k++, n = Math.floor(n / 32)) s = FX_B32[n % 32] + s;
+  return `${prefix}qx${'q'.repeat(prefix === 'tnam1' ? 30 : 28)}${s}`;
+};
+function fxListHolder(rank: number) {
+  const now = Date.now();
+  const total = Math.round(60_000_000 / rank);
+  return {
+    rank, chain: 'namada', address: fxAddress(rank), balance: total * 0.7, bonded: total * 0.3, bondedEstimated: total * 0.3, bondedVerifiedAt: now - 60_000,
+    total, pctSupply: (total / 1.15e9) * 100, change24h: 0, change7d: 0, label: null, category: null, label_plain: null, category_plain: null,
+    label_source: null, label_author: null, linked: [], updatedAt: now - 60_000, verifiedAt: now - 60_000, status: 'live', statusNote: null,
+  };
+}
+function fxReport(address: string, chain: 'namada' | 'osmosis', rank: number | null, rankTotal: number | null | undefined) {
+  return {
+    address, chain, label: null,
+    balance: { value: 1_000_000, prov: { source: 'Namada RPC (balance read)', at: Date.now(), status: 'live' } },
+    indexedBalance: 1_000_000, staking: null, rank, ...(rankTotal !== undefined ? { rankTotal } : {}), change24h: null, change7d: null,
+    links: [], totalFlowsCount: 0, flows: [], counterparties: [],
+  };
+}
+async function originMocks(page: Page) {
+  await page.routeWebSocket('**/ws', () => {});
+  await page.route(/\/api\/holders\?/, (route) => {
+    const u = new URL(route.request().url());
+    const limit = Number(u.searchParams.get('limit') ?? 50);
+    const pg = Number(u.searchParams.get('page') ?? 1);
+    const holders = Array.from({ length: limit }, (_, i) => fxListHolder((pg - 1) * limit + i + 1));
+    return route.fulfill({ json: { total: 64_377, page: pg, limit, holders, next: null, asOf: Date.now() - 30_000, countsAt: Date.now() - 120_000, categories: { total: 64_377, counts: [] } } });
+  });
+  const base = Date.now() - 5 * 60_000;
+  await page.route(/\/api\/flows\?/, (route) => {
+    const u = new URL(route.request().url());
+    const limit = Number(u.searchParams.get('limit') ?? 50);
+    const flows = Array.from({ length: limit }, (_, i) => {
+      const trader = fxAddress(i, 'osmo1');
+      const hash = (i.toString(16).toUpperCase().padStart(8, '0') + 'CD'.repeat(28)).slice(0, 64);
+      return {
+        id: `fx:${i}`, chain: 'osmosis', height: 72_000_000 - i, ts: base - i * 60_000, txHash: hash, explorerHash: hash, kind: 'sell', from: trader, to: null,
+        amount: 5_000 + i, counterDenom: 'USDC', counterAmount: 5.7, poolId: '3005', priceUsd: 0.00114, valueUsd: 5.7, meta: { trader },
+        fromLabel: null, toLabel: null, fromLabelPlain: null, toLabelPlain: null, fromLabelSource: null, toLabelSource: null, fromLabelAuthor: null, toLabelAuthor: null, whale: false,
+      };
+    });
+    return route.fulfill({ json: { total: 2_000, page: 1, limit, flows, next: 'WzE3OTAwMDAwMDAwMDAsMSwiZng6NDkiXQ', asOf: Date.now(), firstTs: Date.UTC(2024, 11, 3) } });
+  });
+  await page.route(/\/api\/address\//, (route) => {
+    const a = decodeURIComponent(new URL(route.request().url()).pathname.split('/').pop() ?? '');
+    return route.fulfill({ json: a.startsWith('osmo1') ? fxReport(a, 'osmosis', 7, 7) : fxReport(a, 'namada', 4, Number(a === fxAddress(1)) || 1_204) });
+  });
+}
+
+test.describe('Address sheet: where it was opened from, and both ranks', () => {
+  test('from a holder row: the eyebrow says the list and the rank; the rank line says both orders with one stamp; Escape returns to the row', async ({ page }, info) => {
+    test.skip(!['375x812', '1280x800'].includes(info.project.name), 'runs at 375 and 1280');
+    await originMocks(page);
+    await gotoRoute(page, '/holders');
+    const name = page.locator('main .act-holders .hrow').first().locator('.act-name');
+    await expect(name).toBeVisible({ timeout: 30_000 });
+    await name.click();
+    const d = page.locator('dialog.sh-addr');
+    await expect(d.locator('.sh-addr__from')).toHaveText('From holders · No. 1 by total NAM');
+    // the eyebrow is the 11 px caps line under the title
+    await expect(d.locator('.sh-addr__from')).toHaveCSS('text-transform', 'uppercase');
+    const ranks = d.locator('.sh-addr__ranks');
+    await expect(ranks).toContainText('No. 1 by total NAM');
+    await expect(ranks).toContainText('No. 4 by spendable NAM');
+    await expect(ranks.locator('[data-num]')).toHaveCount(2);
+    await expect(ranks.locator('.pdot')).toHaveCount(1);
+    await sheetFits(page);
+    await page.keyboard.press('Escape');
+    await expect(d).toHaveCount(0);
+    await expect(name).toBeFocused();
+  });
+
+  test('from a move: "From activity · Move 1 of 2,000"; the same address opened from its link has no eyebrow', async ({ page }, info) => {
+    test.skip(onlyIn(info.project.name), 'runs once');
+    await originMocks(page);
+    await gotoRoute(page, '/activity');
+    const who = page.locator('main .txl .tx').first().locator('.tx__addr').first();
+    await expect(who).toBeVisible({ timeout: 30_000 });
+    await who.click();
+    const d = page.locator('dialog.sh-addr');
+    await expect(d.locator('.sh-addr__from')).toHaveText('From activity · Move 1 of 2,000');
+    await expect(d.locator('.sh-addr__ranks')).toContainText('No. 7 by total NAM');
+    await page.keyboard.press('Escape');
+    await expect(d).toHaveCount(0);
+    // opened from a link (?addr=), the sheet does not claim a list
+    await gotoRoute(page, `/alerts?addr=${fxAddress(0, 'osmo1')}`);
+    await expect(page.locator('dialog.sh-addr .sh-addr__ranks')).toBeVisible({ timeout: 30_000 });
+    await expect(page.locator('dialog.sh-addr .sh-addr__from')).toHaveCount(0);
+  });
+
+  test('a server before the stored totals: only the spendable rank, stamped', async ({ page }, info) => {
+    test.skip(onlyIn(info.project.name), 'runs once');
+    const a = fxAddress(3);
+    await page.route(/\/api\/address\//, (route) => route.fulfill({ json: fxReport(a, 'namada', 318, undefined) }));
+    await gotoRoute(page, `/alerts?addr=${a}`);
+    const ranks = page.locator('dialog.sh-addr .sh-addr__ranks');
+    await expect(ranks).toHaveText(/^No\. 318 by spendable NAM/);
+    await expect(ranks).not.toContainText('total NAM');
+    await expect(ranks.locator('.pdot')).toHaveCount(1);
   });
 });

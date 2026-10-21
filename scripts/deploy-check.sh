@@ -11,6 +11,12 @@ H=https://namada.trade
 echo "== 1. migrations"
 for i in 1 2 3 4 5; do out=$(npx wrangler d1 migrations list namada-trade-db --remote 2>&1) && ! echo "$out" | grep -q 7403 && { echo "$out" | tail -4; break; }; echo "retrying (Cloudflare 7403)"; sleep 6; done
 { yes || true; } | npx wrangler d1 migrations apply namada-trade-db --remote
+# 0008 (stored totals, wider indexes, the word table): its 8 triggers and 7 new objects must be there before the
+# worker that reads them goes out (read-only check)
+for i in 1 2 3 4 5; do out=$(npx wrangler d1 execute namada-trade-db --remote --json --command "SELECT (SELECT COUNT(*) FROM sqlite_master WHERE type='trigger') triggers, (SELECT COUNT(*) FROM sqlite_master WHERE name IN ('holders_total','holders_stake','holders_tail','flows_hash','flows_hash_wrapper','flows_hash_inner','label_tokens')) objects" 2>&1) && ! echo "$out" | grep -q 7403 && break; echo "retrying (Cloudflare 7403)"; sleep 6; done
+echo "$out" | python3 -c "
+import sys,json; r=json.load(sys.stdin)[0]['results'][0]; print('0008 objects:', r)
+sys.exit(0 if r['triggers'] >= 8 and r['objects'] == 7 else 1)" || { echo "FAIL migration 0008 is not in place: not deploying"; exit 1; }
 
 echo "== 2. deploy"
 npm run deploy 2>&1 | grep -E "Current Version ID|Deployed|rror"
@@ -28,6 +34,16 @@ check "/api/auth/me is no-store"       1 "$(curl -s -D - -o /dev/null "$H/api/au
 check "home is 200"                    200 "$(curl -s -o /dev/null -w '%{http_code}' "$H/")"
 check "unknown page is 404"            404 "$(curl -s -o /dev/null -w '%{http_code}' "$H/no-such-page")"
 check "CSP is enforced"                1 "$(curl -s -I "$H/" | grep -ci '^content-security-policy: default-src' || true)"
+# a day the Trade page asks for (30 days back): another day is limited on a miss (worker/src/http.ts seriesFromDays)
+day=$(python3 -c "import datetime; print((datetime.datetime.now(datetime.timezone.utc) - datetime.timedelta(days=30)).strftime('%Y-%m-%d'))")
+check "series answers by day"          200 "$(curl -s -o /dev/null -w '%{http_code}' "$H/api/series?key=price.usd&from=$day&step=1h")"
+check "an encoded parameter name is a 404" 404 "$(curl -s -o /dev/null -w '%{http_code}' "$H/api/alerts/rules?%62igSwap=1&bigSwap=2")"
+check "a count the app never sends is a 400" 400 "$(curl -s -o /dev/null -w '%{http_code}' "$H/api/flows?count=x")"
+check "an unknown series key is 404"   404 "$(curl -s -o /dev/null -w '%{http_code}' "$H/api/series?key=no.such.key")"
+check "the tape answers"               200 "$(curl -s -o /dev/null -w '%{http_code}' "$H/api/series/trades?limit=60")"
+check "search answers in groups"       1 "$(curl -s "$H/api/search?q=anoma" | python3 -c "import sys,json; d=json.load(sys.stdin); print(1 if 'groups' in d and all('group' in r for r in d['results']) else 0)")"
+check "rows-only moves take no count"  1 "$(curl -s "$H/api/flows?limit=10&count=none" | python3 -c "import sys,json; d=json.load(sys.stdin); print(1 if d['total'] is None and len(d['flows']) > 0 else 0)")"
+check "holders page 2 answers"         200 "$(curl -s -o /dev/null -w '%{http_code}' "$H/api/holders?chain=namada&by=total&page=2&limit=50")"
 echo "== checks and health"
 curl -s "$H/api/integrity" | python3 -c "
 import sys,json; d=json.load(sys.stdin)

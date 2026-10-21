@@ -1,4 +1,10 @@
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, vi } from 'vitest';
+import { readFileSync } from 'node:fs';
+import { join } from 'node:path';
+import { HonoRequest } from 'hono/request';
+import { app } from '../worker/src/api';
+import { CACHE_PARAMS, CACHEABLE_API, cacheKeyUrl, limiterFor, isHeavy, isReplay, rateLimited, edgeCacheOf, SEARCH_LIMIT_WORDS } from '../worker/src/http';
+import { testD1 } from './d1-sqlite';
 import {
   ROUTES, SITE, TABS, ROUTE_ALIASES, classifyPath, routeById, routeByPath, fullTitle, redirectLocation, legacyHashTarget,
 } from '../shared/routes';
@@ -247,9 +253,141 @@ describe('sitemap, robots and the server-rendered page', () => {
     const disallowed = [...txt.matchAll(/^Disallow: (.+)$/gm)].map((m) => m[1].trim());
     const reads = ['/api/overview', '/api/metrics/history?key=price.usd&hours=720', '/api/pools', '/api/quote?amount=1000&side=sell', '/api/quote/curve',
       '/api/flows', '/api/holders', '/api/pressure', '/api/blindspot', '/api/alerts/recent', '/api/alerts/rules', '/api/intel', '/api/address/tnam1x',
-      '/api/search?q=x', '/api/integrity', '/api/donation'];
+      '/api/search?q=x', '/api/integrity', '/api/donation', '/api/series?key=price.usd&from=2026-10-01', '/api/series/changes', '/api/series/volume',
+      '/api/series/pairs', '/api/series/trades?limit=60', '/api/series/values', '/activity', '/holders', '/holders?what=genesis'];
     for (const p of reads) for (const d of disallowed) expect(p.startsWith(d), `${d} blocks ${p}`).toBe(false);
     // the account endpoints stay out
     for (const p of ['/api/me/settings', '/api/me/sessions', '/api/auth/me', '/api/export/holders', '/api/labels']) expect(disallowed.some((d) => p.startsWith(d)), p).toBe(true);
+    // the lists' numbered pages stay out (a wildcard rule: '*' matches any run of characters)
+    const blocks = (p: string) => disallowed.some((d) => new RegExp('^' + d.replace(/[.?+^$()[\]{}|\\]/g, '\\$&').replace(/\*/g, '.*')).test(p));
+    for (const p of ['/activity?page=2', '/holders?by=staked&page=40', '/activity?what=sell&page=3&cursor=x']) expect(blocks(p), p).toBe(true);
+    for (const p of ['/activity', '/holders?what=genesis', '/trade']) expect(blocks(p), p).toBe(false);
+  });
+});
+
+// ---------------------------------------------------------------- the edge cache keys and the limits (nav-search-plan.md 2.2, 4.5)
+describe('every query parameter a cached list or search route reads is in its cache key', () => {
+  const SRC = readFileSync(join(__dirname, '..', 'worker', 'src', 'api.ts'), 'utf8');
+  const FQ = readFileSync(join(__dirname, '..', 'worker', 'src', 'flows-query.ts'), 'utf8');
+  /** The names each helper that takes the request reads: `function x(c…)` and `const x = (c…) =>` bodies, to a fixed point. */
+  const helperReads = () => {
+    const out = new Map<string, Set<string>>();
+    const re = /(?:function\s+(\w+)\s*\(c\b[^)]*\)|const\s+(\w+)\s*=\s*(?:async\s*)?\(c\b[^)]*\)\s*(?::[^=]+)?=>)/g;
+    const starts = [...SRC.matchAll(re)].map((m) => ({ name: m[1] ?? m[2], at: m.index! }));
+    for (const s of starts) {
+      // the helper's text: to the next top-level statement (a line that starts with neither a space nor a brace)
+      const rest = SRC.slice(s.at);
+      const end = rest.slice(1).search(/\n(?![\s}])/);
+      const body = end < 0 ? rest : rest.slice(0, end + 1);
+      out.set(s.name, new Set([...body.matchAll(/c\.req\.query\('([A-Za-z]+)'\)/g)].map((m) => m[1])));
+    }
+    return out;
+  };
+  const flowKeys = [...FQ.matchAll(/\bq\('([A-Za-z]+)'\)/g)].map((m) => m[1]);
+
+  it('read statically: the route body, the helpers it calls with the request, and the flow filter', () => {
+    const helpers = helperReads();
+    expect(flowKeys).toEqual(expect.arrayContaining(['since', 'addr', 'hash', 'height']));
+    for (const route of ['/api/holders', '/api/flows', '/api/search', '/api/export/holders', '/api/export/flows']) {
+      expect(CACHEABLE_API.test(route) || route.startsWith('/api/export/'), route).toBe(true);
+      const at = SRC.indexOf(`app.get('${route}'`);
+      expect(at, route).toBeGreaterThan(0);
+      const rest = SRC.slice(at + 1);
+      const end = rest.search(/\napp\.(get|post|put|delete|use)\(/);
+      const body = end < 0 ? rest : rest.slice(0, end);
+      const reads = new Set([...body.matchAll(/c\.req\.query\('([A-Za-z]+)'\)/g)].map((m) => m[1]));
+      for (const [name, keys] of helpers) if (new RegExp(`\\b${name}\\(c\\b`).test(body)) for (const k of keys) reads.add(k);
+      if (/flowsFilterFromQuery\(|flowsFilterError\(/.test(body)) for (const k of flowKeys) reads.add(k);
+      for (const k of reads) expect(CACHE_PARAMS[route], `${route} reads ?${k}`).toContain(k);
+    }
+  });
+
+  it('read at run time: every name a real request asks for is in the key', async () => {
+    const db = testD1();
+    const read = new Map<string, Set<string>>();
+    let current = '';
+    const orig = HonoRequest.prototype.query;
+    HonoRequest.prototype.query = function (this: HonoRequest, key?: string) {
+      if (typeof key === 'string') (read.get(current) ?? read.set(current, new Set()).get(current)!).add(key);
+      return (orig as any).call(this, key);
+    } as typeof orig;
+    try {
+      const urls = [
+        '/api/holders?chain=namada', '/api/holders?chain=all&search=zond&min=1', '/api/holders?after=x&page=2&by=bonded&category=none&max=5',
+        '/api/flows', '/api/flows?before=1790000000000&count=none', '/api/flows?hash=ABCDEF01&since=1790000000000', '/api/flows?addr=tnam1qxyzqxyz&height=5',
+        '/api/search?q=zond&limit=3', '/api/search?q=tnam1qxyzqxyz', '/api/export/holders?min=1', '/api/export/flows?addr=tnam1qxyzqxyz',
+      ];
+      for (const u of urls) {
+        current = new URL(`https://namada.trade${u}`).pathname;
+        const res = await app.request(u, {}, { DB: db } as any);
+        expect(res.status, u).toBeLessThan(500);
+      }
+    } finally {
+      HonoRequest.prototype.query = orig;
+    }
+    for (const [route, keys] of read) for (const k of keys) expect(CACHE_PARAMS[route], `${route} reads ?${k} at run time`).toContain(k);
+    expect([...read.get('/api/flows')!]).toEqual(expect.arrayContaining(['before', 'since', 'addr', 'hash', 'height', 'count']));
+    expect([...read.get('/api/holders')!]).toEqual(expect.arrayContaining(['after', 'min', 'max', 'search']));
+  });
+
+  it('the key keeps the new parameters and drops anything else', () => {
+    expect(cacheKeyUrl(new URL('https://namada.trade/api/search?q=zond&limit=6&r=1'))).toBe('https://namada.trade/api/search?limit=6&q=zond');
+    expect(cacheKeyUrl(new URL('https://namada.trade/api/flows?before=abc&addr=tnam1qxyzqxyz&x=1'))).toBe('https://namada.trade/api/flows?addr=tnam1qxyzqxyz&before=abc');
+    expect(cacheKeyUrl(new URL('https://namada.trade/api/holders?after=abc&min=5&max=9&y=2'))).toBe('https://namada.trade/api/holders?after=abc&max=9&min=5');
+  });
+});
+
+describe('which limit a request is under, and its words', () => {
+  const u = (p: string) => new URL(`https://namada.trade${p}`);
+  it('searches (the search, the lists searched by text) are under the search limit; exports, address reports and quotes under the heavy one', () => {
+    expect(limiterFor(u('/api/search?q=x'))).toBe('search');
+    expect(limiterFor(u('/api/holders?search=zz'))).toBe('search');
+    expect(limiterFor(u('/api/flows?search=zz'))).toBe('search');
+    expect(limiterFor(u('/api/holders?chain=namada'))).toBeNull();
+    expect(limiterFor(u('/api/flows?addr=tnam1qxyzqxyz'))).toBeNull();
+    for (const p of ['/api/export/holders', '/api/export/flows', `/api/address/tnam1${'q'.repeat(40)}`, '/api/quote?amount=1&side=buy']) expect(limiterFor(u(p)), p).toBe('heavy');
+    expect(limiterFor(u('/api/labels'), 'POST')).toBe('heavy');
+    expect(limiterFor(u('/api/overview'))).toBeNull();
+    expect(isHeavy(u('/api/search?q=x'))).toBe(true);
+  });
+
+  it('a search over the limit is told so in plain words; the search limiter is used when bound, the heavy one otherwise', async () => {
+    const deny = () => ({ limit: vi.fn(async () => ({ success: false })) });
+    const allow = () => ({ limit: vi.fn(async () => ({ success: true })) });
+    const req = (p: string) => new Request(`https://namada.trade${p}`, { headers: { 'cf-connecting-ip': '1.2.3.4' } });
+    const search = deny(), heavy = allow();
+    const r = await rateLimited(req('/api/search?q=zond'), { SEARCH_LIMITER: search, HEAVY_LIMITER: heavy } as any);
+    expect(r?.status).toBe(429);
+    expect(await r!.json()).toEqual({ error: SEARCH_LIMIT_WORDS });
+    expect(SEARCH_LIMIT_WORDS).toBe('Too many searches from your address; try again in a minute.');
+    expect(search.limit).toHaveBeenCalledWith({ key: '1.2.3.4:/api/search' });
+    expect(heavy.limit).not.toHaveBeenCalled();
+    const onlyHeavy = deny();
+    expect((await rateLimited(req('/api/holders?search=zz'), { HEAVY_LIMITER: onlyHeavy } as any))?.status).toBe(429);
+    expect(await rateLimited(req('/api/export/holders'), { SEARCH_LIMITER: deny(), HEAVY_LIMITER: allow() } as any)).toBeNull();
+  });
+
+  it('a moves page behind a cursor or a date stays a minute at the edge; a head page 15 s; a cursor, a size or a date is a high-cardinality read', () => {
+    expect(edgeCacheOf(u('/api/flows?before=abc'))).toMatch(/s-maxage=60/);
+    expect(edgeCacheOf(u('/api/flows'))).toMatch(/s-maxage=15/);
+    expect(edgeCacheOf(u('/api/search?q=x'))).toMatch(/s-maxage=15/);
+    for (const p of ['/api/flows?before=abc', '/api/holders?after=abc', '/api/holders?min=5', '/api/flows?since=1']) expect(isReplay(u(p)), p).toBe(true);
+    expect(isReplay(u('/api/search?q=zond'))).toBe(false);
+    expect(CACHEABLE_API.test('/api/search')).toBe(true);
+  });
+
+  it('the series routes: 15 s at the edge; asked by day (as the Trade page asks) they are cache entries, a time to the millisecond, a tape cursor, a maker or a size is a high-cardinality read', () => {
+    for (const p of ['/api/series', '/api/series/changes', '/api/series/volume', '/api/series/pairs', '/api/series/trades', '/api/series/values']) {
+      expect(CACHEABLE_API.test(p), p).toBe(true);
+      expect(edgeCacheOf(u(p))).toMatch(/s-maxage=15/);
+    }
+    // a `from` of one of the days the Trade page sends today (30, 90, 365 or 1,200 days back, or 14 for the daily bars)
+    const sent = new Date(Date.now() - 30 * 86_400_000).toISOString().slice(0, 10);
+    for (const p of [`/api/series?key=price.usd&from=${sent}&step=1h`, '/api/series?key=price.usd', '/api/series/trades?limit=60', '/api/series/changes', '/api/series/pairs']) expect(isReplay(u(p)), p).toBe(false);
+    for (const p of ['/api/series?key=price.usd&from=1792500000000', `/api/series?key=price.usd&from=${sent}&to=1792500000000`, '/api/series?key=price.pool_1h&from=2020-01-01&step=1d', '/api/series/trades?before=abc', '/api/series/trades?limit=61',
+      '/api/series/trades?maker=tnam1x', '/api/series/trades?min=5000', '/api/series/volume?at=1792500000000']) expect(isReplay(u(p)), p).toBe(true);
+    // the cache key keeps every parameter the route reads, sorted, and nothing else
+    expect(cacheKeyUrl(u('/api/series?step=1h&key=price.usd&r=1&from=2026-10-01'))).toBe('https://namada.trade/api/series?from=2026-10-01&key=price.usd&step=1h');
+    expect(cacheKeyUrl(u('/api/series/trades?limit=60&maker=tnam1x&zz=9'))).toBe('https://namada.trade/api/series/trades?limit=60&maker=tnam1x');
   });
 });

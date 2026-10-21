@@ -6,36 +6,38 @@
 // dimmed once and says so in one sentence; a row that differs carries its own mark (the server's
 // status, owner decision 7: `conflict` shows both staked readings).
 //
-// Data: GET /api/holders (chain, sort, search, pages). It does not take `at`: under Rewind the list
-// is current and says so ("Balances were not recorded over time; these are current, not as of …").
-import React, { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
-import type { Holder, HoldersResponse, Overview, SourceStatus } from '../../../../shared/types';
-import { fetchHolders, holdersCsvHref } from '../../api';
+// State: the URL (urlState.ts: ?chain ?by ?what ?q ?min ?max ?page ?size), nav-search-plan 2.4. The search field reads
+// the grammar (shared/search-grammar.ts) into chips; the filter words move into their parameters on Enter.
+//
+// Data: GET /api/holders (chain, sort, category, search, sizes, page). On the stored-totals server the answer carries
+// the count and the "What" counts over the whole list (kv holders.counts, `countsAt`) and the time of the order
+// (`asOf`); an older server sends neither, and the client says what it counted instead (api.ts fetchHoldersPage).
+// It does not take `at`: under Rewind the list is current and says so ("Balances were not recorded over time; these
+// are current, not as of …").
+import React, { useEffect, useMemo, useRef, useState } from 'react';
+import type { Holder, Overview, SourceStatus } from '../../../../shared/types';
+import { fetchHoldersPage, holdersCsvHref, type HoldersPage } from '../../api';
 import { REWIND_WORDS, navigate, useNow, useOverlays, useReplay } from '../../app/index';
 import { Button, DataList, EmptyState, HolderRow, Notice, Num, PageTools, Pager, ProvDot, Segmented, SelectChip, Skeleton, SourceLine, Tag, WallClock, sourcesText, stepFor, type ScopeItem, type Stamp } from '../../ui';
+import { FilterChips } from '../../ui/FilterChips';
+import type { Column } from '../../ui/DataList';
 import { useListKeys, type ListKey } from '../../app/keys';
 import { ageRange } from '../../lib/prov';
 import { holderCatKey as catKey, holderName, holderTag, isUserTag } from '../../lib/holder';
 import { category_plain } from '../../../../shared/labels';
-import { fmtAddr, fmtAge, fmtCount, fmtNamRule, fmtNamSigned, fmtPctRule } from '../../lib/format';
-import { ActivityBar, FilterPanel, FilterSet, KeysHint, SearchField, useRovingRows } from './parts';
-import { TECH } from './words';
-import { HOLDER_CSV_MAX, PAGE_SIZES, firstVisibleRow, flashRow, focusFirstRow, focusRow, listHref, pageCount, pageHref, pageOfRank, revealRow } from './paging';
-
-export interface HolderFilters {
-  chain: 'namada' | 'osmosis' | 'all';
-  by: 'total' | 'liquid' | 'bonded';
-  /** a raw category, 'none' (no label) or 'all' */
-  cat: string;
-  search: string;
-}
-export const H_DEFAULT: HolderFilters = { chain: 'namada', by: 'total', cat: 'all', search: '' };
-export const holderFilterCount = (f: HolderFilters): number => (Object.keys(H_DEFAULT) as (keyof HolderFilters)[]).filter((k) => f[k] !== H_DEFAULT[k]).length;
+import { fmtAddr, fmtAge, fmtCount, fmtNamRule, fmtNamSigned, fmtPctRule, fmtUtcClock } from '../../lib/format';
+import { ActivityBar, FilterPanel, FilterSet, KeysHint, ListSearch, useRovingRows } from './parts';
+import { HOLDER_SEARCH_EMPTY, SEARCH_HINT, SEARCH_PLACEHOLDER, TECH } from './words';
+import { HOLDER_CSV_MAX, PAGE_SIZES, firstVisibleRow, flashRow, focusFirstRow, focusRow, pageCount, pageOfRank, revealRow } from './paging';
+import { HOLDER_DEFAULT, SORT_API, holderPatch, holdersApplied, hrefWith, liftHolders, type HolderUrl } from './urlState';
+import { noteOrigin } from './sheetOrigin';
 
 const H6 = 6 * 3_600_000;
 const H24 = 24 * 3_600_000;
-const BY_WORD: Record<HolderFilters['by'], string> = { total: 'total NAM', liquid: 'spendable NAM', bonded: 'staked NAM' };
-const CHAIN_WORD: Record<HolderFilters['chain'], string> = { namada: 'on Namada', osmosis: 'on Osmosis', all: 'on Namada and Osmosis' };
+/** The counts the cron keeps are rewritten after each listing and every 10 minutes: older than an hour, they are old. */
+const COUNTS_OLD_MS = 3_600_000;
+const BY_WORD: Record<HolderUrl['by'], string> = { total: 'total NAM', spendable: 'spendable NAM', staked: 'staked NAM' };
+const CHAIN_WORD: Record<HolderUrl['chain'], string> = { namada: 'on Namada', osmosis: 'on Osmosis', all: 'on Namada and Osmosis' };
 
 /** The widest rank on the page, in characters of the rank's mono face ("1,204" is 5). */
 const rkChars = (ranks: number[]): number => Math.max(0, ...ranks.map((r) => fmtCount(r).length));
@@ -44,52 +46,68 @@ const RK_CH_PX = 7.6;
 
 const statusOf = (h: Holder): { status: SourceStatus; note: string | null } => ({ status: h.status, note: h.statusNote ?? null });
 
-/**
- * The "What" counts over every holder the chain and search select (the category left out), when the server
- * sends them (HoldersResponse.categories; absent on older servers). `category` is the raw category in lower
- * case, or 'none' for no label; `total` counts every holder the chain and search select.
- */
-type CatCounts = { total: number; counts: { category: string; n: number }[] };
-const catCountsOf = (r: HoldersResponse): CatCounts | null => (r as HoldersResponse & { categories?: CatCounts | null }).categories ?? null;
+type CatCounts = NonNullable<HoldersPage['categories']>;
+
+interface Loaded {
+  key: string;
+  rows: Holder[];
+  total: number;
+  page: number;
+  size: number;
+  /** the server's "What" counts over the whole list (null on servers before the stored totals) */
+  cats: CatCounts | null;
+  /** when the order was read, and when the count was taken (null: counted for this search); both absent on older servers */
+  asOf: number | null;
+  countsAt: number | null;
+  /** false: the server ignored a size filter, applied here to these rows only */
+  exact: boolean;
+}
 
 export default function Holders({
-  filters,
-  setFilters,
+  url,
+  go,
   wide,
   overview,
-  page,
-  size,
 }: {
-  filters: HolderFilters;
-  setFilters: (f: HolderFilters) => void;
+  /** The list's state, from the URL. */
+  url: HolderUrl;
+  /** Write a change to the URL (a history entry unless `replace`). */
+  go: (patch: Partial<HolderUrl>, opts?: { replace?: boolean }) => void;
   wide: boolean;
   overview: Overview | null;
-  /** The page from ?page= (1 when absent). */
-  page: number;
-  /** Rows per page, from ?size= (PAGE_SIZE when absent). */
-  size: number;
 }) {
   const { at, rewound } = useReplay();
   const wall = useNow(); // balances are current: their ages are measured from the wall clock, also under Rewind
   const { openAddress } = useOverlays();
   const [sheet, setSheet] = useState(false);
+  const { page, size } = url;
 
-  // ---- server query (chain, sort, category, search) and the page from the URL; a page change replaces the rows
-  const by = filters.chain === 'osmosis' ? 'total' : filters.by;
-  const category = filters.cat === 'all' ? '' : filters.cat;
-  const key = JSON.stringify([filters.chain, by, filters.search, category]);
-  const [data, setData] = useState<{ key: string; rows: Holder[]; total: number; page: number; size: number; cats: CatCounts | null } | null>(null);
+  // ---- what the URL and the text apply (the text's relative words are read against the moment it was typed)
+  const typedAt = useMemo(() => Date.now(), [url.q]);
+  const applied = useMemo(() => holdersApplied(url, typedAt), [url, typedAt]);
+  const eff = applied.eff;
+  const sort = eff.chain === 'osmosis' ? 'total' : eff.by;
+  const by = SORT_API[sort];
+  const category = eff.what ?? '';
+  const search = applied.search;
+  const key = JSON.stringify([eff.chain, by, search, category, eff.min, eff.max]);
+
+  // ---- the page from the URL; a page change replaces the rows
+  const [data, setData] = useState<Loaded | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [retry, setRetry] = useState(0);
   useEffect(() => {
-    let live = true;
+    const ctl = new AbortController();
     setError(null);
-    fetchHolders(filters.chain, page, size, filters.search, by, category)
-      .then((r) => live && setData({ key, rows: r.holders, total: r.total, page, size, cats: catCountsOf(r) }))
-      .catch(() => live && setError(page > 1 ? 'This page of holders could not be fetched from this site’s server.' : 'The holder list could not be fetched from this site’s server.'));
-    return () => {
-      live = false;
-    };
+    fetchHoldersPage({ chain: eff.chain, by, category, search, min: eff.min, max: eff.max, page, limit: size }, { signal: ctl.signal })
+      .then((r) => {
+        if (ctl.signal.aborted) return;
+        setData({ key, rows: r.holders, total: r.total, page, size, cats: r.categories ?? null, asOf: r.asOf ?? null, countsAt: r.countsAt ?? null, exact: r.exact });
+      })
+      .catch(() => {
+        if (!ctl.signal.aborted) setError(page > 1 ? 'This page of holders could not be fetched from this site’s server.' : 'The holder list could not be fetched from this site’s server.');
+      });
+    return () => ctl.abort();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [key, page, size, retry]);
   // the same query (any page, any size): the count and the chips stay while another page loads
@@ -101,8 +119,22 @@ export default function Holders({
   // a page past the end (an old link, a list that shrank): the last page, without a history entry
   const past = current && pages != null && page > pages;
   useEffect(() => {
-    if (past && pages != null) navigate(pageHref(pages), { replace: true, scroll: false });
+    if (past && pages != null) go({ page: pages }, { replace: true });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [past, pages]);
+  const pageHref = (n: number) => hrefWith(holderPatch({ page: n }));
+
+  // ---- the order was refreshed between two pages of the same query (the counts were taken again): said once
+  const baseline = useRef<{ key: string; countsAt: number } | null>(null);
+  const [refreshed, setRefreshed] = useState<number | null>(null);
+  useEffect(() => {
+    if (!fresh || !current || fresh.countsAt == null) return;
+    const b = baseline.current;
+    if (!b || b.key !== key || page === 1) {
+      baseline.current = { key, countsAt: fresh.countsAt };
+      setRefreshed(null);
+    } else if (fresh.countsAt !== b.countsAt) setRefreshed(fresh.countsAt);
+  }, [fresh, current, key, page]);
 
   // ---- after a page change, once the rows are in: the first row focused (a pager link, a key), or a rank
   // reached (Go to rank: scrolled under the sticky stack, focused, highlighted; a size change: kept in view)
@@ -175,7 +207,7 @@ export default function Holders({
     const rank = seen ? (busy ? data?.rows : rows)?.[seen.index]?.rank ?? null : null;
     const to = rank ? pageOfRank(rank, n) : 1;
     pending.current = rank && seen && seen.index > 0 ? { kind: 'rank', rank, focus: false } : null;
-    navigate(listHref({ page: to, size: n }), { scroll: false });
+    navigate(hrefWith(holderPatch({ page: to, size: n as HolderUrl['size'] })), { scroll: false });
   };
 
   // ---- keys (app/keys.ts): j and k walk the rows, Enter opens the row's address, [ and ] change the page
@@ -206,19 +238,19 @@ export default function Holders({
   });
 
   // ---- the "What" chips, with counts (kept while a category is chosen, so the other chips stay).
-  // A server that sends HoldersResponse.categories counts every holder the chain and search select, so a chip's
-  // count is the number of holders choosing it lists. An older server sends none: then the chips count the
-  // biggest holders loaded without a category filter, and the legend says so. The server filters by category
-  // (?category=); a server that predates that returns every category, and the loaded rows are filtered here.
+  // A server that sends HoldersResponse.categories counts every holder the chain, size and search select, so a chip's
+  // count is the number of holders choosing it lists. An older server sends none: then the chips count the biggest
+  // holders loaded without a category filter, and the legend says so. The server filters by category (?category=);
+  // a server that predates that returns every category, and the loaded rows are filtered here.
   const [catRows, setCatRows] = useState<{ base: string; rows: Holder[]; server: CatCounts | null } | null>(null);
-  const baseKey = JSON.stringify([filters.chain, by, filters.search]);
+  const baseKey = JSON.stringify([eff.chain, by, search, eff.min, eff.max]);
   useEffect(() => {
     if (!fresh) return;
     // the server's counts leave the category out, so any answer for this chain and search carries them
     if (fresh.cats) setCatRows({ base: baseKey, rows: [], server: fresh.cats });
     // an older server: the chips count the biggest holders, page 1 of the list without a category
-    else if (filters.cat === 'all' && fresh.page === 1) setCatRows({ base: baseKey, rows: loaded, server: null });
-  }, [fresh, filters.cat, baseKey, loaded]);
+    else if (!eff.what && fresh.page === 1) setCatRows({ base: baseKey, rows: loaded, server: null });
+  }, [fresh, eff.what, baseKey, loaded]);
   const cats = useMemo(() => {
     const mine = catRows?.base === baseKey ? catRows : null;
     const m = new Map<string, { label: string; n: number }>();
@@ -230,7 +262,7 @@ export default function Holders({
       allN = mine.server.total;
       for (const c of mine.server.counts) if (c.n > 0) m.set(c.category, { label: word(c.category), n: c.n });
     } else {
-      const src = mine ? mine.rows : filters.cat === 'all' && fresh?.page === 1 ? loaded : [];
+      const src = mine ? mine.rows : !eff.what && fresh?.page === 1 ? loaded : [];
       allN = src.length;
       for (const h of src) {
         const k = catKey(h);
@@ -240,13 +272,13 @@ export default function Holders({
       }
     }
     const list = [...m.entries()].sort((a, b) => (a[0] === 'none' ? 1 : b[0] === 'none' ? -1 : b[1].n - a[1].n));
-    if (filters.cat !== 'all' && !m.has(filters.cat)) list.push([filters.cat, { label: word(filters.cat), n: 0 }]);
+    if (eff.what && !m.has(eff.what)) list.push([eff.what, { label: word(eff.what), n: 0 }]);
     return { list, allN, whole };
-  }, [catRows, baseKey, loaded, filters.cat, fresh?.page]);
+  }, [catRows, baseKey, loaded, eff.what, fresh?.page]);
   /** The chip legend: plain "What" when the counts cover every holder, else what they count. */
   const catLegend = cats.whole || !cats.allN ? 'What' : `What, counted among the ${fmtCount(cats.allN)} biggest loaded`;
-  const serverFiltered = filters.cat === 'all' || loaded.every((h) => catKey(h) === filters.cat);
-  const rows = serverFiltered ? loaded : loaded.filter((h) => catKey(h) === filters.cat);
+  const serverFiltered = !eff.what || loaded.every((h) => catKey(h) === eff.what);
+  const rows = serverFiltered ? loaded : loaded.filter((h) => catKey(h) === eff.what);
 
   // ---- status: whole list old (dim once, one sentence) or rows that differ (own mark)
   const st = useMemo(() => new Map(loaded.map((h) => [h.chain + h.address, statusOf(h)])), [loaded]);
@@ -272,8 +304,23 @@ export default function Holders({
     : unknown7 ? `No balance with a reading from 7 days ago changed since then; ${fmtCount(unknown7)} have no reading that old.`
     : 'No balance here changed in the last 7 days.';
 
+  // ---- the order and the count: when the list was read and when it was counted (a server with the stored totals)
+  const countAt = fresh ? fresh.countsAt ?? fresh.asOf : null;
+  const countStamp: Stamp | null =
+    fresh && countAt != null
+      ? {
+          source: TECH.holderIndex,
+          plain: 'Holder index',
+          at: countAt,
+          status: wall - countAt > COUNTS_OLD_MS ? 'stale' : 'live',
+          note: fresh.countsAt == null ? 'Counted for this search when the list was read.' : 'Counted over the stored balances after the last balance listing; the order and the ranks are as of the time the list was read.',
+        }
+      : null;
+  const orderStamp: Stamp | null = fresh?.asOf != null ? { source: TECH.holderIndex, plain: 'Holder index', at: fresh.asOf, status: 'live', note: 'The order of the stored balances when the list was read.' } : null;
+
   // ---- the list's scope (one SourceLine)
   const scope: ScopeItem[] = [];
+  if (countStamp) scope.push({ label: 'Holder count and order', p: countStamp });
   for (const chain of ['namada', 'osmosis'] as const) {
     const part = rows.filter((h) => h.chain === chain);
     const ats = part.map((h) => h.verifiedAt).filter((v): v is number => v != null);
@@ -295,35 +342,75 @@ export default function Holders({
   }
   const scopeText = rewound ? ` · ${sourcesText(scope)} · current, not as of the rewound time` : undefined;
 
-  // ---- filters
-  const count = holderFilterCount(filters);
-  const set = (patch: Partial<HolderFilters>) => setFilters({ ...filters, ...patch });
+  // ---- filters: every change is a history entry and starts again from page 1; the text's filter words move first
+  const typing = useRef(false);
+  const set = (patch: Partial<HolderUrl>) => {
+    typing.current = false;
+    go({ ...liftHolders(url, typedAt), ...patch, page: 1 });
+  };
+  /** Typing: the text applies as it is; the first change of a search is a history entry, the rest replace it. */
+  const onType = (v: string) => {
+    if (v === url.q) return;
+    go({ q: v, page: 1 }, { replace: typing.current });
+    typing.current = true;
+  };
+  /** Enter, or leaving the field: the filter words become their own parameters (and chips). */
+  const onCommit = (v: string) => {
+    const wasTyping = typing.current;
+    typing.current = false;
+    const lifted = liftHolders({ ...url, q: v }, Date.now());
+    const next = { ...url, ...lifted };
+    if (JSON.stringify(holderPatch(next)) === JSON.stringify(holderPatch(url))) return;
+    go({ ...lifted, page: 1 }, { replace: wasTyping || v === url.q });
+  };
+  /** A chip removed: exactly what it says (its word out of the text, or its parameter). */
+  const unchip = (patch: Partial<HolderUrl>) => {
+    typing.current = false;
+    go({ ...patch, page: 1 });
+  };
+  /** After the last chip: focus goes to the search field, or (phones, where it is in the sheet) the Filter button. */
+  const focusSearch = () => (document.querySelector<HTMLInputElement>('main [data-list-search] input') ?? document.querySelector<HTMLButtonElement>('main .act-filterbtn'))?.focus();
+  const clearAll = () => {
+    typing.current = false;
+    go({ chain: HOLDER_DEFAULT.chain, by: HOLDER_DEFAULT.by, what: null, q: '', min: null, max: null, page: 1 });
+  };
+  /** The Filter button's badge counts the chips (the sort is not a filter: the count line says it). */
+  const count = applied.count;
+  const anyOn = count > 0 || (url.by !== HOLDER_DEFAULT.by && eff.chain !== 'osmosis');
   const shown = rows.length;
   const showN = serverFiltered && fresh ? fresh.total : shown;
   const showLabel = !fresh ? 'Show holders' : `Show ${fmtCount(showN)} holder${showN === 1 ? '' : 's'}`;
-  const search = (compact: boolean) => (
-    <SearchField label="Search holders by address or name" compact={compact} value={filters.search} onChange={(v) => set({ search: v, cat: 'all' })} placeholder={compact ? 'Search an address or name' : 'tnam1…, osmo1… or a name'} />
+  const search$ = (compact: boolean) => (
+    <ListSearch
+      label="Search holders by address or name"
+      compact={compact}
+      value={url.q}
+      onType={onType}
+      onCommit={onCommit}
+      placeholder={compact ? SEARCH_PLACEHOLDER.holders : 'tnam1…, osmo1…, …kj4m or a name'}
+      hint={compact ? undefined : SEARCH_HINT.holders}
+    />
   );
   const controls = (
     <>
       <FilterSet label="Chain">
-        <Segmented label="Chain" value={filters.chain} onChange={(v) => set({ chain: v, cat: 'all' })} options={[{ value: 'namada', label: 'Namada' }, { value: 'osmosis', label: 'Osmosis' }, { value: 'all', label: 'Both' }]} />
+        <Segmented label="Chain" value={eff.chain} onChange={(v) => set({ chain: v, what: null })} options={[{ value: 'namada', label: 'Namada' }, { value: 'osmosis', label: 'Osmosis' }, { value: 'all', label: 'Both' }]} />
       </FilterSet>
-      {filters.chain !== 'osmosis' ? (
+      {eff.chain !== 'osmosis' ? (
         <FilterSet label="Biggest by">
-          <Segmented label="Biggest by" value={filters.by} onChange={(v) => set({ by: v })} options={[{ value: 'total', label: 'Total' }, { value: 'liquid', label: 'Spendable' }, { value: 'bonded', label: 'Staked' }]} />
+          <Segmented label="Biggest by" value={eff.by} onChange={(v) => set({ by: v })} options={[{ value: 'total', label: 'Total' }, { value: 'spendable', label: 'Spendable' }, { value: 'staked', label: 'Staked' }]} />
         </FilterSet>
       ) : null}
       <SelectChip
         label={catLegend}
         className="act-cats"
-        value={filters.cat}
-        onChange={(v) => set({ cat: v })}
+        value={eff.what ?? 'all'}
+        onChange={(v) => set({ what: v === 'all' ? null : v })}
         options={[{ value: 'all', label: 'All', count: cats.allN || null }, ...cats.list.map(([k, c]) => ({ value: k, label: c.label, count: c.n }))]}
       />
-      {wide ? null : search(false)}
-      {count ? (
-        <Button variant="secondary" size="sm" className="act-clear" onClick={() => setFilters(H_DEFAULT)}>
+      {wide ? null : search$(false)}
+      {anyOn ? (
+        <Button variant="secondary" size="sm" className="act-clear" onClick={clearAll}>
           Clear filters
         </Button>
       ) : null}
@@ -331,41 +418,40 @@ export default function Holders({
   );
 
   const busy = !!data && (data.key !== key || data.page !== page || data.size !== size || past);
-  const top = rows.length ? Math.max(...loaded.map((h) => h.total)) : 0;
-  const full = filters.chain !== 'osmosis';
+  // The share bars are relative to the largest total on the list's first page (its biggest holders), the same on
+  // every page: page 40 must not look as heavy as page 1. Taken from a first page seen this visit; a deeper page
+  // opened by its own link draws no bar until then, rather than one scaled to its own largest row.
+  const pageTop = rows.length ? Math.max(...loaded.map((h) => h.total)) : 0;
+  if (fresh && fresh.page === 1 && pageTop > 0) LIST_TOP.set(key, pageTop);
+  const top = fresh && fresh.page === 1 ? pageTop : LIST_TOP.get(key) ?? 0;
+  const full = eff.chain !== 'osmosis';
   const empty = !!fresh && !busy && rows.length === 0;
+  /** The count covers the rows the filters select (a server that ignored a size filter: only this page was checked). */
+  const exact = !!fresh && fresh.exact && serverFiltered;
 
   // ---- column heads on the desktop table: Total, Spendable and Staked sort the list (the "Biggest by" choice)
-  const sortHead = (v: HolderFilters['by'], word: string) => (
-    <button type="button" className="dl__sort" data-sort={v} aria-label={`${word}, biggest first`} onClick={() => set({ by: v })}>
+  const sortHead = (v: HolderUrl['by'], word: string) => (
+    <button type="button" className={`dl__sort${sort === v ? ' is-on' : ''}`} data-sort={v} aria-label={`${word}, biggest first`} onClick={() => set({ by: v })}>
       <span className="dl__sorti" aria-hidden="true">↓</span>
       <span>{word}</span>
     </button>
   );
-  const columns = full
+  const sorted = (v: HolderUrl['by']): Column['sort'] => (sort === v ? 'descending' : 'none');
+  const columns: Column[] | undefined = full
     ? [
         { label: '#' },
         { label: 'Holder' },
-        { label: sortHead('total', 'Total NAM'), align: 'r' as const },
-        { label: 'Share', align: 'r' as const },
-        { label: sortHead('liquid', 'Spendable'), align: 'r' as const },
-        { label: sortHead('bonded', 'Staked'), align: 'r' as const },
+        { label: sortHead('total', 'Total NAM'), align: 'r', sort: sorted('total') },
+        { label: 'Share', align: 'r' },
+        { label: sortHead('spendable', 'Spendable'), align: 'r', sort: sorted('spendable') },
+        { label: sortHead('staked', 'Staked'), align: 'r', sort: sorted('staked') },
         ...(anyChange ? [{ label: '7 days', align: 'r' as const }] : []),
       ]
     : undefined;
-  // aria-sort sits on the column head itself (the kit's DataList draws the heads; the state is set here)
-  useLayoutEffect(() => {
-    listRef.current?.querySelectorAll('.dl__head [role="columnheader"]').forEach((h) => {
-      const b = h.querySelector('[data-sort]');
-      if (!b) h.removeAttribute('aria-sort');
-      else h.setAttribute('aria-sort', b.getAttribute('data-sort') === by ? 'descending' : 'none');
-      b?.classList.toggle('is-on', b.getAttribute('data-sort') === by);
-    });
-  });
 
   const csv =
     fresh && fresh.total > 0 ? (
-      <a className="link act-csv" href={holdersCsvHref({ chain: filters.chain, by, category, search: filters.search })} download>
+      <a className="link act-csv" href={holdersCsvHref({ chain: eff.chain, by, category, search })} download>
         <span>Download page data</span>
         {/* the export holds the biggest HOLDER_CSV_MAX of these holders (worker/src/api.ts /api/export/holders) */}
         <span className="act-csv__n">{fresh.total > HOLDER_CSV_MAX ? `CSV, biggest ${fmtCount(HOLDER_CSV_MAX)}` : 'CSV, all of them'}</span>
@@ -379,9 +465,16 @@ export default function Holders({
       <div className="pager act-pager act-pager--ph" aria-hidden="true" />
     );
 
+  /** A row's name: the sheet opens with where it came from ("From holders · No. 1,204 by total NAM"). */
+  const onAddr = (h: Holder) => {
+    noteOrigin(h.address, { from: 'holders', rank: h.rank, by, chain: eff.chain, stamp: orderStamp ?? countStamp });
+    openAddress(h.address);
+  };
+  const whatWord = eff.what ? cats.list.find(([k]) => k === eff.what)?.[1].label ?? category_plain(eff.what) ?? eff.what : null;
+
   return (
     <>
-      <ActivityBar view="holders" wide={wide} filterCount={count} filterOpen={sheet} onFilter={() => setSheet(true)} search={wide ? search(true) : null} />
+      <ActivityBar view="holders" wide={wide} filterCount={count} filterOpen={sheet} onFilter={() => setSheet(true)} search={wide ? search$(true) : null} />
       <FilterPanel wide={wide} open={sheet} onClose={() => setSheet(false)} title="Filter holders" show={showLabel}>
         {controls}
       </FilterPanel>
@@ -403,15 +496,26 @@ export default function Holders({
           <p className="act-count" aria-live="polite">
             {!fresh ? (
               <span className="skel__b act-count__sk" aria-hidden="true" />
-            ) : serverFiltered ? (
+            ) : exact ? (
               <>
-                A total of <Num v={fresh.total} fmt={fmtCount} /> {fresh.total === 1 ? 'holder' : 'holders'} found {CHAIN_WORD[filters.chain]}
-                {filters.cat !== 'all' ? <> in “{cats.list.find(([k]) => k === filters.cat)?.[1].label ?? filters.cat}”</> : null}
-                {filters.search ? <> matching “{filters.search}”</> : null}, biggest first by {BY_WORD[by]}.
+                A total of <Num v={fresh.total} fmt={fmtCount} /> {fresh.total === 1 ? 'holder' : 'holders'} found {CHAIN_WORD[eff.chain]}
+                {whatWord ? <> in “{whatWord}”</> : null}
+                {search ? <> matching “{search}”</> : null}, biggest first by {BY_WORD[sort]}
+                {fresh.asOf != null ? (
+                  <>
+                    {' '}
+                    · <span className="act-at">ordered at {fmtUtcClock(fresh.asOf)}</span>
+                  </>
+                ) : null}
+                .
+              </>
+            ) : !serverFiltered ? (
+              <>
+                <Num v={shown} fmt={fmtCount} /> of the <Num v={loaded.length} fmt={fmtCount} /> holders on this page match; a total of <Num v={fresh.total} fmt={fmtCount} /> holders found {CHAIN_WORD[eff.chain]}.
               </>
             ) : (
               <>
-                <Num v={shown} fmt={fmtCount} /> of the <Num v={loaded.length} fmt={fmtCount} /> holders on this page match; a total of <Num v={fresh.total} fmt={fmtCount} /> holders found {CHAIN_WORD[filters.chain]}.
+                <Num v={shown} fmt={fmtCount} /> of the <Num v={loaded.length} fmt={fmtCount} /> holders on this page are within the sizes asked; this site’s server does not filter holders by size yet, so the other pages were not checked. A total of <Num v={fresh.total} fmt={fmtCount} /> holders found {CHAIN_WORD[eff.chain]}.
               </>
             )}
           </p>
@@ -419,6 +523,13 @@ export default function Holders({
             {wide ? csv : null}
             {pager('head')}
           </div>
+          <FilterChips
+            className="act-chips"
+            label="Filters on the holder list"
+            chips={applied.chips.map((c) => ({ key: c.key, label: c.label, note: c.note, applied: c.applied, onRemove: () => unchip(c.remove) }))}
+            onClear={clearAll}
+            onEmpty={focusSearch}
+          />
         </div>
         {fresh && fresh.total > 0 ? (
           <PageTools
@@ -431,6 +542,20 @@ export default function Holders({
           >
             {wide ? null : csv}
           </PageTools>
+        ) : null}
+
+        {refreshed != null ? (
+          <Notice
+            tone="info"
+            title="The list was refreshed"
+            action={
+              <Button size="sm" onClick={() => goPage(1)}>
+                Start from the top
+              </Button>
+            }
+          >
+            The holder list was counted again at {fmtUtcClock(refreshed)} while you were reading; this page and the ones after it are in the new order.
+          </Notice>
         ) : null}
 
         {error && fresh ? (
@@ -451,19 +576,20 @@ export default function Holders({
               full={full}
               change={full && anyChange}
               columns={columns}
-              label={`Biggest NAM holders ${CHAIN_WORD[filters.chain]}`}
+              label={`Biggest NAM holders ${CHAIN_WORD[eff.chain]}`}
               old={listOld}
+              rowCount={exact && fresh ? fresh.total + 1 : undefined}
               className="act-holders"
             >
               {(busy ? data.rows : rows).map((h) => (
-                <Row key={h.chain + h.address} h={h} s={stOf(h)} wall={wall} mixed={!listOld} top={top} anyChange={full && anyChange} both={filters.chain === 'all'} onAddr={openAddress} />
+                <Row key={h.chain + h.address} h={h} s={stOf(h)} wall={wall} mixed={!listOld} top={top} anyChange={full && anyChange} both={eff.chain === 'all'} onAddr={onAddr} rowIndex={exact ? h.rank + 1 : undefined} />
               ))}
             </DataList>
           </div>
         )}
 
         {empty ? (
-          filters.chain === 'osmosis' && !filters.search && filters.cat === 'all' ? (
+          eff.chain === 'osmosis' && !search && !eff.what && !eff.min && !eff.max ? (
             <EmptyState title="The Osmosis list was not captured.">
               {overview && overview.dex.holders != null && overview.dex.holders > 0 ? (
                 <>
@@ -475,10 +601,15 @@ export default function Holders({
                 'No Osmosis holder rows came back from this site’s server.'
               )}
             </EmptyState>
-          ) : filters.cat !== 'all' && !serverFiltered ? (
+          ) : eff.what && !serverFiltered ? (
             <EmptyState title="No holder on this page matches.">The filter looks only at the {fmtCount(loaded.length)} holders on this page.</EmptyState>
+          ) : search && (eff.what || eff.min || eff.max || eff.chain !== HOLDER_DEFAULT.chain) ? (
+            // a filter beside the search may be what empties the list: the search itself may well find holders
+            <EmptyState title={`No holder matches “${search}” with these filters.`}>Remove a filter above to see more holders.</EmptyState>
+          ) : search ? (
+            <EmptyState title={`No holder matches “${search}”.`}>{HOLDER_SEARCH_EMPTY}</EmptyState>
           ) : (
-            <EmptyState title={filters.search ? `No holder matches “${filters.search}”.` : 'No holder rows came back.'}>The search looks at addresses and names.</EmptyState>
+            <EmptyState title={applied.count ? 'No holder matches these filters.' : 'No holder rows came back.'}>{applied.count ? 'Remove a filter above to see more holders.' : 'The search looks at addresses and names.'}</EmptyState>
           )
         ) : null}
 
@@ -492,6 +623,11 @@ export default function Holders({
 }
 
 // ---------------------------------------------------------------- one holder row
+/** The largest total on the first page of each list (its filters' key) seen this visit: the share bars' reference. */
+const LIST_TOP = new Map<string, number>();
+/** A share of supply: a holding above zero that rounds to 0.00% reads "<0.01%", never "0.00%". */
+const fmtShare = (n: number) => (n > 0 && n < 0.005 ? '<0.01%' : fmtPctRule(n));
+
 function Row({
   h,
   s,
@@ -501,6 +637,7 @@ function Row({
   anyChange,
   both,
   onAddr,
+  rowIndex,
 }: {
   h: Holder;
   s: { status: SourceStatus; note: string | null };
@@ -510,7 +647,8 @@ function Row({
   top: number;
   anyChange: boolean;
   both: boolean;
-  onAddr: (a: string) => void;
+  onAddr: (h: Holder) => void;
+  rowIndex?: number;
 }) {
   const name = holderName(h);
   const shownName = name ?? fmtAddr(h.address);
@@ -549,8 +687,9 @@ function Row({
   return (
     <HolderRow
       rank={h.rank}
+      rowIndex={rowIndex}
       name={
-        <button type="button" className="act-name" title={h.address} onClick={() => onAddr(h.address)} aria-label={`${shownName}: open address ${h.address}`}>
+        <button type="button" className="act-name" title={h.address} onClick={() => onAddr(h)} aria-label={`${shownName}: open address ${h.address}`}>
           {shownName}
         </button>
       }
@@ -569,7 +708,7 @@ function Row({
       }
       tags={catTag || staleMark ? <>{catTag}{staleMark}</> : null}
       total={<Num v={h.total} fmt={fmtNamRule} unit="NAM" />}
-      share={<Num v={h.pctSupply} fmt={(n) => fmtPctRule(n)} unit="of supply" showReason={false} />}
+      share={<Num v={h.pctSupply} fmt={fmtShare} unit="of supply" showReason={false} />}
       spendable={<Num v={h.balance} fmt={fmtNamRule} />}
       staked={h.chain === 'osmosis' ? <span aria-label="No staking on Osmosis">—</span> : <Num v={h.bonded} fmt={fmtNamRule} status={conflict ? 'disagree' : undefined} showReason={false} />}
       stakedNote={

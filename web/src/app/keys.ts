@@ -1,5 +1,6 @@
 // Keyboard (system.md 3, nav-search-plan 3.3): every binding is in SHORTCUTS below, the one place the words
-// and the keys are kept together. 1 to 6 switch tabs, "/" opens search, Ctrl or Cmd + K toggles it, Escape
+// and the keys are kept together. 1 to 6 switch tabs, "/" opens search (on the two lists, where their own search
+// field is on screen, it focuses that field instead), Ctrl or Cmd + K toggles search, "?" opens the Keys sheet, Escape
 // closes the top overlay (native <dialog> behaviour); on the two lists (Holders, Transactions) j and k walk the
 // rows, Enter opens the row, [ and ] change the page. Single keys ignore any event with Meta, Ctrl or Alt held
 // (so the browser's Cmd-1…5 tab switching passes through), and do nothing while typing in a field or while a
@@ -13,23 +14,58 @@ export interface KeyHandlers {
   togglePalette: () => void;
 }
 
-/** Where a key does something: on every page, or on the two lists. */
-export type KeyWhere = 'everywhere' | 'lists';
+/** Where a key does something: on every page, on the two lists, or in search. */
+export type KeyWhere = 'everywhere' | 'lists' | 'search';
 /** Every key binding, in words (the keyboard hint under the lists is rendered from this table). */
 export const SHORTCUTS: readonly { keys: readonly string[]; does: string; where: KeyWhere }[] = [
   { keys: ['1', '6'], does: 'switch view', where: 'everywhere' },
-  { keys: ['/'], does: 'search', where: 'everywhere' },
+  { keys: ['/'], does: 'search; on the two lists, their own search field', where: 'everywhere' },
   { keys: ['Ctrl K'], does: 'open or close search', where: 'everywhere' },
   { keys: ['Esc'], does: 'close the open sheet', where: 'everywhere' },
+  { keys: ['?'], does: 'this list of keys', where: 'everywhere' },
   { keys: ['j', 'k'], does: 'next and previous row', where: 'lists' },
   { keys: ['Enter'], does: 'open the row', where: 'lists' },
   { keys: ['[', ']'], does: 'previous and next page', where: 'lists' },
+  { keys: ['↓', '↑'], does: 'next and previous result', where: 'search' },
+  { keys: ['Home', 'End'], does: 'first and last result', where: 'search' },
+  { keys: ['PgDn', 'PgUp'], does: 'eight results down and up', where: 'search' },
+  { keys: ['Enter'], does: 'open the result', where: 'search' },
+  { keys: ['@'], does: 'only addresses and names', where: 'search' },
+  { keys: ['#'], does: 'only records and blocks', where: 'search' },
+  { keys: ['>'], does: 'only actions', where: 'search' },
+  { keys: ['Tab'], does: 'keep the typed @, # or > as a chip', where: 'search' },
+  { keys: ['Backspace'], does: 'remove the chip from the empty box', where: 'search' },
 ];
 
 const isTyping = (t: EventTarget | null): boolean => {
   const el = t as HTMLElement | null;
   if (!el || !el.tagName) return false;
   return el.isContentEditable || el.tagName === 'INPUT' || el.tagName === 'TEXTAREA' || el.tagName === 'SELECT';
+};
+
+let slashTarget: HTMLElement | null = null;
+/**
+ * A list page registers its own search field (the field, or the element around it): "/" then focuses it instead of
+ * opening search, while it is on screen (below 1024 px the field is inside the closed Filter sheet, and "/" opens
+ * search as everywhere else). Ctrl or Cmd K still opens search.
+ */
+export function useSlashTarget(ref: { readonly current: HTMLElement | null }) {
+  useEffect(() => {
+    const el = ref.current;
+    if (!el) return;
+    slashTarget = el;
+    return () => {
+      if (slashTarget === el) slashTarget = null;
+    };
+  }, [ref]);
+}
+/** The registered field's input, when it is in the page and drawn (an element with no boxes is hidden). */
+const slashField = (): HTMLInputElement | HTMLElement | null => {
+  const el = slashTarget;
+  if (!el || !el.isConnected) return null;
+  const input = el instanceof HTMLInputElement ? el : el.querySelector('input');
+  const f = (input ?? el) as HTMLElement;
+  return f.getClientRects().length > 0 ? f : null;
 };
 
 /** Input types that take no typed text: a list key pressed on one of them is not typing. */
@@ -64,15 +100,16 @@ const overlayOpen = (): boolean => {
 };
 
 /** Pure decision, exported for tests: what a keydown does. */
-export function keyAction(e: Pick<KeyboardEvent, 'key' | 'metaKey' | 'ctrlKey' | 'altKey' | 'shiftKey'>, typing: boolean, overlay: boolean):
+export function keyAction(e: Pick<KeyboardEvent, 'key' | 'metaKey' | 'ctrlKey' | 'altKey' | 'shiftKey'>, typing: boolean, overlay: boolean, slashField = false):
   | { kind: 'toggle-palette' }
   | { kind: 'open-palette' }
+  | { kind: 'focus-search' }
   | { kind: 'tab'; path: string }
   | null {
   if ((e.metaKey || e.ctrlKey) && !e.altKey && !e.shiftKey && e.key.toLowerCase() === 'k') return { kind: 'toggle-palette' };
   if (e.metaKey || e.ctrlKey || e.altKey) return null;
   if (typing || overlay) return null;
-  if (e.key === '/') return { kind: 'open-palette' };
+  if (e.key === '/') return slashField ? { kind: 'focus-search' } : { kind: 'open-palette' };
   const tab = TABS.find((t) => t.key === e.key);
   return tab ? { kind: 'tab', path: tab.path } : null;
 }
@@ -81,7 +118,8 @@ export function useGlobalKeys({ openPalette, togglePalette }: KeyHandlers) {
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
       if (e.defaultPrevented || e.isComposing) return;
-      const a = keyAction(e, isTyping(e.target), overlayOpen());
+      const field = slashField();
+      const a = keyAction(e, isTyping(e.target), overlayOpen(), !!field);
       if (!a) return;
       if (a.kind === 'toggle-palette') {
         // Ctrl/Cmd K inside the palette's own input closes it too
@@ -90,6 +128,10 @@ export function useGlobalKeys({ openPalette, togglePalette }: KeyHandlers) {
       } else if (a.kind === 'open-palette') {
         e.preventDefault();
         openPalette();
+      } else if (a.kind === 'focus-search') {
+        e.preventDefault();
+        field!.focus();
+        if (field instanceof HTMLInputElement) field.select();
       } else {
         e.preventDefault();
         navigate(a.path);

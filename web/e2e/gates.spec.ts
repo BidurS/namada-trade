@@ -13,7 +13,7 @@ import AxeBuilder from '@axe-core/playwright';
 import type { Page, Route } from '@playwright/test';
 import { BODY, NOT_FOUND } from '../../shared/copy';
 import { ROUTES } from '../../shared/routes';
-import type { Overview } from '../../shared/types';
+import type { Overview, SearchResponse } from '../../shared/types';
 import { REWIND_AT, animationsIn, apiUrls, expect, gotoRoute, isExempt, isLiveOnly, layoutAudit, onlyIn, test, trackRequests } from './helpers';
 import { inlineScriptHashes, pagePolicies } from '../../worker/src/http';
 
@@ -659,7 +659,9 @@ test.describe('G10 data honesty', () => {
       const SELLER = 'tnam1qrt5tarfixturesellerxxxxxxxxxxxxxxxx7k2vd';
       const POS = 'tnam1qgqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqc8j2fp';
       await page.route(/\/api\/flows\?/, async (route) => {
-        const res = await route.fetch();
+        // the live feed's seed can still be in flight when the test ends: its fetch then fails, which is not an error
+        const res = await route.fetch().catch(() => null);
+        if (!res) return;
         const j = await res.json();
         if (Array.isArray(j.flows) && j.flows.length) {
           j.flows[0] = {
@@ -668,7 +670,7 @@ test.describe('G10 data honesty', () => {
             to: POS, toLabel: null, toLabelPlain: 'Staking account (staked and unstaking NAM)',
           };
         }
-        await route.fulfill({ response: res, json: j });
+        await route.fulfill({ response: res, json: j }).catch(() => undefined);
       });
       await gotoRoute(page, '/activity');
       const row = page.locator('main .tx').filter({ hasText: 'Public sale allocation (genesis)' }).first();
@@ -703,4 +705,106 @@ test('SEO: every BODY paragraph and section heading is visible text on its route
       for (const para of s.paras) expect(text, `${r.path}: "${para.slice(0, 50)}…"`).toContain(para.replace(/\s+/g, ' '));
     }
   }
+});
+
+// ---------------------------------------------------------------------------------------------
+// Search gates (F1, nav-search-plan 6): G4, G5, G6 and G7 with search open on a typed term (the grouped answer of nav
+// step 5 mocked in the shared/types.ts SearchResponse shape, as production does not send it yet) and the Keys sheet.
+// ---------------------------------------------------------------------------------------------
+const SEARCH_MOCK: SearchResponse = {
+  asOf: REWIND_AT,
+  groups: [{ group: 'addresses', n: 1, more: false }, { group: 'records', n: 1, more: false }, { group: 'names', n: 1, more: false }],
+  results: [
+    { type: 'address', group: 'addresses', kind: 'address', match: 'start', chain: 'namada', value: 'tnam1qzondx8kq3m5wyc0e4u0u3t9yd2r4a9p7hk2j4mq', title: 'tnam1qzondx8kq3m5wyc0e4u0u3t9yd2r4a9p7hk2j4mq', subtitle: 'Namada address · staked 1.2 million NAM', stamp: null },
+    { type: 'tx', group: 'records', kind: 'record', match: 'start', chain: 'osmosis', value: 'ZOND1234ABCD', title: 'Sell, 12,345 NAM', subtitle: 'Block 8,294,006 on Osmosis', href: '/activity?q=ZOND1234ABCD', external: null, stamp: null },
+    { type: 'validator', group: 'names', kind: 'validator', match: 'word', chain: 'namada', value: 'tnam1q9zond7xvaw5cq3ldc9pzk4nvlq8ftx3e6j2hwmr', title: 'Zondax', subtitle: 'Validator · Namada address', label: 'Zondax', label_plain: 'Zondax', category_plain: 'Validator', stamp: null },
+  ],
+};
+
+/** Open search on "zond sell >100k" (server groups, a Lists row, views and actions), settled. */
+async function searchOpenTyped(page: Page) {
+  await page.route(/\/api\/search/, (r) => r.fulfill({ json: SEARCH_MOCK }));
+  await page.locator('header button[aria-label="Search"]').click();
+  await expect(page.getByRole('combobox')).toBeFocused();
+  await page.getByRole('combobox').fill('zond sell >100k');
+  await expect(page.locator('dialog.pal [role="status"]')).toHaveText(/results? in \d+ groups?/, { timeout: 5000 });
+}
+/** Open the Keys sheet with "?" from the page. */
+async function keysOpen(page: Page) {
+  await page.locator('main h1').click();
+  await page.keyboard.press('?');
+  await expect(page.locator('dialog.sh-keys[open]')).toBeVisible();
+}
+
+test.describe('search gates', () => {
+  test('G6: search on a typed term and the Keys sheet fit every viewport, live and rewound', async ({ page }) => {
+    for (const p of ['/faq', withAt('/faq')]) {
+      await gotoRoute(page, p);
+      await searchOpenTyped(page);
+      await sheetFits(page, 'dialog.pal');
+      await page.keyboard.press('Escape');
+      await expect(page.locator('dialog.pal')).toHaveCount(0);
+      await keysOpen(page);
+      await sheetFits(page, 'dialog.sh-keys');
+      await page.keyboard.press('Escape');
+      await expect(page.locator('dialog.sheet')).toHaveCount(0);
+    }
+  });
+
+  test('G4: axe AA with search open on a typed term, and on the Keys sheet (dark and light)', async ({ page }, info) => {
+    test.skip(!['375x812', '1280x800'].includes(info.project.name), 'axe runs at 375 and 1280');
+    for (const light of [false, true]) {
+      await page.addInitScript((l) => { try { localStorage.setItem('nt.theme', l ? 'light' : 'dark'); } catch { /* none */ } }, light);
+      await gotoRoute(page, '/faq', { reducedMotion: true });
+      await settled(page);
+      await searchOpenTyped(page);
+      const r = await axe(page).include('dialog.pal').analyze();
+      expect.soft(axeSummary(r), `search typed ${light ? 'light' : 'dark'}`).toEqual([]);
+      // a scope chip in the input
+      await page.getByRole('combobox').fill('@zond');
+      await page.keyboard.press('Tab');
+      await expect(page.locator('.pal__scope')).toBeVisible();
+      const r2 = await axe(page).include('dialog.pal').analyze();
+      expect.soft(axeSummary(r2), `search scoped ${light ? 'light' : 'dark'}`).toEqual([]);
+      await page.keyboard.press('Escape');
+      await keysOpen(page);
+      const r3 = await axe(page).include('dialog.sh-keys').analyze();
+      expect.soft(axeSummary(r3), `keys ${light ? 'light' : 'dark'}`).toEqual([]);
+      await page.keyboard.press('Escape');
+      await expect(page.locator('dialog.sheet')).toHaveCount(0);
+    }
+  });
+
+  test('G5: no banned word and sentence case in search on a typed term and in the Keys sheet', async ({ page }, info) => {
+    test.skip(onlyIn(info.project.name), 'runs once');
+    await gotoRoute(page, '/faq');
+    await searchOpenTyped(page);
+    expect(findBanned(await renderedText(page, 'dialog.pal'))).toEqual([]);
+    const caps = await page.evaluate(() =>
+      [...document.querySelectorAll('dialog.pal .pal__gh, dialog.pal .pal__l, dialog.pal button, dialog.pal .pal__note, dialog.pal [role="status"]')]
+        .map((e) => (e.textContent ?? '').trim())
+        .filter(Boolean),
+    );
+    // headings are caps by style only (their text is sentence case); words after the first are lower case but names
+    for (const t of caps)
+      for (const seg of t.split(/\s*[·:,(]\s*/)) {
+        const bad = seg.split(/\s+/).slice(1).filter((w) => /^[A-Z][a-z]/.test(w) && !PROPER.has(w.replace(/[.?!)’'"]+$/, '')) && !MONTHS.has(w.slice(0, 3)) && !/^(Zondax|Sell)$/.test(w));
+        expect(bad, t).toEqual([]);
+      }
+    await page.keyboard.press('Escape');
+    await keysOpen(page);
+    expect(findBanned(await renderedText(page, 'dialog.sh-keys'))).toEqual([]);
+  });
+
+  test('G7: no animation with search open on a typed term or with the Keys sheet, under reduced motion', async ({ page }, info) => {
+    test.skip(!['375x812', '1280x800'].includes(info.project.name), 'runs at 375 and 1280');
+    await gotoRoute(page, '/faq', { reducedMotion: true });
+    await searchOpenTyped(page);
+    const running = () => page.evaluate(() => document.getAnimations().map((a) => `${(a as CSSAnimation).animationName ?? a.constructor.name} on ${((a.effect as KeyframeEffect | null)?.target as Element | null)?.className ?? '?'}`));
+    expect(await running()).toEqual([]);
+    await page.keyboard.press('Escape');
+    await keysOpen(page);
+    // the sheet's scrim too: tokens.css's reduced-motion rule covers ::backdrop
+    expect(await running()).toEqual([]);
+  });
 });

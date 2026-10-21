@@ -1,24 +1,73 @@
-// "Where NAM trades" (system.md 9.2): the NAM pools on Osmosis as rows (phones) or a table (from
-// 600 px of its own width), below the split, full width, black. The pool list is a live reading:
-// under Rewind it is not requested, and the overview's figures as of that time stand in its place,
-// each with its own stamp. One SourceLine under the list.
+// "Where NAM trades" (system.md 9.2, screener-plan 2.4): the NAM pools on Osmosis, below the split, full width,
+// black. With the pairs route answering, each pool is a row of the pairs list (ui/PairsList.tsx): depth and share,
+// the Osmosis data API's dollars traded in 24 h and 7 days with its own update time, the trades this site recorded
+// through the pool, the NAM inside and the fee. Without it, the router's pool list as before, and one line says
+// the volume per pool is not served yet ("—" with the reason, never a stand-in). The pool list is a live reading:
+// under Rewind it is not requested, and the overview's figures as of that time stand in its place, each with its
+// own stamp. One SourceLine under the list.
 import type { ReactNode } from 'react';
-import type { Overview, PoolInfo, Provenance } from '../../../../shared/types';
+import type { Overview, PairRow, PairsResponse, PoolInfo, Provenance } from '../../../../shared/types';
+import { NOT_SERVED } from '../../../../shared/types';
 import { REWIND_WORDS } from '../../app/index';
 import { DataList, Notice, Num, PoolRestRow, PoolRow, ProvScope, Skeleton, SourceLine, useUiNow } from '../../ui/index';
-import type { Stamp } from '../../ui/index';
+import type { ScopeItem, Stamp } from '../../ui/index';
+import { PairsList } from '../../ui/PairsList';
 import { NBSP, fmtAgo, fmtCount, fmtNamRule, fmtPctRule, fmtUsdWhole } from '../../lib/format';
 import type { Depth } from './model';
 import { pairName, splitPools } from './model';
+import type { HistoryLoad } from './data';
 
 export interface PoolsProps {
   rewound: boolean;
   pools: { data: { pools: PoolInfo[]; prov: Provenance } | null; error: string | null; loading: boolean };
+  /** the pairs list (/api/series/pairs): live only */
+  pairs?: HistoryLoad<PairsResponse> | null;
   depth: Depth | null;
   overview: Overview | null;
 }
 
-export function Pools({ rewound, pools, depth, overview }: PoolsProps) {
+/** The pairs answer as rows: the pools above the share line (at most POOL_ROW_MAX), the rest folded into one row. */
+function PairsBody({ r, osmosisLine }: { r: PairsResponse; osmosisLine: ReactNode }) {
+  const now = useUiNow();
+  const { shown, rest, total } = splitPools<PairRow>(r.pairs);
+  const stamp: Stamp = { ...r.prov, plain: 'Osmosis pools' };
+  const osmoStamp: Stamp = { ...r.osmosisProv, plain: 'Osmosis app data' };
+  const hereProv = r.pairs.find((p) => p.here24h.value)?.here24h.prov ?? r.pairs[0]?.here24h.prov ?? null;
+  const hereStamp: Stamp | null = hereProv ? { ...hereProv, plain: 'Flow index' } : null;
+  const hereTotal = r.pairs.reduce((a, p) => a + (p.here24h.value?.trades ?? 0), 0);
+  const anyHere = r.pairs.some((p) => p.here24h.value);
+  const share = shown[0] && total > 0 && shown[0].liquidityUsd != null ? (shown[0].liquidityUsd / total) * 100 : null;
+  const items: ScopeItem[] = [
+    { label: 'Pool depth, NAM inside and fee', p: stamp },
+    { label: 'Dollars traded per pool (Osmosis pair summary)', p: osmoStamp },
+    ...(hereStamp ? [{ label: 'Trades recorded here per pool', p: hereStamp }] : []),
+  ];
+  return (
+    <ProvScope
+      className="tk-scope"
+      old={stamp.status === 'stale'}
+      oldSentence={<>The pool list did not answer just now. These figures are its last answer, from {fmtAgo(stamp.at, now)}, so they are shown dimmed.</>}
+    >
+      <p className="lead">
+        <Num as="b" v={r.pairs.length} fmt={fmtCount} /> pools hold <Num as="b" v={total} fmt={fmtUsdWhole} />. The biggest holds{' '}
+        <Num as="b" v={share} fmt={(n) => fmtPctRule(n, 1)} showReason={false} /> of it.
+      </p>
+      {/* the two volume sources, each with its own stamp in view: the Osmosis pair summary's update time and the flow index's */}
+      <p className="cap tk-osmo">
+        In the last 24 hours Osmosis counts{' '}
+        <Num as="b" v={r.osmosisTotals.volume24hUsd} prov={r.osmosisTotals.volume24hUsd == null ? { ...osmoStamp, status: 'missing', note: osmoStamp.note ?? 'no pair has the figure' } : osmoStamp} fmt={fmtUsdWhole} stamp="dot" showAge={false} label="Dollars traded across the NAM pools (Osmosis pair summary)" /> traded across these pools, the priced side only
+        {anyHere ? (
+          <>; this site recorded <Num as="b" v={hereTotal} prov={hereStamp} fmt={fmtCount} stamp="dot" showAge={false} label="Trades recorded here through the NAM pools" /> {hereTotal === 1 ? 'trade' : 'trades'} through them</>
+        ) : null}.
+      </p>
+      {osmosisLine}
+      <PairsList pairs={shown} rest={rest} totalUsd={total} pairName={pairName} label="Pools that trade NAM" />
+      <SourceLine items={items} label="Where the pool figures come from" />
+    </ProvScope>
+  );
+}
+
+export function Pools({ rewound, pools, pairs, depth, overview }: PoolsProps) {
   const now = useUiNow();
   const list = pools.data?.pools ?? [];
   const osmosis = overview ? { value: overview.supply.osmosis, prov: { ...overview.supply.osmosisProv, plain: 'Osmosis supply' } as Stamp } : null;
@@ -29,8 +78,18 @@ export function Pools({ rewound, pools, depth, overview }: PoolsProps) {
     </p>
   ) : null;
 
+  // the volume per pool is a figure only the pairs route has: said once, with the reason, when it does not answer
+  const pairsMissing = !rewound && pairs && !pairs.data && !pairs.loading ? (pairs.unserved ? NOT_SERVED : pairs.error ?? NOT_SERVED) : null;
+  const volumeLine = pairsMissing ? (
+    <p className="cap tk-pairsmiss">
+      Dollars traded per pool: <Num v={null} prov={{ source: 'Osmosis data API (pairs)', plain: 'Osmosis app data', at: null, status: 'missing', note: pairsMissing }} />
+    </p>
+  ) : null;
+
   let body: ReactNode;
-  if (list.length) {
+  if (!rewound && pairs?.data && pairs.data.pairs.length) {
+    body = <PairsBody r={pairs.data} osmosisLine={osmosisLine} />;
+  } else if (list.length) {
     const { shown, rest, total } = splitPools(list);
     const top = shown[0]?.liquidityUsd || 0;
     const restUsd = rest.reduce((a, p) => a + (p.liquidityUsd || 0), 0);
@@ -48,6 +107,7 @@ export function Pools({ rewound, pools, depth, overview }: PoolsProps) {
           <Num as="b" v={share(shown[0])} fmt={(n) => fmtPctRule(n, 1)} showReason={false} /> of it.
         </p>
         {osmosisLine}
+        {volumeLine}
         <DataList kind="pools" label="Pools that trade NAM" className="tk-pools">
           {shown.map((p) => (
             <PoolRow
@@ -95,6 +155,7 @@ export function Pools({ rewound, pools, depth, overview }: PoolsProps) {
           </p>
         ) : null}
         {osmosisLine}
+        {volumeLine}
         <Notice tone={rewound ? 'info' : 'warning'} title={rewound ? 'Pool rows are live only.' : 'The pool list is not available.'}>
           {why}
         </Notice>

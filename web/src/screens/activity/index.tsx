@@ -4,68 +4,53 @@
 // A yellow band with the route's H1, the route's plain paragraph (shared/copy.ts, the same text the
 // server renders) and a four-figure strip with one SourceLine; then a black band with the page tabs,
 // the filters (a sheet with a count badge below 1024 px, inline from 1024 px) and the list.
-// Switching tabs keeps this component mounted, so each tab's filters survive the switch.
-import { useEffect, useState } from 'react';
+// The URL is the state of both lists (urlState.ts, nav-search-plan 2.4): a filter, the sort, the text, the page and
+// the rows per page are query parameters; each page tab's link leads back to that list as it was left.
+import { useCallback, useEffect, useState } from 'react';
 import { BODY } from '../../../../shared/copy';
 import type { Holder, Overview } from '../../../../shared/types';
 import type { ScreenProps } from '../../app/index';
 import { REWIND_WORDS, navigate, useClock, useNow, useOverview, useOverviewFailed, useReplay, useRoute, useVisible } from '../../app/index';
-import { setTitleDetail } from '../../app/router';
+import { setTitleDetail, useLocation } from '../../app/router';
 import { fetchHolders } from '../../api';
 import { Fact, Num, SkeletonBlock, derive, sourcesText, type FactItem, type Stamp } from '../../ui';
 import { NBSP, fmtAge, fmtCount, fmtNamRule, fmtNamSigned, fmtPctRule } from '../../lib/format';
-import Holders, { H_DEFAULT, type HolderFilters } from './Holders';
-import Transactions, { TX_DEFAULT, type TxFilters } from './Transactions';
+import Holders from './Holders';
+import Transactions from './Transactions';
 import { holderFiguresStamp, serverHolderProv, type HolderChain } from './holderStamp';
 import { useWide } from './parts';
-import { PAGE_SIZE, listHref, pageHref, parseBefore, parsePage, parseSize } from './paging';
+import { holderPatch, hrefWith, movePatch, readHolderUrl, readMoveUrl, rememberList, type HolderUrl, type MoveUrl } from './urlState';
 
 export default function ActivityScreen({ view, route }: ScreenProps) {
   const tab: 'activity' | 'holders' = view === 'holders' ? 'holders' : 'activity';
   const { overview } = useOverview();
   const { at, rewound } = useReplay();
   const wide = useWide();
-  const [txf, setTxf] = useState<TxFilters>(TX_DEFAULT);
-  const [hf, setHf] = useState<HolderFilters>(H_DEFAULT);
   const body = BODY[tab];
 
-  // the page lives in the URL (?page=N, nav-search-plan 2.4): a page change is a history entry (the pager's links),
-  // a page 1 or an unreadable value is dropped without one; a filter change starts again from page 1.
-  // The rows per page too (?size=25|100, 50 when absent), and on Transactions the day the list starts before
-  // (?before=, unix ms of a UTC midnight); a default or unreadable value is dropped the same way.
+  // the list's state is the query string (urlState.ts); an unreadable or default value is cleaned from the address
+  // bar without a history entry
   const { params, path } = useRoute();
-  const raw = params.get('page');
-  const page = parsePage(raw) ?? 1;
-  const rawSize = params.get('size');
-  const size = parseSize(rawSize) ?? PAGE_SIZE;
-  const rawBefore = tab === 'activity' ? params.get('before') : null;
-  const before = parseBefore(rawBefore);
+  const { search } = useLocation();
+  const holders = tab === 'holders' ? readHolderUrl(params) : null;
+  const moves = tab === 'activity' ? readMoveUrl(params) : null;
+  const fix = (holders ?? moves)!.fix;
+  const fixKey = JSON.stringify(fix);
   useEffect(() => {
-    if (raw != null && (raw === '1' || parsePage(raw) == null)) navigate(pageHref(1), { replace: true, scroll: false });
-  }, [raw]);
-  useEffect(() => {
-    if (rawSize != null && (parseSize(rawSize) == null || parseSize(rawSize) === PAGE_SIZE)) navigate(listHref({ size: PAGE_SIZE }), { replace: true, scroll: false });
-  }, [rawSize]);
-  useEffect(() => {
-    if (rawBefore != null && parseBefore(rawBefore) == null) navigate(listHref({ before: null }), { replace: true, scroll: false });
-  }, [rawBefore]);
+    if (Object.keys(fix).length) navigate(hrefWith(fix), { replace: true, scroll: false });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [fixKey]);
+  // each page tab's link leads back to that list as it was left
+  useEffect(() => rememberList(path, search), [path, search]);
+  const page = (holders?.url ?? moves?.url)!.page;
   // the title carries the page ("Holders, page 3 · NamadaTrade"); the H1 stays the route's
   const name = tab === 'holders' ? 'Holders' : 'Transactions';
   useEffect(() => {
     setTitleDetail(path, page > 1 ? `${name}, page ${page}` : null);
   }, [path, name, page]);
   useEffect(() => () => setTitleDetail(path, null), [path]);
-  const firstPage = () => {
-    if (page !== 1) navigate(pageHref(1), { replace: true, scroll: false });
-  };
-  const setTx = (f: TxFilters) => {
-    setTxf(f);
-    firstPage();
-  };
-  const setH = (f: HolderFilters) => {
-    setHf(f);
-    firstPage();
-  };
+  const goHolders = useCallback((p: Partial<HolderUrl>, opts: { replace?: boolean } = {}) => navigate(hrefWith(holderPatch(p)), { replace: opts.replace, scroll: false }), []);
+  const goMoves = useCallback((p: Partial<MoveUrl>, opts: { replace?: boolean } = {}) => navigate(hrefWith(movePatch(p)), { replace: opts.replace, scroll: false }), []);
 
   return (
     <>
@@ -82,11 +67,7 @@ export default function ActivityScreen({ view, route }: ScreenProps) {
 
       <section className="band ground-ink act-band" aria-label={tab === 'holders' ? 'Holders' : 'Transactions'}>
         <div className="wrap">
-          {tab === 'holders' ? (
-            <Holders filters={hf} setFilters={setH} wide={wide} overview={overview} page={page} size={size} />
-          ) : (
-            <Transactions filters={txf} setFilters={setTx} wide={wide} page={page} size={size} before={before} />
-          )}
+          {holders ? <Holders url={holders.url} go={goHolders} wide={wide} overview={overview} /> : <Transactions url={moves!.url} go={goMoves} wide={wide} />}
           {body?.paras[1] ? <p className="act-about">{body.paras[1]}</p> : null}
         </div>
       </section>

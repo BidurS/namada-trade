@@ -3,7 +3,7 @@
 // usage: node scripts/shoot.mjs <url> <out.png> [width=375] [height=812] [--full | --tall] [--light] [--reduced] [--scale=2] [--wait=1500]
 //
 // Prints one JSON line: { overflowX, scrollWidth, innerWidth, smallText, smallTargets, tables, h1, consoleErrors }
-//   overflowX     true when the page scrolls sideways (scrollWidth > innerWidth)
+//   overflowX     true when the page scrolls sideways (scrollWidth > the visual viewport's width)
 //   smallText     visible text nodes under 11 px (first 10)
 //   smallTargets  interactive elements whose hit box is under 44 x 44 (first 10; inline links in prose are skipped)
 import { chromium } from '@playwright/test';
@@ -54,7 +54,9 @@ const audit = await page.evaluate(() => {
     if (ew < 44 || eh < 44) smallTargets.push(`${Math.round(ew)}x${Math.round(eh)} ${el.tagName.toLowerCase()} "${(el.getAttribute('aria-label') || el.textContent || '').trim().slice(0, 30)}"`);
   }
   return {
-    overflowX: de.scrollWidth > window.innerWidth, scrollWidth: de.scrollWidth, innerWidth: window.innerWidth,
+    // against the visual viewport: a phone (isMobile) stretches the layout viewport (innerWidth) to fit wider content
+    overflowX: de.scrollWidth > Math.round(window.visualViewport?.width ?? window.innerWidth), scrollWidth: de.scrollWidth, innerWidth: window.innerWidth,
+    viewportWidth: window.visualViewport?.width ?? null,
     pageHeight: de.scrollHeight, h1: [...document.querySelectorAll('h1')].map((x) => x.textContent.trim()),
     tables: document.querySelectorAll('table').length,
     smallText: smallText.slice(0, 10), smallTextCount: smallText.length,

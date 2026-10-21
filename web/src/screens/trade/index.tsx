@@ -1,8 +1,12 @@
-// Trade (/trade), S2. system.md 9.2, reference docs/design/final/trade.html.
+// Trade (/trade), S2. system.md 9.2, reference docs/design/final/trade.html; the screener basics of
+// docs/design/screener-plan.md section 2 placed per its 4.2.
 //
-// Phone: yellow ticket → black chart block → yellow "How size moves the price" → black pools.
+// Phone: yellow ticket → black chart block (the token header: price with its stamp, its changes, what traded in
+// 24 h, pool depth and the two value lines; then the price chart with its hourly volume bars and quoted band, the
+// pool price on the long ranges, and the date each series begins) → what recent buyers paid → yellow "How size
+// moves the price" → black pools with their volume → black "The latest trades" tape.
 // Desktop (1024 px up): a split ground. Left 5/12 the sticky yellow ticket (own scroll when taller
-// than the window); right 7/12 black: chart, then the size block. Pools full width below.
+// than the window); right 7/12 black: header, chart, buyers, then the size block. Pools and the tape full width below.
 //
 // The chart block is the price chart. Under it one button opens a second chart, what was bought and
 // sold over the window (NAM bought and NAM sold per bucket, with the running difference); that record is
@@ -25,10 +29,13 @@ import { PRICE_MOVES } from '../../generated/events';
 import { HISTORY_ALL_DAYS, historyCapReached } from '../../../../shared/history';
 import type { Reading, Side, TicketMode } from './model';
 import { DEFAULT_SIZE, PRESET_SIZES, depthOf, fromQuote, fromTable, markerEvents, parseAmount, quoteKey, serviceAnswered, tablePoints } from './model';
-import { useOrderflowHistory, usePools, usePriceHistory, useQuote, useSizeTable } from './data';
+import { useDailyTrades, useOrderflowHistory, usePairs, usePools, usePriceChanges, usePriceHistory, useQuote, useSizeTable, useTrades, useVolume } from './data';
 import { Ticket } from './Ticket';
 import { SizeBlock } from './SizeBlock';
 import { Pools } from './Pools';
+import { Head } from './Head';
+import { Tape } from './Tape';
+import { Buyers } from './Buyers';
 import { routeById } from '../../../../shared/routes';
 
 const TRADE = routeById('trade')!;
@@ -47,7 +54,8 @@ const FLOW_UNSERVED: Stamp = {
 };
 
 const skeleton = (label: string) => (
-  <div className="tk-chartskel" aria-busy="true" aria-label={label}>
+  // role="status": an aria-label on a plain div is not allowed (axe aria-prohibited-attr)
+  <div className="tk-chartskel" role="status" aria-busy="true" aria-label={label}>
     <SkeletonBlock height={56} width="70%" />
     <SkeletonBlock height={20} width="50%" />
     <SkeletonBlock height={28} width={220} />
@@ -99,6 +107,13 @@ export default function TradeScreen({ route }: ScreenProps) {
   const history = usePriceHistory(at, range);
   const flow = useOrderflowHistory(at, flowRange, showFlow);
   const { result } = useQuote(live, side, amount, immediate);
+  // the screener basics (screener-plan 2.1 to 2.5): each panel reads its own route and says "—" with the reason when it does not answer
+  const changes = usePriceChanges(at);
+  const volume = useVolume(at);
+  const pairs = usePairs(live);
+  const [maker, setMaker] = useState<string | null>(null);
+  const trades = useTrades(at, maker);
+  const daily = useDailyTrades(at);
 
   const pts = tablePoints(table.data);
   const up = serviceAnswered(result);
@@ -127,11 +142,18 @@ export default function TradeScreen({ route }: ScreenProps) {
   // A kept series after a failed refresh: its stamps read old, with since when (never fresh beside a failure).
   const kept = history.data != null && history.failedAt != null;
   const chartProv = useMemo(() => {
-    const p = { executed: overview?.price.swap1h.prov ?? null, quoted: overview ? { ...overview.price.usd.prov, plain: 'Osmosis quote' } : null };
+    // the series answers carry their own stamps; the older read takes the overview's
+    const sp = history.data?.prov ?? {};
+    const p = {
+      executed: sp.executed ?? overview?.price.swap1h.prov ?? null,
+      quoted: sp.quoted ? { ...sp.quoted, plain: 'Osmosis quote' } : overview ? { ...overview.price.usd.prov, plain: 'Osmosis quote' } : null,
+      pool: sp.pool ? { ...sp.pool, plain: 'Osmosis app data' } : null,
+      bars: sp.bars ? { ...sp.bars, plain: 'Executed swaps' } : null,
+    };
     return kept ? ageOutStamps(p, `The latest refresh of the price history did not answer, so the chart is the history fetched at ${fmtUtcClock(history.fetchedAt)}.`) : p;
-  }, [overview, kept, history.fetchedAt]);
+  }, [overview, kept, history.fetchedAt, history.data]);
   // "All" ran into the cap: the series starts where the request did, not where the record does
-  const priceCapped = range === 'all' && history.data != null && historyCapReached(Math.min(history.data.executed[0]?.t ?? Infinity, history.data.quoted[0]?.t ?? Infinity), at ?? history.fetchedAt ?? clock);
+  const priceCapped = range === 'all' && history.data != null && historyCapReached(Math.min(history.data.executed[0]?.t ?? Infinity, history.data.quoted[0]?.t ?? Infinity, history.data.pool?.[0]?.t ?? Infinity), at ?? history.fetchedAt ?? clock);
 
   // the same for the record of what was bought and sold
   const flowKept = flow.data != null && flow.failedAt != null;
@@ -171,13 +193,23 @@ export default function TradeScreen({ route }: ScreenProps) {
           </div>
         </div>
         <div className="split__b ground-ink">
+          <Head overview={overview} overviewFailed={overviewFailed} depth={depth} changes={changes} volume={volume} rewound={rewound} />
           <div className="tk-chart">
             {/* the chart's stamps come with the overview: it waits for them (or for the overview to fail) so no figure shows unsourced */}
             {history.data && (overview || overviewFailed) ? (
               <ProvScope old={kept} oldSentence={kept ? <>The latest refresh of the price history did not answer, so this is the history fetched at {fmtUtcClock(history.fetchedAt)}, and it is shown dimmed.</> : null}>
                 <PriceChart
                   headingId="h-chart"
-                  series={history.data}
+                  series={{ executed: history.data.executed, quoted: history.data.quoted, pool: history.data.pool ?? undefined }}
+                  bars={history.data.bars}
+                  barsStepMs={history.data.barsStepMs}
+                  barsMissing={history.data.barsMissing}
+                  band={history.data.band}
+                  flatHours={history.data.flatHours}
+                  poolStepMs={history.data.poolStepMs}
+                  poolMissing={history.data.poolMissing}
+                  starts={history.data.starts}
+                  executedStart={history.data.executedStart}
                   events={EVENTS}
                   range={range}
                   onRange={setRange}
@@ -244,10 +276,12 @@ export default function TradeScreen({ route }: ScreenProps) {
               </div>
             ) : null}
           </div>
+          <Buyers volume={volume} daily={daily} overview={overview} depth={depth} rewound={rewound} />
           <SizeBlock rewound={rewound} table={table} amount={amount} side={side} onPick={pick} />
         </div>
       </div>
-      <Pools rewound={rewound} pools={pools} depth={depth} overview={overview} />
+      <Pools rewound={rewound} pools={pools} pairs={live ? pairs : null} depth={depth} overview={overview} />
+      <Tape load={trades} rewound={rewound} maker={maker} onMaker={setMaker} />
     </div>
   );
 }

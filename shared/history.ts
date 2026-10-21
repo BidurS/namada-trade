@@ -22,6 +22,13 @@ export const HISTORY_FETCH_DAYS: Record<HistoryRange, number> = { '24h': 30, '7d
 export const historyFetchHours = (range: HistoryRange): number => HISTORY_FETCH_DAYS[range] * DAY_HOURS;
 
 /**
+ * The days "How much trades against how little" draws on the Trade page (screener-plan 3.5b): its series request
+ * starts this many days back. The worker's replay rule (worker/src/http.ts seriesFromDays) lists it beside the
+ * ranges above, so the request the page sends is never limited.
+ */
+export const DAILY_DAYS = 14;
+
+/**
  * Did an "All" answer run into the cap? True when the series' earliest point sits within `slackMs` of the
  * window's start (its end minus the cap), so there may be older readings the request did not ask for. False
  * when the series starts later than that: the record itself begins there, and "All" shows all of it.

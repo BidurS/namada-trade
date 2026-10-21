@@ -14,13 +14,13 @@ import {
 } from '../worker/src/cron';
 import {
   BALANCE_LISTING_SRC, BOND_LISTING_SRC, SPAN_EXTEND_MS, SPAN_MAX_GAP_MS, NAMADA_TOP10_SQL, HOLDER_DUST_SQL, HOLDER_COUNTS_SQL, listingTimes, confirmedAt,
-  refreshHolderFigures, figuresDue, figuresTopRows, figuresCount, usableFigures, HOLDER_TOP_ROWS, HOLDER_FIGURES_SERVE_MS, OSMOSIS_FIGURES_REFRESH_MS, NAMADA_FIGURES_REFRESH_MS,
+  refreshHolderFigures, readHolderFigures, figuresDue, figuresCount, usableFigures, HOLDER_FIGURES_SERVE_MS, OSMOSIS_FIGURES_REFRESH_MS, NAMADA_FIGURES_REFRESH_MS,
 } from '../worker/src/holders';
 import { indexState } from '../worker/src/analytics';
 import { app } from '../worker/src/api';
 import { FETCH_TEXT_MAX_BYTES } from '../worker/src/util';
 import { testD1, insert, runStmts, type TestD1 } from './d1-sqlite';
-import type { HoldersResponse, Overview, SourceHealth } from '../shared/types';
+import type { HoldersResponse, Overview, SourceHealth, HolderCountsKv } from '../shared/types';
 
 const fx = (n: string) => JSON.parse(readFileSync(new URL(`./fixtures/${n}`, import.meta.url), 'utf8'));
 const BAL = fx('balance_listing.json');
@@ -630,7 +630,7 @@ describe('the API and the listings', () => {
 
 // ---------------------------------------------------------------- D1 read cost (2026-10-21): the stored holder figures and the index hints
 
-describe('the stored holder figures (kv holders.figures)', () => {
+describe('the stored holder figures and counts (kv holders.figures, holders.counts)', () => {
   const OSMO = (i: number) => `osmo1${String(i).padStart(38, '0')}`;
   const build = async () => {
     const db = testD1();
@@ -647,69 +647,80 @@ describe('the stored holder figures (kv holders.figures)', () => {
   const URLS = ['/api/holders?chain=namada&limit=100', '/api/holders?chain=all&limit=50', '/api/holders?chain=all&limit=25&page=2', '/api/holders?chain=osmosis&limit=10',
     '/api/holders?chain=namada&page=3&limit=50', '/api/holders?chain=all&by=liquid&limit=25', '/api/holders?chain=namada&category=none&limit=25'];
 
-  it('equal the queries they stand for, and every holder answer and overview figure is the same with them as without', async () => {
+  it('equal the union queries they stand for, and every holder answer and overview figure is the same with them as without; the union never runs', async () => {
     const db = await build();
     vi.useFakeTimers({ now: NOW, toFake: ['Date'] });
     vi.stubGlobal('fetch', vi.fn(async () => new Response('{}', { status: 500 })));
     try {
       const get = async (d: any, u: string) => (await app.request(u, {}, { DB: d } as any)).json() as Promise<any>;
-      const before = await Promise.all(URLS.map((u) => get(db, u)));
-      const ovBefore = (await get(db, '/api/overview')) as Overview;
+      const w0 = watched(db);
+      const before = await Promise.all(URLS.map((u) => get(w0.db, u)));
+      const ovBefore = (await get(w0.db, '/api/overview')) as Overview;
+      // nothing stored: the counts were taken in the request, on the index (never the union)
+      expect(w0.sql.filter((s) => s.includes('UNION SELECT'))).toHaveLength(0);
+      for (const r of before) expect(r.countsAt).toBeNull();
       const f = await refreshHolderFigures(db as any, NOW, { namada: true, osmosis: true });
       const counts = db.raw.prepare(HOLDER_COUNTS_SQL).get();
-      expect(f.namada).toMatchObject({ holders: counts.namada, under1: db.raw.prepare(HOLDER_DUST_SQL).get().n, rowsAt: counts.namada_at });
+      expect(f.namada).toMatchObject({ holders: counts.namada, under1: db.raw.prepare(HOLDER_DUST_SQL).get().n, rowsAt: null });
       expect(f.osmosis).toMatchObject({ holders: counts.osmosis, rowsAt: counts.osmosis_at });
       expect(f.osmosis!.holders).toBe(39); // the pool and the empty row are not holders
+      expect(f.namada!.top10).toEqual(db.raw.prepare(NAMADA_TOP10_SQL).get(NOW - 30 * 60000, NOW - 20 * 60000));
+      const stored = kv<HolderCountsKv>(db, 'holders.counts')!;
+      expect(stored).toMatchObject({ at: NOW, byChain: { namada: { all: counts.namada }, osmosis: { all: 39, none: 39, byCategory: {} }, all: { all: counts.namada + 39 } } });
 
-      expect(f.namada!.top.length).toBe(Math.min(HOLDER_TOP_ROWS, counts.namada));
       const w = watched(db);
       const after = await Promise.all(URLS.map((u) => get(w.db, u)));
-      expect(after).toEqual(before);
+      // the same rows, ranks, counts and chips; only the count's own time is new
+      expect(after.map(({ countsAt, asOf, ...r }) => r)).toEqual(before.map(({ countsAt, asOf, ...r }) => r));
+      for (const r of after) expect(r.countsAt).toBe(NOW);
       const ovAfter = (await get(w.db, '/api/overview')) as Overview;
       expect([ovAfter.namada.holders, ovAfter.namada.holdersUnder1Nam, ovAfter.dex.holders, ovAfter.concentration]).toEqual([ovBefore.namada.holders, ovBefore.namada.holdersUnder1Nam, ovBefore.dex.holders, ovBefore.concentration]);
-      // the union ran only for the requests the figures cannot serve: a page past the kept rows, another order, a category
-      const unions = w.sql.filter((s) => s.includes('UNION SELECT'));
-      expect(unions.length).toBe(4); // page 3: rows only (the count is stored); by=liquid: rows only; the category: rows and count; the overview: none
-
+      expect(w.sql.filter((s) => s.includes('UNION SELECT'))).toHaveLength(0);
+      // with the counts stored, no answer counts: each page is one walk of its index and the rows' own reads
+      expect(w.sql.filter((s) => /COUNT\(\*\)/.test(s) && /\bholders\b/.test(s))).toHaveLength(0);
     } finally {
       vi.useRealTimers();
     }
   });
 
-  it('serve a tag written since at once, and are not used once they are older than 2 hours', async () => {
+  it('a tag written since shows at once (the rows are read live); counts older than 2 hours are not used', async () => {
     const db = await build();
     vi.useFakeTimers({ now: NOW, toFake: ['Date'] });
     try {
-      const f = await refreshHolderFigures(db as any, NOW, { namada: true, osmosis: true });
-      const top = f.namada!.top[0].address;
-      insert(db, 'labels', [{ address: top, chain: 'namada', label: 'my whale', category: 'watch', source: 'user', updated_at: NOW, author: 'tnam1qauthor' }]);
+      await refreshHolderFigures(db as any, NOW, { namada: true, osmosis: true });
+      const first = ((await (await app.request('/api/holders?chain=namada&limit=10', {}, { DB: db } as any)).json()) as HoldersResponse).holders[0].address;
+      insert(db, 'labels', [{ address: first, chain: 'namada', label: 'my whale', category: 'watch', source: 'user', updated_at: NOW, author: 'tnam1qauthor' }]);
       const r = (await (await app.request('/api/holders?chain=namada&limit=10', {}, { DB: db } as any)).json()) as HoldersResponse;
-      expect(r.holders[0]).toMatchObject({ address: top, label: 'my whale', label_source: 'user' });
+      expect(r.holders[0]).toMatchObject({ address: first, label: 'my whale', label_source: 'user' });
+      expect(r.countsAt).toBe(NOW);
       vi.setSystemTime(NOW + HOLDER_FIGURES_SERVE_MS);
       const w = watched(db);
-      await app.request('/api/holders?chain=namada&limit=10', {}, { DB: w.db } as any);
-      expect(w.sql.filter((s) => s.includes('UNION SELECT'))).toHaveLength(2);
-      expect(usableFigures(f, NOW + HOLDER_FIGURES_SERVE_MS)).toEqual({ namada: null, osmosis: null });
+      const old = (await (await app.request('/api/holders?chain=namada&limit=10', {}, { DB: w.db } as any)).json()) as HoldersResponse;
+      expect(old.countsAt).toBeNull();
+      expect(old.total).toBe(r.total);
+      expect(w.sql.filter((s) => /COUNT\(\*\)/.test(s) && /\bholders\b/.test(s)).length).toBeGreaterThan(0);
+      expect(usableFigures(await readHolderFigures(db as any), NOW + HOLDER_FIGURES_SERVE_MS)).toEqual({ v: 2, namada: null, osmosis: null });
     } finally {
       vi.useRealTimers();
     }
   });
 
-  it('are due after a complete listing, when the Osmosis list was written, and when old; the merge of two chains keeps the list\'s order', () => {
+  it('are due after a complete listing, when the Osmosis list was written, and when old; a row from the build before 0008 reads as missing', async () => {
     const at = NOW;
-    const f = { namada: { at, holders: 1, under1: 0, rowsAt: null, top10: null, top: [], listed: { balance: at - 1, bond: at - 1 } }, osmosis: { at, holders: 1, rowsAt: null, top10: null, top: [] } };
+    const part = { at, holders: 1, under1: 0, byCategory: {}, none: 1, rowsAt: null, top10: null };
+    const f = { v: 2 as const, namada: { ...part, listed: { balance: at - 1, bond: at - 1 } }, osmosis: { ...part } };
     expect(figuresDue(null, { balance: null, bond: null }, at, false)).toEqual({ namada: true, osmosis: true });
     expect(figuresDue(f, { balance: at - 1, bond: at - 1 }, at + 60000, false)).toEqual({ namada: false, osmosis: false });
     expect(figuresDue(f, { balance: at + 30000, bond: at - 1 }, at + 60000, false)).toEqual({ namada: true, osmosis: true });
     expect(figuresDue(f, { balance: at - 1, bond: at - 1 }, at + 60000, true)).toEqual({ namada: false, osmosis: true });
     expect(figuresDue(f, { balance: at - 1, bond: at - 1 }, at + OSMOSIS_FIGURES_REFRESH_MS, false)).toEqual({ namada: false, osmosis: true });
     expect(figuresDue(f, { balance: at - 1, bond: at - 1 }, at + NAMADA_FIGURES_REFRESH_MS, false)).toEqual({ namada: true, osmosis: true });
-    const row = (chain: string, address: string, total_num: number) => ({ chain, address, total_num }) as any;
-    const g = { namada: { ...f.namada, top: [row('namada', 'tnam1b', 9), row('namada', 'tnam1a', 5)] }, osmosis: { ...f.osmosis, top: [row('osmosis', 'osmo1z', 9), row('osmosis', 'osmo1y', 7)] } };
-    expect(figuresTopRows(g, 'all', 0, 3)!.map((r) => r.address)).toEqual(['osmo1z', 'tnam1b', 'osmo1y']); // 'o' < 't' on a tie, as SQLite compares
-    expect(figuresTopRows(g, 'all', 90, 11)).toBeNull();
-    expect(figuresCount(g, 'all')).toBe(2);
-    expect(figuresCount({ ...g, osmosis: null }, 'all')).toBeNull();
+    expect(figuresCount(f, 'all')).toBe(2);
+    expect(figuresCount({ ...f, osmosis: null }, 'all')).toBeNull();
+    const db = testD1();
+    insert(db, 'kv', [{ key: 'holders.figures', value: JSON.stringify({ namada: { at, holders: 1, under1: 0, top: [] }, osmosis: null }), updated_at: at }]);
+    expect(await readHolderFigures(db as any)).toBeNull();
+    expect(figuresDue(await readHolderFigures(db as any), { balance: at - 1, bond: at - 1 }, at + 1, false)).toEqual({ namada: true, osmosis: true });
   });
 });
 

@@ -566,3 +566,98 @@ describe('Audit Round 2: high-cardinality cache-busters, stream caps, establishe
     expect(r2.status).toBe(429);
   });
 });
+
+// ------------------------------------------------------------------ Review 3 (2026-10-20): one query read two ways, keys no page asks for, Object's members
+describe('C1/C14 (review 3): the key, the limiters and the route read one query the same way; values no page sends are refused or limited', () => {
+  /** The real app over the stand-in behind the real cachedApi, a Map cache, and three limiters that refuse every call. */
+  function world() {
+    const db = testD1();
+    const H = 3_600_000;
+    insert(db, 'flows', Array.from({ length: 60 }, (_, i) => ({
+      id: `osmosis:H${i}:0`, chain: 'osmosis', height: 1000 + i, ts: NOW - (i + 1) * H, tx_hash: `H${String(i).padStart(8, '0')}`,
+      kind: i % 2 ? 'buy' : 'sell', from_addr: `osmo1${'q'.repeat(38)}${i % 10}`, to_addr: `osmo1${'p'.repeat(38)}${i % 10}`, amount_num: 100 + i,
+    })));
+    const e = edge();
+    const limited: string[] = [];
+    const refuse = (name: string) => ({ limit: async ({ key }: { key: string }) => { limited.push(`${name} ${key}`); return { success: false }; } });
+    const envL = { DB: db, HEAVY_LIMITER: refuse('heavy'), REPLAY_LIMITER: refuse('replay'), SEARCH_LIMITER: refuse('search') } as any;
+    const seen: string[] = [];
+    const fetchApp = (r: Request, en: any, c: any) => { seen.push(r.url); return app.fetch(r, en, c); };
+    const get = async (p: string) => {
+      const r = await cachedApi(new Request(`https://namada.trade${p}`, { headers: { 'cf-connecting-ip': '203.0.113.5' } }), envL, e.ctx, fetchApp);
+      await e.settle();
+      return r;
+    };
+    return { get, limited, seen };
+  }
+
+  it('a parameter name spelled with a percent sign is not found: it can neither store a false answer under the visitors\' key nor slip past a limiter', async () => {
+    const w = world();
+    for (const p of ['/api/flows?%6bind=sell&kind=buy', '/api/flows?%73earch=&search=x', '/api/flows?%70age=1&page=900', '/api/holders?%63hain=namada&chain=osmosis', '/api/series?%6bey=price.usd&key=price.pool_1h']) {
+      const r = await w.get(p);
+      expect(r.status, p).toBe(404);
+      expect(r.headers.get('cache-control')).toBe('no-store');
+    }
+    expect(w.seen).toEqual([]);
+    expect(w.limited).toEqual([]);
+    // the visitors' spelling is answered for what it asks: sells only
+    const r = await w.get('/api/flows?kind=sell&limit=50');
+    expect(r.status).toBe(200);
+    const kinds = new Set(((await r.json()) as { flows: { kind: string }[] }).flows.map((f) => f.kind));
+    expect([...kinds]).toEqual(['sell']);
+  });
+
+  it('the route runs on the key\'s own URL: only the parameters the key holds, each once, as the key decoded them', async () => {
+    const w = world();
+    await w.get('/api/flows?kind=sell&kind=buy&limit=50&r=12345');
+    expect(w.seen).toEqual(['https://namada.trade/api/flows?kind=sell&limit=50']);
+  });
+
+  it('a series from a day the Trade page does not ask for today, or with a `to`, is limited on a miss; the five windows it sends are not', () => {
+    const now = Date.now();
+    const day = (d: number) => new Date(now - d * D).toISOString().slice(0, 10);
+    for (const d of [30, 90, 365, 1200, 14]) expect(isReplay(new URL(`https://namada.trade/api/series?key=price.swap_1h&from=${day(d)}&step=1h`)), `${d} days`).toBe(false);
+    expect(isReplay(new URL(`https://namada.trade/api/series?key=price.swap_1h&from=${day(31)}`))).toBe(false); // the day either side (a clock a little off)
+    expect(isReplay(new URL('https://namada.trade/api/series?key=price.pool_1h&from=2020-01-01&step=1d'))).toBe(true);
+    expect(isReplay(new URL(`https://namada.trade/api/series?key=price.pool_1h&from=${day(200)}&step=1d`))).toBe(true);
+    expect(isReplay(new URL(`https://namada.trade/api/series?key=price.pool_1h&from=${day(30)}&to=2027-01-01`))).toBe(true);
+    expect(isReplay(new URL('https://namada.trade/api/series?key=price.pool_1h&from=1577836800000'))).toBe(true);
+    expect(isReplay(new URL('https://namada.trade/api/series?key=price.usd'))).toBe(false); // the route's own default window
+  });
+
+  it('the tape at any length but the one the page asks for, and a page number spelled any other way, are limited on a miss', () => {
+    expect(isReplay(new URL('https://namada.trade/api/series/trades?limit=60'))).toBe(false);
+    expect(isReplay(new URL('https://namada.trade/api/series/trades'))).toBe(false);
+    for (const l of ['-1', '10', '61', '060']) expect(isReplay(new URL(`https://namada.trade/api/series/trades?limit=${l}`)), l).toBe(true);
+    for (const pg of ['-5', '0', '0.3', '01', '2']) {
+      expect(isReplay(new URL(`https://namada.trade/api/flows?page=${pg}`)), pg).toBe(true);
+      expect(isReplay(new URL(`https://namada.trade/api/holders?chain=namada&page=${pg}`)), pg).toBe(true);
+    }
+    expect(isReplay(new URL('https://namada.trade/api/flows?page=1'))).toBe(false);
+  });
+
+  it('switches, chains, sorts and `count` spelled any other way than the app sends them are refused (a 400 is never cached)', async () => {
+    const db = testD1();
+    const status = async (p: string) => (await app.request(p, {}, env(db))).status;
+    for (const p of ['/api/flows?count=b1', '/api/flows?chain=zz1', '/api/flows?chain=Namada', '/api/flows?whale=t1', '/api/flows?arb=f1', '/api/flows?pairs=two',
+      '/api/holders?by=r1', '/api/holders?chain=all%20', '/api/holders?chain=NAMADA', '/api/export/holders?chain=namada&by=x']) expect(await status(p), p).toBe(400);
+    // the app's own spellings (web/src/api.ts flowsParams, holdersParams)
+    for (const p of ['/api/flows?count=none', '/api/flows?chain=osmosis&whale=true&arb=false&pairs=one', '/api/flows', '/api/flows?chain=all',
+      '/api/holders?chain=all', '/api/holders?chain=namada&by=liquid', '/api/holders?chain=osmosis&by=bonded&page=1', '/api/holders?chain=namada&by=total']) expect(await status(p), p).toBe(200);
+  });
+
+  it('?category=__proto__ and ?category=constructor are categories nothing has (total 0, the narrow read), never Object\'s members', async () => {
+    const db = testD1();
+    insert(db, 'holders', [{ chain: 'namada', address: A, balance: '1', balance_num: 10, total_num: 10, updated_at: NOW, verified_at: NOW, verified_src: 'x' }]);
+    insert(db, 'kv', [{ key: 'holders.counts', value: JSON.stringify({ at: NOW, byChain: { namada: { all: 1, byCategory: {}, none: 1, under1Nam: 0 }, osmosis: { all: 0, byCategory: {}, none: 0, under1Nam: 0 }, all: { all: 1, byCategory: {}, none: 1, under1Nam: 0 } } }), updated_at: NOW }]);
+    for (const c of ['__proto__', 'constructor', 'tostring']) {
+      const r = await app.request(`/api/holders?chain=namada&category=${c}`, {}, env(db));
+      expect(r.status, c).toBe(200);
+      const j = (await r.json()) as { total: unknown; holders: unknown[] };
+      expect(j.total, c).toBe(0);
+      expect(j.holders).toEqual([]);
+    }
+    const { category_plain } = await import('../shared/labels');
+    expect(category_plain('constructor')).toBe('Constructor');
+  });
+});

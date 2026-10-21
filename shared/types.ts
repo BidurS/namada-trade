@@ -48,12 +48,69 @@ export interface Flow {
   whale?: boolean;
 }
 
-/** GET /api/flows: newest first. */
+/**
+ * GET /api/flows: newest first (`ORDER BY ts DESC, height DESC, id DESC`). Parameters: FlowsRequest. The fields after
+ * `flows` are the cursor build's (docs/design/nav-search-plan.md 2.2); a server before it sends none of them, and a
+ * client then pages by `?page=` (web/src/api.ts fetchFlowsPage does).
+ */
 export interface FlowsResponse {
-  total: number;
+  /**
+   * Moves that match the filters, counted on the head page only. null behind a cursor (`?before=` a cursor): the
+   * head page said it, and with `count=none`; a client never reads an absent count as 0.
+   */
+  total: number | null;
+  /** 1 behind a cursor (the client counts its own position) */
   page: number;
   limit: number;
   flows: Flow[];
+  /** the cursor for the older rows (send it back as `?before=`); null on the last page. Absent on older servers. */
+  next?: string | null;
+  /** when the page was read; with `?at=` the rewound time */
+  asOf?: number;
+  /** the oldest move in the index for this chain filter ("The flow index starts on 3 Dec 2024"); on the head page and on a date jump (`?before=<unix ms>`), else absent */
+  firstTs?: number | null;
+  /**
+   * On an empty head page: the newest move that matches every filter but the time window (`since`, `before`), of any
+   * age, for "The last one was 2.3 days ago. Rewind to it." null when none is recorded; absent when not searched.
+   */
+  last?: { id: string; ts: number; chain: Chain } | null;
+}
+
+/**
+ * The query parameters of GET /api/flows and GET /api/export/flows, as the URL carries them (every one an optional
+ * string). Each must be in worker/src/http.ts CACHE_PARAMS['/api/flows'] (test/routes.test.ts checks it).
+ */
+export interface FlowsRequest {
+  chain?: 'namada' | 'osmosis';
+  /** a FlowKind, or the groups 'dex' (buys, sells, pool moves), 'ibc' (bridge records), 'native' */
+  kind?: string;
+  whale?: 'true';
+  /** at least this many NAM (NAM flows only) */
+  minNam?: string;
+  /** 'false': bot round trips left out */
+  arb?: 'false';
+  /** 'one': each bridge crossing once */
+  pairs?: 'one';
+  /** address or record contains the text (`LIKE '%…%'`, the slow path; rate-limited) */
+  search?: string;
+  /** unix ms: nothing newer (Rewind) */
+  at?: string;
+  /** offset page (kept one release for old links; `before` wins when both are sent) */
+  page?: string;
+  /** 10 to 100 (shared/paging.ts clampLimit) */
+  limit?: string;
+  /** a moves cursor (FlowsResponse.next) or a plain unix-ms time (a date jump): shared/paging.ts parseBeforeParam */
+  before?: string;
+  /** unix ms: moves at or after it ("last 7 days", "since 1 Oct") */
+  since?: string;
+  /** an address start of ADDRESS_PREFIX_MIN (shared/search-grammar.ts) characters or more, or a whole address: either side */
+  addr?: string;
+  /** HASH_PREFIX_MIN or more hex characters of a record (upper-cased by the route) */
+  hash?: string;
+  /** a block height */
+  height?: string;
+  /** 'none': rows only, no count (FlowsResponse.total comes back null): Home's latest moves and the live feed's first rows */
+  count?: 'none';
 }
 
 /** A raw balance change (ledger entry) */
@@ -127,12 +184,78 @@ export interface Holder {
   statusNote: string | null;
 }
 
-/** GET /api/holders. Not available under rewind: balances are current, not as of `at`. */
+/**
+ * GET /api/holders. Not available under rewind: balances are current, not as of `at`. Parameters: HoldersRequest.
+ * The fields after `holders` are the stored-totals build's (docs/design/nav-search-plan.md 2.1); a server before it
+ * sends none of them.
+ */
 export interface HoldersResponse {
+  /**
+   * Holders the chain, category, size and search select. Without a search it comes from the counts the cron keeps
+   * (kv holders.counts, HolderCountsKv; stamped by `countsAt`); with a search it is counted in the request.
+   */
   total: number;
+  /** the page these rows are (with `after`, the page the cursor's rank falls on) */
   page: number;
   limit: number;
+  /** rank = (page − 1) × limit + i + 1, or, after a cursor, the cursor's rank + i + 1 */
   holders: Holder[];
+  /** the cursor for the rows after the last one here (send it back as `?after=`); null on the last page */
+  next?: string | null;
+  /** when the list was read: the order (and so every rank) is as of this time */
+  asOf?: number;
+  /** when `total` and `categories` were counted; null when counted in this request (a search) */
+  countsAt?: number | null;
+  /**
+   * Holders by category over the same chain, size and search, the category filter itself left out (so every
+   * "What" chip has its count): `total` all of them, `counts` per raw category in lower case, 'none' for no label.
+   */
+  categories?: { total: number; counts: { category: string; n: number }[] } | null;
+}
+
+/** The sort of the holder list: total (spendable + staked), spendable ('liquid') or staked ('bonded'). */
+export type HoldersBy = 'total' | 'liquid' | 'bonded';
+
+/**
+ * The query parameters of GET /api/holders and GET /api/export/holders, as the URL carries them. Each must be in
+ * worker/src/http.ts CACHE_PARAMS['/api/holders'].
+ */
+export interface HoldersRequest {
+  /** default 'all' on the API (the UI sends 'namada' by default) */
+  chain?: 'all' | 'namada' | 'osmosis';
+  by?: HoldersBy;
+  /** a raw category in lower case, or 'none' (no label) */
+  category?: string;
+  /** read with shared/search-grammar.ts parse(…, { list: 'holders' }): an address start or end, names, sizes, groups */
+  search?: string;
+  /** NAM on the sort's figure (total by default): at least / at most */
+  min?: string;
+  max?: string;
+  /** offset page, from 1 */
+  page?: string;
+  /** a holders cursor (HoldersResponse.next); wins over `page` */
+  after?: string;
+  /** 10 to 100 */
+  limit?: string;
+}
+
+/**
+ * kv 'holders.counts', written by the cron after a listing pass that wrote rows and otherwise every 10 minutes
+ * (nav-search-plan.md 2.1): holder counts by chain and category over the stored totals (total_num > 0, protocol
+ * and pool accounts left out). Read by /api/holders (no search), /api/overview and the server-rendered pages.
+ */
+export interface HolderCountsKv {
+  /** when the counts were taken (unix ms) */
+  at: number;
+  byChain: Record<'namada' | 'osmosis' | 'all', {
+    all: number;
+    /** per raw category in lower case (labelled holders only) */
+    byCategory: Record<string, number>;
+    /** holders with no label */
+    none: number;
+    /** holders with under 1 NAM in all (fee dust and test amounts count as holders) */
+    under1Nam: number;
+  }>;
 }
 
 // ---------------------------------------------------------------- provenance
@@ -609,7 +732,13 @@ export interface AddressReport {
   balance: Sourced<number>;
   indexedBalance: number | null;
   staking?: AddressStaking | null;
+  /** position by spendable NAM on its chain (No. N by spendable NAM), null when not ranked */
   rank: number | null;
+  /**
+   * position by total NAM (spendable + staked), the holder list's default order: `COUNT(*) + 1` of the holders ahead
+   * of it on the stored totals. null when not ranked; absent on servers before the stored-totals build.
+   */
+  rankTotal?: number | null;
   /** as Holder.change24h / change7d: from recorded chain reads, null when not known */
   change24h: number | null;
   change7d: number | null;
@@ -623,9 +752,18 @@ export interface AddressReport {
   counterparties: { address: string; label: string | null; label_plain?: string | null; label_source?: string | null; label_author?: string | null; inNam: number; outNam: number; count: number }[];
 }
 
+/** The groups of a search answer, in the palette's order (nav-search-plan.md 4.6). */
+export type SearchGroup = 'addresses' | 'records' | 'names' | 'pools' | 'blocks';
+/** What a result is: an address, a record (transaction), a name (a label), a validator's name, a pool, a block. */
+export type SearchResultKind = 'address' | 'record' | 'name' | 'validator' | 'pool' | 'block';
+/** How the text matched, for the ranking tiers (exact, then start of the value, then its end, then a word start, then inside). */
+export type SearchMatch = 'exact' | 'start' | 'end' | 'word' | 'contains';
+
 export interface SearchResult {
-  type: 'address' | 'tx' | 'label' | 'pool';
+  /** the kind in the first build's words, kept for clients before nav step 5 ('validator' and 'block' are new) */
+  type: 'address' | 'tx' | 'label' | 'pool' | 'validator' | 'block';
   chain?: Chain;
+  /** the address, the record's explorer hash, the pool id or the block height */
   value: string;
   /** plain words (labels as label_plain) */
   title: string;
@@ -634,6 +772,42 @@ export interface SearchResult {
   label?: string | null;
   label_plain?: string | null;
   category_plain?: string | null;
+  /** the group it is listed under; absent on servers before nav step 5 */
+  group?: SearchGroup;
+  /** what it is; absent on servers before nav step 5 */
+  kind?: SearchResultKind;
+  /** how it matched the text */
+  match?: SearchMatch;
+  /**
+   * The site path that shows it: an address opens its sheet (`/holders?addr=<address>`), a record the moves list on
+   * its hash (`/activity?q=<hash>`), a block the moves list on its height, a pool `/trade`.
+   */
+  href?: string;
+  /** a record on a public explorer (opened in a new tab), for records only */
+  external?: string | null;
+  /**
+   * The source and age of what the subtitle states (the holder index's reading behind "staked 1.2 million NAM",
+   * the label's source behind a name); null when the subtitle states no figure.
+   */
+  stamp?: Provenance | null;
+}
+
+/** GET /api/search?q=&limit= (SearchRequest): current data, grouped; `results` keeps its first-build shape. */
+export interface SearchResponse {
+  /** every group's results, groups in SearchGroup order, at most `limit` per group, best first inside a group */
+  results: SearchResult[];
+  /** when the answer was read; absent on servers before nav step 5 */
+  asOf?: number;
+  /** per group: how many are listed and whether more matched than the limit */
+  groups?: { group: SearchGroup; n: number; more: boolean }[];
+}
+
+/** The query parameters of GET /api/search. */
+export interface SearchRequest {
+  /** the text typed; read with shared/search-grammar.ts parse (no list) */
+  q: string;
+  /** results per group, 1 to 10 (default 6) */
+  limit?: string;
 }
 
 // ---------------------------------------------------------------- trade (D1)
@@ -854,3 +1028,374 @@ export type LiveMessage =
   | { type: 'flows'; flows: Flow[] }
   | { type: 'status'; upstream: { osmosis: boolean; namada: boolean }; heights: { osmosis?: number; namada?: number }; at: number }
   | { type: 'price'; usd: number; at: number };
+
+// ---------------------------------------------------------------- series and the Trade basics
+// docs/design/screener-plan.md 2.1 to 2.6, 2.11 and the read contract 2.12; mounted at /api/series by one line in
+// worker/src/api.ts (worker/src/api-series.ts). Every answer carries its provenance and its honest start (3.9):
+// nothing is drawn before a series starts, a window not yet covered is null with the reason (never 0), and a pool
+// hour without a trade is a flat tick, never a candle.
+
+/**
+ * The body of every series answer that is not a reading: a request refused as asked (400), an unknown key or path
+ * under /api/series (404) and a failure on our side (500), all sent no-store. (501, a route mounted but not built,
+ * existed only while the routes were being built; the client still reads it as not served.)
+ */
+export interface NotServedBody {
+  /** plain words for the reader ("This figure is not served yet.") */
+  error: string;
+  /** what is missing, for the developer reading the answer */
+  reason: string;
+  endpoint: string;
+}
+/** The words a panel prints when its route is not served: 404 from a server without the routes (screener-plan 8: the "—" state, never an error). */
+export const NOT_SERVED = 'This figure is not served yet.';
+
+/** The step of a series answer. */
+export type SeriesStep = '1m' | '1h' | '6h' | '1d';
+export const SERIES_STEP_MS: Record<SeriesStep, number> = { '1m': 60_000, '1h': 3_600_000, '6h': 21_600_000, '1d': 86_400_000 };
+/** The most points one series answer holds; a wider range at a finer step is refused (400) with the reason. */
+export const SERIES_MAX_POINTS = 3000;
+/** The unit of a series' values. */
+export type SeriesUnit = 'usd_per_nam' | 'nam' | 'usd' | 'count' | 'pct';
+/** How a step's value is made from the readings inside it: the last one (prices, depth, supply) or their sum (volume, counts). */
+export type SeriesAgg = 'last' | 'sum';
+
+/**
+ * GET /api/series?key=&from=&to=&step=&at= (query parameters as the URL carries them). Each must be in
+ * worker/src/http.ts CACHE_PARAMS['/api/series'] once the route is cached.
+ */
+export interface SeriesRequest {
+  /**
+   * A served key; anything else is a 404. price.usd, price.swap_1h, price.pool_1h,
+   * dex.swaps_1h.{nam,buy_nam,sell_nam,n,buyers,sellers}, dex.liquidity_usd, supply.total_stake, supply.masp_shielded,
+   * dex.volume_24h_usd_osmosis, dex.volume_7d_usd_osmosis, dex.volume_usd_daily.osmosis,
+   * dex.ref_pool_liquidity_usd.daily.osmosis, dex.volume_nam_daily, dex.traders_daily, dex.hours_with_trades_daily,
+   * holders.namada, holders.osmosis, and pool_hourly.<pool id>.<liquidity_usd|nam_reserve|volume_24h_usd_osmosis|
+   * volume_7d_usd_osmosis|liquidity_usd_osmosis>.
+   */
+  key: string;
+  /** unix ms or YYYY-MM-DD (UTC midnight); default `to` − 30 days */
+  from?: string;
+  /** unix ms or YYYY-MM-DD (the end of that day); default now, or `at` */
+  to?: string;
+  /** default: the finest of 1m, 1h, 6h, 1d that keeps the answer within SERIES_MAX_POINTS */
+  step?: SeriesStep;
+  /** Rewind: nothing newer than this */
+  at?: string;
+}
+
+export interface SeriesSample {
+  /** start of the step (unix ms) */
+  t: number;
+  /**
+   * the time of the step's newest reading (unix ms), when it is not the step's start: a minute reading of the hour
+   * not rolled up yet, or the last hour that traded in a 6-hour or daily step. Absent: the reading is keyed at `t`.
+   */
+  at?: number;
+  /** the step's value: its last reading ('last') or the sum of its readings ('sum') */
+  v: number;
+  /** the step's lowest and highest reading and how many readings it holds */
+  lo?: number;
+  hi?: number;
+  n?: number;
+  /** index into SeriesResponse.sources; absent means sources[0] */
+  src?: number;
+  /** pool price only: no trade moved the pool in that hour (open = high = low = close); drawn as a flat tick, never a candle */
+  flat?: boolean;
+}
+
+export interface SeriesSource {
+  /** the technical source word (shown in plain words through web/src/lib/prov.ts) */
+  source: string;
+  /** this source's first and last point in the answer; null when it has none in this range */
+  from: number | null;
+  to: number | null;
+  /** its honest start: the first reading it ever recorded for the key, whatever the range asked */
+  start: number | null;
+  /** what the start means, in plain words ("Recorded every minute since 15 Oct 2026; nothing earlier exists.") */
+  startNote: string;
+  /** true when the history before its writer shipped was filled in once from stored rows (startNote says from which) */
+  backfilled: boolean;
+}
+
+/** A stretch the record does not cover (the reader was not running, the source did not answer): not "no trade". */
+export interface SeriesGap {
+  from: number;
+  to: number;
+  /** in plain words */
+  why: string;
+}
+
+export interface SeriesResponse {
+  key: string;
+  /** the range answered, [from, to) in unix ms */
+  from: number;
+  to: number;
+  step: SeriesStep;
+  stepMs: number;
+  agg: SeriesAgg;
+  unit: SeriesUnit;
+  /** oldest first; a step with no reading has no point (nothing is filled in) */
+  points: SeriesSample[];
+  /** one or more sources (a series stitched from two keys names both, each with its own start) */
+  sources: SeriesSource[];
+  /** the series' honest start (the earliest source start): a chart draws nothing before it and prints it under itself */
+  start: number | null;
+  /**
+   * true for a series written only when something happened (executed swaps, trade volume): a step without a point
+   * had no trade, which is not a gap. false for readings taken on a clock (the quoted price, depth, supply): a run of
+   * steps without a point is listed in `gaps`.
+   */
+  sparse: boolean;
+  /** steps in the range from `start` on, and how many have a point ("70 of the last 720 hours had a trade") */
+  coverage: { steps: number; withPoint: number };
+  /** runs of steps on a clock series with no reading, merged; empty for a sparse series */
+  gaps: SeriesGap[];
+  /** the newest point's source, time and status (missing with the reason when the range has no point) */
+  prov: Provenance;
+  asOf: number;
+}
+
+/** The windows of the price changes (screener-plan 2.1). */
+export type PriceChangeWindow = 'h1' | 'h6' | 'h24' | 'd7' | 'd30';
+export const PRICE_CHANGE_WINDOW_MS: Record<PriceChangeWindow, number> = { h1: 3_600_000, h6: 21_600_000, h24: 86_400_000, d7: 604_800_000, d30: 2_592_000_000 };
+/** The windows of the pool-price changes (the Osmosis data API pair series reaches back to 20 Jun 2025). */
+export type PoolChangeWindow = 'd7' | 'd30' | 'y1';
+export const POOL_CHANGE_WINDOW_MS: Record<PoolChangeWindow, number> = { d7: 604_800_000, d30: 2_592_000_000, y1: 31_536_000_000 };
+/**
+ * A change's base may come at most this share of its window after the window's start (3 minutes for 1 h, 72 for
+ * 24 h, 8.4 hours for 7 days); a later first reading means the window is not covered, and the change is null.
+ */
+export const PRICE_BASE_MAX_LAG_SHARE = 0.05;
+
+/** One reading a change is measured between. */
+export interface PriceReading {
+  value: number;
+  at: number;
+}
+
+export interface PriceChange {
+  window: PriceChangeWindow | PoolChangeWindow;
+  windowMs: number;
+  /** (now − base) / base × 100; null when the window is not covered or a reading is missing (the note says which) */
+  pct: number | null;
+  /** the reading it is measured to (the latest at or before asOf) */
+  now: PriceReading | null;
+  /** the reading it is measured from: the first stored reading at or after now.at − windowMs */
+  base: PriceReading | null;
+  /** base.at − (now.at − windowMs): how far after the window's start the base was read (0 on time) */
+  baseLagMs: number | null;
+  prov: Provenance;
+  /** "The quoted price has been recorded since 15 Oct 2026." when not covered */
+  note?: string;
+}
+
+/** GET /api/series/changes?at= */
+export interface PriceChangesResponse {
+  asOf: number;
+  /** from the quoted price (metric price.usd: the Osmosis router, every minute since 15 Oct 2026 04:14 UTC) */
+  quoted: Record<PriceChangeWindow, PriceChange>;
+  /** from the pool price (metric price.pool_1h: Osmosis data API, pool 3005 spot, hourly closes); labelled "pool price", never mixed with `quoted` */
+  pool: Record<PoolChangeWindow, PriceChange>;
+}
+
+/** The windows of the volume figures (screener-plan 2.2). */
+export type VolumeWindow = 'h1' | 'h6' | 'h24' | 'd7' | 'd30';
+export const VOLUME_WINDOW_MS: Record<VolumeWindow, number> = { h1: 3_600_000, h6: 21_600_000, h24: 86_400_000, d7: 604_800_000, d30: 2_592_000_000 };
+/** Our 24 h dollar volume and the Osmosis pair summary's disagree when they are more than this many percent apart. */
+export const VOLUME_DISAGREE_PCT = 25;
+
+/** Executed volume over one window, summed from the hourly trade rows (metrics dex.swaps_1h.*, at most 720 per key). */
+export interface ExecutedVolume {
+  window: VolumeWindow;
+  /** [from, to) in unix ms */
+  from: number;
+  to: number;
+  /** NAM bought plus NAM sold, bot round trips left out */
+  nam: number;
+  buyNam: number;
+  sellNam: number;
+  buys: number;
+  sells: number;
+  /** dollars at execution (the sum of each trade's value then); null when any trade of the window has none */
+  usd: number | null;
+  /** dollars over the trades that have a value, and how many have none */
+  usdPriced: number;
+  unpriced: number;
+  /** makers (signers) who bought and who sold; `tradersHow` says how they are counted */
+  buyers: number;
+  sellers: number;
+  /** 'distinct': each address once in the window; 'distinct_per_hour_summed': once per hour, the hours added up (say so) */
+  tradersHow: 'distinct' | 'distinct_per_hour_summed';
+  /** dollars per NAM over the priced trades (all, buys, sells); null when none is priced */
+  vwapUsd: number | null;
+  buyVwapUsd: number | null;
+  sellVwapUsd: number | null;
+  /** hours of the window with at least one trade, of `hours` */
+  hoursWithTrade: number;
+  hours: number;
+}
+
+/** GET /api/series/volume?at= : every window in one answer (one read of at most 720 rows per key). */
+export interface VolumeResponse {
+  asOf: number;
+  /** printed with the figure (shared/copy.ts, the 'volume' fact): what is counted and how it is priced */
+  definition: string;
+  /** null for a window the record does not cover (executed volume is recorded since 12 Aug 2026) */
+  windows: Record<VolumeWindow, ExecutedVolume | null>;
+  /** the flow index's Osmosis coverage (how far the swaps are read) */
+  prov: Provenance;
+  /** the first trade-hour recorded: the figures' honest start */
+  start: number | null;
+  /** the Osmosis data API pair summary over the NAM pairs (priced leg only), with its own update time */
+  osmosis: Sourced<{ usd24h: number | null; usd7d: number | null }>;
+  /** what the Osmosis figure counts, printed beside it */
+  osmosisDefinition: string;
+  /** both 24 h dollar figures exist and are more than VOLUME_DISAGREE_PCT apart: show the disagree state, both reachable */
+  disagree: boolean;
+}
+
+/** One pool holding NAM (the pairs list, screener-plan 2.4). */
+export interface PairRow {
+  poolId: string;
+  /** e.g. 'NAM/USDC' */
+  pair: string;
+  counterSymbol: string | null;
+  type: PoolInfo['type'] | null;
+  /** depth, reserves and fee from the router's pools answer (Osmosis SQS); null when the router did not list the pool */
+  liquidityUsd: number | null;
+  namReserve: number | null;
+  counterReserve: number | null;
+  spreadFactor: number | null;
+  /** the pair summary's dollars traded in 24 h and 7 d (priced leg only) and its liquidity; value null with "Osmosis does not list this pool's volume" when absent */
+  osmosis: Sourced<{ volume24hUsd: number | null; volume7dUsd: number | null; liquidityUsd: number | null }>;
+  /** trades recorded here through this pool in 24 h, from the swap legs; value null with the note until legs are recorded */
+  here24h: Sourced<{ trades: number; nam: number }>;
+  /** when the pool was created (read once from the chain, kv pool.created.<id>); null when not read */
+  createdAt: number | null;
+}
+
+/** GET /api/series/pairs : the NAM pools, deepest first. */
+export interface PairsResponse {
+  asOf: number;
+  pairs: PairRow[];
+  /** the router's pools answer */
+  prov: Provenance;
+  /** the pair summary (its own update time, `last_update_at`) */
+  osmosisProv: Provenance;
+  /** sums over the pairs of the summary's figures that are known; null when no pair has the figure */
+  osmosisTotals: { volume24hUsd: number | null; volume7dUsd: number | null; liquidityUsd: number | null };
+}
+
+/** Consecutive trades by one maker on one side this close together fold into one tape row (screener-plan 2.5). */
+export const TRADE_FOLD_MS = 600_000;
+/** Consecutive trades fold only when each is under this many NAM: a bigger trade always stands alone on the tape. */
+export const TRADE_FOLD_UNDER_NAM = 2000;
+/** The most rows a trades page holds. */
+export const TRADES_LIMIT_MAX = 100;
+/** The rows the Trade page's tape asks for (any other `limit` is a cache entry no page asks for: worker/src/http.ts isReplay). */
+export const TRADES_TAPE_LIMIT = 60;
+
+/** The query parameters of GET /api/series/trades. */
+export interface TradesRequest {
+  /** a moves cursor (TradesResponse.next) or a plain unix-ms time: shared/paging.ts parseBeforeParam */
+  before?: string;
+  /** one maker's trades only (a whole address) */
+  maker?: string;
+  /** at least this many NAM */
+  min?: string;
+  /** 10 to TRADES_LIMIT_MAX */
+  limit?: string;
+  at?: string;
+}
+
+export type TradePattern = 'repeated_small_buys';
+
+/** One executed NAM swap on Osmosis (bot round trips left out). */
+export interface TradeRow {
+  id: string;
+  ts: number;
+  height: number;
+  /** how the time is known, as Flow.meta.tsSource ('block', 'extrapolated', 'interpolated'); null when not said */
+  tsSource: string | null;
+  kind: 'buy' | 'sell';
+  nam: number;
+  counterSymbol: string | null;
+  counterAmount: number | null;
+  /** the trade's own price, dollars per NAM, and where it came from; null with `priceNote` when none was recorded (no pool spot price stands in) */
+  priceUsd: number | null;
+  priceSource: 'execution' | 'swap_1h' | 'spot' | 'unknown' | null;
+  valueUsd: number | null;
+  priceNote?: string;
+  /** the signer (Flow.meta.trader), else the receiving (buy) or sending (sell) address */
+  maker: string | null;
+  makerLabelPlain: string | null;
+  makerLabelSource?: string | null;
+  makerLabelAuthor?: string | null;
+  /** the maker's recorded buys and sells, all time, bots left out (one grouped count per page) */
+  makerTrades: { buys: number; sells: number } | null;
+  /** the pools the swap went through, in order */
+  route: string[];
+  txHash: string;
+  explorerHash?: string;
+  /** the maker's pattern in the 24 h before this trade (TradesResponse.patternRule): a description, never a claim about intent */
+  pattern: TradePattern | null;
+}
+
+/**
+ * A run of consecutive rows by one maker on one side, each under foldUnderNam NAM, within foldMs of the next, and
+ * through a pool every row of the run went through (the router picks each trade's route, so routes differ): one tape
+ * row ("bought 12 times, 4,210 NAM, $4.91 average") with the rows behind a disclosure. A single trade is a group of one. A run is
+ * cut at the page's end; the next page's first group may continue it (same maker and side, within foldMs) and the
+ * client joins the two.
+ */
+export interface TradeGroup {
+  maker: string | null;
+  kind: 'buy' | 'sell';
+  /** the folded rows' ids, newest first (rows in TradesResponse.rows) */
+  ids: string[];
+  n: number;
+  nam: number;
+  /** dollars over the priced rows, and how many have no price; null when none is priced */
+  usd: number | null;
+  unpriced: number;
+  /** dollars per NAM over the priced rows; null when none is priced */
+  avgPriceUsd: number | null;
+  firstTs: number;
+  lastTs: number;
+  pattern: TradePattern | null;
+}
+
+/** GET /api/series/trades : the trades tape, newest first, keyset paged on (ts, height, id). */
+export interface TradesResponse {
+  rows: TradeRow[];
+  groups: TradeGroup[];
+  /** the cursor for older trades (send it back as `?before=`); null at the end of the record */
+  next: string | null;
+  asOf: number;
+  /** the fold rule, sent so the tape can say it: TRADE_FOLD_MS */
+  foldMs: number;
+  /** consecutive trades fold only when each is under this many NAM (TRADE_FOLD_UNDER_NAM) */
+  foldUnderNam?: number;
+  /** "Repeated small buys": at least `minBuys` buys under `underNam` NAM within `windowMs` (20, 2,000, 24 h in the plan) */
+  patternRule: { minBuys: number; underNam: number; windowMs: number };
+  /** the flow index's Osmosis coverage */
+  prov: Provenance;
+  /** the first trade recorded: the tape's honest start */
+  firstTs: number | null;
+}
+
+/** One input of a derived figure, with its own source and time. */
+export interface ValueInput { name: string; value: number | null; at: number | null; source: string; status: Provenance['status'] }
+/** A figure derived from stored readings, printed only with its definition (screener-plan 2.7: never "market cap"). */
+export interface ValueFigure {
+  label: string;
+  definition: string;
+  /** dollars; null when an input is not recorded (prov.note says which) */
+  value: number | null;
+  inputs: ValueInput[];
+  /** source 'derived': the oldest input's time and the worst input's status */
+  prov: Provenance;
+}
+/** GET /api/series/values?at=: all NAM and spendable NAM at today's price, each with its definition and inputs. */
+export interface ValuesResponse { asOf: number; fdv: ValueFigure; spendable: ValueFigure }

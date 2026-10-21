@@ -88,7 +88,12 @@
   .ibtn .ico { width: 22px; height: 22px; }
   .ibtn__on { position: absolute; top: 9px; right: 9px; width: 8px; height: 8px; border-radius: 50%; background: var(--accent); box-shadow: 0 0 0 2px var(--chrome); }
   .kbd-hint { display: none; }
-  @media (max-width: 359px) { .hprice__d { display: none; } }
+  /* search (nav-search-plan 3.1): the icon button below 1024 px, a field-shaped button from 1024 px */
+  .hsearch__t, .hsearch__w, .hsearch__k { display: none; }
+  /* below 375 px the price's 24 h change does not fit beside the status, search and account buttons (360 px read 369) */
+  @media (max-width: 374px) { .hprice__d { display: none; } }
+  /* at 320 px the row read 322 (live, with the status pill's count): a narrower gutter keeps it inside the screen */
+  @media (max-width: 359px) { .hdr__in { padding-inline: 4px; } .hprice { padding-left: 4px; } }
   @media (min-width: 360px) { .hbtn__ns { display: none; } .hbtn__nl { display: inline; } }
   @media (min-width: 400px) { .hbtn__s { display: none; } .hbtn__l { display: inline; } }
   @media (min-width: 640px) {
@@ -108,12 +113,35 @@
     .hprice:hover { background: #1a1a1a; }
     .hdr__sp { order: 2; }
     .hbtn--rewind { display: inline-flex; }
+    /* the header is full at 1024 and from 1200 (six tabs, the price, Rewind, the status pill): the field takes the
+       room the row has left, up to 260 px, instead of a fixed width that would push the row off the screen. It says
+       as much as fits (container query below): the full words, or "Search", and the "/" hint where there is a
+       keyboard. Measured (live data, signed out): 120 px at 1024 ("Search" and "/"), 196 at 1100, 260 from 1170 to
+       1199 (the words), 76 from 1200 (the icon and "/": the wordmark, "Rewind" and "checks" take the rest). */
+    .hdr__in { gap: 6px; }
+    .tabs a { padding: 0 8px; }
+    .tabs a[aria-current="page"]::before { left: 8px; right: 8px; }
+    .hprice { padding: 0 10px 0 8px; }
+    .hdr__sp { flex: 0 0 0; }
+    .hsearch { flex: 1 1 0; display: inline-flex; justify-content: flex-start; gap: 4px; width: auto; min-width: 44px; max-width: 260px; padding: 0 6px 0 10px; border: 1px solid var(--chrome-line); border-radius: var(--r-pill); color: var(--c-ink-3); text-align: left; container-type: inline-size; }
+    .hsearch:hover { color: var(--chrome-ink); }
+    .hsearch .ico { width: 18px; height: 18px; color: var(--chrome-ink-2); }
+    .hsearch__t { display: block; flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: var(--t-13); line-height: 18px; font-weight: var(--w-regular); }
+    .hsearch__k { flex: none; min-width: 24px; padding: 1px 6px; border: 1px solid var(--chrome-line); border-radius: var(--r-1); color: var(--chrome-ink-2); font: var(--w-medium) var(--t-12) / 16px var(--font-code); text-align: center; }
+    /* container widths are the content box: icon 18, "Search" about 46, the hint 24, gaps 4 */
+    @container (max-width: 209px) { .hsearch__t { display: none; } .hsearch__w { display: block; flex: 1; font-size: var(--t-13); line-height: 18px; } }
+    @container (max-width: 95px) { .hsearch__w { display: none; } .hsearch__k { margin-left: auto; } }
+    @container (max-width: 45px) { .hsearch .ico { margin-inline: auto; } }
   }
   @media (min-width: 1024px) and (max-width: 1199px) {
     .brand__word, .hbtn--rewind > span, .hbtn__more { display: none; }
     .hbtn--rewind { padding: 0 10px; }
   }
   @media (pointer: fine) { .kbd-hint { display: inline; } }
+  @media (min-width: 1024px) and (pointer: fine) {
+    .hsearch__k { display: inline-block; }
+    @container (max-width: 45px) { .hsearch__k { display: none; } }
+  }
 
   /* count dot (Alerts): hits since the last visit */
   .count { display: inline-grid; place-items: center; min-width: 18px; height: 18px; padding: 0 5px; border-radius: 9px; background: var(--accent); color: #000; font: var(--w-medium) var(--t-11) / 1 var(--font-code); letter-spacing: 0; }
@@ -202,7 +230,9 @@
   .pal[open] { display: flex; flex-direction: column; animation: nt-sheet-in-pal var(--d-3) var(--ease-enter); }
   .pal::backdrop { background: var(--scrim); }
   .pal:focus { outline: none; }
-  .pal__head { flex: none; display: flex; align-items: center; gap: var(--s-2); padding: var(--s-2) var(--s-2) var(--s-2) var(--s-4); border-bottom: 1px solid var(--line); }
+  /* the input and the settled count stay at the top; the results scroll under them */
+  .pal__top { flex: none; border-bottom: 1px solid var(--line); background: var(--surface); }
+  .pal__head { display: flex; align-items: center; gap: var(--s-2); padding: var(--s-2) var(--s-2) var(--s-2) var(--s-4); }
   .pal__head > .ico { color: var(--ink-2); }
   .pal__in { flex: 1; min-width: 0; height: 52px; padding: 0 var(--s-2); background: transparent; border: 0; color: var(--ink); font: var(--w-regular) 1rem / 24px var(--font-text); }
   .pal__in::placeholder { color: var(--ink-3); }
@@ -210,6 +240,17 @@
   .pal__in::-webkit-search-cancel-button, .pal__in::-webkit-search-decoration { -webkit-appearance: none; appearance: none; display: none; }
   .pal__x { flex: none; display: grid; place-items: center; width: 44px; height: 44px; padding: 0; background: none; border: 0; border-radius: 50%; color: var(--ink); }
   .pal__x:hover { background: var(--surface-2); }
+  /* the scope chip in the input's left slot: 32 px, its remove button a 44 px target through ::after */
+  .pal__scope { flex: none; display: inline-flex; align-items: center; gap: 2px; max-width: min(60%, 240px); height: 32px; padding: 0 2px 0 12px; background: var(--surface-2); border: 1px solid var(--line-strong); border-radius: var(--r-pill); color: var(--ink); font-size: var(--t-13); line-height: 18px; font-weight: var(--w-medium); white-space: nowrap; }
+  .pal__scope-t { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+  .pal__scope-x { position: relative; flex: none; display: grid; place-items: center; width: 28px; height: 28px; padding: 0; background: none; border: 0; border-radius: 50%; color: var(--ink); }
+  .pal__scope-x::after { content: ""; position: absolute; inset: -8px; }
+  .pal__scope-x:hover { background: var(--line); }
+  .pal__scope-x .ico { width: 14px; height: 14px; stroke-width: 2; }
+  /* "12 results in 4 groups": takes room only while something is typed */
+  .pal__status { margin: 0; padding: 0 var(--s-4); font: var(--w-regular) var(--t-12) / 16px var(--font-code); color: var(--ink-2); }
+  .pal__status[data-on] { min-height: 24px; padding-bottom: var(--s-2); }
+  .pal__tip { padding: var(--s-3) var(--s-4) 0; font-size: var(--t-13); line-height: 18px; color: var(--ink-2); }
   .pal__body { flex: 1; min-height: 0; overflow: auto; overscroll-behavior: contain; padding-bottom: calc(var(--s-4) + env(safe-area-inset-bottom, 0px)); }
   .pal__g { padding-top: var(--s-3); }
   .pal__gh { padding: var(--s-2) var(--s-4) var(--s-1); font-size: var(--t-11); line-height: var(--lh-11); font-weight: var(--w-medium); letter-spacing: var(--track-caps); text-transform: uppercase; color: var(--ink-2); }
@@ -222,6 +263,8 @@
   .pal__ot { display: grid; gap: 2px; flex: 1; min-width: 0; }
   .pal__l { font-size: var(--t-15); line-height: 20px; font-weight: var(--w-medium); overflow-wrap: anywhere; }
   .pal__s { font-size: var(--t-13); line-height: 18px; color: var(--ink-2); overflow-wrap: anywhere; }
+  .pal__l--mono { font-family: var(--font-code); font-size: var(--t-15); letter-spacing: 0; }
+  .pal__a { font: var(--w-regular) var(--t-12) / 16px var(--font-code); color: var(--ink-2); overflow-wrap: anywhere; }
   .pal__k { flex: none; min-width: 24px; padding: 2px 6px; border: 1px solid var(--line-strong); border-radius: var(--r-1); color: var(--ink-2); font: var(--w-medium) var(--t-12) / 16px var(--font-code); text-align: center; }
   .pal__note { padding: var(--s-2) var(--s-4); font-size: var(--t-13); line-height: 20px; color: var(--ink-2); }
   .pal__rw { display: grid; gap: var(--s-3); padding: var(--s-2) var(--s-4) var(--s-3); }
@@ -234,11 +277,24 @@
   .pal__pre button { display: inline-grid; gap: 0; justify-items: start; min-height: 44px; padding: 4px 14px; background: none; border: 1.5px solid var(--line-strong); border-radius: var(--r-pill); color: var(--ink); font-size: var(--t-13); line-height: 18px; font-weight: var(--w-medium); text-align: left; }
   .pal__pre button:hover { background: var(--ink); color: var(--bg); border-color: var(--ink); }
   .pal__pre small { font: var(--w-regular) var(--t-12) / 16px var(--font-code); color: inherit; opacity: .8; }
-  .pal__gl { display: grid; gap: 2px; }
-  .pal__gl .pal__x2 { font: var(--w-medium) var(--t-12) / 16px var(--font-code); color: var(--ink-2); }
+  /* the glossary: words, not actions, so a plain list under the results */
+  .pal__gloss { display: grid; margin: 0; padding-bottom: var(--s-2); }
+  .pal__gi { display: grid; gap: 2px; padding: 6px var(--s-4); }
+  .pal__gi dt { display: flex; flex-wrap: wrap; align-items: baseline; gap: 2px var(--s-2); }
+  .pal__gi dd { margin: 0; }
+  .pal__x2 { font: var(--w-medium) var(--t-12) / 16px var(--font-code); color: var(--ink-2); }
   @media (min-width: 1024px) {
     .pal { inset: 0; top: 10vh; bottom: auto; width: min(640px, calc(100vw - 48px)); height: auto; max-height: 76vh; margin: 0 auto; border: 1px solid var(--line-strong); border-top: 2px solid var(--accent); }
   }
+
+  /* ---------- the Keys sheet (nav-search-plan 3.3) ---------- */
+  .sh-keys__g { padding: 0 var(--s-4) var(--s-4); }
+  .sh-keys__h { padding-top: var(--s-2); font-size: var(--t-11); line-height: var(--lh-11); font-weight: var(--w-medium); letter-spacing: var(--track-caps); text-transform: uppercase; color: var(--c-ink-2); }
+  .sh-keys__kv { display: grid; margin: var(--s-2) 0 0; border-top: 1px solid var(--c-line); }
+  .sh-keys__row { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: var(--s-1) var(--s-4); min-height: 48px; padding: 6px 0; border-bottom: 1px solid var(--c-line); }
+  .sh-keys__row dt { display: inline-flex; flex-wrap: wrap; align-items: center; gap: 4px; font-size: var(--t-13); line-height: 18px; color: var(--c-ink-2); }
+  .sh-keys__row dd { margin: 0; font-size: var(--t-15); line-height: 22px; color: var(--c-ink); }
+  .sh-keys kbd { display: inline-grid; place-items: center; min-width: 28px; height: 28px; padding: 0 8px; border: 1px solid var(--c-line-strong); border-radius: var(--r-1); color: var(--c-ink); font: var(--w-medium) var(--t-13) / 1 var(--font-code); }
 
   /* ---------- error boundary ---------- */
   .oops { display: grid; gap: var(--s-3); justify-items: start; padding-block: var(--s-7); }

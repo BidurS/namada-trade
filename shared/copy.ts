@@ -25,6 +25,17 @@ export type FactKey =
   | 'unbonding'  // the unstaking wait, from the chain's own settings
   | 'apr';       // the staking rate the network indexer reports
 
+/**
+ * What the two derived values on the Trade page count (no figures). The series API sends the same sentences with
+ * each figure (worker/src/series-api.ts readValues), so the page and the API say the same words. Never "market cap".
+ */
+export const VALUE_WORDS = {
+  allNamLabel: 'All NAM at today’s price',
+  allNam: 'Every NAM in existence (the chain’s total supply) at today’s quoted price.',
+  spendableLabel: 'Spendable NAM at today’s price',
+  spendable: 'NAM in ordinary accounts on Namada plus NAM on Osmosis, at today’s price. Staked NAM, NAM on its way out of staking, the shielded pool and public funding are left out.',
+} as const;
+
 // SITE lives in shared/site.ts so the shell (routes, titles, footer) can read it without loading every page's BODY.
 import { SITE } from './site';
 export { SITE };

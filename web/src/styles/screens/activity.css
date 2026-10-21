@@ -170,4 +170,19 @@
     .act-count { margin-top: var(--s-6); }
     .act-head { margin-top: var(--s-6); }
   }
+
+  /* ---------- the list's search field (parts.tsx ListSearch) and the chips under the count line ---------- */
+  .act-search { display: grid; gap: var(--s-2); min-width: 0; }
+  .act-hint { font-size: var(--t-13); line-height: var(--lh-13); color: var(--c-ink-2); max-width: 56ch; }
+  .act-head .act-chips { flex: 1 1 100%; order: 3; min-width: 0; }
+  /* "ordered at 10:42 UTC" / "read at …": the time of the list itself, in the code face */
+  .act-at { font: var(--w-medium) var(--t-12) / 16px var(--font-code); color: var(--c-ink-2); white-space: nowrap; }
+
+  /* ---------- the Address sheet (sheets/AddressSheet.tsx): where it was opened from, and both ranks ----------
+     here because the sheet's eyebrow and rank line belong to the list pages' navigation (nav-search-plan 3.2) */
+  .sh-addr__from { margin: 0; }
+  .sh-addr__from [data-num] { color: var(--c-ink); }
+  .sh-addr__ranks { display: flex; flex-wrap: wrap; align-items: center; gap: 2px var(--s-2); margin: 0; font-size: var(--t-13); line-height: 20px; color: var(--c-ink-2); }
+  .sh-addr__ranks [data-num] { color: var(--c-ink); font-weight: var(--w-medium); }
+  .sh-addr__rank { white-space: nowrap; }
 }

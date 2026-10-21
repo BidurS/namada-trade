@@ -1,6 +1,7 @@
 // Activity (S5): /activity (Transactions) and /holders (Holders), one screen with two tabs.
 // Layout checks run in every project of the G6 matrix; behaviour checks run once (375x812) or
 // where the width matters (the filter sheet below 1024 px, inline filters from 1024 px).
+import AxeBuilder from '@axe-core/playwright';
 import type { Locator, Page } from '@playwright/test';
 import { BODY } from '../../shared/copy';
 import { ROUTES, SITE } from '../../shared/routes';
@@ -206,10 +207,12 @@ test.describe('holder figures and chips (API answers modified in the test)', () 
 
   test('the "What" chips count every holder when the server sends the counts, and say what they count when it does not', async ({ page }) => {
     await page.route(LIST, async (route) => {
-      const res = await route.fetch();
-      const j = await res.json();
+      // a read the page itself cancelled (a newer one replaced it) has nothing to answer
+      const res = await route.fetch().catch(() => null);
+      const j = res ? await res.json().catch(() => null) : null;
+      if (!j) return route.abort().catch(() => undefined);
       j.categories = { total: 2212, counts: [{ category: 'backer', n: 248 }, { category: 'genesis', n: 120 }, { category: 'none', n: 1800 }] };
-      await route.fulfill({ json: j });
+      await route.fulfill({ json: j }).catch(() => undefined);
     });
     await gotoRoute(page, HOL.path);
     await expect(page.locator('main .hrow').first()).toBeVisible({ timeout: 30_000 });
@@ -588,7 +591,8 @@ test.describe('list controls', () => {
     await expect(page.locator('.act-holders .dl__head [role="columnheader"]:not([aria-sort])')).toHaveCount(await page.locator('.act-holders .dl__head [role="columnheader"]').count() - 3);
     await page.getByRole('button', { name: 'Spendable, biggest first' }).click();
     await expect(page.locator('.act-count')).toContainText('biggest first by spendable NAM');
-    await expect(page).toHaveURL(/\/holders$/);
+    // the sort is in the URL (nav-search-plan 2.4), and a new sort starts from page 1
+    await expect(page).toHaveURL(/\/holders\?by=spendable$/);
     await expect(head('Spendable, biggest first')).toHaveAttribute('aria-sort', 'descending');
     await expect(head('Total NAM, biggest first')).toHaveAttribute('aria-sort', 'none');
     await listReady(page);
@@ -597,6 +601,11 @@ test.describe('list controls', () => {
     await expect(page.locator('.act-filters').getByRole('radio', { name: 'Spendable' })).toBeChecked();
     await page.getByRole('button', { name: 'Staked, biggest first' }).click();
     await expect(page.locator('.act-count')).toContainText('biggest first by staked NAM');
+    await expect(page).toHaveURL(/\/holders\?by=staked$/);
+    // Back undoes the sort
+    await page.goBack();
+    await expect(page).toHaveURL(/\/holders\?by=spendable$/);
+    await expect(head('Spendable, biggest first')).toHaveAttribute('aria-sort', 'descending');
   });
 
   test('keys: j and k walk the rows, ] and [ change the page, Enter opens the address; nothing while typing', async ({ page }, info) => {
@@ -737,4 +746,388 @@ test.describe('list controls', () => {
       expect(a.smallText).toEqual([]);
     }
   });
+});
+
+// ---------------------------------------------------------------------------------------------
+// The lists on the stored-totals and cursor server (nav-search-plan 2.1, 2.2, 2.4, 2.5, 3.5, 4.3). That server is not
+// in production yet, so its answers are route mocks shaped exactly like shared/types.ts (HoldersResponse with asOf,
+// countsAt and categories; FlowsResponse with next, asOf, firstTs and last, total null behind a cursor). The stream is
+// mocked silent, so no live move lands on top of the mocked rows.
+// ---------------------------------------------------------------------------------------------
+const B32 = 'qpzry9x8gf2tvdw0s3jn54khce6mua7l';
+/** A bech32-shaped address for row i: tnam1 + 40 data characters, osmo1 + 38. */
+const fxAddr = (i: number, prefix: 'tnam1' | 'osmo1' = 'tnam1') => {
+  let s = '';
+  for (let k = 0, n = i; k < 8; k++, n = Math.floor(n / 32)) s = B32[n % 32] + s;
+  return `${prefix}qx${'q'.repeat(prefix === 'tnam1' ? 30 : 28)}${s}`;
+};
+const HTOTAL = 64_377;
+const H_CATS = { total: HTOTAL, counts: [{ category: 'backer', n: 248 }, { category: 'genesis', n: 120 }, { category: 'none', n: HTOTAL - 368 }] };
+function fxHolder(rank: number, o: Record<string, unknown> = {}) {
+  const now = Date.now();
+  const total = Math.round(60_000_000 / rank);
+  return {
+    rank, chain: 'namada', address: fxAddr(rank), balance: total * 0.7, bonded: total * 0.3, bondedEstimated: total * 0.3, bondedVerifiedAt: now - 60_000,
+    total, pctSupply: (total / 1.15e9) * 100, change24h: 0, change7d: 0, label: null, category: null, label_plain: null, category_plain: null,
+    label_source: null, label_author: null, linked: [], updatedAt: now - 60_000, verifiedAt: now - 60_000, status: 'live', statusNote: null, ...o,
+  };
+}
+/** /api/holders as the stored-totals server answers it. `countsAt(page)`: when the count of that page's answer was taken. */
+async function mockHolders(page: Page, seen: URL[] = [], countsAt: (pg: number) => number = () => Date.now() - 120_000) {
+  await page.route(/\/api\/holders\?/, (route) => {
+    const u = new URL(route.request().url());
+    seen.push(u);
+    const limit = Number(u.searchParams.get('limit') ?? 50);
+    const pg = Number(u.searchParams.get('page') ?? 1);
+    const cat = u.searchParams.get('category');
+    const total = cat ? H_CATS.counts.find((c) => c.category === cat)?.n ?? 0 : HTOTAL;
+    const start = (pg - 1) * limit;
+    const extra = cat === 'genesis' ? { category: 'genesis', category_plain: 'Genesis', label: 'Genesis: fixture', label_plain: 'Genesis allocation', label_source: 'genesis' } : {};
+    const holders = Array.from({ length: Math.max(0, Math.min(limit, total - start)) }, (_, i) => fxHolder(start + i + 1, extra));
+    return route.fulfill({ json: { total, page: pg, limit, holders, next: start + limit < total ? 'WzEsInRuYW0xIiwxXQ' : null, asOf: Date.now() - 30_000, countsAt: u.searchParams.get('search') ? null : countsAt(pg), categories: H_CATS } });
+  });
+}
+
+const FTOTAL = 2_000;
+const fxHash = (i: number) => (i.toString(16).toUpperCase().padStart(8, '0') + 'AB'.repeat(28)).slice(0, 64);
+function fxFlow(i: number, base: number, kind = i % 2 ? 'sell' : 'buy') {
+  const trader = fxAddr(i, 'osmo1');
+  return {
+    id: `fx:${i}`, chain: 'osmosis', height: 72_000_000 - i, ts: base - i * 60_000, txHash: fxHash(i), explorerHash: fxHash(i), kind,
+    from: kind === 'sell' ? trader : null, to: kind === 'buy' ? trader : null, amount: 150_000 + i, counterDenom: 'USDC', counterAmount: 171, poolId: '3005',
+    priceUsd: 0.00114, valueUsd: 171, meta: { trader }, fromLabel: null, toLabel: null, fromLabelPlain: null, toLabelPlain: null,
+    fromLabelSource: null, toLabelSource: null, fromLabelAuthor: null, toLabelAuthor: null, whale: true,
+  };
+}
+/** A moves position as the server makes it (shared/paging.ts encodeFlowCursor): base64url of [ts, height, id]. */
+const fxCursor = (f: { ts: number; height: number; id: string }) => Buffer.from(JSON.stringify([f.ts, f.height, f.id])).toString('base64url');
+/** /api/flows as the cursor server answers it: counted only without a position; `next` the last row's position. */
+async function mockFlows(page: Page, seen: URL[] = [], o: { total?: number; firstTs?: number; last?: { id: string; ts: number; chain: string } | null } = {}) {
+  const base = Date.now() - 5 * 60_000;
+  const total = o.total ?? FTOTAL;
+  await page.route(/\/api\/flows\?/, (route) => {
+    const u = new URL(route.request().url());
+    seen.push(u);
+    const limit = Number(u.searchParams.get('limit') ?? 50);
+    const before = u.searchParams.get('before');
+    const kind = u.searchParams.get('kind');
+    let start = 0;
+    let head = true;
+    if (before && !/^\d+$/.test(before)) {
+      const [, , id] = JSON.parse(Buffer.from(before, 'base64url').toString()) as [number, number, string];
+      start = Number(id.slice(3)) + 1;
+      head = false;
+    } else start = (Number(u.searchParams.get('page') ?? 1) - 1) * limit;
+    const flows = Array.from({ length: Math.max(0, Math.min(limit, total - start)) }, (_, i) => fxFlow(start + i, base, kind === 'sell' || kind === 'buy' ? kind : undefined));
+    const lastRow = flows[flows.length - 1];
+    return route.fulfill({
+      json: {
+        total: head ? total : null, page: head ? Number(u.searchParams.get('page') ?? 1) : 1, limit, flows,
+        next: lastRow && start + flows.length < total ? fxCursor(lastRow) : null, asOf: Date.now(),
+        ...(head ? { firstTs: o.firstTs ?? Date.UTC(2024, 11, 3) } : {}),
+        ...(head && !flows.length && o.last !== undefined ? { last: o.last } : {}),
+      },
+    });
+  });
+}
+const silentStream = (page: Page) => page.routeWebSocket('**/ws', () => {});
+const wideOf = (page: Page) => (page.viewportSize()?.width ?? 0) >= 1024;
+
+test.describe('the lists on the stored-totals and cursor server (route mocks)', () => {
+  test('holders: the count is over the whole list and says when the order was read; the What counts too; the table says its length', async ({ page }, info) => {
+    test.skip(!['375x812', '1280x800'].includes(info.project.name), 'runs at 375 and 1280');
+    await silentStream(page);
+    await mockHolders(page);
+    await gotoRoute(page, HOL.path);
+    await listReady(page);
+    await expect(page.locator('.act-count')).toHaveText(/^A total of 64,377 holders found on Namada, biggest first by total NAM · ordered at \d\d:\d\d\sUTC\.$/);
+    await expect(page.locator('.act-holders')).toHaveAttribute('aria-rowcount', String(HTOTAL + 1));
+    await expect(page.locator('main .act-holders .hrow').first()).toHaveAttribute('aria-rowindex', '2');
+    await expect(page.locator('.act-scope .srcb')).toHaveAttribute('data-scope', /Holder count and order/);
+    // the What chips count every holder (the server's categories), not the rows on this page
+    const cats = wideOf(page) ? page.locator('.act-filters .act-cats') : page.getByRole('dialog', { name: 'Filter holders' }).locator('.act-cats');
+    if (!wideOf(page)) await openSheet(page, page.getByRole('dialog', { name: 'Filter holders' }));
+    await expect(cats.locator('legend')).toHaveText('What');
+    await expect(cats.locator('.chipsel__o', { hasText: 'Backer' })).toContainText('248');
+    await expect(cats.locator('.chipsel__o', { hasText: 'All' })).toContainText('64,377');
+    // page 3: the rows say where they are in the whole list
+    await gotoRoute(page, `${HOL.path}?page=3`);
+    await listReady(page);
+    await expect(page.locator('main .act-holders .hrow').first()).toHaveAttribute('aria-rowindex', '102');
+  });
+
+  test('holders: the field reads "genesis >1m" into two chips; Enter moves them into the URL; a chip removed leaves the other, focused', async ({ page }, info) => {
+    test.skip(!['375x812', '1280x800'].includes(info.project.name), 'runs at 375 and 1280');
+    const seen: URL[] = [];
+    await silentStream(page);
+    await mockHolders(page, seen);
+    await gotoRoute(page, HOL.path);
+    await listReady(page);
+    const sheet = page.getByRole('dialog', { name: 'Filter holders' });
+    if (!wideOf(page)) await openSheet(page, sheet);
+    const field = (wideOf(page) ? page.locator('.act-bar') : sheet).getByRole('searchbox', { name: 'Search holders by address or name' });
+    await field.fill('genesis >1m');
+    await field.press('Enter');
+    await expect(page).toHaveURL(/\/holders\?what=genesis&min=1000000$/);
+    await expect(field).toHaveValue('');
+    await expect.poll(() => seen.some((u) => u.searchParams.get('category') === 'genesis' && u.searchParams.get('min') === '1000000' && !u.searchParams.has('search'))).toBe(true);
+    if (!wideOf(page)) {
+      await sheet.locator('.sheet__foot .btn--primary').click();
+      await expect(sheet).toBeHidden();
+      await expect(page.locator('.act-filterbtn .badge')).toHaveText('2');
+    }
+    const chips = page.locator('main .act-chips .fchip:not(.fchip--clear)');
+    await expect(chips).toHaveText([/Genesis only/, /At least 1,000,000 NAM/]);
+    await expect(page.locator('.act-count')).toContainText('in “Genesis”');
+    await page.getByRole('button', { name: 'Remove filter: Genesis only' }).click();
+    await expect(page).toHaveURL(/\/holders\?min=1000000$/);
+    await expect(page.getByRole('button', { name: 'Remove filter: At least 1,000,000 NAM' })).toBeFocused();
+    // Back brings the chip back
+    await page.goBack();
+    await expect(page).toHaveURL(/\/holders\?what=genesis&min=1000000$/);
+    await expect(chips).toHaveCount(2);
+  });
+
+  test('holders: a search names what it looks at when nothing matches; an address end stays in the text', async ({ page }, info) => {
+    test.skip(onlyIn(info.project.name), 'runs once');
+    const seen: URL[] = [];
+    await silentStream(page);
+    await page.route(/\/api\/holders\?/, (route) => {
+      seen.push(new URL(route.request().url()));
+      return route.fulfill({ json: { total: 0, page: 1, limit: 50, holders: [], next: null, asOf: Date.now(), countsAt: null, categories: { total: 0, counts: [] } } });
+    });
+    await gotoRoute(page, `${HOL.path}?q=${encodeURIComponent('…kj4m')}`);
+    await expect(page.locator('main .empty')).toContainText('No holder matches “…kj4m”.');
+    await expect(page.locator('main .empty')).toContainText('the start and the end of addresses');
+    await expect(page.locator('main .act-chips .fchip')).toHaveText([/Address ends with kj4m/]);
+    expect(seen.some((u) => u.searchParams.get('search') === '…kj4m')).toBe(true);
+  });
+
+  test('holders: the order counted again between two pages is said once, with a way back to the top', async ({ page }, info) => {
+    test.skip(onlyIn(info.project.name), 'runs once');
+    const t0 = Date.now() - 20 * 60_000;
+    await silentStream(page);
+    // page 1 was counted at t0; by the time page 2 is read, the counts were taken again ten minutes later
+    await mockHolders(page, [], (pg) => (pg <= 1 ? t0 : t0 + 10 * 60_000));
+    await gotoRoute(page, HOL.path);
+    await listReady(page);
+    await expect(page.locator('main .notice', { hasText: 'The list was refreshed' })).toHaveCount(0);
+    await page.locator('.act-pager--head').getByRole('link', { name: 'Next page' }).click();
+    await expect(page).toHaveURL(/\/holders\?page=2$/);
+    const note = page.locator('main .notice', { hasText: 'The list was refreshed' });
+    await expect(note).toBeVisible();
+    await expect(note).toContainText(/counted again at \d\d:\d\d\sUTC while you were reading/);
+    await note.getByRole('button', { name: 'Start from the top' }).click();
+    await expect(page).toHaveURL(/\/holders$/);
+    await expect(note).toHaveCount(0);
+  });
+
+  test('moves: a shared link ?what=sell&min=100000 opens filtered with two chips, the badge says 2, each chip removes its filter', async ({ page }, info) => {
+    test.skip(!['375x812', '1280x800'].includes(info.project.name), 'runs at 375 and 1280');
+    const seen: URL[] = [];
+    await silentStream(page);
+    await mockFlows(page, seen);
+    await gotoRoute(page, `${ACT.path}?what=sell&min=100000`);
+    await listReady(page, '.tx');
+    await expect(page.locator('main .act-chips .fchip:not(.fchip--clear)')).toHaveText([/Sells only/, /At least 100,000 NAM/]);
+    expect(seen.some((u) => u.searchParams.get('kind') === 'sell' && u.searchParams.get('minNam') === '100000')).toBe(true);
+    if (!wideOf(page)) await expect(page.locator('.act-filterbtn .badge')).toHaveText('2');
+    else await expect(page.locator('.act-filters').getByRole('radio', { name: '100,000+' })).toBeChecked();
+    await expect(page.locator('.act-count')).toContainText(/^A total of 2,000 moves found that match the filters, newest first · read at \d\d:\d\d\sUTC\./);
+    await page.getByRole('button', { name: 'Remove filter: At least 100,000 NAM' }).click();
+    await expect(page).toHaveURL(/\/activity\?what=sell$/);
+    if (!wideOf(page)) await expect(page.locator('.act-filterbtn .badge')).toHaveText('1');
+    await page.getByRole('button', { name: 'Remove filter: Sells only' }).click();
+    await expect(page).toHaveURL(/\/activity$/);
+    await expect(page.locator('main .act-chips')).toHaveCount(0);
+    // the last chip gone: focus goes to the search field (wide) or the Filter button (phones), never the page
+    await expect(page.locator(wideOf(page) ? 'main [data-list-search] input' : 'main .act-filterbtn')).toBeFocused();
+  });
+
+  test('moves: "sell >100k last 7 days" applies as typed and, on Enter, becomes ?what=sell&min=100000&since=…', async ({ page }, info) => {
+    test.skip(!['375x812', '1280x800'].includes(info.project.name), 'runs at 375 and 1280');
+    const seen: URL[] = [];
+    await silentStream(page);
+    await mockFlows(page, seen);
+    await gotoRoute(page, ACT.path);
+    await listReady(page, '.tx');
+    const sheet = page.getByRole('dialog', { name: 'Filter moves' });
+    if (!wideOf(page)) await openSheet(page, sheet);
+    const field = (wideOf(page) ? page.locator('.act-bar') : sheet).getByRole('searchbox', { name: 'Search moves by address or record' });
+    const since = (() => {
+      const d = new Date();
+      return new Date(Date.UTC(d.getUTCFullYear(), d.getUTCMonth(), d.getUTCDate()) - 6 * 86_400_000).toISOString().slice(0, 10);
+    })();
+    await field.fill('sell >100k last 7 days');
+    // applied while typing: the text is in ?q=, the request carries the filters it understood
+    await expect(page).toHaveURL(/\/activity\?q=sell\+%3E100k\+last\+7\+days$/);
+    await expect.poll(() => seen.some((u) => u.searchParams.get('kind') === 'sell' && u.searchParams.get('minNam') === '100000' && u.searchParams.get('since') === String(Date.parse(`${since}T00:00:00Z`)) && !u.searchParams.has('search'))).toBe(true);
+    await field.press('Enter');
+    await expect(page).toHaveURL(new RegExp(`/activity\\?what=sell&min=100000&since=${since}$`));
+    await expect(field).toHaveValue('');
+    if (!wideOf(page)) {
+      await sheet.locator('.sheet__foot .btn--primary').click();
+      await expect(page.locator('.act-filterbtn .badge')).toHaveText('3');
+    }
+    await expect(page.locator('main .act-chips .fchip:not(.fchip--clear)')).toHaveText([/Sells only/, /At least 100,000 NAM/, /Since \d+ \w{3} \d{4}/]);
+    // Back: the list before the search (one history entry for the whole search)
+    await page.goBack();
+    await expect(page).toHaveURL(/\/activity$/);
+  });
+
+  test('moves: a word that is not a filter here keeps a chip that says so and filters nothing', async ({ page }, info) => {
+    test.skip(onlyIn(info.project.name), 'runs once');
+    const seen: URL[] = [];
+    await silentStream(page);
+    await mockFlows(page, seen);
+    await gotoRoute(page, `${ACT.path}?q=foundation`);
+    await listReady(page, '.tx');
+    const chip = page.locator('main .act-chips .fchip--out');
+    await expect(chip).toContainText('Foundation only');
+    await expect(chip).toContainText('Not a filter on the moves list.');
+    await expect(chip).toHaveAccessibleName(/^Remove: Foundation only, not applied\./);
+    await expect(page.locator('.act-filterbtn .badge')).toHaveCount(0);
+    expect(seen.every((u) => !u.searchParams.has('search') && !u.searchParams.has('kind'))).toBe(true);
+  });
+
+  test('moves: › reads the next page by the server position (no count, no offset), the count is kept, a typed page goes by number', async ({ page }, info) => {
+    test.skip(!['375x812', '1280x800'].includes(info.project.name), 'runs at 375 and 1280');
+    const seen: URL[] = [];
+    await silentStream(page);
+    await mockFlows(page, seen);
+    await gotoRoute(page, ACT.path);
+    await listReady(page, '.tx');
+    const head = page.locator('.act-pager--head');
+    await expect(head.locator('.pager__of')).toHaveText(/of\s40/);
+    const nextHref = await head.getByRole('link', { name: 'Next page' }).getAttribute('href');
+    expect(nextHref).toMatch(/^\/activity\?page=2&cursor=/);
+    await head.getByRole('link', { name: 'Next page' }).click();
+    await expect(page).toHaveURL(/\/activity\?page=2&cursor=[\w-]+$/);
+    await listReady(page, '.tx');
+    const req2 = seen[seen.length - 1];
+    expect(req2.searchParams.get('before')).toBeTruthy();
+    expect(JSON.parse(Buffer.from(req2.searchParams.get('before')!, 'base64url').toString())[2]).toBe('fx:49');
+    // the server did not count behind the position; the count from page 1 is kept
+    await expect(page.locator('.act-count')).toContainText('A total of 2,000 moves found');
+    await expect(head.locator('.pager__of')).toHaveText(/of\s40/);
+    await expect(head.getByRole('textbox', { name: 'Page number' })).toHaveValue('2');
+    await expect(page.locator('main .txl')).toHaveAttribute('aria-rowcount', String(FTOTAL + 1));
+    await expect(page.locator('main .txl .tx').first()).toHaveAttribute('aria-rowindex', '52');
+    await expect(page.locator('main .txl .tx').first()).toBeFocused();
+    await head.getByRole('link', { name: 'Next page' }).click();
+    await expect(page).toHaveURL(/\/activity\?page=3&cursor=[\w-]+$/);
+    await listReady(page, '.tx');
+    expect(JSON.parse(Buffer.from(seen[seen.length - 1].searchParams.get('before')!, 'base64url').toString())[2]).toBe('fx:99');
+    // Back: page 2 by its position again
+    await page.goBack();
+    await expect(page).toHaveURL(/\/activity\?page=2&cursor=/);
+    // a typed page has no known position: it goes by number
+    const pf = head.getByRole('textbox', { name: 'Page number' });
+    await pf.fill('10');
+    await pf.press('Enter');
+    await expect(page).toHaveURL(/\/activity\?page=10$/);
+    await listReady(page, '.tx');
+    const req10 = seen[seen.length - 1];
+    expect(req10.searchParams.get('page')).toBe('10');
+    expect(req10.searchParams.has('before')).toBe(false);
+  });
+
+  test('moves: a page opened from its own link, behind a position, says the count is taken on the first page', async ({ page }, info) => {
+    test.skip(onlyIn(info.project.name), 'runs once');
+    await silentStream(page);
+    await mockFlows(page);
+    await gotoRoute(page, `${ACT.path}?page=3&cursor=${fxCursor(fxFlow(99, Date.now()))}`);
+    await listReady(page, '.tx');
+    await expect(page.locator('.act-pager--head .pager__of')).toContainText('—');
+    await expect(page.locator('.act-pager--foot .pager__why')).toContainText('counts the moves only on the first page');
+    await expect(page.locator('.act-count')).toHaveText(/^Moves 101 to 150, newest first · read at \d\d:\d\d\sUTC\.$/);
+    await expect(page.locator('main .txl')).toHaveAttribute('aria-rowcount', '-1');
+    await expect(page.locator('.act-pager--head').getByRole('link', { name: 'Next page' })).not.toHaveAttribute('aria-disabled', 'true');
+  });
+
+  test('moves: a day before the flow index starts says so, with the first day recorded', async ({ page }, info) => {
+    test.skip(onlyIn(info.project.name), 'runs once');
+    await silentStream(page);
+    await mockFlows(page, [], { total: 0, firstTs: Date.UTC(2024, 11, 3, 9) });
+    await gotoRoute(page, `${ACT.path}?before=${Date.UTC(2024, 10, 1)}`);
+    await expect(page.locator('main .empty')).toContainText('Nothing that early is recorded.');
+    await expect(page.locator('main .empty')).toContainText('The flow index starts on 3 Dec 2024');
+    await expect(page.locator('main .act-chips .fchip:not(.fchip--clear)')).toHaveText([/Before 1 Nov 2024/]);
+  });
+
+  test('moves: nothing in the window, and the last match of any age offered as a rewind', async ({ page }, info) => {
+    test.skip(onlyIn(info.project.name), 'runs once');
+    const last = { id: 'fx:last', ts: Date.now() - 2.3 * 86_400_000, chain: 'osmosis' };
+    await silentStream(page);
+    await mockFlows(page, [], { total: 0, last });
+    await gotoRoute(page, `${ACT.path}?what=sell&since=${new Date(Date.now() - 86_400_000).toISOString().slice(0, 10)}`);
+    const empty = page.locator('main .empty');
+    await expect(empty).toContainText('No recorded move matches these filters.');
+    await expect(empty).toContainText(/The last one was 2\.3\sdays ago\./);
+    const link = empty.getByRole('link', { name: 'Rewind to it' });
+    const href = new URL((await link.getAttribute('href'))!, 'http://x');
+    expect(href.searchParams.get('at')).toBe(String(last.ts));
+    expect(href.searchParams.get('what')).toBe('sell');
+    expect(href.searchParams.has('since')).toBe(false);
+  });
+
+  test('the page tabs lead back to each list as it was left', async ({ page }, info) => {
+    test.skip(onlyIn(info.project.name), 'runs once');
+    await silentStream(page);
+    await mockHolders(page);
+    await mockFlows(page);
+    await gotoRoute(page, `${HOL.path}?by=staked&page=2`);
+    await listReady(page);
+    await page.locator('main nav.utabs a', { hasText: 'Transactions' }).click();
+    await expect(page).toHaveURL(/\/activity$/);
+    await listReady(page, '.tx');
+    await expect(page.locator('main nav.utabs a', { hasText: 'Holders' })).toHaveAttribute('href', '/holders?by=staked&page=2');
+    await page.locator('main nav.utabs a', { hasText: 'Holders' }).click();
+    await expect(page).toHaveURL(/\/holders\?by=staked&page=2$/);
+    await expect(page.locator('main .act-holders .hrow').first().locator('.hrow__rk')).toHaveText('51', { timeout: 30_000 });
+  });
+
+  test('an unreadable value in the address bar falls back to the default and is cleaned without a history entry', async ({ page }, info) => {
+    test.skip(onlyIn(info.project.name), 'runs once');
+    await silentStream(page);
+    await mockFlows(page);
+    await gotoRoute(page, `${ACT.path}?what=nonsense&min=-5&bots=maybe&crossings=both&size=50`);
+    await expect(page).toHaveURL(/\/activity\?crossings=both$/);
+    await expect(page.locator('main .act-chips .fchip:not(.fchip--clear)')).toHaveText([/Both records of each crossing/]);
+  });
+});
+
+test.describe('chips and the pager on the new server, every viewport', () => {
+  for (const path of [`${ACT.path}?what=sell&min=100000&q=tnam1qxqqqqqq&page=2`, `${HOL.path}?what=genesis&q=${encodeURIComponent('…kj4m')}&page=2`]) {
+    test(`${path.split('?')[0]} with chips and the pager: no sideways scroll, no <table>, 44 px targets, text at least 11 px`, async ({ page }) => {
+      await silentStream(page);
+      await mockHolders(page);
+      await mockFlows(page);
+      await gotoRoute(page, path);
+      await listReady(page, path.startsWith('/holders') ? '.hrow' : '.tx');
+      await expect(page.locator('main .act-chips .fchip').first()).toBeVisible();
+      const a = await layoutAudit(page, 'main');
+      expect(a.overflowX, `scrollWidth ${a.scrollWidth} > ${a.innerWidth}`).toBe(false);
+      expect(a.tables).toBe(0);
+      expect(a.smallTargets).toEqual([]);
+      expect(a.smallText).toEqual([]);
+      // the chips are 44 px targets inside the viewport (on phones the row scrolls sideways inside itself)
+      for (const b of await page.locator('main .act-chips .fchip').evaluateAll((els) => els.map((e) => e.getBoundingClientRect().toJSON() as DOMRect))) expect(b.height).toBeGreaterThanOrEqual(44);
+    });
+    test(`${path.split('?')[0]} with chips: axe AA, dark and light (375, 1280)`, async ({ page }, info) => {
+      test.skip(!['375x812', '1280x800'].includes(info.project.name), 'axe runs at 375 and 1280');
+      for (const light of [false, true]) {
+        await page.addInitScript((l) => { try { localStorage.setItem('nt.theme', l ? 'light' : 'dark'); } catch { /* none */ } }, light);
+        await silentStream(page);
+        await mockHolders(page);
+        await mockFlows(page);
+        await gotoRoute(page, path, { reducedMotion: true });
+        await listReady(page, path.startsWith('/holders') ? '.hrow' : '.tx');
+        await expect(page.locator('main .act-chips .fchip').first()).toBeVisible();
+        const r = await new AxeBuilder({ page }).include('main').withTags(['wcag2a', 'wcag2aa', 'wcag21a', 'wcag21aa', 'wcag22aa']).disableRules(['target-size']).analyze();
+        expect(r.violations.map((v) => `${v.id}: ${v.nodes.map((n) => n.target.join(' ')).slice(0, 3).join(' | ')}`), light ? 'light' : 'dark').toEqual([]);
+        await page.unrouteAll({ behavior: 'ignoreErrors' });
+      }
+    });
+  }
 });

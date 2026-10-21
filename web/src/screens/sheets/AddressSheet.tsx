@@ -6,16 +6,24 @@
 // with a filter, and your own tag (signed in). Rewind: the address report is not recorded over
 // time, so the sheet says the balances are current, lists moves up to the rewound time only and
 // leaves out the dollar value (a current balance at an old price would be neither).
+//
+// Where it was opened from (nav-search-plan 3.2): opened from a list row, an eyebrow under the title says which list
+// and where in it ("From holders · No. 1,204 by total NAM", "From activity · Move 51 of 53,934"); the rank line says
+// both orders, "No. N by total NAM · No. M by spendable NAM", with the stamp of the stored balances they are counted
+// over. Close and Escape go back to the row (the kit Sheet returns focus to it), so there is no breadcrumb.
 import { useEffect, useMemo, useState } from 'react';
-import type { AddressReport, Flow } from '../../../../shared/types';
+import type { AddressReport, Flow, Overview } from '../../../../shared/types';
 import { navigate, useClock, useHeaderPrice, useOverlays, useOverview, useReplay, useSession, REWIND_WORDS } from '../../app/index';
 import { fetchAddressReport, saveLabel } from '../../api';
-import { Button, Derived, Notice, Num, SelectChip, Sheet, Skeleton, SourceLine, SNum, Tag, type Stamp } from '../../ui/index';
+import { Button, Derived, Notice, Num, ProvDot, SelectChip, Sheet, Skeleton, SourceLine, SNum, Tag, type Stamp } from '../../ui/index';
 import { Icon } from '../../ui/Icon';
 import { explorerAddr, explorerTxOf, fmtAddr, fmtAgo, fmtCount, fmtDayClock, fmtNamRule, fmtNamSigned, fmtPctRule, fmtUsdRule, fmtCoin, labelNeedsAddr } from '../../lib/format';
 import { label_plain, tagByline } from '../../../../shared/labels';
 import { coinOf, counterpartiesOf, crossingsWith, onePerCrossing } from './moves';
 import { plainError, useCopy } from './util';
+import { clearOrigin, originFor, type AddressOrigin } from '../activity/sheetOrigin';
+import { serverHolderProv } from '../activity/holderStamp';
+import { TECH } from '../activity/words';
 
 type Filter = 'all' | 'trades' | 'bridge' | 'other';
 const FILTERS: { value: Filter; label: string; kinds: (k: string) => boolean }[] = [
@@ -36,8 +44,46 @@ const hrefAt = (t: number) => {
   return `${u.pathname}${u.search}`;
 };
 
-export function AddressSheet({ address, onClose }: { address: string; onClose: () => void }) {
+const BY_WORD: Record<'total' | 'liquid' | 'bonded', string> = { total: 'total NAM', liquid: 'spendable NAM', bonded: 'staked NAM' };
+
+/**
+ * The stamp of the two ranks: they are counted over the stored balances of every holder (the holder index), so
+ * they are as old as those balances (the overview's holder figures stamp, the same one the holder counts carry).
+ */
+function rankStamp(o: Overview | null, osmo: boolean): Stamp {
+  const p = serverHolderProv(o, osmo ? 'osmosis' : 'namada');
+  const note = 'Counted among the stored balances of every holder when this address was read; the ranks move when a balance listing writes new balances.';
+  return p ? { ...p, plain: 'Holder index', note: p.note ? `${p.note} ${note}` : note } : { source: TECH.holderIndex, plain: 'Holder index', at: null, status: 'stale', note: `${note} How old those balances are was not sent by this site’s server.` };
+}
+
+/** "From holders · No. 1,204 by total NAM", "From activity · Move 51 of 53,934": the list the sheet was opened from. */
+function OriginLine({ o }: { o: AddressOrigin }) {
+  if (o.from === 'holders') {
+    return (
+      <p className="eyebrow sh-addr__from">
+        From holders · No. <Num v={o.rank} prov={o.stamp} fmt={fmtCount} showAge={false} showReason={false} /> by {BY_WORD[o.by]}
+        {o.chain === 'osmosis' ? ' on Osmosis' : o.chain === 'all' ? ' on Namada and Osmosis' : ''}
+      </p>
+    );
+  }
+  return (
+    <p className="eyebrow sh-addr__from">
+      From activity · Move <Num v={o.pos} prov={o.stamp} fmt={fmtCount} showAge={false} showReason={false} />
+      {o.total != null && o.exact ? (
+        <>
+          {' '}
+          of <Num v={o.total} prov={o.stamp} fmt={fmtCount} showAge={false} showReason={false} />
+        </>
+      ) : null}
+    </p>
+  );
+}
+
+export function AddressSheet({ address, onClose, origin: given }: { address: string; onClose: () => void; origin?: AddressOrigin | null }) {
   const { at, rewound } = useReplay();
+  // the opener's own word for where it was opened (app/overlays.tsx, when it passes one), else the list row's note
+  const [origin] = useState<AddressOrigin | null>(() => given ?? originFor(address));
+  useEffect(() => () => clearOrigin(address), [address]);
   const { overview } = useOverview();
   const { openAddress } = useOverlays();
   const price = useHeaderPrice();
@@ -68,12 +114,13 @@ export function AddressSheet({ address, onClose }: { address: string; onClose: (
   return (
     <Sheet open onClose={onClose} title={title} size="side" className="sh-addr">
       <div className="sheet__body sh-addr__body">
+        {origin ? <OriginLine o={origin} /> : null}
         <div className="sh-addr__tags">
           <Tag cat={isOsmo ? 'Osmosis address' : 'Namada address'} />
           {byline ? <Tag cat={byline} /> : null}
           {cat && !(name ?? '').toLowerCase().includes(cat.toLowerCase()) ? <Tag cat={cat} /> : null}
-          {r?.rank ? <Tag cat={`No. ${fmtCount(r.rank)} by spendable NAM`} /> : null}
         </div>
+        {r && (r.rank != null || r.rankTotal != null) ? <Ranks r={r} stamp={rankStamp(overview, isOsmo)} /> : null}
         <div className="sh-addr__id">
           <p className="sh-addr__full">{address}</p>
           <div className="sh-addr__acts">
@@ -105,6 +152,31 @@ export function AddressSheet({ address, onClose }: { address: string; onClose: (
         )}
       </div>
     </Sheet>
+  );
+}
+
+/**
+ * "No. 1,204 by total NAM · No. 318 by spendable NAM": both orders the holder list has, each its own figure, with one
+ * stamp for both (they are counted over the same stored balances). A server before the stored totals sends only the
+ * spendable rank; "not ranked" when the address holds nothing in that order.
+ */
+function Ranks({ r, stamp }: { r: AddressReport; stamp: Stamp }) {
+  const total = r.rankTotal;
+  return (
+    <p className="sh-addr__ranks" data-prov-group="">
+      {total !== undefined ? (
+        <>
+          <span className="sh-addr__rank">
+            {total != null ? <>No. <Num v={total} prov={stamp} fmt={fmtCount} showAge={false} /> by total NAM</> : 'Not ranked by total NAM'}
+          </span>
+          <span className="sh-addr__sep" aria-hidden="true">·</span>
+        </>
+      ) : null}
+      <span className="sh-addr__rank">
+        {r.rank != null ? <>No. <Num v={r.rank} prov={stamp} fmt={fmtCount} showAge={false} /> by spendable NAM</> : 'Not ranked by spendable NAM'}
+      </span>
+      <ProvDot p={stamp} label={total !== undefined ? 'Ranks by total and by spendable NAM' : 'Rank by spendable NAM'} />
+    </p>
   );
 }
 

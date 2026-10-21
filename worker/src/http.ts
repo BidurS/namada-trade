@@ -1,8 +1,10 @@
 // HTTP helpers of the Worker's fetch handler (index.ts), in their own module so they can be tested without the
 // Durable Object runtime: the API cache rule and the page security policy.
 import type { Env } from './util';
+import { DAY_MS, DAILY_DAYS, HISTORY_FETCH_DAYS } from '../../shared/history';
+import { TRADES_TAPE_LIMIT } from '../../shared/types';
 
-export const CACHEABLE_API = /^\/api\/(overview|pools|pressure|blindspot|orderflow|flows|holders|metrics\/history|quote\/curve|alerts\/rules|alerts\/recent|intel)$/;
+export const CACHEABLE_API = /^\/api\/(overview|pools|pressure|blindspot|orderflow|flows|holders|search|metrics\/history|quote\/curve|alerts\/rules|alerts\/recent|intel|series|series\/changes|series\/volume|series\/pairs|series\/trades|series\/values)$/;
 
 const THRESHOLDS = ['ibcInventory', 'unlock', 'bigSwap', 'unshield', 'bond'];
 /**
@@ -16,15 +18,23 @@ export const CACHE_PARAMS: Record<string, string[]> = {
   '/api/pressure': ['at', 'days'],
   '/api/blindspot': ['at'],
   '/api/orderflow': ['at', 'hours'],
-  '/api/flows': ['chain', 'kind', 'whale', 'minNam', 'arb', 'pairs', 'search', 'at', 'page', 'limit'],
-  '/api/holders': ['chain', 'by', 'category', 'search', 'page', 'limit'],
+  '/api/flows': ['chain', 'kind', 'whale', 'minNam', 'arb', 'pairs', 'search', 'at', 'page', 'limit', 'before', 'since', 'addr', 'hash', 'height', 'count'],
+  '/api/holders': ['chain', 'by', 'category', 'search', 'page', 'limit', 'after', 'min', 'max'],
+  '/api/search': ['q', 'limit'],
   '/api/metrics/history': ['key', 'hours', 'at'],
   '/api/quote/curve': [],
   '/api/alerts/rules': THRESHOLDS,
   '/api/alerts/recent': ['at', 'since', ...THRESHOLDS],
   '/api/intel': [],
-  '/api/export/holders': ['chain', 'by', 'category', 'search', 'limit', 'format'],
-  '/api/export/flows': ['chain', 'kind', 'whale', 'minNam', 'arb', 'pairs', 'search', 'at', 'limit', 'format'],
+  // The series routes (worker/src/api-series.ts SERIES_PARAMS lists exactly these; test/series-api.test.ts checks it)
+  '/api/series': ['key', 'from', 'to', 'step', 'at'],
+  '/api/series/changes': ['at'],
+  '/api/series/volume': ['at'],
+  '/api/series/pairs': [],
+  '/api/series/trades': ['before', 'maker', 'min', 'limit', 'at'],
+  '/api/series/values': ['at'],
+  '/api/export/holders': ['chain', 'by', 'category', 'search', 'limit', 'format', 'min', 'max'],
+  '/api/export/flows': ['chain', 'kind', 'whale', 'minNam', 'arb', 'pairs', 'search', 'at', 'limit', 'format', 'since', 'addr', 'hash', 'height'],
 };
 
 /** The cache key for a request: its path and the parameters the route reads, sorted. */
@@ -41,17 +51,26 @@ const EXPORTS = /^\/api\/export\/(holders|flows)$/;
 const EXPORT_EDGE_CACHE = 'public, max-age=5, s-maxage=60';
 
 /**
- * Requests that read many D1 rows per call (exports, search, address reports, flow and holder lists with a text
- * search), ask an outside service per call (quotes), or write for whoever asks (sign-in, pairing, tags, settings,
- * keys): limited per client address and path family, 30 a minute (the HEAVY_LIMITER binding in wrangler.jsonc;
- * skipped where it is absent).
+ * Which per-address limit a request falls under (nav-search-plan.md 4.5):
+ * - 'heavy', 30 a minute per client address and path family (HEAVY_LIMITER): exports and address reports (many D1
+ *   rows per call), quotes (an outside service per call), and every write for whoever asks (sign-in, pairing, tags,
+ *   settings, keys);
+ * - 'search', 120 a minute (SEARCH_LIMITER): the search and the lists searched by text. A person typing in the
+ *   palette sends about one request per pause, which a long session took past 30 a minute;
+ * - null: everything else. Each is skipped where its binding is absent; a search falls back to HEAVY_LIMITER when
+ *   only that one is bound.
  */
-export function isHeavy(url: URL, method = 'GET'): boolean {
+export type LimiterKind = 'heavy' | 'search';
+export function limiterFor(url: URL, method = 'GET'): LimiterKind | null {
   const p = url.pathname;
-  if (method === 'POST' || method === 'PUT' || method === 'DELETE') return /^\/api\/(auth\/|labels$|me($|\/))/.test(p);
-  if (method !== 'GET') return false;
-  return /^\/api\/(export\/|search$|address\/|quote$)/.test(p) || ((p === '/api/flows' || p === '/api/holders') && !!url.searchParams.get('search'));
+  if (method === 'POST' || method === 'PUT' || method === 'DELETE') return /^\/api\/(auth\/|labels$|me($|\/))/.test(p) ? 'heavy' : null;
+  if (method !== 'GET') return null;
+  if (/^\/api\/(export\/|address\/|quote$)/.test(p)) return 'heavy';
+  if (p === '/api/search' || ((p === '/api/flows' || p === '/api/holders') && !!url.searchParams.get('search'))) return 'search';
+  return null;
 }
+/** Is the request limited at all (either limiter)? */
+export const isHeavy = (url: URL, method = 'GET'): boolean => limiterFor(url, method) !== null;
 /**
  * Rewound reads (`?at=`, `?since=`), metric histories, and the list and alert variants with many possible values
  * (`?minNam=`, a page past the first, a page size the app does not use, a custom alert threshold): every distinct
@@ -62,6 +81,16 @@ export function isHeavy(url: URL, method = 'GET'): boolean {
 /** The windows the pages ask for (web/src/screens/trade/data.ts rangeFetchHours; supply/parts.tsx WindowDays). */
 const ORDERFLOW_HOURS = new Set(['24', '168', '720', '2160', '8760', '28800']);
 const PRESSURE_DAYS = new Set(['1', '7', '30', '90', '365']);
+/**
+ * The `from` days a series request is sent with today (web/src/screens/trade/series.ts seriesWindow, data.ts
+ * useDailyTrades): the UTC day `d` days before now for each window the Trade page draws, and the day either side
+ * (a client clock a little off, a request made across midnight). Any other day is a cache entry no page asks for.
+ */
+export function seriesFromDays(now: number): Set<string> {
+  const out = new Set<string>();
+  for (const d of [...Object.values(HISTORY_FETCH_DAYS), DAILY_DAYS]) for (const k of [-1, 0, 1]) out.add(new Date(now - (d + k) * DAY_MS).toISOString().slice(0, 10));
+  return out;
+}
 export function isReplay(url: URL): boolean {
   const p = url.pathname;
   if (p === '/api/metrics/history' || url.searchParams.has('at') || url.searchParams.has('since')) return true;
@@ -70,10 +99,27 @@ export function isReplay(url: URL): boolean {
   if (p === '/api/orderflow') return !ORDERFLOW_HOURS.has(url.searchParams.get('hours') ?? '720');
   if (p === '/api/pressure') return !PRESSURE_DAYS.has(url.searchParams.get('days') ?? '7');
   if ((p === '/api/alerts/recent' || p === '/api/alerts/rules') && THRESHOLDS.some((k) => url.searchParams.has(k))) return true;
+  // A series asked from one of the days the Trade page sends today is a few cache entries a day. Any other `from`
+  // (another day, a time to the millisecond) and any `to` (the page never sends one) is its own entry, and a read of
+  // up to the series' whole history (46,770 rows for the pool price): limited on a miss.
+  if (p === '/api/series') {
+    if (url.searchParams.has('to')) return true;
+    const f = url.searchParams.get('from');
+    if (f != null && !seriesFromDays(Date.now()).has(f)) return true;
+  }
+  // A tape page behind a cursor, one maker's trades, a size, or a page length the tape does not ask for: one entry per value.
+  if (p === '/api/series/trades') {
+    if (['before', 'maker', 'min'].some((k) => url.searchParams.has(k))) return true;
+    const limit = url.searchParams.get('limit');
+    if (limit != null && limit !== String(TRADES_TAPE_LIMIT)) return true;
+  }
   if (p === '/api/flows' || p === '/api/holders') {
-    if (url.searchParams.has('minNam')) return true;
-    const page = Number(url.searchParams.get('page') || '1');
-    if (!Number.isFinite(page) || page > 1) return true;
+    // a size, a cursor or a date jump: every value is its own cache entry
+    if (['minNam', 'min', 'max', 'after', 'before'].some((k) => url.searchParams.has(k))) return true;
+    // a page past the first, or the first spelled any other way ("-5", "0.3", "01"): the route reads them all as a
+    // page number, so each spelling would be a cache entry of its own
+    const page = url.searchParams.get('page');
+    if (page != null && page !== '1') return true;
     const limit = url.searchParams.get('limit');
     if (limit != null && !['25', '50', '100'].includes(limit)) return true;
   }
@@ -89,9 +135,12 @@ async function limitBy(limiter: Limiter, request: Request, url: URL, message: st
     status: 429, headers: { 'content-type': 'application/json', 'retry-after': '60', 'x-robots-tag': 'noindex', 'cache-control': 'no-store', 'x-content-type-options': 'nosniff' },
   });
 }
+export const SEARCH_LIMIT_WORDS = 'Too many searches from your address; try again in a minute.';
 export async function rateLimited(request: Request, env: Env): Promise<Response | null> {
   const url = new URL(request.url);
-  if (!isHeavy(url, request.method)) return null;
+  const kind = limiterFor(url, request.method);
+  if (!kind) return null;
+  if (kind === 'search') return limitBy(env.SEARCH_LIMITER ?? env.HEAVY_LIMITER, request, url, SEARCH_LIMIT_WORDS);
   return limitBy(env.HEAVY_LIMITER, request, url, 'Too many requests of this kind from your address; try again in a minute.');
 }
 export async function replayLimited(request: Request, env: Env): Promise<Response | null> {
@@ -103,6 +152,12 @@ export async function replayLimited(request: Request, env: Env): Promise<Respons
 /** What browsers may keep an API answer for. The edge keeps its own copy for 15 s (EDGE_CACHE). */
 export const BROWSER_CACHE = 'public, max-age=5';
 const EDGE_CACHE = 'public, max-age=5, s-maxage=15, stale-while-revalidate=30';
+/**
+ * A moves page behind a cursor or a date (`?before=`): a minute at the edge, not five, because the flow index can
+ * catch up and add a row with an older time (the list's "last checked the chain" line covers that).
+ */
+export const EDGE_CACHE_BEHIND = 'public, max-age=5, s-maxage=60, stale-while-revalidate=30';
+export const edgeCacheOf = (url: URL) => (url.pathname === '/api/flows' && url.searchParams.has('before') ? EDGE_CACHE_BEHIND : EDGE_CACHE);
 
 /**
  * Every API answer: not for search indexes (the footer links /api/overview; robots.txt keeps the read paths
@@ -124,12 +179,22 @@ function apiHeaders(res: Response, browserCache: string | null): Response {
  * Cache-Control (to max-age=14400 on 2026-10-17), and returning it as stored would let browsers keep market data
  * for hours.
  */
+/**
+ * Does a query parameter's name carry a percent sign? The cache key and the limiters read the query with
+ * URLSearchParams (names decoded, the first occurrence), while the routes read it with Hono's c.req.query (the first
+ * literal `name=`, an encoded name skipped). `?%6bind=sell&kind=buy` would be keyed and limited as kind=sell and
+ * answered as kind=buy, which stored a false answer under the visitors' key and slipped past every limiter
+ * (docs/security-review.md C1). No client of this API encodes a name (URLSearchParams writes plain ASCII names).
+ */
+export const hasEncodedName = (url: URL): boolean => url.search.slice(1).split('&').some((p) => p.split('=')[0].includes('%'));
+
 export async function cachedApi(request: Request, env: Env, ctx: ExecutionContext, fetchApp: (r: Request, e: Env, c: ExecutionContext) => Response | Promise<Response>): Promise<Response> {
   const url = new URL(request.url);
   // No API path carries a percent-encoded character (addresses are bech32, ids are hex, typed text travels in the
   // query string). The router matches the decoded path while the cache and limiter rules below see the raw one, so
-  // an encoded path (/api/%73earch) would only serve to slip past them: it is not found.
-  if (url.pathname.includes('%')) return apiHeaders(new Response(JSON.stringify({ error: 'Not found' }), { status: 404, headers: { 'content-type': 'application/json' } }), null);
+  // an encoded path (/api/%73earch) would only serve to slip past them: it is not found. So is a query whose
+  // parameter names are encoded (hasEncodedName).
+  if (url.pathname.includes('%') || hasEncodedName(url)) return apiHeaders(new Response(JSON.stringify({ error: 'Not found' }), { status: 404, headers: { 'content-type': 'application/json' } }), null);
   // HEAD is answered from the GET's own cache entry, never stored itself: the router would run the GET handler and
   // answer with no body, and that empty answer must never become the stored copy every visitor is served.
   if (request.method === 'HEAD') {
@@ -149,10 +214,12 @@ export async function cachedApi(request: Request, env: Env, ctx: ExecutionContex
   if (hit) return apiHeaders(hit, BROWSER_CACHE);
   const replay = await replayLimited(request, env);
   if (replay) return replay;
-  const res = await fetchApp(request, env, ctx);
+  // The route reads the request as the key reads it: the key's own URL (only the parameters the route reads, each
+  // once, as URLSearchParams decoded it), so the answer stored under a key is always the answer to that key.
+  const res = await fetchApp(new Request(key.url, { method: 'GET', headers: request.headers }), env, ctx);
   if (res.status !== 200) return apiHeaders(res, null);
   const stored = new Response(res.body, res);
-  stored.headers.set('Cache-Control', isExport ? EXPORT_EDGE_CACHE : EDGE_CACHE);
+  stored.headers.set('Cache-Control', isExport ? EXPORT_EDGE_CACHE : edgeCacheOf(url));
   stored.headers.set('X-Robots-Tag', 'noindex');
   ctx.waitUntil(cache.put(key, stored.clone()));
   return apiHeaders(stored, BROWSER_CACHE);

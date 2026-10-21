@@ -16,6 +16,11 @@ export type DataListKind = 'holders' | 'ladder' | 'pools' | 'moves';
 export interface Column {
   label: React.ReactNode;
   align?: 'l' | 'r';
+  /**
+   * A column the list can be sorted by: its state, set as `aria-sort` on the column head (the head holds the sort
+   * button). Absent: a plain head, without aria-sort (nav-search-plan 3.4).
+   */
+  sort?: 'ascending' | 'descending' | 'none';
 }
 
 const DEFAULT_COLUMNS: Record<DataListKind, Column[]> = {
@@ -42,11 +47,17 @@ export interface DataListProps {
   /** The list's provenance scope: one SourceLine under the rows. */
   scope?: ScopeItem[];
   scopeLabel?: string;
+  /**
+   * Every row of the whole list plus the head row (a list of 64,377 holders: 64,378), when the list is longer than
+   * the rows on screen, so a screen reader hears "row 1,205 of 64,378"; -1 when the length is not known. Rows then
+   * carry `rowIndex` (HolderRow). Absent: the rows on screen are the whole list.
+   */
+  rowCount?: number;
   className?: string;
   children: React.ReactNode;
 }
 
-export function DataList({ kind, label, full, change, columns, old, oldSentence, scope, scopeLabel, className = '', children }: DataListProps) {
+export function DataList({ kind, label, full, change, columns, old, oldSentence, scope, scopeLabel, rowCount, className = '', children }: DataListProps) {
   const cols = columns ?? (kind === 'holders' && full ? [...FULL_HOLDERS, ...(change ? [{ label: '7 days', align: 'r' as const }] : [])] : DEFAULT_COLUMNS[kind]);
   return (
     <div className={`dl-scope${old ? ' is-old' : ''}`} data-prov-scope="">
@@ -56,11 +67,11 @@ export function DataList({ kind, label, full, change, columns, old, oldSentence,
           <span>{oldSentence}</span>
         </p>
       ) : null}
-      <div className={`dl dl--${kind}${full ? ' dl--full' : ''}${change ? ' dl--chg' : ''} ${className}`} role="table" aria-label={label}>
+      <div className={`dl dl--${kind}${full ? ' dl--full' : ''}${change ? ' dl--chg' : ''} ${className}`} role="table" aria-label={label} aria-rowcount={rowCount}>
         {cols.length ? (
-          <div className="dl__head" role="row">
+          <div className="dl__head" role="row" aria-rowindex={rowCount != null ? 1 : undefined}>
             {cols.map((c, i) => (
-              <span key={i} role="columnheader" className={c.align === 'r' ? 'r' : undefined}>{c.label}</span>
+              <span key={i} role="columnheader" className={c.align === 'r' ? 'r' : undefined} aria-sort={c.sort}>{c.label}</span>
             ))}
           </div>
         ) : null}
@@ -90,14 +101,19 @@ export interface HolderRowProps {
   change7d?: React.ReactNode;
   /** The row's own mark when it differs from its scope (a ProvDot), shown as line three on phones. */
   exception?: React.ReactNode;
-  /** Share bar width relative to the largest row, 0..1. */
+  /**
+   * Share bar width, 0..1, relative to one reference for the whole list (the holder list: the largest total on its
+   * first page), so a deep page never looks as heavy as the first; null draws no bar.
+   */
   bar?: number | null;
+  /** The row's place in the whole list, the head row being 1 (rank + 1); set with DataList `rowCount`. */
+  rowIndex?: number;
   className?: string;
 }
 
-export function HolderRow({ rank, name, sub, tags, total, share, spendable, staked, stakedNote, change7d, exception, bar, className = '' }: HolderRowProps) {
+export function HolderRow({ rank, name, sub, tags, total, share, spendable, staked, stakedNote, change7d, exception, bar, rowIndex, className = '' }: HolderRowProps) {
   return (
-    <div className={`hrow ${className}`} role="row">
+    <div className={`hrow ${className}`} role="row" aria-rowindex={rowIndex}>
       <span className="hrow__rk" role="cell">{fmtCount(rank)}</span>
       <span className="hrow__id" role="cell">
         <span className="hrow__name">{name}</span>

@@ -6,15 +6,24 @@
 // URL state: ?addr=<address> opens the Address sheet (and is written while it is open, so
 // the link can be shared); ?pair=<code> opens Sign in on the pair-code step (N5). Both use
 // replaceState, never a history entry.
+//
+// `?` opens the Keys sheet (nav-search-plan 3.3) with the same guards as every single key in app/keys.ts: not while
+// typing in a field, not while a dialog or a popover is open, not with Meta, Ctrl or Alt. An address opened here is
+// counted in this browser's recents (app/recent.ts, localStorage only, never sent).
 import React, { createContext, lazy, Suspense, useCallback, useContext, useEffect, useMemo, useRef, useState } from 'react';
+import { isTextEntry } from './keys';
 import { PartBoundary } from './LoadFailed';
+import { noteRecent } from './recent';
 import { dropParams, navCount, putParam, useLocation } from './router';
+import type { AddressOrigin } from '../screens/activity/sheetOrigin';
 
 export type SheetRequest =
   | { kind: 'sources' }
-  | { kind: 'address'; address: string }
+  /** `label`: the address's plain name when the opener knows it (kept with the recent entry, nothing else) */
+  | { kind: 'address'; address: string; label?: string | null; origin?: AddressOrigin | null }
   | { kind: 'signin'; code?: string | null }
-  | { kind: 'account' };
+  | { kind: 'account' }
+  | { kind: 'keys' };
 
 export interface PaletteRequest {
   /** Open with the Rewind row focused (the header Rewind button). */
@@ -35,14 +44,17 @@ export interface OverlaysValue {
   togglePalette: () => void;
   // shorthands
   openSources: () => void;
-  openAddress: (address: string) => void;
+  /** `label`: the plain name when known (Recent); `origin`: the list row it was opened from (the sheet's eyebrow) */
+  openAddress: (address: string, opts?: { label?: string | null; origin?: AddressOrigin | null }) => void;
   openSignIn: (code?: string | null) => void;
+  /** The Keys sheet (also the `?` key). */
+  openKeys: () => void;
 }
 
 const noop = () => {};
 const OverlaysCtx = createContext<OverlaysValue>({
   sheet: null, openSheet: noop, closeSheet: noop, palette: null, openPalette: noop, closePalette: noop, togglePalette: noop,
-  openSources: noop, openAddress: noop, openSignIn: noop,
+  openSources: noop, openAddress: noop, openSignIn: noop, openKeys: noop,
 });
 
 /** Open and close sheets and the palette from anywhere. */
@@ -54,6 +66,7 @@ const SourcesSheet = lazy(() => loadSheets().then((m) => ({ default: m.SourcesSh
 const AddressSheet = lazy(() => loadSheets().then((m) => ({ default: m.AddressSheet })));
 const SignInSheet = lazy(() => loadSheets().then((m) => ({ default: m.SignInSheet })));
 const AccountSheet = lazy(() => loadSheets().then((m) => ({ default: m.AccountSheet })));
+const KeysSheet = lazy(() => import('./KeysSheet'));
 export const loadPalette = () => import('./Palette');
 const Palette = lazy(loadPalette);
 /** Start downloading search's code (on hover or focus of its buttons); a failure shows when it is opened. */
@@ -61,23 +74,25 @@ export const prefetchPalette = () => {
   loadPalette().catch(() => {});
 };
 
-const RECENT_KEY = 'nt.recentAddr';
-/** Recently opened addresses (this browser only), newest first. */
-export function readRecent(): string[] {
+/**
+ * An open dialog or glossary card (the guard of app/keys.ts). Built once: a browser without the Popover API rejects
+ * ':popover-open' with a SyntaxError.
+ */
+const OVERLAY_SEL = (() => {
   try {
-    const v = JSON.parse(localStorage.getItem(RECENT_KEY) ?? '[]');
-    return Array.isArray(v) ? v.filter((x): x is string => typeof x === 'string').slice(0, 5) : [];
+    if (typeof CSS !== 'undefined' && CSS.supports('selector(:popover-open)')) return 'dialog[open], [popover]:popover-open, .pop.is-open';
   } catch {
-    return [];
+    /* CSS.supports without selector() */
   }
-}
-function pushRecent(a: string) {
+  return 'dialog[open], .pop.is-open';
+})();
+const overlayOpen = (): boolean => {
   try {
-    localStorage.setItem(RECENT_KEY, JSON.stringify([a, ...readRecent().filter((x) => x !== a)].slice(0, 5)));
+    return !!document.querySelector(OVERLAY_SEL);
   } catch {
-    /* not stored */
+    return !!document.querySelector('dialog[open]');
   }
-}
+};
 
 export function OverlaysProvider({ children }: { children: React.ReactNode }) {
   const loc = useLocation();
@@ -111,7 +126,7 @@ export function OverlaysProvider({ children }: { children: React.ReactNode }) {
     setPalette(null);
     setSheet(req);
     if (req.kind === 'address') {
-      pushRecent(req.address);
+      noteRecent('address', req.address, { label: req.label });
       putParam('addr', req.address);
     } else {
       dropParams('addr');
@@ -140,6 +155,18 @@ export function OverlaysProvider({ children }: { children: React.ReactNode }) {
     else openPalette();
   }, [openPalette, closePalette]);
 
+  // `?` opens the Keys sheet; a handler that ran first (a later keys.ts binding) prevents the default and wins
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if (e.defaultPrevented || e.isComposing || e.key !== '?' || e.metaKey || e.ctrlKey || e.altKey) return;
+      if (isTextEntry(e.target) || overlayOpen()) return;
+      e.preventDefault();
+      openSheet({ kind: 'keys' });
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [openSheet]);
+
   // ?addr= and ?pair= open their sheets (on load, and when Back brings such a URL)
   useEffect(() => {
     const q = new URLSearchParams(loc.search);
@@ -157,8 +184,9 @@ export function OverlaysProvider({ children }: { children: React.ReactNode }) {
     () => ({
       sheet, openSheet, closeSheet, palette, openPalette, closePalette, togglePalette,
       openSources: () => openSheet({ kind: 'sources' }),
-      openAddress: (address: string) => openSheet({ kind: 'address', address }),
+      openAddress: (address: string, opts?: { label?: string | null; origin?: AddressOrigin | null }) => openSheet({ kind: 'address', address, label: opts?.label ?? null, origin: opts?.origin ?? null }),
       openSignIn: (code?: string | null) => openSheet({ kind: 'signin', code: code ?? null }),
+      openKeys: () => openSheet({ kind: 'keys' }),
     }),
     [sheet, openSheet, closeSheet, palette, openPalette, closePalette, togglePalette],
   );
@@ -171,9 +199,10 @@ export function OverlaysProvider({ children }: { children: React.ReactNode }) {
       <PartBoundary onClose={closeSheet} resetKey={sheet ? `${sheet.kind}:${sheet.kind === 'address' ? sheet.address : ''}` : null}>
         <Suspense fallback={null}>
           {sheet?.kind === 'sources' ? <SourcesSheet onClose={closeSheet} /> : null}
-          {sheet?.kind === 'address' ? <AddressSheet key={sheet.address} address={sheet.address} onClose={closeSheet} /> : null}
+          {sheet?.kind === 'address' ? <AddressSheet key={sheet.address} address={sheet.address} origin={sheet.origin ?? null} onClose={closeSheet} /> : null}
           {sheet?.kind === 'signin' ? <SignInSheet code={sheet.code ?? null} onClose={closeSheet} /> : null}
           {sheet?.kind === 'account' ? <AccountSheet onClose={closeSheet} /> : null}
+          {sheet?.kind === 'keys' ? <KeysSheet onClose={closeSheet} /> : null}
         </Suspense>
       </PartBoundary>
       <PartBoundary onClose={closePalette} resetKey={palette ? 'open' : null}>

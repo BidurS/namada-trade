@@ -385,6 +385,6 @@
   /* Reduced motion: nothing animates or transitions; every final state is the first state.
      Test: document.getAnimations().length === 0 after load. */
   @media (prefers-reduced-motion: reduce) {
-    *, *::before, *::after { animation: none !important; transition: none !important; scroll-behavior: auto !important; }
+    *, *::before, *::after, *::backdrop { animation: none !important; transition: none !important; scroll-behavior: auto !important; }
   }
 }

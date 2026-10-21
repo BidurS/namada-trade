@@ -16,6 +16,8 @@ export interface Env {
   HEAVY_LIMITER?: { limit(o: { key: string }): Promise<{ success: boolean }> };
   /** The same for rewound reads and metric histories, which miss the edge cache by design (worker/src/http.ts) */
   REPLAY_LIMITER?: { limit(o: { key: string }): Promise<{ success: boolean }> };
+  /** The search and the lists searched by text, 120 a minute (worker/src/http.ts limiterFor; wrangler.jsonc SEARCH_LIMITER) */
+  SEARCH_LIMITER?: { limit(o: { key: string }): Promise<{ success: boolean }> };
 }
 
 export class HttpError extends Error {

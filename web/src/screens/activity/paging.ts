@@ -1,13 +1,12 @@
 // Activity (S5): numbered pages for the Holders and Transactions lists (docs/design/nav-search-plan.md 2.3,
-// owner decision 2026-10-20: First ‹ Page [n] of N › Last, never "Load more"). The page lives in the URL
-// (?page=N, 1 when absent), the rows per page too (?size=25|100, 50 when absent); the sizes live here, never
-// typed into JSX (the N2 lint).
+// owner decision 2026-10-20: First ‹ Page [n] of N › Last, never "Load more"). The page and the rows per page live
+// in the URL with every other list parameter (urlState.ts); the sizes and caps live here, never typed into JSX (the
+// N2 lint), with the helpers that place and focus rows under the sticky stack.
 
-/** The rows-per-page choices on both lists (the API clamps `limit` to 10…100, worker/src/api.ts). */
-export const PAGE_SIZES = [25, 50, 100] as const;
-export type PageSize = (typeof PAGE_SIZES)[number];
-/** Rows per page when ?size= is absent. */
-export const PAGE_SIZE: PageSize = 50;
+import { PAGE_SIZES, PAGE_SIZE, type PageSize } from '../../../../shared/paging';
+/** The rows-per-page choices and the default, from shared/paging.ts (one list for the API and both screens). */
+export { PAGE_SIZES, PAGE_SIZE };
+export type { PageSize };
 /** The holder export's row cap (worker/src/api.ts HOLDER_EXPORT_MAX). */
 export const HOLDER_CSV_MAX = 10_000;
 /** The flow export's row cap (worker/src/api.ts FLOW_EXPORT_MAX). */
@@ -15,56 +14,11 @@ export const FLOW_CSV_MAX = 5_000;
 /** How long a row reached by "Go to rank" stays highlighted (ms). */
 export const HIT_MS = 1_600;
 
-/** `?page=` as a page number: a whole number from 1, otherwise null (the caller normalises it away). */
-export function parsePage(raw: string | null): number | null {
-  if (raw == null || !/^\d{1,6}$/.test(raw)) return null;
-  const n = Number(raw);
-  return n >= 1 ? n : null;
-}
-
-/** `?size=` as one of PAGE_SIZES, otherwise null (absent or unreadable: the default, and the URL is cleaned). */
-export function parseSize(raw: string | null): PageSize | null {
-  if (raw == null) return null;
-  const n = Number(raw);
-  return (PAGE_SIZES as readonly number[]).includes(n) && String(n) === raw ? (n as PageSize) : null;
-}
-
-/** `?before=` (Transactions): a unix-ms time in the past (UTC midnight of the chosen day), otherwise null. */
-export function parseBefore(raw: string | null, now = Date.now()): number | null {
-  if (raw == null || !/^\d{11,14}$/.test(raw)) return null;
-  const n = Number(raw);
-  return n > 0 && n <= now + 86_400_000 ? n : null;
-}
-
 /** The number of pages for `total` rows (at least 1, so an empty list is page 1 of 1). */
 export const pageCount = (total: number, size: number = PAGE_SIZE): number => Math.max(1, Math.ceil(total / size));
 
 /** The page that holds the row at 1-based position `rank`. */
 export const pageOfRank = (rank: number, size: number): number => Math.max(1, Math.ceil(rank / size));
-
-/**
- * The current URL with list parameters set or dropped (null, or a default, drops it, so canonical links stay
- * short); every other parameter kept (?at=, ?addr=, the filters).
- */
-export function listHref(patch: { page?: number; size?: number; before?: number | null }): string {
-  const u = new URL(location.href);
-  if (patch.page !== undefined) {
-    if (patch.page <= 1) u.searchParams.delete('page');
-    else u.searchParams.set('page', String(patch.page));
-  }
-  if (patch.size !== undefined) {
-    if (patch.size === PAGE_SIZE) u.searchParams.delete('size');
-    else u.searchParams.set('size', String(patch.size));
-  }
-  if (patch.before !== undefined) {
-    if (patch.before == null) u.searchParams.delete('before');
-    else u.searchParams.set('before', String(patch.before));
-  }
-  return `${u.pathname}${u.search}${u.hash}`;
-}
-
-/** The current URL with ?page= set (dropped for page 1); every other parameter kept. */
-export const pageHref = (page: number): string => listHref({ page });
 
 // ---------------------------------------------------------------- the sticky stack and rows
 
