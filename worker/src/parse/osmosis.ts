@@ -188,18 +188,31 @@ export function parseOsmosisTx(tx: NormTx, ctx: OsmoCtx): OsmoParsed {
   const signer = signerOf(tx);
 
   // ---- 2. Swaps ----
-  // One leg per NAM-moving token_swapped event: which way the NAM went, through which pool, against what.
-  const legs: { pool: string; side: 'sell' | 'buy'; nam: number; counter: ReturnType<typeof counterOf> }[] = [];
+  // One leg per NAM-moving token_swapped event: which way the NAM went, through which pool, against what, in which
+  // message and for which swapper.
+  type Leg = { pool: string; side: 'sell' | 'buy'; nam: number; counter: ReturnType<typeof counterOf>; msg: string; sender: string | null };
+  const legs: Leg[] = [];
   // The NAM bank legs that are a swap's own (they are the swap, not transfers), and the messages that swapped NAM.
-  // Each token_swapped event comes after the bank legs of its hop (the poolmanager, test/fixtures/osmo_swap.json):
-  // NAM in is the taker fee to the taker-fee collector, then exactly tokens_in into the pool, then (a concentrated
-  // pool) the spread reward to the pool's spread account, then the other coin out of the pool; NAM out is exactly
-  // tokens_out from the pool to the swapper. Nothing else can sit between those legs, so a send placed in the same
-  // message (authz, a contract) is never mistaken for one of them.
+  // Each token_swapped event comes after the pool's bank legs of its hop (the poolmanager, test/fixtures/osmo_swap.json):
+  // NAM in is exactly tokens_in into the pool, then (a concentrated pool) the spread reward to the pool's spread
+  // account, then the other coin out of the pool; NAM out is exactly tokens_out from the pool to the swapper. The
+  // taker fee, in the coin put in, goes from the swapper to the taker-fee collector just before those legs on an
+  // exact-in hop (RouteExactAmountIn charges it first) and just after the hop's token_swapped event on an exact-out hop
+  // (RouteExactAmountOut charges it once the pool has swapped). Nothing else can sit between those legs, so a send
+  // placed in the same message (authz, a contract) is never mistaken for one of them.
   const swapLegIdx = new Set<number>();
   const swapMsgs = new Set<string>();
   /** Messages with a NAM swap whose bank legs could not be told apart (an old event shape): all their NAM legs are the swap's, as before. */
   const unmatchedMsgs = new Set<string>();
+  /** Per swap message, the NAM its hops' own legs paid the swapper (out of the pools) less what they took from it (into the pools, their spread accounts and the taker fee). */
+  const swapNet = new Map<string, bigint>();
+  const own = (t: (typeof transfers)[number], toSwapper: boolean) => {
+    if (swapLegIdx.has(t.idx)) return;
+    swapLegIdx.add(t.idx);
+    swapNet.set(t.msg, (swapNet.get(t.msg) ?? 0n) + (toSwapper ? t.base : -t.base));
+  };
+  const isFee = (t: (typeof transfers)[number] | undefined, swapper: string): t is (typeof transfers)[number] =>
+    !!t && t.base > 0n && t.from === swapper && t.to === OSMOSIS.takerFeeCollector;
   const prevSwap = new Map<string, number>();
   tx.events.forEach((e, i) => {
     if (e.type !== 'token_swapped') return;
@@ -208,8 +221,9 @@ export function parseOsmosisTx(tx: NormTx, ctx: OsmoCtx): OsmoParsed {
     const from = prevSwap.get(m) ?? -1;
     prevSwap.set(m, i);
     const inBase = namBase(a.tokens_in), outBase = namBase(a.tokens_out);
-    if (inBase > 0n) legs.push({ pool: a.pool_id, side: 'sell', nam: namFromCoins(a.tokens_in), counter: counterOf(a.tokens_out, ctx) });
-    if (outBase > 0n) legs.push({ pool: a.pool_id, side: 'buy', nam: namFromCoins(a.tokens_out), counter: counterOf(a.tokens_in, ctx) });
+    const sender = a.sender || null;
+    if (inBase > 0n) legs.push({ pool: a.pool_id, side: 'sell', nam: namFromCoins(a.tokens_in), counter: counterOf(a.tokens_out, ctx), msg: m, sender });
+    if (outBase > 0n) legs.push({ pool: a.pool_id, side: 'buy', nam: namFromCoins(a.tokens_out), counter: counterOf(a.tokens_in, ctx), msg: m, sender });
     if (inBase === 0n && outBase === 0n) return;
     swapMsgs.add(m);
     const w = transfers.filter((t) => t.msg === m && t.ev > from && t.ev < i);
@@ -218,23 +232,54 @@ export function parseOsmosisTx(tx: NormTx, ctx: OsmoCtx): OsmoParsed {
       const k = lastIn((t) => t.base === inBase && (!a.sender || t.from === a.sender));
       if (k < 0) unmatchedMsgs.add(m);
       else {
-        swapLegIdx.add(w[k].idx);
-        const fee = w[k - 1], spread = w[k + 1];
-        if (fee && fee.base > 0n && fee.from === w[k].from && fee.to === OSMOSIS.takerFeeCollector) swapLegIdx.add(fee.idx);
-        if (spread && spread.base > 0n && spread.from === w[k].from && spread.to !== w[k].to) swapLegIdx.add(spread.idx);
+        own(w[k], false);
+        const spread = w[k + 1];
+        if (spread && spread.base > 0n && spread.from === w[k].from && spread.to !== w[k].to) own(spread, false);
+        // exact-in: the leg just before the pool's; exact-out: this message's first leg after the event
+        for (const fee of [w[k - 1], transfers.find((t) => t.msg === m && t.ev > i)]) if (isFee(fee, w[k].from)) own(fee, false);
       }
     }
     if (outBase > 0n) {
       const k = lastIn((t) => t.base === outBase && (!a.sender || t.to === a.sender));
       if (k < 0) unmatchedMsgs.add(m);
-      else swapLegIdx.add(w[k].idx);
+      else own(w[k], true);
     }
   });
-  const namSold = legs.filter((l) => l.side === 'sell').reduce((s, l) => s + l.nam, 0);
-  const namBought = legs.filter((l) => l.side === 'buy').reduce((s, l) => s + l.nam, 0);
-  const pools = new Set(legs.map((l) => l.pool));
-  const isSwap = legs.length > 0;
-  if (isSwap) {
+
+  // Each swap message's NAM, per account: what came in less what went out.
+  const netIn = new Map<string, Map<string, bigint>>();
+  for (const t of namTransfers) {
+    if (!swapMsgs.has(t.msg)) continue;
+    const n = netIn.get(t.msg) ?? netIn.set(t.msg, new Map()).get(t.msg)!;
+    n.set(t.from, (n.get(t.from) ?? 0n) - t.base);
+    n.set(t.to, (n.get(t.to) ?? 0n) + t.base);
+  }
+  // The trader of each swap message: the one account the message changed by exactly the NAM its hops paid out or took
+  // in (swapNet). That is the swapper itself, or the account a router, an ibc-hooks entry point (Skip), an authz grant
+  // or a vault swapped for: the signer is only the fee payer, a relayer or a keeper. A pool, the transfer module and
+  // the taker-fee collector are never one. When no single account matches (a cut paid out of the swap, a round trip,
+  // an old event shape) it is the signer, as before.
+  const traderOf = new Map<string, string | null>();
+  for (const m of swapMsgs) {
+    const want = swapNet.get(m) ?? 0n;
+    const hits = want === 0n || unmatchedMsgs.has(m) ? [] : [...netIn.get(m) ?? []]
+      .filter(([x, v]) => v === want && !ctx.poolAddrs.has(x) && x !== OSMOSIS.transferModule && x !== OSMOSIS.takerFeeCollector);
+    traderOf.set(m, hits.length === 1 ? hits[0][0] : signer);
+  }
+
+  // In a transaction whose messages carry msg_index, a token_swapped event without one is the post-handler's
+  // (ProtoRev's backrun through any pools, after the signer's messages ran): its own trade, never the signer's. It is
+  // recorded as its own row, named for its swapper; mixed into the signer's row, its legs both ways cost that row its
+  // counter coin and its own price. In an older transaction nothing tells them apart and all legs make one row.
+  const indexed = msgOf.some((m) => m !== '');
+  const isPost = (l: Leg) => indexed && l.msg === '';
+  const userLegs = legs.filter((l) => !isPost(l)), postLegs = legs.filter(isPost);
+  const onlyOne = <T>(xs: T[]) => (new Set(xs).size === 1 ? xs[0] : null);
+
+  const swapRow = (suffix: string, legs: Leg[], trader: string | null, postHandler: boolean) => {
+    const namSold = legs.filter((l) => l.side === 'sell').reduce((s, l) => s + l.nam, 0);
+    const namBought = legs.filter((l) => l.side === 'buy').reduce((s, l) => s + l.nam, 0);
+    const pools = new Set(legs.map((l) => l.pool));
     const net = namBought - namSold;
     const gross = Math.max(namBought, namSold);
     const isArb = namSold > 0 && namBought > 0 && Math.abs(net) < gross * 0.05;
@@ -254,23 +299,28 @@ export function parseOsmosisTx(tx: NormTx, ctx: OsmoCtx): OsmoParsed {
     let priceUsd = ctx.priceUsd;
     if (counter && trusted && amount > 0 && !isArb) priceUsd = counter.amount / amount;
     out.flows.push({
-      id: `osmosis:${tx.hash}:swap`,
+      id: `osmosis:${tx.hash}:${suffix}`,
       chain: 'osmosis',
       height: tx.height,
       ts: tx.ts,
       txHash: tx.hash,
       kind,
-      from: kind === 'buy' ? null : signer,
-      to: kind === 'buy' ? signer : null,
+      from: kind === 'buy' ? null : trader,
+      to: kind === 'buy' ? trader : null,
       amount,
       counterDenom: counter?.symbol ?? null,
       counterAmount: counter?.amount ?? null,
       poolId: [...pools].join(','),
       priceUsd,
       valueUsd: priceUsd != null ? priceUsd * amount : null,
-      meta: isArb ? { arb: true, namSold, namBought } : { trader: signer },
+      meta: { ...(isArb ? { arb: true, namSold, namBought } : { trader }), ...(postHandler ? { postHandler: true } : {}) },
     });
-  }
+  };
+  // The signer's row is its messages' trader's when they all have the same one.
+  const userTrader = onlyOne([...new Set(userLegs.map((l) => l.msg))].map((m) => traderOf.get(m) ?? signer)) ?? signer;
+  if (userLegs.length) swapRow('swap', userLegs, userTrader, false);
+  // A post-handler swap after a signer's swap that moved no NAM is the transaction's swap row, as it always was.
+  if (postLegs.length) swapRow(userLegs.length ? 'post_swap' : 'swap', postLegs, onlyOne(postLegs.map((l) => l.sender)), true);
 
   // ---- 3. IBC ----
   // Each packet event is read with its own message's events: the channel of a send is on that message's send_packet
@@ -356,20 +406,16 @@ export function parseOsmosisTx(tx: NormTx, ctx: OsmoCtx): OsmoParsed {
   // Every NAM bank leg that is not a swap's own: legs in messages without a NAM swap, and in a swap message the legs
   // that are not one of its hops (section 2). Such a leg in a swap message is still the swap's when it only carries
   // the swap's NAM between the trader and the swapper (a router contract and its entry point): both its ends are the
-  // signer or an account the message leaves where it started (as much NAM in as out). A send to anyone else in the
-  // same message (authz, a contract) changes that account's NAM and is recorded.
-  const netIn = new Map<string, Map<string, bigint>>();
-  for (const t of namTransfers) {
-    if (!swapMsgs.has(t.msg)) continue;
-    const n = netIn.get(t.msg) ?? netIn.set(t.msg, new Map()).get(t.msg)!;
-    n.set(t.from, (n.get(t.from) ?? 0n) - t.base);
-    n.set(t.to, (n.get(t.to) ?? 0n) + t.base);
-  }
+  // message's trader (section 2) or an account the message leaves where it started (as much NAM in as out). A send to
+  // anyone else in the same message (authz, a contract) changes that account's NAM and is recorded. A pool is never
+  // such an account: a leg to or from one is a hop (matched in section 2) or liquidity, even when a deposit equals the
+  // NAM just bought from it and leaves the pool where it started.
   const theSwaps = (t: (typeof namTransfers)[number]) => {
     if (!swapMsgs.has(t.msg)) return false;
     if (unmatchedMsgs.has(t.msg) || swapLegIdx.has(t.idx)) return true;
     const n = netIn.get(t.msg)!;
-    const settled = (x: string) => x === signer || x === OSMOSIS.transferModule || n.get(x) === 0n;
+    const trader = traderOf.get(t.msg);
+    const settled = (x: string) => !ctx.poolAddrs.has(x) && (x === trader || x === OSMOSIS.transferModule || n.get(x) === 0n);
     return settled(t.from) && settled(t.to);
   };
   let lpAdd = 0, lpRemove = 0;

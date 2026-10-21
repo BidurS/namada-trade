@@ -1327,7 +1327,7 @@ export interface TradeRow {
   priceSource: 'execution' | 'swap_1h' | 'spot' | 'unknown' | null;
   valueUsd: number | null;
   priceNote?: string;
-  /** the signer (Flow.meta.trader), else the receiving (buy) or sending (sell) address */
+  /** the trader (Flow.meta.trader: the account whose NAM the swap moved, else the signer), else the receiving (buy) or sending (sell) address */
   maker: string | null;
   makerLabelPlain: string | null;
   makerLabelSource?: string | null;

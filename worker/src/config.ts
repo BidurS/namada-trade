@@ -34,7 +34,8 @@ export const OSMOSIS = {
   pricePoolIds: ['3005'] as readonly string[],
   /**
    * The poolmanager's taker-fee collector (module account 'taker_fee_collector': the first 20 bytes of the sha256 of
-   * that name). A swap pays its taker fee here, in the coin it puts in, just before it pays the pool.
+   * that name). A swap pays its taker fee here, in the coin it puts in: just before it pays the pool on an exact-in hop,
+   * just after the pool has swapped (its token_swapped event) on an exact-out hop.
    */
   takerFeeCollector: 'osmo1r9jc2234fljy93z80cevqjt3nmjycec8aj4cc6',
   /** Noble USDC on Osmosis */
