@@ -320,7 +320,7 @@ function HitPrice({ h }: { h: AlertHit }) {
 
 function Settled({ s }: { s: Settle }) {
   const coin = (c: SettledCoin) => `${fmtCoin(Math.abs(c.amount), c.rate === 'stable' ? 2 : 4)} ${c.symbol}`;
-  const valued = (c: SettledCoin) => c.rate === 'stable' ? (c.symbol === 'USDC' ? '' : `, Osmosis's alloyed USDC, at a dollar`)
+  const valued = (c: SettledCoin) => c.rate === 'stable' ? (c.symbol === 'USDC' ? '' : ` (Osmosis's alloyed USDC, counted at a dollar)`)
     : ` (${fmtUsdRule(Math.abs(c.amount) * c.usdEach)} at ${fmtUsdRule(c.usdEach)} per ${c.symbol}, ${c.rate === 'tx' ? `this transaction's own ${c.symbol}/USDC rate` : `the Osmosis ${c.symbol} quote for that minute`})`;
   const list = (cs: SettledCoin[]) => cs.map((c) => coin(c) + valued(c)).join(' and ');
   const got = s.coins.filter((c) => c.amount > 0), paid = s.coins.filter((c) => c.amount < 0);
@@ -328,7 +328,7 @@ function Settled({ s }: { s: Settle }) {
   const nam = `${fmtNamRule(s.nam)} NAM`;
   const trade = sale
     ? `gave ${nam}, fees in, for ${list(got)}${paid.length ? `, and paid ${list(paid)}` : ''}`
-    : `paid ${list(paid)} for ${nam}, after fees${got.length ? `, and got ${list(got)}` : ''}`;
+    : `paid ${list(paid)}, fees in, for ${nam}${got.length ? `, and got ${list(got)}` : ''}`;
   const gas = s.gasUsd != null ? `, ${sale ? 'less' : 'plus'} ${fmtUsdRule(s.gasUsd)} of gas` : '';
   return <>Settled at {fmtUsdRule(s.usdPerNam)} a NAM: {trade}{gas}.{s.gasLeftOut ? ' Its gas is left out: its coin has no price for that minute.' : ''}</>;
 }
