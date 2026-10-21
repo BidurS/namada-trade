@@ -306,6 +306,8 @@ export interface BondListingRecord {
   /** sum of every unbond entry net of slashing (in-flight + withdrawable) decoded from the same listing; undefined when the answer had none */
   unbondingNam?: number;
   written: number; zeroed: number; remaining: number; ticks: number; durationMs: number;
+  /** rows already at 0 from another source (the per-address reads before the listing) stamped as the listing's 0 */
+  confirmed?: number;
   failedAt?: number | null;
   error?: string;
   failures?: number;
@@ -622,12 +624,19 @@ export async function runBondListing(env: Env, health: SourceHealth[], now: numb
     // Not named by the listing: a stake the chain no longer lists, or an estimate from the flow history for an
     // address the chain never listed a bond for (an estimate alone must not make a holder: H3, 2026-10-20).
     const toZero = stored.filter((s) => !listing.sources.has(s.address) && ((s.bonded_num ?? 0) > 0 || (s.bonded_num == null && (s.estimated_num ?? 0) > 0)) && (s.verified_height ?? 0) <= listing.height).map((s) => s.address);
+    // Not named by the listing and already 0, but from another source (the per-address reads before the listing):
+    // the listing confirms the 0, so the row takes its source and time. Otherwise the row keeps its old read time,
+    // and every figure that takes the oldest reading behind it (the top 10's) reads as old for ever.
+    const toConfirm = stored.filter((s) => !listing.sources.has(s.address) && s.bonded_num === 0 && s.verified_src !== BOND_LISTING_SRC && (s.verified_height ?? 0) <= listing.height).map((s) => s.address);
     toWrite.sort((a, b) => (a.address < b.address ? -1 : a.address > b.address ? 1 : 0));
     const part = toWrite.slice(0, cap);
     const zeroPart = toZero.slice(0, Math.max(0, cap - part.length));
-    rec.remaining = (toWrite.length - part.length) + (toZero.length - zeroPart.length);
+    const confirmPart = toConfirm.slice(0, Math.max(0, cap - part.length - zeroPart.length));
+    rec.remaining = (toWrite.length - part.length) + (toZero.length - zeroPart.length) + (toConfirm.length - confirmPart.length);
+    const zeroRows = (a: string[]) => stmt.stakesVerified(a.map((address) => ({ address, bondedNam: 0, delegations: [] })), epoch, listing.height, now, BOND_LISTING_SRC);
     if (part.length) rec.written = await runBatch(env.DB, stmt.stakesVerified(part, epoch, listing.height, now, BOND_LISTING_SRC));
-    if (zeroPart.length) rec.zeroed = await runBatch(env.DB, stmt.stakesVerified(zeroPart.map((address) => ({ address, bondedNam: 0, delegations: [] })), epoch, listing.height, now, BOND_LISTING_SRC));
+    if (zeroPart.length) rec.zeroed = await runBatch(env.DB, zeroRows(zeroPart));
+    if (confirmPart.length) rec.confirmed = await runBatch(env.DB, zeroRows(confirmPart));
     if (rec.remaining === 0) {
       rec.completeAt = now;
       // The stake keys, the unbond queue, validator_daily and the listings row (series.ts).
@@ -652,7 +661,7 @@ export async function runBondListing(env: Env, health: SourceHealth[], now: numb
       + `${rec.stakers.toLocaleString('en-US')} addresses stake ${Math.round(rec.totalNam).toLocaleString('en-US')} NAM`
       + (rec.slashedNam ? ` (${Math.round(rec.slashedNam).toLocaleString('en-US')} NAM of slashed bonds left out)` : '')
       + `; ${rec.written.toLocaleString('en-US')} rows written`
-      + (rec.zeroed ? `, ${rec.zeroed} set to 0` : '') + (rec.remaining ? `, ${rec.remaining.toLocaleString('en-US')} left for the next tick` : '') });
+      + (rec.zeroed ? `, ${rec.zeroed} set to 0` : '') + (rec.confirmed ? `, ${rec.confirmed.toLocaleString('en-US')} confirmed at 0` : '') + (rec.remaining ? `, ${rec.remaining.toLocaleString('en-US')} left for the next tick` : '') });
   } catch (e) {
     rec.remaining = Math.max(1, rec.remaining);
     rec.error = String(e).slice(0, 160);

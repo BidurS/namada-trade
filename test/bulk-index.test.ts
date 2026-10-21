@@ -312,6 +312,24 @@ describe('the bond listing run', () => {
     expect(db.raw.prepare('SELECT COUNT(*) n FROM stakes WHERE verified_src != ?').get(BOND_LISTING_SRC).n).toBe(0);
   });
 
+  it('confirms a 0 the old per-address read left, once: the row takes the listing\'s source and time (the top 10 read as old otherwise)', async () => {
+    const db = testD1();
+    await runBondListing(env(db), [], NOW, 2690, {}, bondLister());
+    insert(db, 'stakes', [{ address: 'tnam1qoldzero', bonded_num: 0, delegations: '[]', verified_at: NOW - D, verified_epoch: 2600, verified_src: 'ProviderNode', updated_at: NOW - D }]);
+    const r = (await runBondListing(env(db), [], NOW + H, 2691, {}, bondLister()))!;
+    expect(r).toMatchObject({ written: 0, zeroed: 0, confirmed: 1, remaining: 0, completeAt: NOW + H });
+    expect(db.raw.prepare("SELECT bonded_num, verified_src, verified_at, verified_height FROM stakes WHERE address='tnam1qoldzero'").get()).toMatchObject({ bonded_num: 0, verified_src: BOND_LISTING_SRC, verified_at: NOW + H, verified_height: 8343327 });
+    const again = (await runBondListing(env(db), [], NOW + 2 * H, 2691, {}, bondLister()))!;
+    expect(again).toMatchObject({ written: 0, zeroed: 0, remaining: 0 });
+    expect(again.confirmed).toBeUndefined();
+    // under the cap the confirmations wait their turn and keep the pass open
+    insert(db, 'stakes', [{ address: 'tnam1qoldzero2', bonded_num: 0, delegations: '[]', verified_at: NOW - D, verified_src: 'ProviderNode', updated_at: NOW - D }]);
+    db.raw.prepare("UPDATE stakes SET verified_src='ProviderNode' WHERE address=?").run(stakers[0]);
+    const capped = (await runBondListing(env(db), [], NOW + 3 * H, 2692, {}, bondLister(), 1))!;
+    expect(capped).toMatchObject({ written: 1, remaining: 1, completeAt: NOW + 2 * H });
+    expect((await runBondListing(env(db), [], NOW + 3 * H + 60000, 2692, {}, bondLister(), 1))!).toMatchObject({ confirmed: 1, remaining: 0, completeAt: NOW + 3 * H + 60000 });
+  });
+
   it('carries the rest over under the cap and keeps the pass open until it is done', async () => {
     const db = testD1();
     const r1 = (await runBondListing(env(db), [], NOW, 2690, {}, bondLister(), 10))!;
