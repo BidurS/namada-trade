@@ -29,6 +29,11 @@ export interface TxCommitment {
 
 export interface DecodedTx {
   wrapperHash: string; // upper-case hex, equals the `hash` attribute of the tx/applied event
+  /**
+   * The account that paid the wrapper's fee: the implicit address of the fee payer's key in the header (null for a
+   * transaction that is not a wrapper). No event names it: the chain emits none for the fee itself.
+   */
+  feePayer: string | null;
   commitments: TxCommitment[];
   /** section hash -> { tag, codeHash } for Code sections (tag is e.g. "tx_unbond.wasm", codeHash the wasm checksum) */
   codes: Map<string, { tag: string | null; codeHash: string }>;
@@ -87,6 +92,18 @@ export function readAddress(r: Reader): string {
   return bech32m.encode('tnam', bech32m.toWords(raw), 100);
 }
 
+/**
+ * The implicit address of a public key as the header serialises it (`common::PublicKey`: the scheme tag, 0 Ed25519 or
+ * 1 Secp256k1, then the key): the first 20 bytes of its SHA-256, raw discriminant 0. Checked on the wrappers of
+ * blocks 6,957,587, 8,251,377 and 8,300,328: each key gives the account that unbonded or withdrew in it.
+ */
+export function implicitAddress(serializedKey: Uint8Array): string {
+  const raw = new Uint8Array(21);
+  raw[0] = 0; // Implicit
+  raw.set(sha256(serializedKey).subarray(0, 20), 1);
+  return bech32m.encode('tnam', bech32m.toWords(raw), 100);
+}
+
 /** Strip the CometBFT protobuf envelope (`0a <varint len> <bytes>`), if present. */
 export function unwrapTxBytes(raw: Uint8Array): Uint8Array {
   if (raw[0] !== 0x0a) return raw;
@@ -133,14 +150,17 @@ export function decodeNamadaTx(rawTx: Uint8Array): DecodedTx {
   for (let i = 0; i < n; i++) commitmentBytes.push(r.bytes(96));
   r.u8(); // atomic
   const txType = r.u8(); // 0 Raw, 1 Wrapper, 2 Protocol
+  let feePayer: string | null = null;
   if (txType === 1) {
     r.bytes(32); // fee.amount_per_gas_unit.amount (Uint)
     r.u8(); // fee.amount_per_gas_unit.denom
     readAddress(r); // fee.token
+    const pkStart = r.o;
     const pk = r.u8(); // 0 Ed25519(32) | 1 Secp256k1(33)
     if (pk === 0) r.bytes(32);
     else if (pk === 1) r.bytes(33);
     else throw new Error(`bad pk tag ${pk}`);
+    feePayer = implicitAddress(tx.subarray(pkStart, r.o));
     r.u64(); // gas_limit
   } else if (txType !== 0) {
     throw new Error(`unsupported tx_type ${txType}`);
@@ -166,7 +186,7 @@ export function decodeNamadaTx(rawTx: Uint8Array): DecodedTx {
   });
 
   // ---- Sections
-  const out: DecodedTx = { wrapperHash, commitments, codes: new Map(), data: new Map(), stoppedAt: null };
+  const out: DecodedTx = { wrapperHash, feePayer, commitments, codes: new Map(), data: new Map(), stoppedAt: null };
   const nSec = r.u32();
   for (let i = 0; i < nSec; i++) {
     const start = r.o;
@@ -214,3 +234,20 @@ export function decodeUnbond(data: Uint8Array): UnbondData {
 }
 
 export const txBytesFromBase64 = (b64: string): Uint8Array => base64.decode(b64);
+
+/**
+ * The fee payer of each wrapper among a block's txs (`/block` data.txs, base64), by wrapper hash. A tx that does not
+ * decode is left out, never guessed: its transfers' pool fee is then read from the events alone (parse/namada.ts).
+ */
+export function feePayersOf(txs: readonly string[]): Map<string, string> {
+  const out = new Map<string, string>();
+  for (const b64 of Array.isArray(txs) ? txs : []) {
+    try {
+      const tx = decodeNamadaTx(txBytesFromBase64(b64));
+      if (tx.feePayer) out.set(tx.wrapperHash, tx.feePayer);
+    } catch {
+      // not a wrapper this decoder reads
+    }
+  }
+  return out;
+}

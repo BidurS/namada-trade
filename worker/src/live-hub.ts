@@ -5,6 +5,7 @@ import { OSMOSIS, NAM, NAMADA } from './config';
 import { normFromWs, normFromTxSearch, parseOsmosisTx, type OsmoCtx } from './parse/osmosis';
 import { parseNamadaBlock } from './parse/namada';
 import { blockHasUnbond, parseNamadaUnbonds } from './parse/namada-unbond';
+import { feePayersOf } from './parse/namada-tx';
 import { blockMetas, blockResults, blockTxs, namadaStatusAny, RpcBreaker, LIVE_READ, type ReadOpts } from './sources/namada';
 import type { NamadaBlock } from './parse/namada';
 import { runBatch, stmt, kvGet, kvGetJson, kvSet } from './db';
@@ -305,10 +306,11 @@ export class LiveHub extends DurableObject<Env> {
   }
 
   /**
-   * One pass over the Namada blocks since the cursor. A block whose time, events or tx bytes cannot be fetched this
-   * tick, or whose rows cannot be written, is left for the next tick: the cursor never passes it. A block this parser
-   * cannot read as a block (a shape it does not know) is recorded as not scanned (kv `namada.scan`), since a retry
-   * would only stall the scan; so is a gap the scan jumps when it has fallen more than SCAN_MAX_LAG blocks behind.
+   * One pass over the Namada blocks since the cursor. A block whose time, events or unbonds' tx bytes cannot be
+   * fetched this tick, or whose rows cannot be written, is left for the next tick: the cursor never passes it. A block
+   * this parser cannot read as a block (a shape it does not know) is recorded as not scanned (kv `namada.scan`), since
+   * a retry would only stall the scan; so is a gap the scan jumps when it has fallen more than SCAN_MAX_LAG blocks
+   * behind.
    * Alerts go out after the cursor is written, so a slow webhook can hold up alerts, never the scan.
    */
   private async scanNamada() {
@@ -348,7 +350,18 @@ export class LiveHub extends DurableObject<Env> {
       let retryBlock = false;
       try {
         if (blk.events && blk.events.length > 0) {
-          const parsed = parseNamadaBlock(blk, this.lastPriceUsd);
+          let parsed = parseNamadaBlock(blk, this.lastPriceUsd);
+          // The shielded pool's fee is tied to the account that paid gas only when the wrapper names it (no event
+          // does): the block's tx bytes are fetched only for a block whose pool fee the events alone had to read.
+          // Bytes that cannot be fetched leave that reading (parse/namada.ts namFlows says what it cannot tell): a
+          // fee is never worth holding up the scan.
+          if (parsed.feePayerWanted.length) {
+            try {
+              parsed = parseNamadaBlock(blk, this.lastPriceUsd, feePayersOf(await blockTxs(h, read)));
+            } catch (e) {
+              console.error(`Namada block ${h}: tx bytes unavailable, the shielded pool's fee read from the events alone:`, e);
+            }
+          }
           // PoS unbond requests move no tokens: decode them from the block's tx bytes (only when a
           // tx/applied result touched an unbond key, so most blocks cost no extra RPC call).
           if (blockHasUnbond(blk)) {
