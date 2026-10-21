@@ -2,7 +2,7 @@ import { DurableObject } from 'cloudflare:workers';
 import type { Env } from './util';
 import type { LiveMessage, Flow } from '../../shared/types';
 import { OSMOSIS, NAM, NAMADA } from './config';
-import { normFromWs, normFromTxSearch, parseOsmosisTx, type OsmoCtx } from './parse/osmosis';
+import { normFromWs, normFromTxSearch, parseOsmosisTx, type OsmoCtx, type OsmoParsed } from './parse/osmosis';
 import { parseNamadaBlock } from './parse/namada';
 import { blockHasUnbond, parseNamadaUnbonds } from './parse/namada-unbond';
 import { feePayersOf } from './parse/namada-tx';
@@ -57,9 +57,16 @@ export class LiveHub extends DurableObject<Env> {
   private isPollingNamada = false;
   private seenOsmoTx = new Set<string>();
   /**
+   * Osmosis transactions whose write threw, by hash, until the catch-up search has them written whole and alerted.
+   * Each one's rows go to D1 in one batch (writeOsmoTx), so a write that threw left none of them or all of them (a
+   * batch can commit and then lose its answer): the search reads such a hash again even when its rows are stored,
+   * writes it only when they are not, and alerts it (the alert claims keep a move from being posted twice).
+   */
+  private osmoRetryTx = new Set<string>();
+  /**
    * The lowest height of a stream transaction whose rows could not be written since the last catch-up search that
    * covered it, and a count of such failures: the next search reads from below that height, and a complete search
-   * clears it only when no write failed after the search began.
+   * clears it (and osmoRetryTx) only when no write failed after the search began.
    */
   private osmoRetryFrom: number | null = null;
   private osmoRetryGen = 0;
@@ -187,9 +194,11 @@ export class LiveHub extends DurableObject<Env> {
 
     // Deduplicate multiple WS subscription matches for the same Osmosis tx hash. The hash is held while the
     // transaction is written (the other subscriptions' copies of it return here) and stays seen only once its rows
-    // are written: the catch-up search skips a seen hash.
+    // are written: the catch-up search skips a seen hash. A copy arriving after its write threw leaves it to the
+    // search (osmoRetryTx), which knows whether that write stored its rows: writing them again would count its
+    // address links twice.
     if (norm.hash) {
-      if (this.seenOsmoTx.has(norm.hash)) return;
+      if (this.seenOsmoTx.has(norm.hash) || this.osmoRetryTx.has(norm.hash)) return;
       this.seenOsmoTx.add(norm.hash);
       if (this.seenOsmoTx.size > 1000) {
         const oldest = this.seenOsmoTx.values().next().value;
@@ -202,22 +211,16 @@ export class LiveHub extends DurableObject<Env> {
     const parsed = parseOsmosisTx(norm, this.osmoCtx);
     if (!parsed.flows.length && !parsed.moves.length) return;
 
-    // Persist to D1. A write that fails (a transient D1 error) leaves nothing stored, broadcast or alerted: the hash
-    // is forgotten, so the catch-up search reads the transaction again, from below its height even when its cursor
-    // has passed it (a search that ran meanwhile skipped the hash as seen), and alerts it as found late. A parse that
-    // throws is not retried: it would throw the same way again.
+    // Persist to D1, in one batch. A write that fails (a transient D1 error) is neither broadcast nor alerted, and it
+    // stored none of the transaction's rows or, when the batch committed and its answer was lost, all of them: the
+    // hash is forgotten as seen and kept for a retry, so the catch-up search reads the transaction again, from below
+    // its height even when its cursor has passed it (a search that ran meanwhile skipped the hash as seen), writes
+    // it if nothing of it is stored, and alerts it as found late. A parse that throws is not retried: it would throw
+    // the same way again.
     try {
-      await runBatch(this.env.DB, [
-        ...parsed.flows.map(stmt.flow),
-        ...parsed.moves.map(stmt.move),
-        ...parsed.links.map(stmt.link),
-      ]);
+      await this.writeOsmoTx(parsed);
     } catch (e) {
-      if (norm.hash) this.seenOsmoTx.delete(norm.hash);
-      if (Number.isFinite(norm.height) && norm.height > 0) {
-        this.osmoRetryFrom = Math.min(this.osmoRetryFrom ?? norm.height, norm.height);
-        this.osmoRetryGen += 1;
-      }
+      this.noteOsmoWriteFailed(norm.hash, norm.height);
       throw e;
     }
 
@@ -225,6 +228,30 @@ export class LiveHub extends DurableObject<Env> {
     this.broadcast({ type: 'flows', flows: parsed.flows });
 
     await this.alertFlows(parsed.flows);
+  }
+
+  /**
+   * One Osmosis transaction's rows in one D1 batch, which D1 runs as one transaction: a write that fails stores
+   * none of them (in runBatch's 80-statement batches the first ones of a large transaction, a relayer's many receives
+   * or a multi-send, would stay stored on their own, and the rest be lost).
+   */
+  private async writeOsmoTx(parsed: OsmoParsed) {
+    const stmts = [...parsed.flows.map(stmt.flow), ...parsed.moves.map(stmt.move), ...parsed.links.map(stmt.link)];
+    await runBatch(this.env.DB, stmts, Math.max(1, stmts.length));
+  }
+
+  /** A write of Osmosis transaction `hash` at `height` threw: the next catch-up search reads it again (osmoRetryTx). */
+  private noteOsmoWriteFailed(hash: string, height: number) {
+    if (hash) {
+      this.seenOsmoTx.delete(hash);
+      this.osmoRetryTx.add(hash);
+      if (this.osmoRetryTx.size > 1000) {
+        const oldest = this.osmoRetryTx.values().next().value;
+        if (oldest) this.osmoRetryTx.delete(oldest);
+      }
+    }
+    if (Number.isFinite(height) && height > 0) this.osmoRetryFrom = Math.min(this.osmoRetryFrom ?? height, height);
+    this.osmoRetryGen += 1;
   }
 
   /**
@@ -435,8 +462,9 @@ export class LiveHub extends DurableObject<Env> {
   /**
    * The catch-up search: the stream is not a ledger (a dropped connection or a missed message loses a transaction,
    * as on 2026-10-17 a 20,000 NAM bridge send was lost). Each query is searched newest first until it reaches the
-   * height already covered; transactions not yet in `flows` are parsed and written with their block time. The
-   * cursor moves to the head read at the start only when every query answered.
+   * height already covered; transactions not yet in `flows` are parsed and written with their block time, and those
+   * whose write threw (osmoRetryTx) are alerted even when that write stored them. The cursor moves to the head read
+   * at the start only when every query answered.
    */
   private async sweepOsmosis() {
     const prev = await kvGetJson<OsmosisCursor>(this.env.DB, 'osmosis.cursor');
@@ -480,7 +508,10 @@ export class LiveHub extends DurableObject<Env> {
     }
     const times = new Map<number, number>();
     for (const [hash, t] of found) {
-      if (have.has(hash) || this.seenOsmoTx.has(hash)) continue;
+      if (this.seenOsmoTx.has(hash)) continue;
+      // A transaction whose write threw (osmoRetryTx) is read again though rows of it are stored: that write stored
+      // all of its rows (one batch), so they are not written again, but nothing alerted them.
+      if (have.has(hash) && !this.osmoRetryTx.has(hash)) continue;
       const h = Number(t.height);
       if (!times.has(h)) {
         const b = await get(`/block?height=${h}`).catch(() => null);
@@ -491,9 +522,17 @@ export class LiveHub extends DurableObject<Env> {
       const parsed = parseOsmosisTx(normFromTxSearch(t, times.get(h)!), this.osmoCtx);
       if (!parsed.flows.length && !parsed.moves.length) continue;
       for (const f of parsed.flows) f.meta = { ...(f.meta ?? {}), tsSource: 'block', via: 'catch-up search' };
-      await runBatch(this.env.DB, [...parsed.flows.map(stmt.flow), ...parsed.moves.map(stmt.move), ...parsed.links.map(stmt.link)]);
+      if (!have.has(hash)) {
+        try {
+          await this.writeOsmoTx(parsed);
+        } catch (e) {
+          this.noteOsmoWriteFailed(hash, h);
+          throw e;
+        }
+        added += parsed.flows.length;
+      }
       this.seenOsmoTx.add(hash);
-      added += parsed.flows.length;
+      this.osmoRetryTx.delete(hash);
       if (parsed.flows.length) this.broadcast({ type: 'flows', flows: parsed.flows });
       // Owner decision 14: a move the live stream missed still alerts, marked as found late (discord.ts), unless
       // it is older than LATE_ALERT_MAX_AGE_MS, so a long outage does not flood the channels with old news.
@@ -501,7 +540,7 @@ export class LiveHub extends DurableObject<Env> {
       if (recent.length) await this.alertFlows(recent).catch((e) => console.error('late alert:', e));
     }
     if (head > this.osmoHeight) this.osmoHeight = head;
-    if (complete && this.osmoRetryGen === retryGen) this.osmoRetryFrom = null;
+    if (complete && this.osmoRetryGen === retryGen) { this.osmoRetryFrom = null; this.osmoRetryTx.clear(); }
     const next: OsmosisCursor = complete
       ? { height: head, at: Date.now(), added }
       : { height: prev?.height ?? 0, at: prev?.at ?? 0, added, error: 'The last catch-up search did not finish; it is retried.' };

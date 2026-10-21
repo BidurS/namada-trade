@@ -234,7 +234,7 @@ describe('an Osmosis stream transaction whose write fails is read again by the c
     }));
     const hub: any = Object.assign(Object.create(LiveHub.prototype), {
       env: { DB: db, DISCORD_WEBHOOK_URL: OP },
-      seenOsmoTx: new Set<string>(), osmoRetryFrom: null, osmoRetryGen: 0, osmoHeight: 0, sessions: new Set(), lastPriceUsd: null,
+      seenOsmoTx: new Set<string>(), osmoRetryTx: new Set<string>(), osmoRetryFrom: null, osmoRetryGen: 0, osmoHeight: 0, sessions: new Set(), lastPriceUsd: null,
       osmoCtx: { poolAddrs: new Map(), priceUsd: null, assets: new Map() },
     });
     const rows = () => real.raw.prepare('SELECT COUNT(*) AS n FROM flows WHERE tx_hash = ?').get(hash.toUpperCase()).n as number;

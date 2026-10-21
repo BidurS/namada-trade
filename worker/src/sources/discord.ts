@@ -135,14 +135,17 @@ export async function claimDiscordAlert(
 
 /**
  * Each key claimed on its own, where claimDiscordAlert takes a set together: the keys this caller is the first to
- * claim. Fails open the same way: when D1 cannot be written, every key the memory lock let through counts as claimed.
+ * claim. Fails open the same way, for the keys D1 has not answered: when a batch cannot be written, its keys and
+ * those of the batches after it count as claimed (the memory lock let them through), while a key an earlier batch
+ * found claimed stays refused (another record of the same crossing has posted to that channel).
  */
 async function claimEach(db: D1Database | undefined, keys: string[], now = Date.now()): Promise<Set<string>> {
   const fresh = keys.filter((k) => checkMemoryLock([k]));
   if (!db || !fresh.length) return new Set(fresh);
   const won = new Set<string>();
+  let i = 0;
   try {
-    for (let i = 0; i < fresh.length; i += 80) {
+    for (; i < fresh.length; i += 80) {
       const part = fresh.slice(i, i + 80);
       const res = await db.batch(part.map((k) => db.prepare('INSERT OR IGNORE INTO kv (key, value, updated_at) VALUES (?, ?, ?)').bind(k, '1', now)));
       part.forEach((k, j) => { if (Number(res[j]?.meta?.changes ?? 0) > 0) won.add(k); });
@@ -150,7 +153,8 @@ async function claimEach(db: D1Database | undefined, keys: string[], now = Date.
     return won;
   } catch (err) {
     console.error('claimDiscordAlert error:', err);
-    return new Set(fresh);
+    for (const k of fresh.slice(i)) won.add(k);
+    return won;
   }
 }
 
