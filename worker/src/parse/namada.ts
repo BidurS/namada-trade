@@ -37,9 +37,40 @@ function tokenMeta(tokenAddr: string) {
   return NAMADA_TOKENS[tokenAddr] || { symbol: tokenAddr.slice(0, 8) + '…', decimals: 6 };
 }
 
-function toTokenUnits(raw: string, decimals = 6): number {
+function toTokenUnits(raw: bigint, decimals = 6): number {
   return Number(raw) / 10 ** decimals;
 }
+
+/** A whole number of base units as the chain writes it, or null for anything else (never read as a guess). */
+const unitsOf = (s: string): bigint | null => (/^\d+$/.test(s) ? BigInt(s) : null);
+
+/** One (account, token) side of a token/transfer event with a readable, non-zero amount. */
+interface Leg {
+  account: string;
+  token: string;
+  units: bigint;
+}
+
+function legs(json: string | undefined): Leg[] {
+  const out: Leg[] = [];
+  for (const x of entries(json)) {
+    const units = unitsOf(x.amount);
+    if (units !== null && units > 0n) out.push({ account: x.account, token: x.token, units });
+  }
+  return out;
+}
+
+const byUnitsDesc = (a: Leg, b: Leg) => (b.units > a.units ? 1 : b.units < a.units ? -1 : 0);
+
+/**
+ * The largest NAM leg the shielded pool can pay one other account in a transfer and still be read as that
+ * transfer's fee (the pool pays the gas payer) rather than as NAM leaving the pool. The fee legs on record are
+ * 0.084159 NAM (block 8,294,006), 0.1 (7,011,473) and 0.144159 (8,288,955); the 4,631 fee legs the shielded-pool
+ * history step found averaged 0.76 NAM (docs/decisions.md). A larger leg is a flow of its own, so a side leg can
+ * never carry a real move out of sight: at most this much per transfer is ever filed as a fee.
+ */
+export const MASP_FEE_CAP_NAM = 5;
+const MASP_FEE_CAP = BigInt(MASP_FEE_CAP_NAM) * 1_000_000n;
 
 function attrs(e: RawEvent): Record<string, string> {
   const o: Record<string, string> = {};
@@ -96,16 +127,31 @@ export function classify(descriptor: string, from: string | null, to: string | n
 interface Packet {
   sender: string;
   receiver: string;
+  /** base units, as the packet carries them */
   amount: string;
   denom: string;
   dir: 'out' | 'in';
-  hash: string;
+  /**
+   * The inner transaction that sent or received the packet. A packet belongs to the transfer of the same inner
+   * transaction and to no other: the wrapper hash is shared by every inner transaction of a relayer's batch.
+   */
+  innerHash: string;
+  /** false when the ICS-20 receive callback of the same inner transaction reported a failure (nothing was credited) */
+  ok: boolean;
 }
 
 function ibcPackets(block: NamadaBlock): Packet[] {
+  // The ICS-20 callback's verdict per receiving inner transaction (fungible_token_packet `success`).
+  const failed = new Set<string>();
+  for (const e of block.events) {
+    if (e?.type !== 'fungible_token_packet') continue;
+    const a = attrs(e);
+    const inner = (a['inner-tx-hash'] || '').toUpperCase();
+    if (inner && a.success !== undefined && a.success !== 'true') failed.add(inner);
+  }
   const out: Packet[] = [];
   for (const e of block.events) {
-    if (e.type !== 'send_packet' && e.type !== 'recv_packet') continue;
+    if (e?.type !== 'send_packet' && e?.type !== 'recv_packet') continue;
     const a = attrs(e);
     const dir = e.type === 'send_packet' ? 'out' : 'in';
     const ch = dir === 'out' ? a.packet_src_channel : a.packet_dst_channel;
@@ -116,23 +162,164 @@ function ibcPackets(block: NamadaBlock): Packet[] {
     } catch {
       continue;
     }
-    if (!pd?.sender || !pd?.receiver) continue;
+    if (typeof pd?.sender !== 'string' || typeof pd?.receiver !== 'string' || !pd.sender || !pd.receiver) continue;
+    const innerHash = (a['inner-tx-hash'] || '').toUpperCase();
     out.push({
       sender: pd.sender,
       receiver: pd.receiver,
       amount: String(pd.amount || '0'),
       denom: String(pd.denom || ''),
       dir,
-      hash: String(a.hash || a['inner-tx-hash'] || '').toUpperCase(),
+      innerHash,
+      ok: !(innerHash && failed.has(innerHash)),
     });
   }
   return out;
+}
+
+/** NAM as an ICS-20 denom: native when Namada sends it, with the counterparty's trace prefix when it comes back. */
+const isNamDenom = (denom: string) => denom === NAM.namadaToken || denom.endsWith(`/${NAM.namadaToken}`);
+
+/**
+ * The NAM legs of a transfer of another coin are the shielded pool's fee for it (the pool pays the gas payer, block
+ * 8,294,006) only when that is all they can be: one leg out of the pool, the same amount into one other account, at
+ * most MASP_FEE_CAP_NAM. Anything else is NAM that moved and gets flows of its own.
+ */
+function maspFeeOf(src: Leg[], dst: Leg[]): bigint | null {
+  if (src.length !== 1 || dst.length !== 1) return null;
+  const [s] = src;
+  const [d] = dst;
+  return s.account === I.masp && d.account !== I.masp && s.units === d.units && s.units <= MASP_FEE_CAP ? s.units : null;
+}
+
+/**
+ * Who paid whom in one token's legs. The event lists its sources and its targets per account, not the pairs:
+ * - one source: one leg per target, from that source, with the target's own amount (exact);
+ * - one target: one leg per source, to that target, with the source's own amount (exact);
+ * - several of each: sources and targets are paired largest with largest. Every account's sent and received total
+ *   and the shielded pool's own legs stay exact; the pairs are a reading, said in meta.pairing.
+ * A side with no legs at all (the chain names none) gives legs with that end left null.
+ */
+function pairLegs(s: Leg[], d: Leg[]): { legs: { from: string | null; to: string | null; units: bigint }[]; assumed: boolean } {
+  if (!s.length) return { legs: d.map((t) => ({ from: null, to: t.account, units: t.units })), assumed: false };
+  if (!d.length) return { legs: s.map((x) => ({ from: x.account, to: null, units: x.units })), assumed: false };
+  if (s.length === 1) return { legs: d.map((t) => ({ from: s[0].account, to: t.account, units: t.units })), assumed: false };
+  if (d.length === 1) return { legs: s.map((x) => ({ from: x.account, to: d[0].account, units: x.units })), assumed: false };
+  const out: { from: string | null; to: string | null; units: bigint }[] = [];
+  let i = 0;
+  let j = 0;
+  let ri = s[0].units;
+  let rj = d[0].units;
+  while (i < s.length && j < d.length) {
+    const u = ri < rj ? ri : rj;
+    out.push({ from: s[i].account, to: d[j].account, units: u });
+    ri -= u;
+    rj -= u;
+    if (ri === 0n && ++i < s.length) ri = s[i].units;
+    if (rj === 0n && ++j < d.length) rj = d[j].units;
+  }
+  return { legs: out, assumed: true };
 }
 
 export function parseNamadaBlock(block: NamadaBlock, priceUsd: number | null): NamadaParsed {
   const out: NamadaParsed = { moves: [], flows: [], balances: [], links: [] };
   const packets = ibcPackets(block);
   const usedPackets = new Set<number>();
+
+  /**
+   * The packet of a bridge leg: sent or received by the same inner transaction, on the Osmosis channel, NAM, the
+   * leg's own amount, and the leg's account as its sender (out) or receiver (in). None that fits: the leg keeps the
+   * escrow as its other end and nothing is linked, never another transfer's packet.
+   */
+  const bindPacket = (want: 'out' | 'in', innerTxHash: string, from: string | null, to: string | null, units: bigint): Packet | null => {
+    if (!innerTxHash) return null;
+    const k = packets.findIndex(
+      (p, n) =>
+        !usedPackets.has(n) &&
+        p.dir === want &&
+        p.innerHash === innerTxHash &&
+        p.ok &&
+        isNamDenom(p.denom) &&
+        unitsOf(p.amount) === units &&
+        (want === 'out' ? p.sender === from : p.receiver === to),
+    );
+    if (k < 0) return null;
+    usedPackets.add(k);
+    return packets[k];
+  };
+
+  /**
+   * The NAM flows of one event's NAM legs, one per leg (pairLegs). The first keeps the id `idBase`, so an event with
+   * one source and one target is written as before; the others are `idBase:<n>`.
+   *
+   * The shielded pool's fee: an unshield (the pool the only source) usually carries a second, small target, the gas
+   * payer the pool pays for the transaction (blocks 8,288,955, 7,011,473), and a shield from one account can carry a
+   * small side output (4,707,359). The smallest such leg is kept in the first flow's meta (maspFeeNam, otherNam) when
+   * it is at most MASP_FEE_CAP_NAM, so pool accounting can add it back; any other leg is a flow of its own.
+   */
+  const namFlows = (idBase: string, txHash: string, innerTxHash: string, descriptor: string, src: Leg[], dst: Leg[]) => {
+    if (!src.length && !dst.length) return;
+    const s = [...src].sort(byUnitsDesc);
+    const d = [...dst].sort(byUnitsDesc);
+    let maspFee: bigint | null = null;
+    let other: bigint | null = null;
+    if (s.length === 1 && d.length > 1) {
+      const side = d[d.length - 1];
+      if (side.account !== I.masp && side.units <= MASP_FEE_CAP) {
+        if (s[0].account === I.masp) maspFee = side.units;
+        else if (d[0].account === I.masp) other = side.units;
+        if (maspFee !== null || other !== null) d.pop();
+      }
+    }
+    const { legs: pairs, assumed } = pairLegs(s, d);
+    pairs.forEach((l, k) => {
+      const amount = toNam(l.units);
+      const kind = classify(descriptor, l.from, l.to);
+      let flowFrom = l.from;
+      let flowTo = l.to;
+      const meta: Record<string, unknown> = {
+        descriptor,
+        ...(innerTxHash ? { innerTxHash } : {}),
+        ...(k === 0 && maspFee !== null ? { maspFeeNam: toNam(maspFee) } : {}),
+        ...(k === 0 && other !== null ? { otherNam: toNam(other) } : {}),
+        ...(assumed ? { pairing: 'largest-first' } : {}),
+      };
+
+      // Pair with the IBC packet of the same inner transaction (including a direct IBC -> MASP shield, escrow -> pool)
+      if (kind === 'ibc_out' || kind === 'ibc_in') {
+        const want = kind === 'ibc_out' ? 'out' : 'in';
+        const p = bindPacket(want, innerTxHash, l.from, l.to, l.units);
+        if (p && want === 'out') {
+          // No link from a send: the receiver is text the sender chose, and a send that times out is refunded.
+          flowTo = p.receiver;
+          meta.escrow = I.ibc;
+        } else if (p) {
+          flowFrom = p.sender;
+          meta.escrow = I.ibc;
+          // The NAM arrived here: this is the one record that links the osmo1 sender to the tnam1 receiver. Two real
+          // accounts only (the checksum), never the shielded pool.
+          if (isRealAddress(p.sender) === 'osmosis' && isRealAddress(p.receiver) === 'namada' && p.receiver !== I.masp) {
+            out.links.push({ osmo: p.sender, namada: p.receiver, amount, ts: block.ts });
+          }
+        }
+      }
+
+      out.flows.push({
+        id: k === 0 ? idBase : `${idBase}:${k}`,
+        chain: 'namada',
+        height: block.height,
+        ts: block.ts,
+        txHash,
+        kind,
+        from: flowFrom,
+        to: flowTo,
+        amount,
+        priceUsd,
+        valueUsd: priceUsd != null ? priceUsd * amount : null,
+        meta,
+      });
+    });
+  };
 
   block.events.forEach((e, i) => {
     // Handle IBC-MASP mint/burn of non-NAM IBC tokens (e.g. direct IBC shield/unshield of OSMO/USDC)
@@ -147,13 +334,17 @@ export function parseNamadaBlock(block: NamadaBlock, priceUsd: number | null): N
       const wrapperHash = (a.hash || a['inner-tx-hash'] || `blk${block.height}`).toUpperCase();
       const innerTxHash = (a['inner-tx-hash'] || '').toUpperCase();
       const tMeta = tokenMeta(tokenAddr);
-      const tokenAmt = toTokenUnits(a.amount || '0', tMeta.decimals);
+      const units = unitsOf(a.amount || '0');
+      const tokenAmt = units === null ? 0 : toTokenUnits(units, tMeta.decimals);
       if (tokenAmt <= 0) return;
 
       const isShield = e.type === 'token/mint';
-      const pkt = packets.find(
-        (p) => p.dir === (isShield ? 'in' : 'out') && (!p.hash || p.hash === wrapperHash),
-      );
+      // The packet of the same inner transaction only (see Packet.innerHash); none: the escrow stands for the other end.
+      const pi = innerTxHash
+        ? packets.findIndex((p, n) => !usedPackets.has(n) && p.dir === (isShield ? 'in' : 'out') && p.innerHash === innerTxHash && p.ok)
+        : -1;
+      if (pi >= 0) usedPackets.add(pi);
+      const pkt = pi >= 0 ? packets[pi] : undefined;
 
       out.flows.push({
         id: `namada:${wrapperHash}:ibcmasp:${i}`,
@@ -192,8 +383,8 @@ export function parseNamadaBlock(block: NamadaBlock, priceUsd: number | null): N
       out.balances.push({ address: p.account, balance: p.amount, height: block.height });
     }
 
-    const allSrc = entries(a['source-accounts']).filter((x) => x.amount !== '0');
-    const allDst = entries(a['target-accounts']).filter((x) => x.amount !== '0');
+    const allSrc = legs(a['source-accounts']);
+    const allDst = legs(a['target-accounts']);
 
     const namSrc = allSrc.filter((x) => x.token === NAM.namadaToken);
     const namDst = allDst.filter((x) => x.token === NAM.namadaToken);
@@ -201,8 +392,8 @@ export function parseNamadaBlock(block: NamadaBlock, priceUsd: number | null): N
     const nonNamDst = allDst.filter((x) => x.token !== NAM.namadaToken);
 
     // Record NAM balance moves
-    namSrc.forEach((s, j) => out.moves.push(mv(block, txHash, i * 100 + j, s.account, -toNam(s.amount))));
-    namDst.forEach((d, j) => out.moves.push(mv(block, txHash, i * 100 + 50 + j, d.account, toNam(d.amount))));
+    namSrc.forEach((s, j) => out.moves.push(mv(block, txHash, i * 100 + j, s.account, -toNam(s.units))));
+    namDst.forEach((d, j) => out.moves.push(mv(block, txHash, i * 100 + 50 + j, d.account, toNam(d.units))));
 
     // Case A: Non-NAM token transfer (e.g. shielding/unshielding OSMO, USDC, ATOM on Namada)
     if (nonNamSrc.length > 0 || nonNamDst.length > 0) {
@@ -213,10 +404,11 @@ export function parseNamadaBlock(block: NamadaBlock, priceUsd: number | null): N
       const from = s0?.account ?? null;
       const to = d0?.account ?? null;
       const tokenAmt = Math.max(
-        nonNamSrc.reduce((s, x) => s + toTokenUnits(x.amount, tMeta.decimals), 0),
-        nonNamDst.reduce((s, x) => s + toTokenUnits(x.amount, tMeta.decimals), 0),
+        nonNamSrc.reduce((s, x) => s + toTokenUnits(x.units, tMeta.decimals), 0),
+        nonNamDst.reduce((s, x) => s + toTokenUnits(x.units, tMeta.decimals), 0),
       );
-      const feeNam = namSrc.reduce((s, x) => s + toNam(x.amount), 0);
+      // The NAM legs of the same event: the pool's fee for it when that is all they can be, else NAM flows of their own.
+      const feeUnits = maspFeeOf(namSrc, namDst);
       const kind = classify(descriptor, from, to);
 
       out.flows.push({
@@ -237,90 +429,17 @@ export function parseNamadaBlock(block: NamadaBlock, priceUsd: number | null): N
           descriptor,
           tokenSymbol: tMeta.symbol,
           tokenAddress: tokenAddr,
-          feeNam: feeNam > 0 ? feeNam : undefined,
+          feeNam: feeUnits !== null ? toNam(feeUnits) : undefined,
           innerTxHash: innerTxHash || undefined,
         },
       });
+      // `:nam` keeps these ids apart from every Case B id of the block (`namada:<hash>:<i>[:<n>]`).
+      if (feeUnits === null) namFlows(`namada:${txHash}:${i}:nam`, txHash, innerTxHash, descriptor, namSrc, namDst);
       return;
     }
 
     // Case B: Pure NAM transfer
-    if (!namSrc.length && !namDst.length) return;
-
-    // When unshielding NAM from MASP, Namada may include a tiny fee output first and the user output second!
-    // Pick the largest target account when source is MASP so we don't mistake the gas fee for the recipient.
-    const sortedSrc = [...namSrc].sort((a, b) => toNam(b.amount) - toNam(a.amount));
-    const sortedDst = [...namDst].sort((a, b) => toNam(b.amount) - toNam(a.amount));
-    const sumSrc = namSrc.reduce((s, x) => s + toNam(x.amount), 0);
-    const sumDst = namDst.reduce((s, x) => s + toNam(x.amount), 0);
-
-    const from = sortedSrc[0]?.account ?? null;
-    const to = sortedDst[0]?.account ?? null;
-    // The flow's amount is its main leg. Whatever else left or entered the MASP in the same transfer (the fee the
-    // MASP pays to the gas payer, a side output of a mixed transfer) is kept in meta so pool accounting can add it back.
-    let amount = Math.max(sumSrc, sumDst);
-    let maspFeeNam: number | undefined;
-    let otherNam: number | undefined;
-    if (from === I.masp && sortedDst.length > 1) {
-      amount = toNam(sortedDst[0].amount);
-      maspFeeNam = sumSrc - amount;
-    } else if (to === I.masp && sortedDst.length > 1) {
-      amount = toNam(sortedDst[0].amount);
-      otherNam = sumDst - amount;
-    }
-    const kind = classify(descriptor, from, to);
-
-    let flowFrom = from;
-    let flowTo = to;
-    const meta: Record<string, unknown> = {
-      descriptor,
-      ...(innerTxHash ? { innerTxHash } : {}),
-      ...(maspFeeNam && maspFeeNam > 0 ? { maspFeeNam } : {}),
-      ...(otherNam && otherNam > 0 ? { otherNam } : {}),
-    };
-
-    // Pair with IBC packet (including direct IBC -> MASP shield where from === I.ibc && to === I.masp)
-    if (kind === 'ibc_out' || kind === 'ibc_in') {
-      const want = kind === 'ibc_out' ? 'out' : 'in';
-      const pi = packets.findIndex(
-        (p, k) =>
-          !usedPackets.has(k) &&
-          p.dir === want &&
-          (want === 'out' ? p.sender === from : p.receiver === to),
-      );
-      if (pi >= 0) {
-        usedPackets.add(pi);
-        const p = packets[pi];
-        if (want === 'out') {
-          // No link from a send: the receiver is text the sender chose, and a send that times out is refunded.
-          flowTo = p.receiver;
-          meta.escrow = I.ibc;
-        } else {
-          flowFrom = p.sender;
-          meta.escrow = I.ibc;
-          // The NAM arrived here: this is the one record that links the osmo1 sender to the tnam1 receiver. Two real
-          // accounts only (the checksum), never the shielded pool.
-          if (isRealAddress(p.sender) === 'osmosis' && isRealAddress(p.receiver) === 'namada' && p.receiver !== I.masp) {
-            out.links.push({ osmo: p.sender, namada: p.receiver, amount, ts: block.ts });
-          }
-        }
-      }
-    }
-
-    out.flows.push({
-      id: `namada:${txHash}:${i}`,
-      chain: 'namada',
-      height: block.height,
-      ts: block.ts,
-      txHash,
-      kind,
-      from: flowFrom,
-      to: flowTo,
-      amount,
-      priceUsd,
-      valueUsd: priceUsd != null ? priceUsd * amount : null,
-      meta,
-    });
+    namFlows(`namada:${txHash}:${i}`, txHash, innerTxHash, descriptor, namSrc, namDst);
   });
 
   // Keep only the last post-balance per address within the block

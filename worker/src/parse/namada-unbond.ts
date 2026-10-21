@@ -7,9 +7,12 @@
  *      so the extra `/block` fetch only happens for such blocks) and which (source, validator) pair it touched.
  *   2. The block's tx bytes are borsh-decoded (parse/namada-tx.ts); the Data section referenced by the applied
  *      inner tx's commitment is decoded as `Unbond { validator, amount, source }`.
- *   3. Withdraws also touch `unbond/…` keys (they delete them), so the inner tx's Code section tag decides:
- *      only `tx_unbond.wasm` is decoded; other tags are counted in `skipped`. A flow is emitted only when the
- *      decoded (source, validator) matches the changed key for that inner hash.
+ *   3. Withdraws also touch `unbond/…` keys (they delete them), so the code the inner tx ran decides: a known
+ *      `tx_unbond.wasm` checksum (UNBOND_CODE_HASHES) is decoded whatever tag the signer wrote on its Code section,
+ *      and so is a section tagged `tx_unbond.wasm` (a newer unbond wasm than the list knows); other tagged code is
+ *      counted in `skipped`, and untagged code the list does not know is reported in `undecoded`. A flow is
+ *      emitted only when the bytes decode exactly as an Unbond and the decoded (source, validator) matches the
+ *      changed key for that inner hash.
  *      Rows use the same id/meta scheme as the indexer backfill (scripts/backfill-history.ts step `pos`):
  *      id `namada:<INNER_HASH>:pos`, from = PoS, to = delegator, meta.validator / meta.wrapper / meta.tsSource.
  *
@@ -24,6 +27,13 @@ import { decodeNamadaTx, decodeUnbond, txBytesFromBase64 } from './namada-tx';
 const POS = NAMADA.internal.pos;
 /** Tag the Namada SDK puts on the Code section of an unbond (the wasm file name; its hash is recorded in meta.code). */
 const UNBOND_WASM = 'tx_unbond.wasm';
+/**
+ * Checksums of tx_unbond.wasm: the code the chain runs for an unbond, whatever the signer wrote in the Code section's
+ * tag (the tag is the signer's own text and may be left out). 36E77435… is checksums.current['tx_unbond.wasm'] of
+ * indexer.namada.net /chain/parameters, and the code of the unbonds in blocks 6,957,587 (2026-06-17) and 8,300,328
+ * (2026-10-16). A protocol upgrade that ships a new tx_unbond.wasm adds its checksum here.
+ */
+export const UNBOND_CODE_HASHES: ReadonlySet<string> = new Set(['36E774350B865752C9D309D518223ABF0A60374BAE15A1F73DFE4721B5887048']);
 
 interface AppliedInner {
   wrapperHash: string;
@@ -76,7 +86,7 @@ export interface UnbondParse {
   flows: Flow[];
   /** Applied inner txs that touched unbond keys but could not be turned into a flow, with the reason */
   undecoded: { innerHash: string; wrapperHash: string; reason: string }[];
-  /** Applied inner txs that touched unbond keys but are not unbonds (e.g. tx_withdraw.wasm), by code tag */
+  /** Applied inner txs that touched unbond keys but ran tagged code that is not an unbond (e.g. tx_withdraw.wasm), by tag */
   skipped: Record<string, number>;
 }
 
@@ -112,9 +122,15 @@ export function parseNamadaUnbonds(block: NamadaBlock, txsB64: string[], priceUs
       out.undecoded.push({ ...a, reason: `code section ${hit.codeHash.slice(0, 8)} not decoded${hit.tx.stoppedAt ? ` (stopped at ${hit.tx.stoppedAt})` : ''}` });
       continue;
     }
-    if (code.tag !== UNBOND_WASM) {
-      const k = code.tag ?? `untagged:${code.codeHash.slice(0, 8)}`;
-      out.skipped[k] = (out.skipped[k] ?? 0) + 1;
+    // The executed code decides, not the tag alone: a known unbond checksum is decoded with any tag or none.
+    if (!UNBOND_CODE_HASHES.has(code.codeHash) && code.tag !== UNBOND_WASM) {
+      if (code.tag === null) {
+        // No tag and a code the list does not know, on an inner tx that changed unbond keys: possibly an unbond under
+        // a newer checksum. Reported (the health view shows it), never dropped in silence and never decoded on a guess.
+        out.undecoded.push({ ...a, reason: `untagged code ${code.codeHash.slice(0, 8)} is not a known ${UNBOND_WASM} checksum` });
+        continue;
+      }
+      out.skipped[code.tag] = (out.skipped[code.tag] ?? 0) + 1;
       continue;
     }
     const data = hit.tx.data.get(hit.dataHash);
