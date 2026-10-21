@@ -12,6 +12,9 @@ const explorerHashOf = (f: { txHash: string; meta?: Record<string, unknown> | nu
   const w = f.meta?.wrapper;
   return typeof w === 'string' && /^[0-9a-fA-F]{64}$/.test(w) ? w.toUpperCase() : f.txHash;
 };
+/** As shared/flow-rules.ts isOtherCoin (copied, for the same reason): a move in another coin than NAM (shielded
+    USDC, OSMO…) carries meta.tokenSymbol, and its amount is in that coin's units. */
+const isOtherCoin = (f: { meta?: Record<string, unknown> | null }): boolean => !!f.meta?.tokenSymbol;
 
 export const INTERNAL_ADDRESSES = {
   pos: 'tnam1qgqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqc8j2fp',
@@ -125,6 +128,9 @@ export function alertRules(th: AlertThresholds = DEFAULT_THRESHOLDS): AlertRuleI
 }
 
 export function evaluateFlow(f: Flow, th: AlertThresholds = DEFAULT_THRESHOLDS): AlertHit[] {
+  // Every rule's size and words are NAM (a hit says "<n> NAM" and carries amountNam): a move in another coin is no
+  // hit at any size, as 50,000 OSMO leaving the shielded set is not 50,000 NAM.
+  if (isOtherCoin(f)) return [];
   const hits: AlertHit[] = [];
   for (const r of RULES) {
     const m = r.test(f, th[r.key]);

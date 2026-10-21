@@ -1,4 +1,4 @@
-import { explorerHashOf } from '../../../shared/flow-rules';
+import { explorerHashOf, isOtherCoin } from '../../../shared/flow-rules';
 import type { Flow, ForumPost, GovernanceProposal } from '../../../shared/types';
 import { safeHttpUrl } from '../../../shared/flow-rules';
 import { EXPLORERS, NAMADA } from '../config';
@@ -101,8 +101,10 @@ function checkMemoryLock(keys: string[]): boolean {
 }
 
 /**
- * Atomically claim an alert key in D1 `kv` table using INSERT OR IGNORE.
- * Returns true if this caller is the FIRST to claim the alert key, false if already sent.
+ * Atomically claim alert keys in the D1 `kv` table with INSERT OR IGNORE. True when this caller is the first to
+ * claim every key, false when any was claimed before (already sent), so offering the same thing again never posts
+ * it twice. Fails open: when D1 cannot be written the post goes ahead (a repeat post in another isolate is better
+ * than a lost alert), and the memory lock still stops a repeat within this isolate.
  */
 export async function claimDiscordAlert(
   db: D1Database | undefined,
@@ -143,9 +145,26 @@ async function getUsers(db?: D1Database): Promise<StoredSettings[]> {
   } catch { return []; }
 }
 
+/**
+ * A NAM move at or above the whale size. A move in another coin (shielded USDC, OSMO…: meta.tokenSymbol) is never
+ * one, whatever its size: its amount is in that coin's units, not NAM.
+ */
+export const isNamWhale = (flow: Flow, whaleNam: number): boolean => !isOtherCoin(flow) && flow.amount >= whaleNam;
+
+/**
+ * Whether the live alert pass (live-hub.ts alertFlows) offers a move to sendDiscordWhaleAlert at all. `minNam` is a
+ * NAM size, so it reads NAM moves only. A move into or out of the shielded set is always offered, and so is a move
+ * in another coin: no NAM size can measure it, and only a watchlist can match it (no rule or whale size is in its
+ * coin), so it is offered for the watchers of its addresses whatever its size.
+ */
+export const offeredForAlerts = (flow: Flow, minNam: number): boolean =>
+  isOtherCoin(flow) || flow.kind === 'shield' || flow.kind === 'unshield' || flow.amount >= minNam;
+
 export function buildFlowDiscordBody(flow: Flow, usdPrice: number | null, customTag?: string) {
-  const assetSymbol =
-    flow.chain === 'namada' && flow.counterDenom ? flow.counterDenom : 'NAM';
+  // The coin the amount is in: a move in another coin is named by its own symbol (meta.tokenSymbol), never as NAM.
+  const assetSymbol = isOtherCoin(flow)
+    ? String(flow.meta!.tokenSymbol)
+    : flow.chain === 'namada' && flow.counterDenom ? flow.counterDenom : 'NAM';
 
   const valueStr = flow.valueUsd
     ? `$${flow.valueUsd.toLocaleString(undefined, { maximumFractionDigits: 2 })}`
@@ -257,29 +276,13 @@ export async function sendDiscordWhaleAlert(
   db?: D1Database,
   systemThreshold = 10000,
 ) {
-  const dedupKeys = [
-    `alert:flow:${flow.id}`,
-    `alert:tx:${flow.chain}:${flow.txHash}:${flow.kind}`,
-  ];
-
-  if ((flow.kind === 'ibc_in' || flow.kind === 'ibc_out') && flow.from && flow.to) {
-    const bucket10m = Math.floor((flow.ts || Date.now()) / 600000);
-    dedupKeys.push(
-      `alert:ibc:${flow.from}:${flow.to}:${Math.round(flow.amount)}:${bucket10m}`,
-    );
-  }
-
-  const allowed = await claimDiscordAlert(db, dedupKeys, Date.now());
-  if (!allowed) {
-    return;
-  }
-
   const targets: { url: string; body: Record<string, unknown> }[] = [];
-  // 1. The operator's channel, for moves at or above the whale size.
-  if (webhookUrl && flow.amount >= systemThreshold) targets.push({ url: webhookUrl, body: buildFlowDiscordBody(flow, usdPrice) });
+  // 1. The operator's channel, for NAM moves at or above the whale size (another coin's units are not NAM).
+  if (webhookUrl && isNamWhale(flow, systemThreshold)) targets.push({ url: webhookUrl, body: buildFlowDiscordBody(flow, usdPrice) });
 
-  // 2. Fan out per user: the same rules as the UI and the replay harness, with that user's thresholds. One post per
-  //    webhook, whoever shares it (the first matching user's tag names it).
+  // 2. Fan out per user: the same rules as the UI and the replay harness, with that user's thresholds (the rules
+  //    are in NAM, so a move in another coin can match a watchlist only). One post per webhook, whoever shares it
+  //    (the first matching user's tag names it).
   const seen = new Set<string>(webhookUrl ? [webhookUrl] : []);
   for (const u of await getUsers(db)) {
     const url = u.channels.discord.webhookUrl!;
@@ -292,7 +295,23 @@ export async function sendDiscordWhaleAlert(
     seen.add(url);
     targets.push({ url, body: buildFlowDiscordBody(flow, usdPrice, watched ? 'WATCHLIST' : hits[0].ruleId.toUpperCase()) });
   }
-  if (targets.length) await postAll(targets, db, `move ${flow.id}`);
+  if (!targets.length) return;
+
+  // 3. The claim, taken only for a move that will be posted, so a move that posts nothing holds no key another move
+  //    needs. It names the move itself (its flow id), never only its transaction: one transaction or Namada batch
+  //    (whose moves all carry the wrapper hash) can hold several moves of one kind, and each is its own alert. The
+  //    id is the move's identity on every path (the stream, the catch-up search and the Namada scan parse one
+  //    transaction into the same ids, and `flows` stores rows by it), so one move is still posted once. A NAM bridge
+  //    crossing is recorded on both chains under two ids: alert:ibc pairs the two records, so it is posted once.
+  //    Another coin's crossing has no Osmosis record (the Osmosis reader records NAM only) and its amount is not NAM,
+  //    so it takes no pairing key a NAM crossing of the same addresses and number would then miss.
+  const dedupKeys = [`alert:flow:${flow.id}`];
+  if ((flow.kind === 'ibc_in' || flow.kind === 'ibc_out') && flow.from && flow.to && !isOtherCoin(flow)) {
+    const bucket10m = Math.floor((flow.ts || Date.now()) / 600000);
+    dedupKeys.push(`alert:ibc:${flow.from}:${flow.to}:${Math.round(flow.amount)}:${bucket10m}`);
+  }
+  if (!(await claimDiscordAlert(db, dedupKeys, Date.now()))) return;
+  await postAll(targets, db, `move ${flow.id}`);
 }
 
 /**

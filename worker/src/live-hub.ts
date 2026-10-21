@@ -10,7 +10,7 @@ import type { NamadaBlock } from './parse/namada';
 import { runBatch, stmt, kvGet, kvGetJson, kvSet } from './db';
 import { admitSocket } from './ws-admit';
 import { fetchNamPools, fetchNamPrice } from './sources/sqs';
-import { configureAlerts, sendDiscordWhaleAlert } from './sources/discord';
+import { configureAlerts, isNamWhale, offeredForAlerts, sendDiscordWhaleAlert } from './sources/discord';
 import { fetchJson } from './util';
 
 /** Moves found late by the catch-up search alert only when they happened within this window. */
@@ -208,14 +208,16 @@ export class LiveHub extends DurableObject<Env> {
 
   /**
    * Discord alerts for whale movements (>= 10k NAM) and user watchlist/MASP webhooks. The same path serves the
-   * live stream, the catch-up search and the Namada scan; sendDiscordWhaleAlert claims a key per flow and per
-   * transaction, so a move is never posted twice. `minNam`: the size from which a move is offered to the per-user
-   * rules at all (100 on Osmosis, 10 on Namada); shielded moves always are.
+   * live stream, the catch-up search and the Namada scan; sendDiscordWhaleAlert claims a key per move (its flow id)
+   * once it has somewhere to post it, so a move is never posted twice and never holds back another move of the same
+   * transaction. `minNam`: the NAM size from which a move is offered to the per-user rules at all (100 on Osmosis,
+   * 10 on Namada); shielded moves and moves in another coin (no NAM size, watchlist only) always are
+   * (discord.ts offeredForAlerts). The whale size is NAM too: another coin's units never make a NAM whale.
    */
   private async alertFlows(flows: Flow[], threshold = Number(this.env.WHALE_OSMOSIS_NAM || 10000), minNam = 100) {
     for (const f of flows) {
-      if (f.amount >= threshold) f.whale = true;
-      if (f.amount >= minNam || f.kind === 'shield' || f.kind === 'unshield') {
+      if (isNamWhale(f, threshold)) f.whale = true;
+      if (offeredForAlerts(f, minNam)) {
         await sendDiscordWhaleAlert(
           this.env.DISCORD_WEBHOOK_URL,
           f,

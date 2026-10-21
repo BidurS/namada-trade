@@ -1113,10 +1113,15 @@ export async function orderflowSeries(db: D1Database, asOf: number, replay: bool
 
 // ---------------------------------------------------------------- alerts (D7)
 
+/**
+ * Alert hits between `from` and `to`. Every rule's size is NAM, so rows in another coin (meta.tokenSymbol,
+ * NAM_AMOUNT) are left out, as the site's other NAM reads of the same kinds leave them out, and never fill the 500
+ * rows read.
+ */
 export async function alertsBetween(db: D1Database, from: number, to: number, th: AlertThresholds): Promise<AlertHit[]> {
   const minAmt = Math.min(th.ibcInventory, th.unlock, th.bigSwap, th.unshield, th.bond);
   const rows = await db
-    .prepare(`${FLOW_SELECT} WHERE f.ts >= ? AND f.ts < ? AND f.amount_num >= ? AND f.kind IN ('ibc_in','withdraw','unbond','buy','sell','unshield','bond') AND ${NOT_LEGACY_TWIN} ORDER BY f.ts DESC LIMIT 500`)
+    .prepare(`${FLOW_SELECT} WHERE f.ts >= ? AND f.ts < ? AND f.amount_num >= ? AND f.kind IN ('ibc_in','withdraw','unbond','buy','sell','unshield','bond') AND ${NAM_AMOUNT} AND ${NOT_LEGACY_TWIN} ORDER BY f.ts DESC LIMIT 500`)
     .bind(from, to, minAmt)
     .all<any>();
   return evaluateFlows((rows.results || []).map(rowToFlow), th);
@@ -1124,9 +1129,10 @@ export async function alertsBetween(db: D1Database, from: number, to: number, th
 
 /**
  * The most recent alert hit before `to`, of any age (W5), for the "nothing crossed an alert size" state.
- * The SQL narrows to flows each rule could fire on (its chain, kinds and size); the shared rules then decide,
- * exactly as for live alerts. Pages back newest first: null only when the search reached the oldest record and
- * found none; undefined when it gave up after `pages` full pages (not known, so never "none on record").
+ * The SQL narrows to flows each rule could fire on (its chain, kinds and NAM size; rows in another coin are left
+ * out, NAM_AMOUNT, so they never fill a page); the shared rules then decide, exactly as for live alerts. Pages back
+ * newest first: null only when the search reached the oldest record and found none; undefined when it gave up after
+ * `pages` full pages (not known, so never "none on record").
  */
 export async function lastAlertBefore(db: D1Database, to: number, th: AlertThresholds, pages = 5, pageSize = 100): Promise<AlertHit | null | undefined> {
   const cond = `((f.chain='osmosis' AND f.kind='ibc_in' AND f.amount_num >= ?)
@@ -1138,7 +1144,7 @@ export async function lastAlertBefore(db: D1Database, to: number, th: AlertThres
   // planner's own choice, one range per kind on flows_kind merged and sorted whole, read 40,134 for every page.
   for (let p = 0; p < pages; p++) {
     const rows = await db
-      .prepare(`${flowSelect('INDEXED BY flows_ts')} WHERE f.ts < ? AND ${cond} AND ${NOT_LEGACY_TWIN} ORDER BY f.ts DESC, f.height DESC LIMIT ? OFFSET ?`)
+      .prepare(`${flowSelect('INDEXED BY flows_ts')} WHERE f.ts < ? AND ${cond} AND ${NAM_AMOUNT} AND ${NOT_LEGACY_TWIN} ORDER BY f.ts DESC, f.height DESC LIMIT ? OFFSET ?`)
 
       .bind(to, th.ibcInventory, th.unlock, th.bigSwap, th.unshield, th.bond, pageSize, p * pageSize)
       .all<any>();
