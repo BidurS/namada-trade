@@ -38,7 +38,7 @@ describe('a mixed-token event keeps its NAM legs', () => {
     expect(p.flows).toHaveLength(2);
     const osmo = p.flows.find((f) => f.meta?.tokenSymbol === 'OSMO')!;
     expect(osmo).toMatchObject({ id: `namada:${h}:0`, kind: 'unshield', from: MASP, to: USER, amount: 0.000001 });
-    expect(osmo.meta?.feeNam).toBeUndefined();
+    expect(osmo.meta).not.toHaveProperty('maspFeeNam');
     const nam = p.flows.find((f) => !f.meta?.tokenSymbol)!;
     expect(nam).toMatchObject({ id: `namada:${h}:0:nam`, txHash: h, kind: 'unshield', from: MASP, to: USER, amount: 1_000_000 });
     expect(nam.meta).toMatchObject({ descriptor: 'transfer-from-wasm', innerTxHash: h.replace(/A/g, 'C') });
@@ -55,17 +55,18 @@ describe('a mixed-token event keeps its NAM legs', () => {
     expect(p.flows[0]).toMatchObject({ id: `namada:${'AD'.repeat(32)}:0`, kind: 'unshield', amount: 1_000_000 });
   });
 
-  it('the pool\'s fee for an OSMO unshield (block 8,294,006: 0.084159 NAM to the gas payer) stays meta.feeNam', () => {
+  it('the pool\'s fee for an OSMO unshield (block 8,294,006: 0.084159 NAM to the gas payer) is the OSMO row\'s meta.maspFeeNam', () => {
     const p = parse(ev('AE'.repeat(32), [[MASP, NAMT, '84159'], [MASP, OSMO, '20000000']], [[USER, OSMO, '20000000'], [GAS, NAMT, '84159']]));
     expect(p.flows).toHaveLength(1);
-    expect(p.flows[0]).toMatchObject({ kind: 'unshield', from: MASP, to: USER, amount: 20, meta: { tokenSymbol: 'OSMO', feeNam: 0.084159 } });
+    expect(p.flows[0]).toMatchObject({ kind: 'unshield', from: MASP, to: USER, amount: 20, meta: { tokenSymbol: 'OSMO', maspFeeNam: 0.084159 } });
+    expect(p.flows[0].meta).not.toHaveProperty('feeNam');
   });
 
   it('NAM legs that are not fee-sized, or not the pool paying one account, are flows, never a fee', () => {
     const over = String((MASP_FEE_CAP_NAM + 1) * 1e6);
     const a = parse(ev('AF'.repeat(32), [[MASP, NAMT, over], [MASP, OSMO, '1']], [[USER, OSMO, '1'], [GAS, NAMT, over]]));
     expect(a.flows.find((f) => !f.meta?.tokenSymbol)).toMatchObject({ kind: 'unshield', from: MASP, to: GAS, amount: MASP_FEE_CAP_NAM + 1 });
-    expect(a.flows.find((f) => f.meta?.tokenSymbol)!.meta?.feeNam).toBeUndefined();
+    expect(a.flows.find((f) => f.meta?.tokenSymbol)!.meta).not.toHaveProperty('maspFeeNam');
     // a transparent NAM move next to the other coin is a transfer, whatever its size
     const b = parse(ev('A0'.repeat(32), [[USER, NAMT, '1000000'], [MASP, OSMO, '1']], [[GAS, NAMT, '1000000'], [USER, OSMO, '1']]));
     expect(b.flows.find((f) => !f.meta?.tokenSymbol)).toMatchObject({ kind: 'transfer', from: USER, to: GAS, amount: 1 });
@@ -76,7 +77,7 @@ describe('a mixed-token event keeps its NAM legs', () => {
     const nam = p.flows.filter((f) => !f.meta?.tokenSymbol);
     expect(nam).toHaveLength(1);
     expect(nam[0]).toMatchObject({ kind: 'unshield', to: USER, amount: 1_000_000, meta: { maspFeeNam: 0.084159 } });
-    expect(p.flows.find((f) => f.meta?.tokenSymbol)!.meta?.feeNam).toBeUndefined();
+    expect(p.flows.find((f) => f.meta?.tokenSymbol)!.meta).not.toHaveProperty('maspFeeNam');
   });
 
   it('the live dispatcher posts the NAM unshield although the dust OSMO row of the same transaction came first', async () => {

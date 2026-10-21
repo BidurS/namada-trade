@@ -190,13 +190,15 @@ describe('namada parser: MASP legs', () => {
     expect(fl[0].meta?.maspFeeNam).toBeCloseTo(0.1, 6);
   });
 
-  it('mixed transfer: shield amount is the MASP leg only', () => {
+  it('mixed transfer: shield amount is the MASP leg only, the side output a transfer of its own', () => {
     const fl = maspFlows(4707359);
     expect(fl).toHaveLength(1);
     expect(fl[0].kind).toBe('shield');
     expect(fl[0].to).toBe(MASP);
     expect(fl[0].amount).toBe(10);
-    expect(fl[0].meta?.otherNam).toBeCloseTo(0.1, 6);
+    expect(fl[0].meta).not.toHaveProperty('otherNam');
+    const side = parseNamadaBlock(block(4707359), null).flows.filter((f) => f.from !== MASP && f.to !== MASP);
+    expect(side.map((f) => [f.kind, f.to, f.amount])).toEqual([['transfer', 'tnam1qrxsru5rdu4he400xny6p779fcw7xuftsgjnmzup', 0.1]]);
   });
 
   it('shielded IBC deposit: ibc_in to the MASP from the packet sender, no link', () => {

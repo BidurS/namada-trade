@@ -99,6 +99,8 @@ function entries(json: string | undefined): { account: string; token: string; am
 }
 
 const I = NAMADA.internal;
+/** The protocol's own accounts (staking, bridge escrow, shielded pool, PGF, governance): never a gas payer. */
+const INTERNAL = new Set<string>(Object.values(I));
 
 /**
  * The kind of one token/transfer event. The staking account's own balance moved by a wasm transfer (descriptor
@@ -182,14 +184,15 @@ const isNamDenom = (denom: string) => denom === NAM.namadaToken || denom.endsWit
 
 /**
  * The NAM legs of a transfer of another coin are the shielded pool's fee for it (the pool pays the gas payer, block
- * 8,294,006) only when that is all they can be: one leg out of the pool, the same amount into one other account, at
- * most MASP_FEE_CAP_NAM. Anything else is NAM that moved and gets flows of its own.
+ * 8,294,006) only when that is all they can be: one leg out of the pool, the same amount into one other account that
+ * can pay gas (not a protocol account: NAM from the pool into the bridge escrow is a bridge send), at most
+ * MASP_FEE_CAP_NAM. Anything else is NAM that moved and gets flows of its own.
  */
 function maspFeeOf(src: Leg[], dst: Leg[]): bigint | null {
   if (src.length !== 1 || dst.length !== 1) return null;
   const [s] = src;
   const [d] = dst;
-  return s.account === I.masp && d.account !== I.masp && s.units === d.units && s.units <= MASP_FEE_CAP ? s.units : null;
+  return s.account === I.masp && !INTERNAL.has(d.account) && s.units === d.units && s.units <= MASP_FEE_CAP ? s.units : null;
 }
 
 /**
@@ -253,23 +256,24 @@ export function parseNamadaBlock(block: NamadaBlock, priceUsd: number | null): N
    * one source and one target is written as before; the others are `idBase:<n>`.
    *
    * The shielded pool's fee: an unshield (the pool the only source) usually carries a second, small target, the gas
-   * payer the pool pays for the transaction (blocks 8,288,955, 7,011,473), and a shield from one account can carry a
-   * small side output (4,707,359). The smallest such leg is kept in the first flow's meta (maspFeeNam, otherNam) when
-   * it is at most MASP_FEE_CAP_NAM, so pool accounting can add it back; any other leg is a flow of its own.
+   * payer the pool pays for the transaction (blocks 8,288,955, 7,011,473). The smallest target is kept in the first
+   * flow's meta (maspFeeNam), so pool accounting can add it back, when it is at most MASP_FEE_CAP_NAM and an account
+   * that can pay gas: a protocol account (staking, the bridge escrow) never does, so a small bond or bridge send out
+   * of the pool is a flow of its own. Every other leg is a flow of its own too, a shield's side output included (block
+   * 4,707,359: 10 NAM shielded and 0.1 NAM to another account, a transparent transfer that never touched the pool).
+   * The events do not name the gas payer (a masp/fee-payment event of the same inner transaction is there for 19 of
+   * the 2,491 fee-shaped pool transfers in the 70,908 blocks of scripts/out/history/masp_blocks), so a second account
+   * the pool pays at most MASP_FEE_CAP_NAM in a transaction whose fee was paid elsewhere is still read as the fee: at
+   * most that much per transfer, and the pool's outflow stays whole.
    */
   const namFlows = (idBase: string, txHash: string, innerTxHash: string, descriptor: string, src: Leg[], dst: Leg[]) => {
     if (!src.length && !dst.length) return;
     const s = [...src].sort(byUnitsDesc);
     const d = [...dst].sort(byUnitsDesc);
     let maspFee: bigint | null = null;
-    let other: bigint | null = null;
-    if (s.length === 1 && d.length > 1) {
+    if (s.length === 1 && s[0].account === I.masp && d.length > 1) {
       const side = d[d.length - 1];
-      if (side.account !== I.masp && side.units <= MASP_FEE_CAP) {
-        if (s[0].account === I.masp) maspFee = side.units;
-        else if (d[0].account === I.masp) other = side.units;
-        if (maspFee !== null || other !== null) d.pop();
-      }
+      if (!INTERNAL.has(side.account) && side.units <= MASP_FEE_CAP) maspFee = d.pop()!.units;
     }
     const { legs: pairs, assumed } = pairLegs(s, d);
     pairs.forEach((l, k) => {
@@ -281,7 +285,6 @@ export function parseNamadaBlock(block: NamadaBlock, priceUsd: number | null): N
         descriptor,
         ...(innerTxHash ? { innerTxHash } : {}),
         ...(k === 0 && maspFee !== null ? { maspFeeNam: toNam(maspFee) } : {}),
-        ...(k === 0 && other !== null ? { otherNam: toNam(other) } : {}),
         ...(assumed ? { pairing: 'largest-first' } : {}),
       };
 
@@ -429,7 +432,9 @@ export function parseNamadaBlock(block: NamadaBlock, priceUsd: number | null): N
           descriptor,
           tokenSymbol: tMeta.symbol,
           tokenAddress: tokenAddr,
-          feeNam: feeUnits !== null ? toNam(feeUnits) : undefined,
+          // The pool's fee under the key pool accounting reads (the same as on a NAM unshield): it is NAM that left
+          // the pool. Not `feeNam`: older builds wrote that for every NAM source of the event, whoever sent it.
+          ...(feeUnits !== null ? { maspFeeNam: toNam(feeUnits) } : {}),
           innerTxHash: innerTxHash || undefined,
         },
       });

@@ -571,6 +571,9 @@ async function masp() {
   let bal = cur.value;
   const twinIds = new Set(twins.map((r) => r.id));
   for (const r of namRows) if (!twinIds.has(r.id)) bal += r.from_addr === MASP ? r.amount_num + Number(metaOf(r).maspFeeNam ?? 0) : -r.amount_num;
+  // The pool's NAM fee for a transfer of another coin (block 8,294,006) is kept on that coin's row, as meta.maspFeeNam
+  // (an older row's feeNam is every NAM source of the event, whoever sent it, so it is not read).
+  for (const r of d1Rows) { const m = metaOf(r); if (m.tokenSymbol || m.tokenAddress) bal += Number(m.maspFeeNam ?? 0); }
   const balWithChain = bal - addedIn + addedOut;
   log(`masp: flows-only reconstruction before the first flow: ${bal.toFixed(0)} NAM as stored, ${balWithChain.toFixed(0)} NAM with the corrective rows (chain says ${pts[0].post!.toFixed(0)} + ${minted.toFixed(0)} minted)`);
 

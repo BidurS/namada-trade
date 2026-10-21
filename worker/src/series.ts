@@ -366,8 +366,9 @@ export interface DayAggregates {
 
 /**
  * One UTC day of flows as edges, activity and the daily keys. `refunds`: Osmosis bridge refunds from the day's
- * start to three days after its end. Left out everywhere: other coins (meta.tokenSymbol), bridge sends that timed
- * out and their refunds. Bot round trips are kept as kind 'bot' in the edges and left out of activity and volume.
+ * start to three days after its end. Left out everywhere: other coins (meta.tokenSymbol; only the NAM fee the
+ * shielded pool paid for one, its meta.maspFeeNam, counts in masp.out_daily), bridge sends that timed out and their
+ * refunds. Bot round trips are kept as kind 'bot' in the edges and left out of activity and volume.
  *
  * Each chain's rows are that chain's own records, and a bridge move is recorded on both (the sending chain's
  * `ibc_out`, the receiving chain's `ibc_in`): flow_edges_daily and activity_daily therefore hold the same NAM once per
@@ -422,7 +423,11 @@ export function dayAggregates(rows: DayFlowRow[], refunds: DayFlowRow[]): DayAgg
     } else {
       const M = NAMADA.internal.masp;
       metrics['masp.in_daily'] = rs.filter((r) => r.to_addr === M).reduce((a, r) => a + r.amount_num, 0);
-      metrics['masp.out_daily'] = rs.filter((r) => r.from_addr === M).reduce((a, r) => a + r.amount_num + (Number(meta(r).maspFeeNam) || 0), 0);
+      // The NAM the pool paid as the fee of a transfer of another coin (block 8,294,006) left the pool too: the row is
+      // the other coin's, but its meta.maspFeeNam is NAM. An older row's feeNam is not read: those builds wrote every
+      // NAM source of the event there, whoever sent it.
+      const otherCoinFees = rows.filter((r) => r.chain === chain && meta(r).tokenSymbol != null).reduce((a, r) => a + (Number(meta(r).maspFeeNam) || 0), 0);
+      metrics['masp.out_daily'] = rs.filter((r) => r.from_addr === M).reduce((a, r) => a + r.amount_num + (Number(meta(r).maspFeeNam) || 0), 0) + otherCoinFees;
     }
   }
   return { edges: [...edges.values()].map(({ priced, ...e }) => ({ ...e, usd: priced ? e.usd : null })), activity, metrics };
