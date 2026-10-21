@@ -254,17 +254,39 @@ export function parseOsmosisTx(tx: NormTx, ctx: OsmoCtx): OsmoParsed {
     n.set(t.from, (n.get(t.from) ?? 0n) - t.base);
     n.set(t.to, (n.get(t.to) ?? 0n) + t.base);
   }
-  // The trader of each swap message: the one account the message changed by exactly the NAM its hops paid out or took
-  // in (swapNet). That is the swapper itself, or the account a router, an ibc-hooks entry point (Skip), an authz grant
-  // or a vault swapped for: the signer is only the fee payer, a relayer or a keeper. A pool, the transfer module and
-  // the taker-fee collector are never one. When no single account matches (a cut paid out of the swap, a round trip,
-  // an old event shape) it is the signer, as before.
+  // The trader of each swap message: the account whose NAM the message changed by what its hops paid out or took in
+  // (swapNet), cuts aside. That is the swapper itself, or the account a router, an ibc-hooks entry point (Skip), an
+  // authz grant or a vault swapped for: the signer is only the fee payer, a relayer or a keeper. A pool, the transfer
+  // module and the taker-fee collector are never one. It is the one account the message changed by exactly swapNet;
+  // when none is, the one it changed most the swap's way (a buy's delivery, a sell's funding), when that change and the
+  // cuts make up swapNet. A cut is NAM another account keeps that was paid outside the hops by that account or by one
+  // the message leaves where it started (a router, an entry point): Skip's affiliate fee out of the bought NAM before
+  // the delivery, a bot's service fee taken from the granter beside the sale. The cuts stay transfers (section 4). When
+  // neither holds (a round trip, two equal deliveries, another send in the message, an old event shape) it is the
+  // signer, as before.
+  const canTrade = (x: string) => !ctx.poolAddrs.has(x) && x !== OSMOSIS.transferModule && x !== OSMOSIS.takerFeeCollector;
+  const size = (v: bigint) => (v < 0n ? -v : v);
+  const tradedFor = (m: string, want: bigint): string | null => {
+    const n = netIn.get(m) ?? new Map<string, bigint>();
+    const exact = [...n].filter(([x, v]) => v === want && canTrade(x));
+    if (exact.length) return exact.length === 1 ? exact[0][0] : null;
+    let top: [string, bigint] | null = null, tie = false;
+    for (const [x, v] of n) {
+      if (!canTrade(x) || v === 0n || (v > 0n) !== (want > 0n)) continue;
+      if (!top || size(v) > size(top[1])) { top = [x, v]; tie = false; } else if (size(v) === size(top[1])) tie = true;
+    }
+    if (!top || tie) return null;
+    const [t, tv] = top;
+    const passOn = (x: string) => canTrade(x) && n.get(x) === 0n;
+    const cuts = new Set(namTransfers
+      .filter((l) => l.msg === m && !swapLegIdx.has(l.idx) && l.to !== t && canTrade(l.to) && (n.get(l.to) ?? 0n) > 0n && (l.from === t || passOn(l.from)))
+      .map((l) => l.to));
+    return [...cuts].reduce((s, x) => s + n.get(x)!, tv) === want ? t : null;
+  };
   const traderOf = new Map<string, string | null>();
   for (const m of swapMsgs) {
     const want = swapNet.get(m) ?? 0n;
-    const hits = want === 0n || unmatchedMsgs.has(m) ? [] : [...netIn.get(m) ?? []]
-      .filter(([x, v]) => v === want && !ctx.poolAddrs.has(x) && x !== OSMOSIS.transferModule && x !== OSMOSIS.takerFeeCollector);
-    traderOf.set(m, hits.length === 1 ? hits[0][0] : signer);
+    traderOf.set(m, (want === 0n || unmatchedMsgs.has(m) ? null : tradedFor(m, want)) ?? signer);
   }
 
   // In a transaction whose messages carry msg_index, a token_swapped event without one is the post-handler's
