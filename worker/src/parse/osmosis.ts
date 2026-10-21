@@ -353,7 +353,8 @@ export function parseOsmosisTx(tx: NormTx, ctx: OsmoCtx): OsmoParsed {
       const ok = after(i, 'fungible_token_packet').some((x) => x.success === 'true' && x.denom === pd.denom && (x.amount === undefined || x.amount === String(pd.amount)));
       if (!ok) return;
       const amount = Number(pd.amount) / 10 ** NAM.decimals;
-      out.flows.push(flow(tx, `ibc_in:${i}`, 'ibc_in', pd.sender, pd.receiver, amount, ctx.priceUsd, { memo: pd.memo, channel: a.packet_dst_channel }));
+      // The packet's sequence is the one Namada's record of the same send carries (the crossing's identity).
+      out.flows.push(flow(tx, `ibc_in:${i}`, 'ibc_in', pd.sender, pd.receiver, amount, ctx.priceUsd, { memo: pd.memo, channel: a.packet_dst_channel, ...(a.packet_sequence ? { packetSequence: a.packet_sequence } : {}) }));
       // A link joins two real accounts only (the packet's sender and receiver are text the sender chose).
       if (isRealAddress(pd.receiver) === 'osmosis' && isRealAddress(pd.sender) === 'namada') out.links.push({ osmo: pd.receiver, namada: pd.sender, amount, ts: tx.ts });
     } else if (e.type === 'ibc_transfer') {

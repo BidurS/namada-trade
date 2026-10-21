@@ -9,7 +9,7 @@ import { evaluateFlows, INTERNAL_ADDRESSES, isInternal, type AlertThresholds } f
 import { SELLS_MOST_CUT } from '../../shared/supply-thresholds';
 import { kvGetJson, kvSet } from './db';
 import { NAM_AMOUNT, NOT_LEGACY_TWIN } from './flows-query';
-import { safeHttpUrl, explorerHashOf } from '../../shared/flow-rules';
+import { safeHttpUrl, explorerHashOf, isOtherCoin } from '../../shared/flow-rules';
 import { fetchJson } from './util';
 import { INTERNAL_LABELS } from './config';
 import { label_plain, labelAuthorShort } from './labels';
@@ -42,7 +42,8 @@ export function rowToFlow(r: any): Flow {
     // A wallet's own tag says whose it is ("Tag by tnam1qxyz…"), so it never passes for a curated name.
     fromLabelAuthor: r.from_label ? labelAuthorShort(r.from_label_source, r.from_label_author) : null,
     toLabelAuthor: r.to_label ? labelAuthorShort(r.to_label_source, r.to_label_author) : null,
-    whale: r.amount_num >= 10000,
+    // 10,000 NAM, as the live alerts' isNamWhale: a row in another coin (meta.tokenSymbol) is in that coin's units.
+    whale: r.amount_num >= 10000 && !isOtherCoin({ meta }),
   };
 }
 

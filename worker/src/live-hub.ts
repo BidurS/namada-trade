@@ -55,6 +55,13 @@ export class LiveHub extends DurableObject<Env> {
   private isConnectingOsmo = false;
   private isPollingNamada = false;
   private seenOsmoTx = new Set<string>();
+  /**
+   * The lowest height of a stream transaction whose rows could not be written since the last catch-up search that
+   * covered it, and a count of such failures: the next search reads from below that height, and a complete search
+   * clears it only when no write failed after the search began.
+   */
+  private osmoRetryFrom: number | null = null;
+  private osmoRetryGen = 0;
   private osmoHeight = 0;
   private namadaHeight = 0;
   private osmoSince: number | null = null;
@@ -177,7 +184,9 @@ export class LiveHub extends DurableObject<Env> {
     if (!norm) return;
     this.osmoLastMsgAt = Date.now();
 
-    // Deduplicate multiple WS subscription matches for the same Osmosis tx hash
+    // Deduplicate multiple WS subscription matches for the same Osmosis tx hash. The hash is held while the
+    // transaction is written (the other subscriptions' copies of it return here) and stays seen only once its rows
+    // are written: the catch-up search skips a seen hash.
     if (norm.hash) {
       if (this.seenOsmoTx.has(norm.hash)) return;
       this.seenOsmoTx.add(norm.hash);
@@ -192,13 +201,24 @@ export class LiveHub extends DurableObject<Env> {
     const parsed = parseOsmosisTx(norm, this.osmoCtx);
     if (!parsed.flows.length && !parsed.moves.length) return;
 
-    // Persist to D1
-    const stmts = [
-      ...parsed.flows.map(stmt.flow),
-      ...parsed.moves.map(stmt.move),
-      ...parsed.links.map(stmt.link),
-    ];
-    await runBatch(this.env.DB, stmts);
+    // Persist to D1. A write that fails (a transient D1 error) leaves nothing stored, broadcast or alerted: the hash
+    // is forgotten, so the catch-up search reads the transaction again, from below its height even when its cursor
+    // has passed it (a search that ran meanwhile skipped the hash as seen), and alerts it as found late. A parse that
+    // throws is not retried: it would throw the same way again.
+    try {
+      await runBatch(this.env.DB, [
+        ...parsed.flows.map(stmt.flow),
+        ...parsed.moves.map(stmt.move),
+        ...parsed.links.map(stmt.link),
+      ]);
+    } catch (e) {
+      if (norm.hash) this.seenOsmoTx.delete(norm.hash);
+      if (Number.isFinite(norm.height) && norm.height > 0) {
+        this.osmoRetryFrom = Math.min(this.osmoRetryFrom ?? norm.height, norm.height);
+        this.osmoRetryGen += 1;
+      }
+      throw e;
+    }
 
     // Broadcast to UI
     this.broadcast({ type: 'flows', flows: parsed.flows });
@@ -210,9 +230,10 @@ export class LiveHub extends DurableObject<Env> {
    * Discord alerts for whale movements (>= 10k NAM) and user watchlist/MASP webhooks. The same path serves the
    * live stream, the catch-up search and the Namada scan; sendDiscordWhaleAlert claims a key per move (its flow id)
    * once it has somewhere to post it, so a move is never posted twice and never holds back another move of the same
-   * transaction. `minNam`: the NAM size from which a move is offered to the per-user rules at all (100 on Osmosis,
-   * 10 on Namada); shielded moves and moves in another coin (no NAM size, watchlist only) always are
-   * (discord.ts offeredForAlerts). The whale size is NAM too: another coin's units never make a NAM whale.
+   * transaction, and a bridge crossing's two records (one per chain) reach each channel once. `minNam`: the NAM size
+   * from which a move is offered to the per-user rules at all (100 on Osmosis, 10 on Namada); shielded moves and
+   * moves in another coin (no NAM size, watchlist only) always are (discord.ts offeredForAlerts). The whale size is
+   * NAM too: another coin's units never make a NAM whale.
    */
   private async alertFlows(flows: Flow[], threshold = Number(this.env.WHALE_OSMOSIS_NAM || 10000), minNam = 100) {
     for (const f of flows) {
@@ -414,7 +435,9 @@ export class LiveHub extends DurableObject<Env> {
     };
     const head = Number((await get('/status'))?.result?.sync_info?.latest_block_height) || 0;
     if (!head) throw new Error('no Osmosis head height');
-    const floor = prev?.height ?? 0;
+    // A stream transaction whose write failed is read again even below the cursor (handleOsmosisMessage).
+    const retryGen = this.osmoRetryGen;
+    const floor = Math.min(prev?.height ?? 0, this.osmoRetryFrom != null ? this.osmoRetryFrom - 1 : Infinity);
     const found = new Map<string, any>();
     let complete = true;
     for (const q of OSMOSIS_QUERIES) {
@@ -465,6 +488,7 @@ export class LiveHub extends DurableObject<Env> {
       if (recent.length) await this.alertFlows(recent).catch((e) => console.error('late alert:', e));
     }
     if (head > this.osmoHeight) this.osmoHeight = head;
+    if (complete && this.osmoRetryGen === retryGen) this.osmoRetryFrom = null;
     const next: OsmosisCursor = complete
       ? { height: head, at: Date.now(), added }
       : { height: prev?.height ?? 0, at: prev?.at ?? 0, added, error: 'The last catch-up search did not finish; it is retried.' };

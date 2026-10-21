@@ -140,6 +140,14 @@ interface Packet {
   innerHash: string;
   /** false when the ICS-20 receive callback of the same inner transaction reported a failure (nothing was credited) */
   ok: boolean;
+  /** Namada's end of the channel as the event names it ('' when it names none) */
+  channel: string;
+  /**
+   * The packet's sequence on its source channel (packet_sequence), or null when the event gives no whole number. The
+   * other chain's record of the same packet carries the same sequence, so the two records of one crossing can be
+   * told from any other crossing (worker/src/sources/discord.ts crossingOf).
+   */
+  sequence: string | null;
 }
 
 function ibcPackets(block: NamadaBlock): Packet[] {
@@ -174,6 +182,8 @@ function ibcPackets(block: NamadaBlock): Packet[] {
       dir,
       innerHash,
       ok: !(innerHash && failed.has(innerHash)),
+      channel: ch || '',
+      sequence: /^\d+$/.test(a.packet_sequence ?? '') ? a.packet_sequence : null,
     });
   }
   return out;
@@ -292,6 +302,9 @@ export function parseNamadaBlock(block: NamadaBlock, priceUsd: number | null): N
       if (kind === 'ibc_out' || kind === 'ibc_in') {
         const want = kind === 'ibc_out' ? 'out' : 'in';
         const p = bindPacket(want, innerTxHash, l.from, l.to, l.units);
+        // The packet's own identity, as the Osmosis records keep theirs (meta.channel is this chain's end of it).
+        if (p?.channel) meta.channel = p.channel;
+        if (p?.sequence) meta.packetSequence = p.sequence;
         if (p && want === 'out') {
           // No link from a send: the receiver is text the sender chose, and a send that times out is refunded.
           flowTo = p.receiver;

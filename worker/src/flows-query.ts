@@ -1,7 +1,7 @@
 // The WHERE clause of GET /api/flows, as a pure function so its conditions can be tested (W1), and the page reads
 // on the feed's order (nav-search-plan.md 2.2).
 //
-//   ?chain=osmosis|namada   ?kind=<FlowKind>|dex|ibc|native   ?whale=true (≥ 10,000 NAM)
+//   ?chain=osmosis|namada   ?kind=<FlowKind>|dex|ibc|native   ?whale=true (≥ 10,000 NAM; other coins never count)
 //   ?minNam=<n>             at least n NAM; flows of other coins (shielded USDC, OSMO…) never count as NAM
 //   ?arb=false              bot trades removed (shared/flow-rules.ts isBotFlow: round trips the Osmosis parser marks
 //                           with meta.arb, and any kind 'other' row that is not a bridge refund)
@@ -141,7 +141,8 @@ export function flowsConditions(f: FlowsFilter, skipWindow = false): { conds: st
     if (g) conditions.push(`f.kind IN (${kindList(g)})`);
     else { conditions.push('f.kind = ?'); params.push(f.kind); }
   }
-  if (f.whale) conditions.push('f.amount_num >= 10000');
+  // A whale is 10,000 NAM: another coin's row (meta.tokenSymbol) is in that coin's units and never one.
+  if (f.whale) conditions.push('f.amount_num >= 10000', NAM_AMOUNT);
   if (f.minNam != null && f.minNam > 0) { conditions.push('f.amount_num >= ?', NAM_AMOUNT); params.push(f.minNam); }
   if (f.excludeBots) conditions.push(NOT_BOT);
   if (f.onePerCrossing) conditions.push(`NOT ${RECEIVED_TWIN}`);

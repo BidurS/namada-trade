@@ -1,12 +1,14 @@
 import { explorerHashOf, isOtherCoin } from '../../../shared/flow-rules';
 import type { Flow, ForumPost, GovernanceProposal } from '../../../shared/types';
 import { safeHttpUrl } from '../../../shared/flow-rules';
-import { EXPLORERS, NAMADA } from '../config';
+import { EXPLORERS, NAM, NAMADA } from '../config';
 import { evaluateFlow } from '../../../shared/alerts';
 import { allDeliverable, inQuietHours, thresholdsOf, type StoredSettings } from '../settings';
 import { SITE } from '../../../shared/site';
 import { chainOf } from '../util';
 import { kvGetJson, kvSet } from '../db';
+import { sha256 } from '@noble/hashes/sha2.js';
+import { bytesToHex } from '@noble/hashes/utils.js';
 
 /**
  * A webhook that accepts the request and never answers must not hold up its caller (the cron's tick, the live
@@ -130,6 +132,49 @@ export async function claimDiscordAlert(
     return true;
   }
 }
+
+/**
+ * Each key claimed on its own, where claimDiscordAlert takes a set together: the keys this caller is the first to
+ * claim. Fails open the same way: when D1 cannot be written, every key the memory lock let through counts as claimed.
+ */
+async function claimEach(db: D1Database | undefined, keys: string[], now = Date.now()): Promise<Set<string>> {
+  const fresh = keys.filter((k) => checkMemoryLock([k]));
+  if (!db || !fresh.length) return new Set(fresh);
+  const won = new Set<string>();
+  try {
+    for (let i = 0; i < fresh.length; i += 80) {
+      const part = fresh.slice(i, i + 80);
+      const res = await db.batch(part.map((k) => db.prepare('INSERT OR IGNORE INTO kv (key, value, updated_at) VALUES (?, ?, ?)').bind(k, '1', now)));
+      part.forEach((k, j) => { if (Number(res[j]?.meta?.changes ?? 0) > 0) won.add(k); });
+    }
+    return won;
+  } catch (err) {
+    console.error('claimDiscordAlert error:', err);
+    return new Set(fresh);
+  }
+}
+
+/**
+ * The crossing a NAM bridge record belongs to: the packet both chains record, named by its source channel and its
+ * sequence. The sending chain numbers the packets of a channel once each and the receiving chain's record carries
+ * the same number, so a crossing's two records (Namada's and Osmosis's) give the same key and any other crossing
+ * gives another, however alike its addresses, amount and time; no time window is involved. A crossing to Osmosis
+ * leaves on Namada's channel (NAM.namadaChannel), one to Namada on Osmosis's (NAM.osmoChannel), and a record counts
+ * only when it names its own end of that pair. Null for a record no packet was bound to (a Namada leg that no packet
+ * of its own inner transaction fits) and for a move in another coin: such a record is posted on its own id and pairs
+ * with nothing, since a guess could only make it hide a crossing it does not belong to.
+ */
+export function crossingOf(flow: Flow): string | null {
+  if ((flow.kind !== 'ibc_in' && flow.kind !== 'ibc_out') || isOtherCoin(flow)) return null;
+  if (flow.meta?.channel !== (flow.chain === 'namada' ? NAM.namadaChannel : NAM.osmoChannel)) return null;
+  const seq = flow.meta?.packetSequence;
+  if (typeof seq !== 'string' || !/^\d+$/.test(seq)) return null;
+  const toOsmosis = (flow.chain === 'osmosis') === (flow.kind === 'ibc_in');
+  return `${toOsmosis ? NAM.namadaChannel : NAM.osmoChannel}:${seq}`;
+}
+
+/** A channel in a stored key: the webhook URL holds the token that posts to it, so the key keeps a digest, never the URL. */
+const channelKey = (url: string) => bytesToHex(sha256(new TextEncoder().encode(url))).slice(0, 32);
 
 /** Settings are read at most once per this long per database (a saved change takes effect within it); decrypted copies live in memory only. */
 export const USERS_CACHE_MS = 15_000;
@@ -297,21 +342,25 @@ export async function sendDiscordWhaleAlert(
   }
   if (!targets.length) return;
 
-  // 3. The claim, taken only for a move that will be posted, so a move that posts nothing holds no key another move
-  //    needs. It names the move itself (its flow id), never only its transaction: one transaction or Namada batch
-  //    (whose moves all carry the wrapper hash) can hold several moves of one kind, and each is its own alert. The
-  //    id is the move's identity on every path (the stream, the catch-up search and the Namada scan parse one
-  //    transaction into the same ids, and `flows` stores rows by it), so one move is still posted once. A NAM bridge
-  //    crossing is recorded on both chains under two ids: alert:ibc pairs the two records, so it is posted once.
-  //    Another coin's crossing has no Osmosis record (the Osmosis reader records NAM only) and its amount is not NAM,
-  //    so it takes no pairing key a NAM crossing of the same addresses and number would then miss.
-  const dedupKeys = [`alert:flow:${flow.id}`];
-  if ((flow.kind === 'ibc_in' || flow.kind === 'ibc_out') && flow.from && flow.to && !isOtherCoin(flow)) {
-    const bucket10m = Math.floor((flow.ts || Date.now()) / 600000);
-    dedupKeys.push(`alert:ibc:${flow.from}:${flow.to}:${Math.round(flow.amount)}:${bucket10m}`);
+  // 3. The claims, taken only for a move that will be posted, so a move that posts nothing holds no key another move
+  //    needs. The first names the move itself (its flow id), never only its transaction: one transaction or Namada
+  //    batch (whose moves all carry the wrapper hash) can hold several moves of one kind, and each is its own alert.
+  //    The id is the move's identity on every path (the stream, the catch-up search and the Namada scan parse one
+  //    transaction into the same ids, and `flows` stores rows by it), so one move is still posted once.
+  if (!(await claimDiscordAlert(db, [`alert:flow:${flow.id}`], Date.now()))) return;
+  //    A NAM bridge crossing is recorded on both chains under two ids, and its two records do not reach the same
+  //    channels: the "NAM bridged to Osmosis" rule reads the Osmosis receive only, while the operator and watchers of
+  //    either address hear of both. So the crossing (its packet, crossingOf) is claimed per channel: each channel
+  //    hears of it once, from whichever record reaches it first, and the channels the first record took never keep
+  //    the second record from the channels only it reaches.
+  const crossing = crossingOf(flow);
+  let send = targets;
+  if (crossing) {
+    const key = (url: string) => `alert:ibc:${crossing}:${channelKey(url)}`;
+    const won = await claimEach(db, targets.map((t) => key(t.url)), Date.now());
+    send = targets.filter((t) => won.has(key(t.url)));
   }
-  if (!(await claimDiscordAlert(db, dedupKeys, Date.now()))) return;
-  await postAll(targets, db, `move ${flow.id}`);
+  if (send.length) await postAll(send, db, `move ${flow.id}`);
 }
 
 /**
