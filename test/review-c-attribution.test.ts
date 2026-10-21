@@ -75,14 +75,16 @@ describe('a bridge receiver\'s Namada origin comes only from NAM that crossed fr
     expect(p.pipelineSummary!.cohorts.genesisBackersNam).toBe(0);
   });
 
-  it('a genesis wallet that really bridged the NAM is still named, and its NAM is genesis NAM', async () => {
+  it('a genesis wallet that really bridged the NAM is still named, and its NAM (only its own) is genesis NAM', async () => {
     const db = await fixture(null);
     insert(db, 'flows', [{ id: 'o3', chain: 'osmosis', height: 4, ts: NOW - 10 * H, tx_hash: 'O3', kind: 'ibc_in', from_addr: G, to_addr: A, amount_num: 200_000, meta: null }]);
     await link(db, { osmo: A, namada: G, amount: 200_000, ts: NOW - 10 * H });
     const p = await pressure(db as any, NOW, false, 7);
     const e = p.onDeck.find((d) => d.address === A)!;
     expect(e).toMatchObject({ linkedNamada: G, linkedLabel: 'Genesis: Anoma Foundation', linkedLabelSource: 'genesis', bridgedIn: 500_000 });
-    expect(p.pipelineSummary!.cohorts.genesisBackersNam).toBe(500_000);
+    // G sent 200,000 of the 500,000; the 300,000 from the untagged T1 and T2 is theirs, not genesis NAM
+    expect(p.pipelineSummary!.cohorts.genesisBackersNam).toBe(200_000);
+    expect(p.pipelineSummary!.cohorts.transparentNam).toBe(300_000);
   });
 });
 

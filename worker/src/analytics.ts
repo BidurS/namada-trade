@@ -13,6 +13,7 @@ import { safeHttpUrl, explorerHashOf } from '../../shared/flow-rules';
 import { fetchJson } from './util';
 import { INTERNAL_LABELS } from './config';
 import { label_plain, labelAuthorShort } from './labels';
+import { chunks } from './holders';
 
 const H = 3600000, D = 86400000;
 /** Supply's "Unstaking and restaking" list: moves of at least this many NAM over this many days (sent with the response). */
@@ -457,21 +458,40 @@ export async function osmosisNetIbc(db: D1Database, from: number, to: number): P
 
 /**
  * Share follow-up moves out over an address's withdrawals in time order: each withdrawal takes, from the moves
- * inside its window and not yet taken, at most its own amount. Returns the amount per kind for each withdrawal.
+ * inside its window and not yet taken, at most its own amount. A move made with NAM that first had to cross to
+ * another account (a sale on Osmosis) names those crossings in `via`: it is then also held to the NAM that crossed
+ * at or after the withdrawal and at or before the move, each crossing backing at most its own amount. A sale made
+ * before any NAM crossed, or larger than what crossed, cannot all have been the withdrawn NAM.
+ * Returns the amount per kind for each withdrawal.
  */
 export function allocateFollowUps<K extends string>(
   withdrawals: { key: string; ts: number; amount: number }[],
-  moves: { kind: K; ts: number; amount: number; windowMs: number }[],
+  moves: { kind: K; ts: number; amount: number; windowMs: number; via?: string }[],
+  crossings: Map<string, { ts: number; amount: number }[]> = new Map(),
 ): Map<string, Record<K, number>> {
   const out = new Map<string, Record<K, number>>();
   const left = moves.map((m) => ({ ...m, left: m.amount })).sort((a, b) => a.ts - b.ts);
+  const backing = new Map([...crossings].map(([k, list]) => [k, list.map((c) => ({ ts: c.ts, left: c.amount })).sort((a, b) => a.ts - b.ts)]));
   for (const w of [...withdrawals].sort((a, b) => a.ts - b.ts)) {
     const got = {} as Record<K, number>;
     let cap = w.amount;
     for (const m of left) {
       if (cap <= 0) break;
       if (m.left <= 0 || m.ts < w.ts || m.ts >= w.ts + m.windowMs) continue;
-      const take = Math.min(m.left, cap);
+      let take = Math.min(m.left, cap);
+      if (m.via !== undefined) {
+        // the earliest crossings first: one made before a later withdrawal can back none of that withdrawal's moves
+        const cs = (backing.get(m.via) ?? []).filter((c) => c.left > 0 && c.ts >= w.ts && c.ts <= m.ts);
+        take = Math.min(take, cs.reduce((a, c) => a + c.left, 0));
+        let need = take;
+        for (const c of cs) {
+          if (need <= 0) break;
+          const used = Math.min(c.left, need);
+          c.left -= used;
+          need -= used;
+        }
+        if (take <= 0) continue;
+      }
       m.left -= take;
       cap -= take;
       got[m.kind] = (got[m.kind] ?? 0) + take;
@@ -537,48 +557,73 @@ export async function pressure(db: D1Database, asOf: number, replay: boolean, wi
                         WHERE f.to_addr IN (${receivers.map(() => '?').join(',')}) AND f.ts >= ? AND f.ts < ? AND f.chain='osmosis' AND f.kind='ibc_in' AND f.from_addr LIKE 'tnam1%'
                         GROUP BY f.to_addr, f.from_addr ORDER BY nam DESC, first_ts ASC, namada_addr ASC`).bind(...receivers, from, asOf).all<any>()
     : { results: [] as any[] };
-  const linkOf = new Map<string, { addr: string; label: string | null; source: string | null; author: string | null }>();
-  for (const l of links.results || []) if (!linkOf.has(l.osmo_addr)) linkOf.set(l.osmo_addr, { addr: l.namada_addr, label: l.label ?? INTERNAL_LABELS[l.namada_addr]?.label ?? null, source: l.label ? l.source ?? null : INTERNAL_LABELS[l.namada_addr] ? 'auto' : null, author: l.author ?? null });
+  // Every Namada sender of each receiver with the NAM it sent it in the window and its own first crossing, the
+  // largest first: the first is the receiver's shown origin (linkedNamada), and each sender's NAM goes to that
+  // sender's own cohort (below), so NAM a receiver also got from others is not counted as its largest sender's.
+  type Sender = { addr: string; nam: number; firstTs: number; label: string | null; source: string | null; author: string | null };
+  const sendersOf = new Map<string, Sender[]>();
+  for (const l of links.results || []) {
+    const s: Sender = { addr: l.namada_addr, nam: Number(l.nam) || 0, firstTs: Number(l.first_ts), label: l.label ?? INTERNAL_LABELS[l.namada_addr]?.label ?? null, source: l.label ? l.source ?? null : INTERNAL_LABELS[l.namada_addr] ? 'auto' : null, author: l.author ?? null };
+    (sendersOf.get(l.osmo_addr) ?? sendersOf.set(l.osmo_addr, []).get(l.osmo_addr)!).push(s);
+  }
+  const linkOf = new Map([...sendersOf].map(([osmo, list]) => [osmo, list[0]] as const));
 
   /**
-   * The Osmosis account each of `namadaAddrs` sent NAM to from `since` on (the one it sent the most), from Osmosis's
-   * own records of the crossings (from_addr the Namada sender). Not address_links, which keeps both directions in
-   * one row: an Osmosis account that sent NAM to a withdrawer is not where the withdrawer's NAM went, and its sales
-   * are not the withdrawer's. Nor a crossing made before `since` (the first withdrawal listed): it cannot have
-   * carried withdrawn NAM, and each address's range on flows_from stays a few rows. Accounts in `skip` are passed over.
+   * The Osmosis account each address in `sinceOf` sent NAM to from its own `since` on (the one it sent the most),
+   * with those crossings, from Osmosis's own records of them (from_addr the Namada sender). Not address_links, which
+   * keeps both directions in one row: an Osmosis account that sent NAM to a withdrawer is not where the withdrawer's
+   * NAM went, and its sales are not the withdrawer's. Nor a crossing made before the address's own `since` (its first
+   * listed withdrawal, or the first transfer a burner got after its sender's): it cannot have carried withdrawn NAM,
+   * whatever another address withdrew earlier. The read starts at the earliest `since` (each address's range on
+   * flows_from stays a few rows) and each address's own is applied to its rows. Accounts in `skip` are passed over.
    */
-  const sentToOsmosis = async (namadaAddrs: string[], since: number, skip: Set<string> = new Set()): Promise<Map<string, string>> => {
-    const r = await db.prepare(`SELECT from_addr AS namada_addr, to_addr AS osmo_addr, SUM(amount_num) AS nam, MIN(ts) AS first_ts FROM flows INDEXED BY flows_from
-                                WHERE from_addr IN (${namadaAddrs.map(() => '?').join(',')}) AND ts >= ? AND ts < ? AND chain='osmosis' AND kind='ibc_in' AND to_addr LIKE 'osmo1%'
-                                GROUP BY from_addr, to_addr ORDER BY nam DESC, first_ts ASC, osmo_addr ASC`).bind(...namadaAddrs, since, asOf).all<any>().catch(() => ({ results: [] as any[] }));
-    const out = new Map<string, string>();
-    for (const l of r.results || []) if (!out.has(l.namada_addr) && !skip.has(l.osmo_addr)) out.set(l.namada_addr, l.osmo_addr);
+  const sentToOsmosis = async (sinceOf: Map<string, number>, skip: Set<string> = new Set()) => {
+    const out = new Map<string, { osmo: string; crossings: { ts: number; amount: number }[] }>();
+    if (!sinceOf.size) return out;
+    const namadaAddrs = [...sinceOf.keys()];
+    const r = await db.prepare(`SELECT from_addr AS namada_addr, to_addr AS osmo_addr, ts, amount_num FROM flows INDEXED BY flows_from
+                                WHERE from_addr IN (${namadaAddrs.map(() => '?').join(',')}) AND ts >= ? AND ts < ? AND chain='osmosis' AND kind='ibc_in' AND to_addr LIKE 'osmo1%'`)
+      .bind(...namadaAddrs, Math.min(...sinceOf.values()), asOf).all<any>().catch(() => ({ results: [] as any[] }));
+    const pairs = new Map<string, { namada: string; osmo: string; nam: number; first: number; crossings: { ts: number; amount: number }[] }>();
+    for (const c of r.results || []) {
+      if (!(c.ts >= (sinceOf.get(c.namada_addr) ?? Infinity)) || skip.has(c.osmo_addr)) continue;
+      const k = `${c.namada_addr} ${c.osmo_addr}`;
+      const p = pairs.get(k) ?? pairs.set(k, { namada: c.namada_addr, osmo: c.osmo_addr, nam: 0, first: c.ts, crossings: [] }).get(k)!;
+      p.nam += c.amount_num;
+      p.first = Math.min(p.first, c.ts);
+      p.crossings.push({ ts: c.ts, amount: c.amount_num });
+    }
+    // the most NAM, then the earliest first crossing, then the account (the order the grouped read used)
+    const ranked = [...pairs.values()].sort((a, b) => b.nam - a.nam || a.first - b.first || (a.osmo < b.osmo ? -1 : a.osmo > b.osmo ? 1 : 0));
+    for (const p of ranked) if (!out.has(p.namada)) out.set(p.namada, { osmo: p.osmo, crossings: p.crossings });
     return out;
   };
 
-  // 2-hop burner attribution for unlabeled linkedNamada origins: an unlabeled tnam1 bridge sender that received
-  // Namada transfers in the 48 h before its NAM first arrived on Osmosis names the upstream origin, when those
-  // transfers are a meaningful part of what crossed (HOP_ORIGIN_SHARE of it, and at least HOP_ORIGIN_MIN_NAM): a
-  // dust transfer eight days earlier is neither.
-  const unlabeledLinked = [...new Set([...linkOf.values()].filter((l) => !l.label && !isInternal(l.addr)).map((l) => l.addr))];
+  // 2-hop burner attribution for unlabeled Namada senders: an unlabeled tnam1 bridge sender that received Namada
+  // transfers in the 48 h before its own NAM first arrived on the receiver names the upstream origin, when those
+  // transfers are a meaningful part of what it sent across (HOP_ORIGIN_SHARE of it, and at least
+  // HOP_ORIGIN_MIN_NAM): a dust transfer eight days earlier is neither. Every sender is read, not only the largest,
+  // since each sender's NAM goes to its own cohort; the list is split to fit D1's bound parameters.
+  const unlabeled = [...sendersOf.values()].flat().filter((s) => !s.label && !isInternal(s.addr));
+  const unlabeledSenders = [...new Set(unlabeled.map((s) => s.addr))];
   const hopRowsByBurner = new Map<string, { origin: string; nam: number; ts: number; label: string | null; source: string | null }[]>();
-  if (unlabeledLinked.length) {
-    const firsts = (ibcIn.results || []).map((r: any) => Number(r.first_ts)).filter((t: number) => Number.isFinite(t));
+  if (unlabeledSenders.length) {
+    const firsts = unlabeled.map((s) => s.firstTs).filter((t) => Number.isFinite(t));
     const lo = (firsts.length ? Math.min(...firsts) : from) - HOP_ORIGIN_WINDOW_MS;
     const hi = firsts.length ? Math.max(...firsts) : asOf;
-    const hopRows = await db.prepare(
+    const hopParts = await Promise.all(chunks(unlabeledSenders, 3).map((part) => db.prepare(
       `SELECT f.to_addr AS burner, f.from_addr AS origin, f.amount_num AS nam, f.ts, l.label, l.source
        FROM flows f LEFT JOIN labels l ON l.address = f.from_addr
-       WHERE f.chain='namada' AND f.kind='transfer' AND f.to_addr IN (${unlabeledLinked.map(() => '?').join(',')})
+       WHERE f.chain='namada' AND f.kind='transfer' AND f.to_addr IN (${part.map(() => '?').join(',')})
          AND f.from_addr IS NOT NULL AND f.amount_num >= ? AND f.ts >= ? AND f.ts < ? AND ${NOT_LEGACY_TWIN}
        ORDER BY f.amount_num DESC LIMIT 500`,
-    ).bind(...unlabeledLinked, HOP_ORIGIN_MIN_NAM, lo, hi).all<any>().catch(() => ({ results: [] as any[] }));
-    for (const hr of hopRows.results || []) {
+    ).bind(...part, HOP_ORIGIN_MIN_NAM, lo, hi).all<any>().catch(() => ({ results: [] as any[] }))));
+    for (const hr of hopParts.flatMap((r) => r.results || [])) {
       if (!hr.burner || !hr.origin || isInternal(hr.origin)) continue;
       (hopRowsByBurner.get(hr.burner) ?? hopRowsByBurner.set(hr.burner, []).get(hr.burner)!).push({ origin: hr.origin, nam: hr.nam, ts: hr.ts, label: hr.label ?? null, source: hr.source ?? null });
     }
   }
-  /** The largest origin of the burner's transfers in the 48 h before `firstTs`, when it sent at least the floor and HOP_ORIGIN_SHARE of `bridgedIn`. */
+  /** The largest origin of the burner's transfers in the 48 h before `firstTs`, when it sent at least the floor and HOP_ORIGIN_SHARE of `bridgedIn` (what the burner sent the receiver). */
   const hopOriginOf = (burner: string, firstTs: number, bridgedIn: number) => {
     const rows = hopRowsByBurner.get(burner);
     if (!rows) return null;
@@ -605,7 +650,8 @@ export async function pressure(db: D1Database, asOf: number, replay: boolean, wi
       const soldCounted = Math.min(soldSince, r.nam);
       const sentBackCounted = Math.min(bridgedOutSince, r.nam - soldCounted);
       const link = linkOf.get(r.addr);
-      const hopOriginNamada = link?.addr ? hopOriginOf(link.addr, r.first_ts, r.nam) : null;
+      // read against the shown sender's own first crossing and NAM, as its share of the cohorts is
+      const hopOriginNamada = link?.addr ? hopOriginOf(link.addr, link.firstTs, link.nam) : null;
       // Empirical Bayesian Beta-Binomial dump hazard score in [0, 1]
       const empiricalPropensity = (soldCounted + priorSells30d + 5_000) / (r.nam + priorSells30d + 25_000);
       const hazardBoost = (soldCounted > 0 ? 0.25 : 0) + (priorSells30d > 0 ? 0.15 : 0) + (hopOriginNamada ? 0.1 : 0);
@@ -669,10 +715,15 @@ export async function pressure(db: D1Database, asOf: number, replay: boolean, wi
   });
   // What did each withdrawer do with the NAM next? A re-bond is a validator move, not a sale. One address's later
   // moves (including 2-hop burner transfers) are shared out over its withdrawals (oldest first, each capped at its own amount), never counted twice.
+  // A sale on Osmosis counts only up to the NAM the withdrawer (or its burner) sent the selling account between the
+  // withdrawal and the sale.
   const withdraws = unlocks.filter((u) => u.kind === 'withdraw' && u.address);
   if (withdraws.length) {
     const addrs = [...new Set(withdraws.map((w) => w.address))];
     const minW = Math.min(...withdraws.map((w) => w.ts));
+    // each address's own first listed withdrawal: its crossings before that cannot have carried withdrawn NAM
+    const firstW = new Map<string, number>();
+    for (const w of withdraws) firstW.set(w.address, Math.min(firstW.get(w.address) ?? Infinity, w.ts));
     const maxFollow = Math.min(asOf, Math.max(...withdraws.map((w) => w.ts)) + 48 * H);
     const [after, hopTransfers, osmoOf] = await Promise.all([
       // Each address's range on flows_from (a few dozen rows; 52,463 on flows_chain_height on 2026-10-20).
@@ -680,11 +731,12 @@ export async function pressure(db: D1Database, asOf: number, replay: boolean, wi
         .bind(...addrs, minW, maxFollow).all<any>().catch(() => ({ results: [] as any[] })),
       db.prepare(`SELECT f.from_addr, f.to_addr, f.ts, f.amount_num FROM flows f WHERE f.chain='namada' AND f.kind='transfer' AND f.from_addr IN (${addrs.map(() => '?').join(',')}) AND f.to_addr IS NOT NULL AND f.ts >= ? AND f.ts < ? AND ${NOT_LEGACY_TWIN}`)
         .bind(...addrs, minW, maxFollow).all<any>().catch(() => ({ results: [] as any[] })),
-      sentToOsmosis(addrs, minW),
+      sentToOsmosis(firstW),
     ]);
-    const sold = osmoOf.size
-      ? await db.prepare(`SELECT from_addr, ts, amount_num FROM flows WHERE chain='osmosis' AND kind='sell' AND from_addr IN (${[...osmoOf.values()].map(() => '?').join(',')}) AND ts >= ? AND ts < ?`)
-          .bind(...osmoOf.values(), minW, asOf).all<any>().catch(() => ({ results: [] as any[] }))
+    const sellers = [...new Set([...osmoOf.values()].map((o) => o.osmo))];
+    const sold = sellers.length
+      ? await db.prepare(`SELECT from_addr, ts, amount_num FROM flows WHERE chain='osmosis' AND kind='sell' AND from_addr IN (${sellers.map(() => '?').join(',')}) AND ts >= ? AND ts < ?`)
+          .bind(...sellers, minW, asOf).all<any>().catch(() => ({ results: [] as any[] }))
       : { results: [] as any[] };
 
     type K = 'rebonded' | 'bridged_out' | 'shielded' | 'sold';
@@ -694,26 +746,37 @@ export async function pressure(db: D1Database, asOf: number, replay: boolean, wi
     const hopMovesByOrigin = new Map<string, { kind: K; ts: number; amount: number; windowMs: number }[]>();
     const burners = [...new Set((hopTransfers.results || []).map((r: any) => r.to_addr as string).filter((a) => a && !isInternal(a) && !addrs.includes(a)))].slice(0, 40);
     if (burners.length) {
+      // A burner's crossings count from the first transfer it got from a withdrawer after that withdrawer's own
+      // first withdrawal; a burner that got none after one has no Osmosis account here.
+      const burnerSince = new Map<string, number>();
+      for (const t of hopTransfers.results || []) {
+        if (!burners.includes(t.to_addr) || !(t.ts >= (firstW.get(t.from_addr) ?? Infinity))) continue;
+        burnerSince.set(t.to_addr, Math.min(burnerSince.get(t.to_addr) ?? Infinity, t.ts));
+      }
       // An Osmosis account a withdrawer and its burner both sent NAM to is one seller: its sales are attributed
       // through the withdrawer's own crossing, never again through the burner's.
       const [burnerAfter, burnerOsmo] = await Promise.all([
         db.prepare(`SELECT from_addr, kind, ts, amount_num FROM flows INDEXED BY flows_from WHERE chain='namada' AND kind IN ('bond','ibc_out','shield') AND from_addr IN (${burners.map(() => '?').join(',')}) AND ts >= ? AND ts < ?`)
           .bind(...burners, minW, maxFollow).all<any>().catch(() => ({ results: [] as any[] })),
-        sentToOsmosis(burners, minW, new Set(osmoOf.values())),
+        sentToOsmosis(burnerSince, new Set(sellers)),
       ]);
-      const burnerSold = burnerOsmo.size
-        ? await db.prepare(`SELECT from_addr, ts, amount_num FROM flows WHERE chain='osmosis' AND kind='sell' AND from_addr IN (${[...burnerOsmo.values()].map(() => '?').join(',')}) AND ts >= ? AND ts < ?`)
-            .bind(...burnerOsmo.values(), minW, asOf).all<any>().catch(() => ({ results: [] as any[] }))
+      const burnerSellers = [...new Set([...burnerOsmo.values()].map((o) => o.osmo))];
+      const burnerSold = burnerSellers.length
+        ? await db.prepare(`SELECT from_addr, ts, amount_num FROM flows WHERE chain='osmosis' AND kind='sell' AND from_addr IN (${burnerSellers.map(() => '?').join(',')}) AND ts >= ? AND ts < ?`)
+            .bind(...burnerSellers, minW, asOf).all<any>().catch(() => ({ results: [] as any[] }))
         : { results: [] as any[] };
 
       for (const bAddr of burners) {
         const incoming = (hopTransfers.results || []).filter((r: any) => r.to_addr === bAddr);
+        const bOsmo = burnerOsmo.get(bAddr);
         const bMoves = [
           ...(burnerAfter.results || []).filter((r: any) => r.from_addr === bAddr && KIND[r.kind]).map((r: any) => ({ kind: KIND[r.kind], ts: r.ts, amount: r.amount_num, windowMs: 48 * H })),
-          ...(burnerSold.results || []).filter((r: any) => burnerOsmo.has(bAddr) && r.from_addr === burnerOsmo.get(bAddr)).map((r: any) => ({ kind: 'sold' as K, ts: r.ts, amount: r.amount_num, windowMs: 7 * D })),
+          // a sale counts up to what the burner sent the account between the transfer and the sale
+          ...(bOsmo ? (burnerSold.results || []).filter((r: any) => r.from_addr === bOsmo.osmo).map((r: any) => ({ kind: 'sold' as K, ts: r.ts, amount: r.amount_num, windowMs: 7 * D, via: bAddr })) : []),
         ];
         if (!bMoves.length) continue;
-        const bAlloc = allocateFollowUps<K>(incoming.map((t: any, idx: number) => ({ key: `${idx}`, ts: t.ts, amount: t.amount_num })), bMoves);
+        const bAlloc = allocateFollowUps<K>(incoming.map((t: any, idx: number) => ({ key: `${idx}`, ts: t.ts, amount: t.amount_num })), bMoves,
+          bOsmo ? new Map([[bAddr, bOsmo.crossings]]) : undefined);
         incoming.forEach((t: any, idx: number) => {
           const got = bAlloc.get(`${idx}`);
           if (!got) return;
@@ -730,12 +793,15 @@ export async function pressure(db: D1Database, asOf: number, replay: boolean, wi
 
     for (const addr of addrs) {
       const mine = withdraws.filter((w) => w.address === addr);
+      const osmo = osmoOf.get(addr);
       const moves = [
         ...(after.results || []).filter((r: any) => r.from_addr === addr && KIND[r.kind]).map((r: any) => ({ kind: KIND[r.kind], ts: r.ts, amount: r.amount_num, windowMs: 48 * H })),
-        ...(sold.results || []).filter((r: any) => osmoOf.has(addr) && r.from_addr === osmoOf.get(addr)).map((r: any) => ({ kind: 'sold' as K, ts: r.ts, amount: r.amount_num, windowMs: 7 * D })),
+        // a sale counts up to what the withdrawer sent the account between the withdrawal and the sale
+        ...(osmo ? (sold.results || []).filter((r: any) => r.from_addr === osmo.osmo).map((r: any) => ({ kind: 'sold' as K, ts: r.ts, amount: r.amount_num, windowMs: 7 * D, via: addr })) : []),
         ...(hopMovesByOrigin.get(addr) ?? []),
       ];
-      const alloc = allocateFollowUps<K>(mine.map((w, i) => ({ key: `${w.txHash}:${i}`, ts: w.ts, amount: w.amountNam })), moves);
+      const alloc = allocateFollowUps<K>(mine.map((w, i) => ({ key: `${w.txHash}:${i}`, ts: w.ts, amount: w.amountNam })), moves,
+        osmo ? new Map([[addr, osmo.crossings]]) : undefined);
       mine.forEach((w, i) => {
         const got = alloc.get(`${w.txHash}:${i}`) ?? ({} as Record<K, number>);
         const best = (['rebonded', 'bridged_out', 'sold', 'shielded'] as K[]).map((k) => [k, got[k] ?? 0] as const).sort((a, b) => b[1] - a[1])[0];
@@ -799,19 +865,28 @@ export async function pressure(db: D1Database, asOf: number, replay: boolean, wi
   let burnerHopNam = 0;
   let transparentNam = 0;
   let highHazardRemainingNam = 0;
+  const EARLY = /genesis|backer|foundation|team/i;
   for (const e of onDeck) {
     if ((e.dumpHazardScore ?? 0) >= SELLS_MOST_CUT) highHazardRemainingNam += e.remaining;
-    const isGenesis =
-      e.labelSource === 'genesis' ||
-      e.linkedLabelSource === 'genesis' ||
-      /genesis|backer|foundation|team/i.test(e.label ?? '') ||
-      /genesis|backer|foundation|team/i.test(e.linkedLabel ?? '') ||
-      /genesis|backer|foundation|team/i.test(e.hopOriginNamada?.label ?? '');
-    const isMasp = e.linkedNamada === MASP || !!e.passthroughFrom;
-    if (isGenesis) genesisBackersNam += e.bridgedIn;
-    else if (isMasp) maspTurnstileNam += e.bridgedIn;
-    else if (e.hopOriginNamada) burnerHopNam += e.bridgedIn;
-    else transparentNam += e.bridgedIn;
+    // The receiver's own tag, or a matched pass through the shielded set, decides for all it got.
+    if (e.labelSource === 'genesis' || EARLY.test(e.label ?? '')) { genesisBackersNam += e.bridgedIn; continue; }
+    if (e.passthroughFrom) { maspTurnstileNam += e.bridgedIn; continue; }
+    // Otherwise each Namada sender's own NAM into it (its crossings in the window) goes to that sender's cohort, so
+    // NAM from untagged senders is never counted as a tagged largest sender's, nor the reverse.
+    let fromSenders = 0;
+    for (const s of sendersOf.get(e.address) ?? []) {
+      const nam = Math.min(s.nam, e.bridgedIn - fromSenders);
+      if (!(nam > 0)) break;
+      fromSenders += nam;
+      const hop = hopOriginOf(s.addr, s.firstTs, s.nam);
+      if (s.source === 'genesis' || EARLY.test(s.label ?? '') || EARLY.test(hop?.label ?? '')) genesisBackersNam += nam;
+      else if (s.addr === MASP) maspTurnstileNam += nam;
+      else if (hop) burnerHopNam += nam;
+      else transparentNam += nam;
+    }
+    // NAM whose sender Osmosis did not record as a tnam1 address names no Namada origin; it stays in the last part
+    // as it did before, so the parts add up to what crossed.
+    transparentNam += Math.max(0, e.bridgedIn - fromSenders);
   }
   const pipelineSummary: SupplyCohortBreakdown = {
     cohorts: {
