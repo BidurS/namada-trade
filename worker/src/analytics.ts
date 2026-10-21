@@ -526,12 +526,35 @@ export async function pressure(db: D1Database, asOf: number, replay: boolean, wi
   for (const o of sendsOut.outs) if (o.from) (outByAddr.get(o.from) ?? outByAddr.set(o.from, []).get(o.from)!).push({ ts: o.ts, nam: o.amount });
 
   const receivers = (ibcIn.results || []).map((r: any) => r.addr as string);
+  // A receiver's Namada origin is the tnam1 address that sent it the NAM it got in the window: the sender of its
+  // own crossings as Osmosis recorded them (an Osmosis ibc_in row: from_addr the Namada sender, to_addr this
+  // receiver), the largest first. Not address_links: that table keeps one row per (osmo1, tnam1) pair for both
+  // directions, so an Osmosis account that sent NAM to a Namada wallet of its choosing (a genesis wallet, say)
+  // would be shown as coming from that wallet, and its NAM counted in that wallet's cohort.
   const links = receivers.length
-    ? await db.prepare(`SELECT l.osmo_addr, l.namada_addr, lb.label, lb.source, lb.author FROM address_links l LEFT JOIN labels lb ON lb.address = l.namada_addr
-                        WHERE l.osmo_addr IN (${receivers.map(() => '?').join(',')}) ORDER BY l.volume_num DESC`).bind(...receivers).all<any>()
+    ? await db.prepare(`SELECT f.to_addr AS osmo_addr, f.from_addr AS namada_addr, SUM(f.amount_num) AS nam, MIN(f.ts) AS first_ts, lb.label, lb.source, lb.author
+                        FROM flows f INDEXED BY flows_to LEFT JOIN labels lb ON lb.address = f.from_addr
+                        WHERE f.to_addr IN (${receivers.map(() => '?').join(',')}) AND f.ts >= ? AND f.ts < ? AND f.chain='osmosis' AND f.kind='ibc_in' AND f.from_addr LIKE 'tnam1%'
+                        GROUP BY f.to_addr, f.from_addr ORDER BY nam DESC, first_ts ASC, namada_addr ASC`).bind(...receivers, from, asOf).all<any>()
     : { results: [] as any[] };
   const linkOf = new Map<string, { addr: string; label: string | null; source: string | null; author: string | null }>();
   for (const l of links.results || []) if (!linkOf.has(l.osmo_addr)) linkOf.set(l.osmo_addr, { addr: l.namada_addr, label: l.label ?? INTERNAL_LABELS[l.namada_addr]?.label ?? null, source: l.label ? l.source ?? null : INTERNAL_LABELS[l.namada_addr] ? 'auto' : null, author: l.author ?? null });
+
+  /**
+   * The Osmosis account each of `namadaAddrs` sent NAM to from `since` on (the one it sent the most), from Osmosis's
+   * own records of the crossings (from_addr the Namada sender). Not address_links, which keeps both directions in
+   * one row: an Osmosis account that sent NAM to a withdrawer is not where the withdrawer's NAM went, and its sales
+   * are not the withdrawer's. Nor a crossing made before `since` (the first withdrawal listed): it cannot have
+   * carried withdrawn NAM, and each address's range on flows_from stays a few rows. Accounts in `skip` are passed over.
+   */
+  const sentToOsmosis = async (namadaAddrs: string[], since: number, skip: Set<string> = new Set()): Promise<Map<string, string>> => {
+    const r = await db.prepare(`SELECT from_addr AS namada_addr, to_addr AS osmo_addr, SUM(amount_num) AS nam, MIN(ts) AS first_ts FROM flows INDEXED BY flows_from
+                                WHERE from_addr IN (${namadaAddrs.map(() => '?').join(',')}) AND ts >= ? AND ts < ? AND chain='osmosis' AND kind='ibc_in' AND to_addr LIKE 'osmo1%'
+                                GROUP BY from_addr, to_addr ORDER BY nam DESC, first_ts ASC, osmo_addr ASC`).bind(...namadaAddrs, since, asOf).all<any>().catch(() => ({ results: [] as any[] }));
+    const out = new Map<string, string>();
+    for (const l of r.results || []) if (!out.has(l.namada_addr) && !skip.has(l.osmo_addr)) out.set(l.namada_addr, l.osmo_addr);
+    return out;
+  };
 
   // 2-hop burner attribution for unlabeled linkedNamada origins: an unlabeled tnam1 bridge sender that received
   // Namada transfers in the 48 h before its NAM first arrived on Osmosis names the upstream origin, when those
@@ -651,15 +674,14 @@ export async function pressure(db: D1Database, asOf: number, replay: boolean, wi
     const addrs = [...new Set(withdraws.map((w) => w.address))];
     const minW = Math.min(...withdraws.map((w) => w.ts));
     const maxFollow = Math.min(asOf, Math.max(...withdraws.map((w) => w.ts)) + 48 * H);
-    const [after, hopTransfers, osmoLinks] = await Promise.all([
+    const [after, hopTransfers, osmoOf] = await Promise.all([
       // Each address's range on flows_from (a few dozen rows; 52,463 on flows_chain_height on 2026-10-20).
       db.prepare(`SELECT from_addr, to_addr, kind, ts, amount_num FROM flows INDEXED BY flows_from WHERE chain='namada' AND kind IN ('bond','ibc_out','shield') AND from_addr IN (${addrs.map(() => '?').join(',')}) AND ts >= ? AND ts < ?`)
         .bind(...addrs, minW, maxFollow).all<any>().catch(() => ({ results: [] as any[] })),
       db.prepare(`SELECT f.from_addr, f.to_addr, f.ts, f.amount_num FROM flows f WHERE f.chain='namada' AND f.kind='transfer' AND f.from_addr IN (${addrs.map(() => '?').join(',')}) AND f.to_addr IS NOT NULL AND f.ts >= ? AND f.ts < ? AND ${NOT_LEGACY_TWIN}`)
         .bind(...addrs, minW, maxFollow).all<any>().catch(() => ({ results: [] as any[] })),
-      db.prepare(`SELECT osmo_addr, namada_addr FROM address_links WHERE namada_addr IN (${addrs.map(() => '?').join(',')})`).bind(...addrs).all<any>().catch(() => ({ results: [] as any[] })),
+      sentToOsmosis(addrs, minW),
     ]);
-    const osmoOf = new Map((osmoLinks.results || []).map((l: any) => [l.namada_addr, l.osmo_addr]));
     const sold = osmoOf.size
       ? await db.prepare(`SELECT from_addr, ts, amount_num FROM flows WHERE chain='osmosis' AND kind='sell' AND from_addr IN (${[...osmoOf.values()].map(() => '?').join(',')}) AND ts >= ? AND ts < ?`)
           .bind(...osmoOf.values(), minW, asOf).all<any>().catch(() => ({ results: [] as any[] }))
@@ -672,15 +694,13 @@ export async function pressure(db: D1Database, asOf: number, replay: boolean, wi
     const hopMovesByOrigin = new Map<string, { kind: K; ts: number; amount: number; windowMs: number }[]>();
     const burners = [...new Set((hopTransfers.results || []).map((r: any) => r.to_addr as string).filter((a) => a && !isInternal(a) && !addrs.includes(a)))].slice(0, 40);
     if (burners.length) {
-      const [burnerAfter, burnerLinks] = await Promise.all([
+      // An Osmosis account a withdrawer and its burner both sent NAM to is one seller: its sales are attributed
+      // through the withdrawer's own crossing, never again through the burner's.
+      const [burnerAfter, burnerOsmo] = await Promise.all([
         db.prepare(`SELECT from_addr, kind, ts, amount_num FROM flows INDEXED BY flows_from WHERE chain='namada' AND kind IN ('bond','ibc_out','shield') AND from_addr IN (${burners.map(() => '?').join(',')}) AND ts >= ? AND ts < ?`)
           .bind(...burners, minW, maxFollow).all<any>().catch(() => ({ results: [] as any[] })),
-        db.prepare(`SELECT osmo_addr, namada_addr FROM address_links WHERE namada_addr IN (${burners.map(() => '?').join(',')})`).bind(...burners).all<any>().catch(() => ({ results: [] as any[] })),
+        sentToOsmosis(burners, minW, new Set(osmoOf.values())),
       ]);
-      // An Osmosis account linked to a withdrawer and to its burner is one seller: its sales are attributed through
-      // the withdrawer's own link, never again through the burner's.
-      const directOsmo = new Set(osmoOf.values());
-      const burnerOsmo = new Map((burnerLinks.results || []).filter((l: any) => !directOsmo.has(l.osmo_addr)).map((l: any) => [l.namada_addr, l.osmo_addr]));
       const burnerSold = burnerOsmo.size
         ? await db.prepare(`SELECT from_addr, ts, amount_num FROM flows WHERE chain='osmosis' AND kind='sell' AND from_addr IN (${[...burnerOsmo.values()].map(() => '?').join(',')}) AND ts >= ? AND ts < ?`)
             .bind(...burnerOsmo.values(), minW, asOf).all<any>().catch(() => ({ results: [] as any[] }))

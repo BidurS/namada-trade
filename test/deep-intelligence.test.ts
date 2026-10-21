@@ -303,11 +303,10 @@ describe('Review fixes (docs/review-deep-protocol-intelligence.md)', () => {
   it('3. an Osmosis account linked to both the vault and its burner is one seller: a sale is counted once', async () => {
     const db = testD1();
     const vault = 'tnam1qvault_shared', burner = 'tnam1qburner_shared', osmo = 'osmo1shared';
-    insert(db, 'address_links', [
-      { osmo_addr: osmo, namada_addr: vault, first_seen: NOW - 10 * H, last_seen: NOW - 10 * H, transfers: 1, volume_num: 100_000 },
-      { osmo_addr: osmo, namada_addr: burner, first_seen: NOW - 10 * H, last_seen: NOW - 10 * H, transfers: 1, volume_num: 100_000 },
-    ]);
     insert(db, 'flows', [
+      // both sent NAM to the one Osmosis account (Osmosis's records of the crossings: the link pressure() reads)
+      { id: 'g0a', chain: 'osmosis', height: 3, ts: NOW - 10 * H, tx_hash: 'IN_VAULT', kind: 'ibc_in', from_addr: vault, to_addr: osmo, amount_num: 100_000, meta: null },
+      { id: 'g0b', chain: 'osmosis', height: 4, ts: NOW - 10 * H, tx_hash: 'IN_BURNER', kind: 'ibc_in', from_addr: burner, to_addr: osmo, amount_num: 100_000, meta: null },
       { id: 'g1', chain: 'namada', height: 1, ts: NOW - 12 * H, tx_hash: 'W_SHARED', kind: 'withdraw', from_addr: POS, to_addr: vault, amount_num: 300_000, meta: null },
       { id: 'g2', chain: 'namada', height: 2, ts: NOW - 11 * H, tx_hash: 'HOP_SHARED', kind: 'transfer', from_addr: vault, to_addr: burner, amount_num: 200_000, meta: null },
       { id: 'g3', chain: 'osmosis', height: 5, ts: NOW - 9 * H, tx_hash: 'SELL_SHARED', kind: 'sell', from_addr: osmo, to_addr: 'osmo1pool', amount_num: 100_000, meta: null },
