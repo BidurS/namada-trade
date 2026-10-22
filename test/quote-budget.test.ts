@@ -2,7 +2,7 @@
 // stored answer first and each call once (security review, 2026-10-22).
 import { describe, it, expect, vi, afterEach } from 'vitest';
 import { app, QUOTE_BUDGET_KEY } from '../worker/src/api';
-import { quoteNamTrade } from '../worker/src/sources/sqs';
+import { quoteNamTrade, QUOTE_TRIES } from '../worker/src/sources/sqs';
 import { NAM, OSMOSIS } from '../worker/src/config';
 import { testD1 } from './d1-sqlite';
 
@@ -105,8 +105,8 @@ describe('a visitor\'s quote is bounded in Osmosis calls', () => {
     expect(calls.length).toBeLessThanOrEqual(6);
   });
 
-  it('a visitor\'s quote asks a refused URL once more and no further: 403 then 200 quotes (2 calls), 403 twice is busy', async () => {
-    // the quote service refused about every other first ask from a location (2026-10-22): one retry, each a call of the budget
+  it('a visitor\'s quote asks a refused URL again up to QUOTE_TRIES times, each a call of its budget: 403 then 200 quotes, 403 every time is busy', async () => {
+    // the quote service refused about half the asks from a location (2026-10-22)
     vi.useFakeTimers();
     edge();
     const calls = sqs({ fail: (_u, n) => (n <= 1 ? 403 : null) });
@@ -114,7 +114,7 @@ describe('a visitor\'s quote is bounded in Osmosis calls', () => {
     await vi.runAllTimersAsync();
     const r = await p;
     expect(r.body.quote).not.toBeNull();
-    expect(calls.filter((u: string) => u.includes('/router/')).length).toBeLessThanOrEqual(2);
+    expect(calls.filter((u: string) => u.includes('/router/')).length).toBeLessThanOrEqual(QUOTE_TRIES);
     vi.useFakeTimers();
     edge();
     const refused = sqs({ fail: () => 403 });
@@ -122,7 +122,7 @@ describe('a visitor\'s quote is bounded in Osmosis calls', () => {
     await vi.runAllTimersAsync();
     const b = await q;
     expect(b.body.quote).toBeNull();
-    expect(refused.length).toBeLessThanOrEqual(4); // the price twice and the route twice at most, never the 15 of before
+    expect(refused.length).toBeLessThanOrEqual(2 * QUOTE_TRIES); // the price and the route each QUOTE_TRIES times at most
   });
 
   it('takes its spot from the quote the cron stored in the last two minutes, said with that time: no price call', async () => {

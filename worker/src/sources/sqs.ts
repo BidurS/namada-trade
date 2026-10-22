@@ -141,9 +141,9 @@ export async function quoteNamTrade(
   // 5,000 NAM) is the stored answer, before anything is asked of SQS: the spot price included.
   const key = `quote2-${side}-${Math.round(amountNam)}`;
   return edgeCached(key, 10, async () => {
-    // With a budget each attempt spends one call of it, and a call refused (a 403, a 5xx) is asked once more after a
-    // pause: the quote service refuses about every other first ask from a location at times (2026-10-22), so one
-    // attempt alone left a visitor's quote 'busy' half the time.
+    // With a budget each attempt spends one call of it, and a call refused (a 403, a 5xx) is asked again after a
+    // growing pause, up to QUOTE_TRIES in all, as sqsGet does: the quote service refused about half the asks from a
+    // location at times (2026-10-22), so one or two attempts left a visitor's quote 'busy' half the time.
     const call: typeof routerQuote = async (inBase, inDenom, outDenom) => {
       if (!budget) return routerQuote(inBase, inDenom, outDenom);
       for (let a = 0; ; a++) {
@@ -151,8 +151,8 @@ export async function quoteNamTrade(
         try {
           return await routerQuote(inBase, inDenom, outDenom, 1);
         } catch (e) {
-          if (a >= 1 || !(e instanceof HttpError) || (e.status !== 403 && e.status !== 429 && e.status < 500)) throw e;
-          await sleep(400 + Math.floor(Math.random() * 250));
+          if (a >= QUOTE_TRIES - 1 || !(e instanceof HttpError) || (e.status !== 403 && e.status !== 429 && e.status < 500)) throw e;
+          await sleep(350 * 2 ** a + Math.floor(Math.random() * 250));
         }
       }
     };
@@ -160,9 +160,9 @@ export async function quoteNamTrade(
     let spotAt = knownSpotUsd != null && knownSpotAt != null ? knownSpotAt : Date.now();
     if (spotUsd == null) {
       let pr: Awaited<ReturnType<typeof fetchNamPrice>> = { usd: null, at: Date.now() };
-      for (let a = 0; a < (budget ? 2 : 1) && pr.usd == null; a++) {
+      for (let a = 0; a < (budget ? QUOTE_TRIES : 1) && pr.usd == null; a++) {
         if (budget && !(await budget())) return { quote: null, error: quoteErrorText('busy'), code: 'busy' as const };
-        if (a) await sleep(400 + Math.floor(Math.random() * 250));
+        if (a) await sleep(350 * 2 ** (a - 1) + Math.floor(Math.random() * 250));
         pr = await fetchNamPrice(budget ? 1 : 3);
       }
       spotUsd = pr.usd;
@@ -179,6 +179,8 @@ export async function quoteNamTrade(
  * live hub pass none and keep their retries.
  */
 export type QuoteBudget = () => Promise<boolean>;
+/** Attempts per quote-service call of a visitor's quote, each one call of its budget (as sqsGet's three). */
+export const QUOTE_TRIES = 3;
 
 type Raw = { inBase: string; out: number; impactPct: number; feePct: number; route: string[] };
 
