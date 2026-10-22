@@ -24,6 +24,7 @@ import type { Flow } from '../shared/types';
 // an instance made without its constructor (which would open sockets and fetch prices).
 vi.mock('cloudflare:workers', () => ({ DurableObject: class {} }));
 import { LiveHub } from '../worker/src/live-hub';
+import { HubQuote } from '../worker/src/live-quote';
 
 type Hub = { alertFlows(flows: Flow[], threshold?: number, minNam?: number): Promise<void> };
 const hubWith = (env: Record<string, unknown>): Hub => Object.assign(Object.create(LiveHub.prototype), { env, lastPriceUsd: null });
@@ -236,6 +237,7 @@ describe('an Osmosis stream transaction whose write fails is read again by the c
       env: { DB: db, DISCORD_WEBHOOK_URL: OP },
       seenOsmoTx: new Set<string>(), osmoRetryTx: new Map<string, number>(), osmoRetryFrom: null, osmoRetryGen: 0, osmoHeight: 0, sessions: new Set(), lastPriceUsd: null,
       osmoCtx: { poolAddrs: new Map(), priceUsd: null, assets: new Map() },
+      quote: new HubQuote(async () => null, async () => null),
     });
     const rows = () => real.raw.prepare('SELECT COUNT(*) AS n FROM flows WHERE tx_hash = ?').get(hash.toUpperCase()).n as number;
     const cursor = () => JSON.parse(real.raw.prepare("SELECT value FROM kv WHERE key='osmosis.cursor'").get().value).height as number;

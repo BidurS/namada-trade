@@ -23,6 +23,7 @@ import { testD1 } from './d1-sqlite';
 
 vi.mock('cloudflare:workers', () => ({ DurableObject: class {} }));
 import { LiveHub } from '../worker/src/live-hub';
+import { HubQuote } from '../worker/src/live-quote';
 
 const MASP = NAMADA.internal.masp;
 const NAMT = NAM.namadaToken;
@@ -168,7 +169,7 @@ describe('the live scan reads the fee payer from the block for such a block', ()
       throw new Error(`unexpected ${url}`);
     }));
     const db = testD1();
-    const hub: any = Object.assign(Object.create(LiveHub.prototype), { env: { DB: db }, sessions: new Set(), lastPriceUsd: null, namadaHeight: 0 });
+    const hub: any = Object.assign(Object.create(LiveHub.prototype), { env: { DB: db }, sessions: new Set(), lastPriceUsd: null, namadaHeight: 0, quote: new HubQuote(async () => null, async () => null) });
     const flows = () => db.raw.prepare('SELECT id, kind, to_addr, amount_num, meta FROM flows ORDER BY id').all()
       .map((r: any) => [r.id, r.kind, r.to_addr, r.amount_num, JSON.parse(r.meta).maspFeeNam ?? null]);
     const cursor = () => db.raw.prepare("SELECT value FROM kv WHERE key = 'namada.cursor'").get()?.value;

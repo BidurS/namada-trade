@@ -21,6 +21,7 @@ import type { Flow } from '../shared/types';
 // without its constructor (which would open sockets and fetch prices).
 vi.mock('cloudflare:workers', () => ({ DurableObject: class {} }));
 import { LiveHub } from '../worker/src/live-hub';
+import { HubQuote } from '../worker/src/live-quote';
 
 afterEach(() => vi.unstubAllGlobals());
 const fx = (n: string) => JSON.parse(readFileSync(join(__dirname, 'fixtures', n), 'utf8'));
@@ -78,6 +79,7 @@ describe('an Osmosis stream transaction whose failed write left rows stored is w
       env: { DB: db, DISCORD_WEBHOOK_URL: OP },
       seenOsmoTx: new Set<string>(), osmoRetryTx: new Map<string, number>(), osmoRetryFrom: null, osmoRetryGen: 0, osmoHeight: 0, sessions: new Set(), lastPriceUsd: null,
       osmoCtx: { poolAddrs: new Map(), priceUsd: null, assets: new Map() },
+      quote: new HubQuote(async () => null, async () => null),
     });
     await real.prepare("INSERT INTO kv (key, value, updated_at) VALUES ('osmosis.cursor', ?, 0)").bind(JSON.stringify({ height: 50, at: 0 })).run();
     const count = (table: string) => real.raw.prepare(`SELECT COUNT(*) AS n FROM ${table} WHERE tx_hash = ?`).get(hash.toUpperCase()).n as number;

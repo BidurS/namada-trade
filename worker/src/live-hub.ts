@@ -11,6 +11,7 @@ import type { NamadaBlock } from './parse/namada';
 import { runBatch, stmt, kvGet, kvGetJson, kvSet } from './db';
 import { admitSocket } from './ws-admit';
 import { fetchNamPools, fetchNamPrice } from './sources/sqs';
+import { HubQuote, storedQuoteReader } from './live-quote';
 import { configureAlerts, isNamWhale, offeredForAlerts, sendDiscordWhaleAlert } from './sources/discord';
 import { fetchJson } from './util';
 
@@ -77,7 +78,9 @@ export class LiveHub extends DurableObject<Env> {
   private lastLiveReport = 0;
   private lastSweep = 0;
   private needSweep = true;
+  /** The NAM quote new moves are priced at, as osmoCtx.priceUsd: null when none is fresh (worker/src/live-quote.ts). */
   private lastPriceUsd: number | null = null;
+  private quote: HubQuote;
   private osmoCtx: OsmoCtx = {
     poolAddrs: new Map(),
     priceUsd: null,
@@ -87,6 +90,7 @@ export class LiveHub extends DurableObject<Env> {
   constructor(ctx: DurableObjectState, env: Env) {
     super(ctx, env);
     configureAlerts(env.SETTINGS_KEY);
+    this.quote = new HubQuote(async () => (await fetchNamPrice()).usd, storedQuoteReader(env.DB));
     this.ctx.blockConcurrencyWhile(async () => {
       // Initialize pool mappings & price
       await this.refreshContext();
@@ -106,13 +110,20 @@ export class LiveHub extends DurableObject<Env> {
       for (const p of pools) {
         if (p.address) this.osmoCtx.poolAddrs.set(p.address, p.id);
       }
-      const { usd } = await fetchNamPrice();
-      if (usd) {
-        this.lastPriceUsd = usd;
-        this.osmoCtx.priceUsd = usd;
-      }
     } catch (e) {
       console.error('refreshContext error:', e);
+    }
+    await this.refreshQuote();
+  }
+
+  /** The quote for moves now (HubQuote.refresh): it prices the stream's moves; a change is broadcast. */
+  private async refreshQuote() {
+    const q = await this.quote.refresh(Date.now()).catch(() => null);
+    const usd = q?.usd ?? null;
+    this.osmoCtx.priceUsd = usd;
+    if (usd !== this.lastPriceUsd) {
+      this.lastPriceUsd = usd;
+      if (q) this.broadcast({ type: 'price', usd: q.usd, at: q.at });
     }
   }
 
@@ -298,13 +309,8 @@ export class LiveHub extends DurableObject<Env> {
         console.error('Namada scan:', err);
       }
 
-      // Check price update
-      const { usd } = await fetchNamPrice();
-      if (usd && usd !== this.lastPriceUsd) {
-        this.lastPriceUsd = usd;
-        this.osmoCtx.priceUsd = usd;
-        this.broadcast({ type: 'price', usd, at: Date.now() });
-      }
+      // The quote for new moves (at most one ask of the quote service every 30 s; else the cron's stored minute)
+      await this.refreshQuote();
 
       // Ensure Osmosis WS stays active
       this.ensureOsmosisWs();
@@ -374,14 +380,16 @@ export class LiveHub extends DurableObject<Env> {
       let retryBlock = false;
       try {
         if (blk.events && blk.events.length > 0) {
-          let parsed = parseNamadaBlock(blk, this.lastPriceUsd);
+          // the quote for the block's own minute (the scan may be behind)
+          const priceUsd = await this.quote.at(blk.ts, Date.now());
+          let parsed = parseNamadaBlock(blk, priceUsd);
           // The shielded pool's fee is tied to the account that paid gas only when the wrapper names it (no event
           // does): the block's tx bytes are fetched only for a block whose pool fee the events alone had to read.
           // Bytes that cannot be fetched leave that reading (parse/namada.ts namFlows says what it cannot tell): a
           // fee is never worth holding up the scan.
           if (parsed.feePayerWanted.length) {
             try {
-              parsed = parseNamadaBlock(blk, this.lastPriceUsd, feePayersOf(await blockTxs(h, read)));
+              parsed = parseNamadaBlock(blk, priceUsd, feePayersOf(await blockTxs(h, read)));
             } catch (e) {
               console.error(`Namada block ${h}: tx bytes unavailable, the shielded pool's fee read from the events alone:`, e);
             }
@@ -390,7 +398,7 @@ export class LiveHub extends DurableObject<Env> {
           // tx/applied result touched an unbond key, so most blocks cost no extra RPC call).
           if (blockHasUnbond(blk)) {
             try {
-              parsed.flows.push(...(await this.liveUnbonds(blk, read)));
+              parsed.flows.push(...(await this.liveUnbonds(blk, read, priceUsd)));
             } catch (e) {
               // Nothing of this block has been written yet: leave the cursor below it and retry next tick.
               console.error(`Namada block ${h}: tx bytes unavailable, retrying next tick:`, e);
@@ -434,11 +442,11 @@ export class LiveHub extends DurableObject<Env> {
    * decodes them; the outcome (decoded / skipped / undecoded / fetch failure) is kept in kv `namada.unbonds.live`
    * so the cron health view can show it. A failure throws so the block is logged, never silently half-written.
    */
-  private async liveUnbonds(blk: NamadaBlock, read: ReadOpts) {
+  private async liveUnbonds(blk: NamadaBlock, read: ReadOpts, priceUsd: number | null) {
     const status = (await kvGetJson<LiveUnbondStatus>(this.env.DB, 'namada.unbonds.live')) ?? { decoded: 0, failures: [] };
     try {
       const txs = await blockTxs(blk.height, read);
-      const p = parseNamadaUnbonds(blk, txs, this.lastPriceUsd);
+      const p = parseNamadaUnbonds(blk, txs, priceUsd);
       status.decoded += p.flows.length;
       status.lastHeight = blk.height;
       status.lastAt = Date.now();
@@ -516,7 +524,9 @@ export class LiveHub extends DurableObject<Env> {
         if (!Number.isFinite(ts)) { complete = false; continue; } // no block time: never written with a made-up one
         times.set(h, ts);
       }
-      const parsed = parseOsmosisTx(normFromTxSearch(t, times.get(h)!), this.osmoCtx);
+      // A transaction found late is priced at its own minute's quote, never the current one.
+      const priceUsd = await this.quote.at(times.get(h)!, Date.now());
+      const parsed = parseOsmosisTx(normFromTxSearch(t, times.get(h)!), { ...this.osmoCtx, priceUsd });
       if (!parsed.flows.length && !parsed.moves.length) continue;
       for (const f of parsed.flows) f.meta = { ...(f.meta ?? {}), tsSource: 'block', via: 'catch-up search' };
       if (!have.has(hash)) {

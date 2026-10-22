@@ -401,8 +401,10 @@ export function parseOsmosisTx(tx: NormTx, ctx: OsmoCtx): OsmoParsed {
     // A trade sets its own price only in a pool trusted for the price (OSMOSIS.pricePoolIds) against the asset map's
     // stable coin: any other pool is priced at the quote, like a trade against a coin that is not a stable.
     const trusted = !!counter?.stable && mine.every((l) => OSMOSIS.pricePoolIds.includes(l.pool));
-    let priceUsd = ctx.priceUsd;
-    if (counter && trusted && amount > 0 && !isArb) priceUsd = counter.amount / amount;
+    // Any other row is priced at the quote for its minute (ctx.priceUsd), and says so (meta.priceSource 'spot', as the
+    // Namada unbond rows do), or has no price when there is none.
+    const own = counter && trusted && amount > 0 && !isArb ? counter.amount / amount : null;
+    const priceUsd = own ?? ctx.priceUsd;
     const settle = !isArb && !postHandler && trader && indexed ? settleFor(legs, trader) : null;
     out.flows.push({
       id: `osmosis:${tx.hash}:${suffix}`,
@@ -419,7 +421,7 @@ export function parseOsmosisTx(tx: NormTx, ctx: OsmoCtx): OsmoParsed {
       poolId: [...pools].join(','),
       priceUsd,
       valueUsd: priceUsd != null ? priceUsd * amount : null,
-      meta: { ...(isArb ? { arb: true, namSold, namBought } : { trader }), ...(postHandler ? { postHandler: true } : {}), ...(settle ? { settle } : {}) },
+      meta: { ...(isArb ? { arb: true, namSold, namBought } : { trader }), ...(postHandler ? { postHandler: true } : {}), ...(own == null && priceUsd != null ? { priceSource: 'spot' } : {}), ...(settle ? { settle } : {}) },
     });
   };
   // The signer's row is its messages' trader's when they all have the same one.
