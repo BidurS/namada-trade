@@ -13,7 +13,7 @@ import {
 } from '../worker/src/auth';
 import { assertLoginMessage } from '../shared/login';
 import { chainOf, isRealAddress, HttpError, fetchText } from '../worker/src/util';
-import { inlineSql } from '../worker/src/db';
+import { inlineSql, stmt } from '../worker/src/db';
 import { configureAlerts, buildFlowDiscordBody, sendDiscordWhaleAlert, sendDiscordForumAlert, plainMd, BACKOFF_AFTER, FANOUT_DEADLINE_MS, POST_CONCURRENCY } from '../worker/src/sources/discord';
 import { saveSettings, defaultPrefs, type StoredSettings } from '../worker/src/settings';
 import { appliedUnbonds } from '../worker/src/parse/namada-unbond';
@@ -351,10 +351,65 @@ describe('E2: user tags are bounded and never read as links', () => {
   it('the site takes TAGS_PER_DAY new tags a day in all', async () => {
     const db = testD1();
     const t = await signedIn(db);
-    insert(db, 'labels', Array.from({ length: TAGS_PER_DAY }, (_, i) => ({ address: addr(1000 + i), chain: 'namada', label: `t${i}`, category: 'watch', source: 'user', author: 'tnam1qotherxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx', updated_at: NOW - 60000 })));
+    insert(db, 'labels', Array.from({ length: TAGS_PER_DAY }, (_, i) => ({ address: addr(1000 + i), chain: 'namada', label: `t${i}`, category: 'watch', source: 'user', author: 'tnam1qotherxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx', updated_at: NOW - 60000, created_at: NOW - 60000 })));
     const res = await post(db, t, { address: addr(1), label: 'one more', category: 'watch' });
     expect(res.status).toBe(400);
     expect(((await res.json()) as any).error).toMatch(/paused/);
+  });
+
+  // security review, 2026-10-22: the caps were two counts before an unconditional insert, and the day's count read
+  // updated_at, which a re-save renews
+  const other = 'tnam1qotherxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx';
+  const fill = (db: ReturnType<typeof testD1>, n: number, created: number, updated = created, from = 5000) =>
+    insert(db, 'labels', Array.from({ length: n }, (_, i) => ({ address: addr(from + i), chain: 'namada', label: `t${i}`, category: 'watch', source: 'user', author: other, updated_at: updated, created_at: created })));
+  const userTags = (db: ReturnType<typeof testD1>) => (db.raw.prepare("SELECT COUNT(*) n FROM labels WHERE source = 'user'").get() as { n: number }).n;
+  it('concurrent new tags never pass the day\'s cap together: the insert counts it', async () => {
+    const db = testD1();
+    fill(db, TAGS_PER_DAY - 1, NOW - 60_000);
+    const tokens = await Promise.all(Array.from({ length: 20 }, (_, i) => signedIn(db, addr(9000 + i))));
+    const res = await Promise.all(tokens.map((t, i) => post(db, t, { address: addr(100 + i), label: `new ${i}`, category: 'watch' })));
+    expect(res.filter((r) => r.status === 200)).toHaveLength(1);
+    expect(userTags(db)).toBe(TAGS_PER_DAY);
+  });
+  it('a re-saved tag keeps its first-write time: re-saving never renews its place in the day, and an edit is never counted', async () => {
+    const db = testD1();
+    // the whole day's allowance written 23 h ago and re-saved just now
+    fill(db, TAGS_PER_DAY, NOW - 23 * 3_600_000, NOW - 1000);
+    const t = await signedIn(db);
+    expect((await post(db, t, { address: addr(1), label: 'new', category: 'watch' })).status).toBe(400);
+    // 2 h later the first writes are past 24 h: a new tag is taken, though every row was re-saved within the day
+    db.raw.prepare("UPDATE labels SET created_at = created_at - 2 * 3600000 WHERE source = 'user'").run();
+    expect((await post(db, t, { address: addr(1), label: 'new', category: 'watch' })).status).toBe(200);
+    // the day full again: editing one's own tag still goes through, and keeps its first-write time
+    fill(db, TAGS_PER_DAY, NOW - 60_000, NOW - 60_000, 6000);
+    const before = db.raw.prepare('SELECT created_at FROM labels WHERE address = ?').get(addr(1)) as { created_at: number };
+    expect((await post(db, t, { address: addr(1), label: 'renamed', category: 'bot' })).status).toBe(200);
+    expect((db.raw.prepare('SELECT label, created_at FROM labels WHERE address = ?').get(addr(1)) as any)).toEqual({ label: 'renamed', created_at: before.created_at });
+  });
+  it('a count that cannot run fails the write (500), never admits the tag', async () => {
+    const db = testD1();
+    const t = await signedIn(db);
+    const prepare = db.prepare;
+    (db as any).prepare = (sql: string) => (/labels_user_created/.test(sql) && /INSERT/.test(sql) ? { bind: () => ({ run: () => Promise.reject(new Error('D1_ERROR: simulated')) }) } : prepare(sql));
+    const res = await post(db, t, { address: addr(2), label: 'x', category: 'watch' });
+    expect(res.status).toBe(500);
+    (db as any).prepare = prepare;
+    expect(userTags(db)).toBe(0);
+  });
+  it('the cron\'s pool label replaces a tag a wallet wrote first on that address, and the tag\'s author goes', async () => {
+    const db = testD1();
+    const t = await signedIn(db);
+    const P = 'osmo1' + 'q'.repeat(58);
+    expect((await post(db, t, { address: P, label: 'my favourite', category: 'whale' })).status).toBe(200);
+    const s = stmt.label(P, 'osmosis', 'Pool #3999', 'pool', 'auto', null, NOW);
+    db.raw.prepare(s.sql).run(...(s.params as any[]));
+    expect(db.raw.prepare('SELECT label, category, source, author FROM labels WHERE address = ?').get(P)).toEqual({ label: 'Pool #3999', category: 'pool', source: 'auto', author: null });
+    // any other curated label still never replaces a tag
+    const q = 'osmo1' + 'z'.repeat(38);
+    expect((await post(db, t, { address: q, label: 'mine', category: 'watch' })).status).toBe(200);
+    const g = stmt.label(q, 'osmosis', 'Somebody', 'exchange', 'auto', null, NOW);
+    db.raw.prepare(g.sql).run(...(g.params as any[]));
+    expect((db.raw.prepare('SELECT source FROM labels WHERE address = ?').get(q) as any).source).toBe('user');
   });
 });
 

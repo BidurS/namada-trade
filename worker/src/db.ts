@@ -4,6 +4,17 @@ import { toNam } from './util';
 
 export interface Stmt { sql: string; params: unknown[] }
 
+/** The most tags one wallet may hold (each address once; editing one's own tag is not counted). */
+export const TAGS_PER_AUTHOR = 200;
+/** The most new tags the site takes in 24 h, by first write: too few to deface the holder list, enough for real use. */
+export const TAGS_PER_DAY = 500;
+/** A wallet's other tags, on labels_user_author (migration 0010), counted to the cap at most. */
+const OWN_TAGS = (author: string, address: string) =>
+  `(SELECT COUNT(*) FROM (SELECT 1 FROM labels INDEXED BY labels_user_author WHERE source = 'user' AND author = ${author} AND address != ${address} LIMIT ${TAGS_PER_AUTHOR}))`;
+/** The site's other new tags in the 24 h before `at`, by first write, on labels_user_created (migration 0010). */
+const DAY_TAGS = (at: string, address: string) =>
+  `(SELECT COUNT(*) FROM (SELECT 1 FROM labels INDEXED BY labels_user_created WHERE source = 'user' AND created_at > ${at} - 86400000 AND address != ${address} LIMIT ${TAGS_PER_DAY}))`;
+
 export const stmt = {
   move: (m: Move): Stmt => ({
     sql: 'INSERT OR IGNORE INTO moves (chain,address,height,ts,tx_hash,idx,delta_num) VALUES (?,?,?,?,?,?,?)',
@@ -53,24 +64,42 @@ export const stmt = {
             volume_num=address_links.volume_num+excluded.volume_num`,
     params: [l.osmo, l.namada, l.ts, l.ts, l.amount],
   }),
-  /** A curated label (auto, genesis, valopers). Never replaces a user tag. */
+  /**
+   * A curated label (auto, genesis, valopers). It never replaces a user tag, except a pool label: the quote service
+   * listing the address as a NAM pool is the proof, the holder list leaves pools out by this row's category alone
+   * (holders.ts notPool, LISTED), and a pool's address can be tagged before its first label is written, so a tag
+   * written first must give way (security review, 2026-10-22). The tag's author goes with it.
+   */
   label: (address: string, chain: string, label: string, category: string, source: string, note: string | null, at: number): Stmt => ({
     sql: `INSERT INTO labels (address,chain,label,category,source,note,updated_at) VALUES (?,?,?,?,?,?,?)
           ON CONFLICT(address) DO UPDATE SET label=excluded.label, category=excluded.category,
-            source=excluded.source, note=excluded.note, updated_at=excluded.updated_at
-          WHERE labels.source != 'user'`,
+            source=excluded.source, note=excluded.note, updated_at=excluded.updated_at, author=NULL
+          WHERE labels.source != 'user' OR excluded.category = 'pool'`,
     params: [address, chain, label, category, source, note, at],
   }),
   /**
    * A tag a signed-in wallet writes. It lands on an address without a label, or replaces a tag the same wallet
    * wrote; it never replaces a curated label or another wallet's tag (the route answers 409 when nothing changed).
+   * A new tag is admitted in the same statement only while the wallet holds fewer than TAGS_PER_AUTHOR tags and the
+   * site took fewer than TAGS_PER_DAY new ones (by first write, created_at) in the last 24 h: D1 runs one statement at
+   * a time, so concurrent posts cannot pass the caps together, and a count that fails fails the write. Editing one's
+   * own tag is never counted and keeps its created_at, so a re-save never renews a tag's place in the day.
    */
   userTag: (address: string, chain: string, label: string, category: string, author: string, note: string | null, at: number): Stmt => ({
-    sql: `INSERT INTO labels (address,chain,label,category,source,note,updated_at,author) VALUES (?,?,?,?,'user',?,?,?)
+    sql: `INSERT INTO labels (address,chain,label,category,source,note,updated_at,author,created_at)
+          SELECT ?1,?2,?3,?4,'user',?5,?6,?7,?6
+          WHERE EXISTS (SELECT 1 FROM labels WHERE address = ?1 AND source = 'user' AND author = ?7)
+             OR (${OWN_TAGS('?7', '?1')} < ${TAGS_PER_AUTHOR} AND ${DAY_TAGS('?6', '?1')} < ${TAGS_PER_DAY})
           ON CONFLICT(address) DO UPDATE SET label=excluded.label, category=excluded.category, note=excluded.note,
             updated_at=excluded.updated_at
           WHERE labels.source = 'user' AND labels.author = excluded.author`,
     params: [address, chain, label, category, note, at, author],
+  }),
+  /** Why userTag changed nothing: the address's row, and the two caps as the insert counted them (only to word the answer). */
+  userTagRefusal: (address: string, author: string, at: number): Stmt => ({
+    sql: `SELECT (SELECT source FROM labels WHERE address = ?1) source, (SELECT author FROM labels WHERE address = ?1) author,
+            ${OWN_TAGS('?2', '?1')} own, ${DAY_TAGS('?3', '?1')} today`,
+    params: [address, author, at],
   }),
   kvSet: (key: string, value: string, at: number): Stmt => ({
     sql: 'INSERT OR REPLACE INTO kv (key,value,updated_at) VALUES (?,?,?)',

@@ -22,6 +22,12 @@ for i in 1 2 3 4 5; do out=$(npx wrangler d1 execute namada-trade-db --remote --
 echo "$out" | python3 -c "
 import sys,json; n=json.load(sys.stdin)[0]['results'][0]['n']; print('0009 indexes:', n)
 sys.exit(0 if n == 3 else 1)" || { echo "FAIL migration 0009 is not in place: not deploying"; exit 1; }
+# 0010 (user tags' first-write time and their two partial indexes): the tag insert counts on them (db.ts userTag,
+# INDEXED BY), so a tag cannot be saved until they are there
+for i in 1 2 3 4 5; do out=$(npx wrangler d1 execute namada-trade-db --remote --json --command "SELECT (SELECT COUNT(*) FROM pragma_table_info('labels') WHERE name = 'created_at') col, (SELECT COUNT(*) FROM sqlite_master WHERE type='index' AND name IN ('labels_user_author','labels_user_created')) n" 2>&1) && ! echo "$out" | grep -q 7403 && break; echo "retrying (Cloudflare 7403)"; sleep 6; done
+echo "$out" | python3 -c "
+import sys,json; r=json.load(sys.stdin)[0]['results'][0]; print('0010 column and indexes:', r)
+sys.exit(0 if r['col'] == 1 and r['n'] == 2 else 1)" || { echo "FAIL migration 0010 is not in place: not deploying"; exit 1; }
 
 echo "== 2. deploy"
 npm run deploy 2>&1 | grep -E "Current Version ID|Deployed|rror"

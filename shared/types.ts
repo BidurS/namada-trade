@@ -440,7 +440,7 @@ export interface OnDeckEntry {
    * When `linkedNamada` is an intermediate burner address that received its funds via a recent Namada transfer
    * within 48h before bridging, the upstream Namada origin (2-hop attribution).
    */
-  hopOriginNamada?: { address: string; label: string | null; labelPlain: string | null } | null;
+  hopOriginNamada?: { address: string; label: string | null; labelPlain: string | null; labelSource?: string | null } | null;
   /**
    * When NAM arrived on Osmosis from the MASP (shielded IBC out) and matches a prior MASP shield leg within 24h
    * by amount conservation and low anonymity-set entropy, the probabilistic turnstile origin.

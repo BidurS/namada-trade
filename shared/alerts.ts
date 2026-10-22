@@ -15,6 +15,10 @@ const explorerHashOf = (f: { txHash: string; meta?: Record<string, unknown> | nu
 /** As shared/flow-rules.ts isOtherCoin (copied, for the same reason): a move in another coin than NAM (shielded
     USDC, OSMO…) carries meta.tokenSymbol, and its amount is in that coin's units. */
 const isOtherCoin = (f: { meta?: Record<string, unknown> | null }): boolean => !!f.meta?.tokenSymbol;
+/** As shared/labels.ts tagByline (copied, for the same reason): a tag a signed-in wallet wrote goes with "Tag by
+    tnam1qxyz…" wherever it is shown, so in a hit's detail it never reads like a curated name. */
+const tagByline = (source: string | null | undefined, authorShort: string | null | undefined): string | null =>
+  source !== 'user' ? null : authorShort ? `Tag by ${authorShort}` : 'Tag by a signed-in wallet';
 
 export const INTERNAL_ADDRESSES = {
   pos: 'tnam1qgqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqc8j2fp',
@@ -55,11 +59,12 @@ interface Rule {
 }
 
 const fmt = (n: number) => Math.round(n).toLocaleString('en-US');
-const short = (a: string | null | undefined, label?: string | null) =>
-  label ? label : a ? `${a.slice(0, 10)}…${a.slice(-4)}` : '—';
-/** The label as the site shows it when the Worker supplied one (worker/src/labels.ts), else the raw label. */
-const from = (f: Flow) => short(f.from, f.fromLabelPlain ?? f.fromLabel);
-const to = (f: Flow) => short(f.to, f.toLabelPlain ?? f.toLabel);
+const short = (a: string | null | undefined, label?: string | null, byline?: string | null) =>
+  label ? (byline ? `${label} (${byline})` : label) : a ? `${a.slice(0, 10)}…${a.slice(-4)}` : '—';
+/** The label as the site shows it when the Worker supplied one (worker/src/labels.ts), else the raw label; a wallet's
+    tag with its byline ("Heliax team wallet (Tag by tnam1qxyz…)"), as Home's moves list writes it. */
+const from = (f: Flow) => short(f.from, f.fromLabelPlain ?? f.fromLabel, tagByline(f.fromLabelSource, f.fromLabelAuthor));
+const to = (f: Flow) => short(f.to, f.toLabelPlain ?? f.toLabel, tagByline(f.toLabelSource, f.toLabelAuthor));
 
 const RULES: Rule[] = [
   {

@@ -11,7 +11,7 @@ import { fetchNamPools, fetchNamPrice, quoteNamTrade, quoteSlippageCurve } from 
 import { namBalance, namadaEpoch, delegationsAt, QUICK, type ReadOpts } from './sources/namada';
 import { fetchIntel } from './sources/intel';
 import { sendDiscordTestAlert } from './sources/discord';
-import { stmt, kvGet, kvSet, kvGetJson } from './db';
+import { stmt, TAGS_PER_AUTHOR, TAGS_PER_DAY, kvGet, kvSet, kvGetJson } from './db';
 import { toNam, chainOf } from './util';
 import { OSMOSIS, INTERNAL_LABELS } from './config';
 import {
@@ -1458,8 +1458,9 @@ app.get('/api/export/flows', async (c) => {
   if (format === 'json') return c.json({ count: flows.length, total: matching, truncated: cut, asOf, flows }, 200, { ...(matching != null ? { 'X-Total-Count': String(matching) } : {}), 'X-Truncated': String(cut) });
   const meta = (f: { meta?: Record<string, unknown> | null }, k: string) => (f.meta && typeof f.meta[k] === 'string' ? (f.meta[k] as string) : '');
   const csv = csvOf(
-    ['time_utc', 'chain', 'kind', 'nam', 'value_usd', 'price_usd', 'from', 'from_label', 'to', 'to_label', 'tx_hash', 'time_source', 'price_source', 'settle_usd_per_nam', 'settle_usd'],
-    flows.map((f) => [isoOrBlank(f.ts), f.chain, f.kind, f.amount, f.valueUsd ?? '', f.priceUsd ?? '', f.from ?? '', f.fromLabelPlain ?? '', f.to ?? '', f.toLabelPlain ?? '', f.txHash, meta(f, 'tsSource') || 'block', meta(f, 'priceSource'),
+    // each label with where it came from and, for a wallet's tag ('user'), who wrote it, as the JSON export sends them
+    ['time_utc', 'chain', 'kind', 'nam', 'value_usd', 'price_usd', 'from', 'from_label', 'from_label_source', 'from_label_author', 'to', 'to_label', 'to_label_source', 'to_label_author', 'tx_hash', 'time_source', 'price_source', 'settle_usd_per_nam', 'settle_usd'],
+    flows.map((f) => [isoOrBlank(f.ts), f.chain, f.kind, f.amount, f.valueUsd ?? '', f.priceUsd ?? '', f.from ?? '', f.fromLabelPlain ?? '', f.fromLabelSource ?? '', f.fromLabelAuthor ?? '', f.to ?? '', f.toLabelPlain ?? '', f.toLabelSource ?? '', f.toLabelAuthor ?? '', f.txHash, meta(f, 'tsSource') || 'block', meta(f, 'priceSource'),
       f.settle?.usdPerNam ?? '', f.settle ? settleUsd(f.settle) : '']),
   );
   return new Response(csv, { headers: exportHeaders('text/csv; charset=utf-8', `namada-trade-moves-${cut ? `newest-${flows.length}-${matching != null ? `of-${matching}-` : ''}` : ''}${Date.now()}.csv`, matching, flows.length, cut) });
@@ -1478,9 +1479,8 @@ app.get('/api/integrity', async (c) => {
 
 /** The categories a user tag may have: words about the tagger's own view, never curated ones (exchange, team…). */
 export const USER_TAG_CATEGORIES = ['watch', 'whale', 'bot', 'other'] as const;
-/** Tags one wallet may hold in all, and new tags the site takes in a day: enough for any real use, too few to deface the holder list. */
-export const TAGS_PER_AUTHOR = 200;
-export const TAGS_PER_DAY = 500;
+/** Tags one wallet may hold in all, and new tags the site takes in a day (worker/src/db.ts, where the insert counts them). */
+export { TAGS_PER_AUTHOR, TAGS_PER_DAY };
 /** A tag is a name, never a place to send people: text that reads as a link is refused. */
 const TAG_LINK = /:\/\/|www\.|\.[a-z]{2,}\//i;
 /** Control and format characters (zero-width joiners, direction marks) hide or reshape text. */
@@ -1503,16 +1503,22 @@ app.post('/api/labels', async (c) => {
   if (TAG_LINK.test(label) || (note && TAG_LINK.test(note))) return c.json({ error: 'A tag cannot hold a link.' }, 400);
   if (TAG_HIDDEN.test(label) || (note && TAG_HIDDEN.test(note))) return c.json({ error: 'A tag cannot hold hidden characters.' }, 400);
   if (INTERNAL_LABELS[address]) return c.json({ error: 'This address has a curated name, which a tag cannot replace.' }, 409);
-  // Caps (a wallet's other tags, and the site's new tags today); editing one's own tag on this address is never counted.
-  const own = await c.env.DB.prepare(`SELECT COUNT(*) n FROM labels WHERE source = 'user' AND author = ? AND address != ?`).bind(sess.address, address).first<{ n: number }>().catch(() => null);
-  if (own && own.n >= TAGS_PER_AUTHOR) return c.json({ error: `A wallet can tag at most ${TAGS_PER_AUTHOR} addresses.` }, 400);
-  const today = await c.env.DB.prepare(`SELECT COUNT(*) n FROM labels WHERE source = 'user' AND updated_at > ? AND address != ?`).bind(Date.now() - D, address).first<{ n: number }>().catch(() => null);
-  if (today && today.n >= TAGS_PER_DAY) return c.json({ error: `Tagging is paused for today: the site takes ${TAGS_PER_DAY} new tags a day.` }, 400);
-  const s = stmt.userTag(address, chain, label, category, sess.address, note, Date.now());
+  // The caps (a wallet's other tags, the site's new tags in 24 h) are counted by the insert itself (stmt.userTag), so
+  // concurrent posts cannot pass them together; editing one's own tag is never counted. A failed count fails the
+  // write (500), never an admission.
+  const now = Date.now();
+  const s = stmt.userTag(address, chain, label, category, sess.address, note, now);
   const r = await c.env.DB.prepare(s.sql).bind(...s.params).run();
   if (!Number(r?.meta?.changes ?? 0)) {
-    const cur = await c.env.DB.prepare('SELECT source, author FROM labels WHERE address = ?').bind(address).first<{ source: string; author: string | null }>().catch(() => null);
-    return c.json({ error: cur?.source === 'user' ? 'This address already has a tag by another wallet.' : 'This address has a curated name, which a tag cannot replace.' }, 409);
+    // why nothing changed, in this order: another's row on the address, then the wallet's cap, then the day's
+    const q = stmt.userTagRefusal(address, sess.address, now);
+    const why = await c.env.DB.prepare(q.sql).bind(...q.params).first<{ source: string | null; author: string | null; own: number; today: number }>();
+    if (why?.source && !(why.source === 'user' && why.author === sess.address)) {
+      return c.json({ error: why.source === 'user' ? 'This address already has a tag by another wallet.' : 'This address has a curated name, which a tag cannot replace.' }, 409);
+    }
+    if ((why?.own ?? 0) >= TAGS_PER_AUTHOR) return c.json({ error: `A wallet can tag at most ${TAGS_PER_AUTHOR} addresses.` }, 400);
+    if ((why?.today ?? 0) >= TAGS_PER_DAY) return c.json({ error: `Tagging is paused for today: the site takes ${TAGS_PER_DAY} new tags a day.` }, 400);
+    return c.json({ error: 'The tag was not saved; try again.' }, 503);
   }
   return c.json({ success: true });
 });

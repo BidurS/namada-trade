@@ -662,7 +662,8 @@ export async function pressure(db: D1Database, asOf: number, replay: boolean, wi
   // transfers are a meaningful part of what it sent across (HOP_ORIGIN_SHARE of it, and at least
   // HOP_ORIGIN_MIN_NAM): a dust transfer eight days earlier is neither. Every sender is read, not only the largest,
   // since each sender's NAM goes to its own cohort; the list is split to fit D1's bound parameters.
-  const unlabeled = [...sendersOf.values()].flat().filter((s) => !s.label && !isInternal(s.addr));
+  // A tag a signed-in wallet wrote names nothing here (series.ts sideCategory): its address is read as untagged.
+  const unlabeled = [...sendersOf.values()].flat().filter((s) => (!s.label || s.source === 'user') && !isInternal(s.addr));
   const unlabeledSenders = [...new Set(unlabeled.map((s) => s.addr))];
   const hopRowsByBurner = new Map<string, { origin: string; nam: number; ts: number; label: string | null; source: string | null }[]>();
   if (unlabeledSenders.length) {
@@ -695,7 +696,7 @@ export async function pressure(db: D1Database, asOf: number, replay: boolean, wi
     for (const [address, o] of byOrigin) if (!best || o.nam > best.nam) best = { address, ...o };
     if (!best || best.nam < Math.max(HOP_ORIGIN_MIN_NAM, bridgedIn * HOP_ORIGIN_SHARE)) return null;
     const lbl = best.label ?? INTERNAL_LABELS[best.address]?.label ?? null;
-    return { address: best.address, label: lbl, labelPlain: label_plain(lbl, best.address, best.source) };
+    return { address: best.address, label: lbl, labelPlain: label_plain(lbl, best.address, best.source), labelSource: best.label ? best.source : null };
   };
 
   const onDeck: OnDeckEntry[] = (ibcIn.results || [])
@@ -924,10 +925,12 @@ export async function pressure(db: D1Database, asOf: number, replay: boolean, wi
   let transparentNam = 0;
   let highHazardRemainingNam = 0;
   const EARLY = /genesis|backer|foundation|team/i;
+  /** The genesis file's addresses, and a curated name with those words; never a tag a signed-in wallet wrote (shared/labels.ts label_plain). */
+  const early = (label: string | null | undefined, source: string | null | undefined) => source === 'genesis' || (source !== 'user' && EARLY.test(label ?? ''));
   for (const e of onDeck) {
     if ((e.dumpHazardScore ?? 0) >= SELLS_MOST_CUT) highHazardRemainingNam += e.remaining;
     // The receiver's own tag, or a matched pass through the shielded set, decides for all it got.
-    if (e.labelSource === 'genesis' || EARLY.test(e.label ?? '')) { genesisBackersNam += e.bridgedIn; continue; }
+    if (early(e.label, e.labelSource)) { genesisBackersNam += e.bridgedIn; continue; }
     if (e.passthroughFrom) { maspTurnstileNam += e.bridgedIn; continue; }
     // Otherwise each Namada sender's own NAM into it (its crossings in the window) goes to that sender's cohort, so
     // NAM from untagged senders is never counted as a tagged largest sender's, nor the reverse.
@@ -937,7 +940,7 @@ export async function pressure(db: D1Database, asOf: number, replay: boolean, wi
       if (!(nam > 0)) break;
       fromSenders += nam;
       const hop = hopOriginOf(s.addr, s.firstTs, s.nam);
-      if (s.source === 'genesis' || EARLY.test(s.label ?? '') || EARLY.test(hop?.label ?? '')) genesisBackersNam += nam;
+      if (early(s.label, s.source) || (hop && early(hop.label, hop.labelSource))) genesisBackersNam += nam;
       else if (s.addr === MASP) maspTurnstileNam += nam;
       else if (hop) burnerHopNam += nam;
       else transparentNam += nam;
