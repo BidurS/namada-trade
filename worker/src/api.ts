@@ -26,8 +26,9 @@ import {
 } from './holders';
 import { label_plain, category_plain, labelAuthorShort, tagByline } from './labels';
 import { counterpartiesOf } from '../../shared/flow-rules';
+import { settleUsd } from '../../shared/settle';
 import {
-  FLOW_SELECT, flowSelect, rowToFlow, safeParseJson, provAt, metricAt, coverageOf, pressure, blindSpot, alertsBetween, lastAlertBefore, metricSeries, metricSeriesRolled, type HistoryPoint, osmosisNetIbc, orderflowSeries,
+  FLOW_SELECT, flowSelect, rowToFlow, safeParseJson, provAt, metricAt, coverageOf, pressure, blindSpot, alertsBetween, lastAlertBefore, metricSeries, withSettles, metricSeriesRolled, type HistoryPoint, osmosisNetIbc, orderflowSeries,
 } from './analytics';
 import { NAM_AMOUNT, NOT_LEGACY_TWIN as NOT_TWIN } from './flows-query';
 import { INTERNAL_ADDRESSES } from '../../shared/alerts';
@@ -705,6 +706,7 @@ app.get('/api/flows', async (c) => {
   // A text search pages by cursor only: an offset counts matches, and a window can end before it is reached.
   if (f.search && head && page > 1) return c.json({ error: 'A search by text is paged with before=<next>, not page=.' }, 400);
   const r = await readFlows(db, f, before, limit, head ? (page - 1) * limit : 0, count, true);
+  await withSettles(db, r.flows);
   const res: FlowsResponse = { total: r.total, ...(r.over != null ? { totalOver: r.over } : {}), page: head ? page : 1, limit, flows: r.flows, next: r.next, asOf };
   // The oldest move for this chain filter (for "The flow index starts on …"), on the head page and on a date jump.
   if (head || before?.kind === 'time') {
@@ -864,7 +866,7 @@ app.get('/api/address/:addr', async (c) => {
           db.prepare(`${FLOW_SELECT} WHERE (f.from_addr = ? OR f.to_addr = ?) AND ${NOT_TWIN} ORDER BY f.ts DESC, f.height DESC LIMIT 300`).bind(addr, addr).all<any>(),
         ]).then(([n, r]) => ({ flows: (r.results || []).map(rowToFlow), total: n?.c ?? null })),
   ]);
-  const flows = moves.flows;
+  const flows = await withSettles(db, moves.flows);
   const totalFlowsRow = { c: moves.total ?? flows.length };
 
   // 24 h / 7 d changes: the balance now (the live read, else the indexed one) minus the recorded chain read
@@ -1452,11 +1454,13 @@ app.get('/api/export/flows', async (c) => {
   // null: a text search, not counted (one walk); `next` then says whether more match than the file holds
   const matching = r.total;
   const cut = matching != null ? flows.length < matching : r.next != null;
+  await withSettles(db, flows);
   if (format === 'json') return c.json({ count: flows.length, total: matching, truncated: cut, asOf, flows }, 200, { ...(matching != null ? { 'X-Total-Count': String(matching) } : {}), 'X-Truncated': String(cut) });
   const meta = (f: { meta?: Record<string, unknown> | null }, k: string) => (f.meta && typeof f.meta[k] === 'string' ? (f.meta[k] as string) : '');
   const csv = csvOf(
-    ['time_utc', 'chain', 'kind', 'nam', 'value_usd', 'price_usd', 'from', 'from_label', 'to', 'to_label', 'tx_hash', 'time_source', 'price_source'],
-    flows.map((f) => [isoOrBlank(f.ts), f.chain, f.kind, f.amount, f.valueUsd ?? '', f.priceUsd ?? '', f.from ?? '', f.fromLabelPlain ?? '', f.to ?? '', f.toLabelPlain ?? '', f.txHash, meta(f, 'tsSource') || 'block', meta(f, 'priceSource')]),
+    ['time_utc', 'chain', 'kind', 'nam', 'value_usd', 'price_usd', 'from', 'from_label', 'to', 'to_label', 'tx_hash', 'time_source', 'price_source', 'settle_usd_per_nam', 'settle_usd'],
+    flows.map((f) => [isoOrBlank(f.ts), f.chain, f.kind, f.amount, f.valueUsd ?? '', f.priceUsd ?? '', f.from ?? '', f.fromLabelPlain ?? '', f.to ?? '', f.toLabelPlain ?? '', f.txHash, meta(f, 'tsSource') || 'block', meta(f, 'priceSource'),
+      f.settle?.usdPerNam ?? '', f.settle ? settleUsd(f.settle) : '']),
   );
   return new Response(csv, { headers: exportHeaders('text/csv; charset=utf-8', `namada-trade-moves-${cut ? `newest-${flows.length}-${matching != null ? `of-${matching}-` : ''}` : ''}${Date.now()}.csv`, matching, flows.length, cut) });
 });

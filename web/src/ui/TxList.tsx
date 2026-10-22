@@ -8,6 +8,8 @@ import type { Flow } from '../../../shared/types';
 import { kindSign } from '../lib/kinds';
 import { MINUS, fmtAddr, fmtAgo, fmtCoin, fmtCount, fmtNamRule, fmtUsdRule, fmtUtcLong, explorerTxOf, labelNeedsAddr } from '../lib/format';
 import { PRICE_SHORT, chainWord, coinWord, dayHm, priceHow, tagOf, timeEstimated, type PriceHow } from '../lib/flows';
+import { flowSettle, settleGasNote, settleWords } from '../lib/settle';
+import { settleUsd, type Settle } from '../../../shared/settle';
 import { tagByline } from '../../../shared/labels';
 import { Icon } from './Icon';
 import { Tag } from './Tag';
@@ -88,6 +90,8 @@ function TxRow({ f, now, isNew, onAddr, rowIndex }: { f: Flow; now: number; isNe
   const nam = fmtNamRule(f.amount);
   const signed = sign > 0 ? `+${nam}` : sign < 0 && nam !== '0' ? `${MINUS}${nam}` : nam;
   const how = priceHow(f);
+  // a trade's value is what it settled at for its trader when that is known (as on the trades tape)
+  const settle = flowSettle(f);
   const fromL = f.fromLabelPlain ?? null;
   const toL = f.toLabelPlain ?? null;
   const age = fmtAgo(f.ts, now);
@@ -112,7 +116,9 @@ function TxRow({ f, now, isNew, onAddr, rowIndex }: { f: Flow; now: number; isNe
         <span className="u"> NAM</span>
       </span>
       <span className="tx__val" role="cell">
-        {f.valueUsd != null && Number.isFinite(f.valueUsd) ? (
+        {settle ? (
+          <span data-num="" data-status="fresh">{fmtUsdRule(settleUsd(settle))}</span>
+        ) : f.valueUsd != null && Number.isFinite(f.valueUsd) ? (
           <span data-num="" data-status="fresh">{fmtUsdRule(f.valueUsd)}</span>
         ) : (
           <>
@@ -129,7 +135,7 @@ function TxRow({ f, now, isNew, onAddr, rowIndex }: { f: Flow; now: number; isNe
       <span className="tx__src" role="cell">
         <span className="tx__srcw">
           <span>{timeEstimated(f) ? 'Estimated time' : 'Block time'}</span>
-          <span>{PRICE_SHORT[how]}</span>
+          <span>{settle ? 'settle price' : PRICE_SHORT[how]}</span>
         </span>
       </span>
       <span className="tx__rec" role="cell">
@@ -140,7 +146,7 @@ function TxRow({ f, now, isNew, onAddr, rowIndex }: { f: Flow; now: number; isNe
       </span>
       {open ? (
         <div className="tx__more" id={`${id}d`} role="cell">
-          <Detail f={f} how={how} />
+          <Detail f={f} how={how} settle={settle} />
         </div>
       ) : null}
     </div>
@@ -148,12 +154,13 @@ function TxRow({ f, now, isNew, onAddr, rowIndex }: { f: Flow; now: number; isNe
 }
 
 /** Line 3 on phones: when, how the price was set, what it traded against, and the record. */
-function Detail({ f, how }: { f: Flow; how: PriceHow }) {
+function Detail({ f, how, settle }: { f: Flow; how: PriceHow; settle: Settle | null }) {
   const coin = coinWord(f.counterDenom);
   const pools = f.poolId ? f.poolId.split(',').map((p) => `#${p.trim()}`).join(', ') : null;
   const price = f.priceUsd != null ? `${fmtUsdRule(f.priceUsd)} per NAM` : null;
-  const priceText =
-    how === 'execution' ? `Price: ${price}, from this trade itself.`
+  const gasNote = settle ? settleGasNote(settle) : '';
+  const priceText = settle ? `Settled at ${fmtUsdRule(settle.usdPerNam)} a NAM: ${settleWords(settle)}.${gasNote ? ` ${gasNote}` : ''}`
+    : how === 'execution' ? `Price: ${price}, from this trade itself.`
     : how === 'swap_1h' ? `Price: ${price}, the median of that hour’s trades.`
     : how === 'spot' ? `Price: ${price}, the Osmosis quote when the move was recorded.`
     : how === 'unstated' ? `Price: ${price}, recorded with the move; how it was set is not stated.`

@@ -1,7 +1,8 @@
 // The words for a trade's settle price (shared/settle.ts), one sentence the Alerts page and the trades tape both use:
 // what the trader gave and got, each coin that is not USDC with the rate it was valued at and where that rate came
 // from, and the gas.
-import type { Settle, SettledCoin } from '../../../shared/settle';
+import type { Flow } from '../../../shared/types';
+import { QUOTE_KEYS, quotesNeeded, settleMetaOf, settleOf, type Settle, type SettledCoin } from '../../../shared/settle';
 import { fmtCoin, fmtNamRule, fmtUsdRule } from './format';
 
 const coinWords = (c: SettledCoin) => `${fmtCoin(Math.abs(c.amount), c.rate === 'stable' ? 2 : 4)} ${c.symbol}`;
@@ -29,3 +30,14 @@ export function settleWords(s: Settle): string {
 
 /** The sentence a settle price owes when its gas could not be counted; empty otherwise. */
 export const settleGasNote = (s: Settle): string => (s.gasLeftOut ? 'Its gas is left out: its coin has no price for that minute.' : '');
+
+/**
+ * A move's settle price: the Worker's (Flow.settle, priced at its minute), else, for a trade from the live stream, from
+ * its own coins when none needs a stored quote (as the trades tape prices its live rows); null otherwise.
+ */
+export function flowSettle(f: Flow): Settle | null {
+  if (f.settle) return f.settle;
+  if (f.kind !== 'buy' && f.kind !== 'sell') return null;
+  const rec = settleMetaOf(f.meta ?? null);
+  return rec && !quotesNeeded(rec).some((c) => QUOTE_KEYS[c]) ? settleOf(f.kind, rec) : null;
+}

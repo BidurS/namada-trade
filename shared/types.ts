@@ -47,6 +47,8 @@ export interface Flow {
   fromLabelAuthor?: string | null;
   toLabelAuthor?: string | null;
   whale?: boolean;
+  /** A trade's settle price (shared/settle.ts), priced at its minute by the Worker; absent when it has none (and on live rows, priced by the page from their own coins) */
+  settle?: Settle;
 }
 
 /**

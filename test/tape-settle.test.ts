@@ -10,7 +10,7 @@ import { testD1, type TestD1 } from './d1-sqlite';
 import { settleOf, settleUsd, tradeValue, QUOTE_KEYS, type Settle, type SettleMeta } from '../shared/settle';
 import { osmoAssets } from '../worker/src/parse/osmosis';
 import { foldTrades as foldOnPage, tradeOfFlow } from '../web/src/screens/trade/series';
-import { settleGasNote, settleWords } from '../web/src/lib/settle';
+import { flowSettle, settleGasNote, settleWords } from '../web/src/lib/settle';
 import type { Flow, TradeRow, TradesResponse } from '../shared/types';
 
 const MIN = 60_000;
@@ -119,6 +119,29 @@ describe('trades paid in other coins (2026-10-22: 163 settle records named a coi
     const symbols = [...assets.values()].map((a) => a.symbol);
     for (const s of ['ATOM', 'TIA', 'ETH', 'KYVE', 'allUSDT']) expect(symbols).toContain(s);
     for (const [symbol] of Object.entries(QUOTE_KEYS)) expect(symbols).toContain(symbol);
+  });
+});
+
+describe('the moves list and its exports carry each trade\'s settle price', () => {
+  it('GET /api/flows and both exports price a trade\'s settle record at its minute; a live row is priced from its own coins', async () => {
+    at(NOW);
+    const db = testD1();
+    const t0 = NOW - 60 * MIN;
+    insert(db, [{ id: 'osmosis:M1:swap', ts: t0, kind: 'sell', maker: osmo(11), nam: 19796.328, usd: 16.77, settle: sale, route: '3005,1464,3368' }]);
+    const list = (await (await app.request(`/api/flows?limit=25`, {}, { DB: db } as any)).json()) as any;
+    const row = list.flows.find((f: Flow) => f.id === 'osmosis:M1:swap');
+    expect(row.settle.usdPerNam).toBeCloseTo(saleUsdPerNam, 12);
+    const json = (await (await app.request(`/api/export/flows?format=json`, {}, { DB: db } as any)).json()) as any;
+    expect(json.flows[0].settle.usdPerNam).toBeCloseTo(saleUsdPerNam, 12);
+    const csv = (await (await app.request(`/api/export/flows?format=csv`, {}, { DB: db } as any)).text()).trim().split('\n');
+    const head = csv[0].split(','), cells = csv[1].split(',');
+    expect(head.slice(-2)).toEqual(['settle_usd_per_nam', 'settle_usd']);
+    expect(Number(cells[head.indexOf('settle_usd_per_nam')])).toBeCloseTo(saleUsdPerNam, 12);
+    expect(Number(cells[head.indexOf('settle_usd')])).toBeCloseTo(saleUsdPerNam * 20000, 9);
+    // the live stream's row has no Worker price: the page prices it from its own coins
+    const live = { ...row, settle: undefined, meta: { trader: osmo(11), settle: sale } } as Flow;
+    expect(flowSettle(live)!.usdPerNam).toBeCloseTo(saleUsdPerNam, 12);
+    expect(flowSettle({ ...live, meta: { settle: { nam: -100, coins: { ATOM: 5 } } } } as Flow)).toBeNull();
   });
 });
 

@@ -1316,6 +1316,15 @@ export async function settlePrices(db: D1Database, trades: readonly { kind: stri
   return recs.map((s, i) => (s && !unread.has(i) ? settleOf(trades[i].kind as 'buy' | 'sell', s, quotes[i]) : null));
 }
 
+/** Each buy or sell among `flows` gets its settle price (settlePrices), when it has one: the lists and exports of moves. */
+export async function withSettles(db: D1Database, flows: Flow[]): Promise<Flow[]> {
+  const trades = flows.filter((f) => f.kind === 'buy' || f.kind === 'sell');
+  if (!trades.length) return flows;
+  const ss = await settlePrices(db, trades).catch(() => trades.map(() => null));
+  trades.forEach((f, i) => { if (ss[i]) f.settle = ss[i]!; });
+  return flows;
+}
+
 /**
  * Each trade hit's price. First what it settled at for its trader (settlePrices: every coin their balance changed by,
  * fees and gas in; 'settled'). Else, for a row recorded before the parser kept those coins, its own USDC per NAM
