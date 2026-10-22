@@ -5,6 +5,7 @@
  *
  *   npx tsx scripts/repair-settle.ts [days=40]             # rows without a settle record: add one
  *   npx tsx scripts/repair-settle.ts [days=40] --recheck   # rows with one: replace it where the current parser's differs
+ *   npx tsx scripts/repair-settle.ts [days=40] --recheck --unknown   # only records that named a coin the parser did not know
  *
  * Each swap row of the last `days` days (public nodes keep about six weeks) has its transaction read again and parsed
  * by the current parser. The record is written only when the parser makes the same row (same id, kind and trader);
@@ -24,6 +25,7 @@ import { settleOf, quotesNeeded, type SettleMeta } from '../shared/settle';
 const RPCS = [OSMOSIS.publicRpc, 'https://osmosis-rpc.polkachu.com'];
 const args = process.argv.slice(2);
 const recheck = args.includes('--recheck');
+const unknownOnly = args.includes('--unknown');
 const days = Number(args.find((a) => !a.startsWith('--')) ?? 40);
 const sqlStr = (s: string) => `'${s.replace(/'/g, "''")}'`;
 
@@ -47,7 +49,7 @@ async function tx(hash: string): Promise<any> {
 
 const since = Date.now() - days * 86_400_000;
 const rows = d1<{ id: string; ts: number; kind: string; tx_hash: string; amount_num: number; meta: string | null; settle: string | null }>(
-  `SELECT id, ts, kind, tx_hash, amount_num, meta, json_extract(meta, '$.settle') AS settle FROM flows WHERE chain = 'osmosis' AND kind IN ('buy','sell') AND ts >= ${since} AND json_extract(meta, '$.settle') IS ${recheck ? 'NOT ' : ''}NULL ORDER BY ts DESC`,
+  `SELECT id, ts, kind, tx_hash, amount_num, meta, json_extract(meta, '$.settle') AS settle FROM flows WHERE chain = 'osmosis' AND kind IN ('buy','sell') AND ts >= ${since} AND json_extract(meta, '$.settle') IS ${recheck ? 'NOT ' : ''}NULL${unknownOnly ? " AND json_extract(meta, '$.settle.unknown') = 1" : ''} ORDER BY ts DESC`,
 );
 const pools = await fetchNamPools();
 const ctx: OsmoCtx = {
