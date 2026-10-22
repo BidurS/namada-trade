@@ -9,7 +9,7 @@ import type {
 import { SERIES_MAX_POINTS, SERIES_STEP_MS, TRADE_FOLD_MS, TRADE_FOLD_UNDER_NAM } from '../../../../shared/types';
 import { DAY_MS, HISTORY_FETCH_DAYS, type HistoryRange } from '../../../../shared/history';
 import { isBotFlow } from '../../../../shared/flow-rules';
-import { settleMetaOf, settleOf, tradeValue } from '../../../../shared/settle';
+import { QUOTE_KEYS, quotesNeeded, settleMetaOf, settleOf, tradeValue } from '../../../../shared/settle';
 import { priceHow } from '../../lib/flows';
 
 const fin = (x: number | null | undefined): x is number => x != null && Number.isFinite(x);
@@ -221,8 +221,10 @@ export function tradeOfFlow(f: Flow): TradeRow | null {
   const how = priceHow(f);
   const priced = fin(f.priceUsd);
   const tsSource = typeof m.tsSource === 'string' ? m.tsSource : null;
+  // Priced here only from its own coins: a record that needs a coin's stored quote, its gas's included, waits for the
+  // server's page (which reads the quote for its minute) rather than showing a price without it.
   const rec = settleMetaOf(m);
-  const settle = rec ? settleOf(f.kind, rec) : null;
+  const settle = rec && !quotesNeeded(rec).some((c) => QUOTE_KEYS[c]) ? settleOf(f.kind, rec) : null;
   return {
     id: f.id,
     ts: f.ts,
@@ -236,8 +238,6 @@ export function tradeOfFlow(f: Flow): TradeRow | null {
     priceSource: !priced ? null : how === 'execution' || how === 'swap_1h' || how === 'spot' ? how : 'unknown',
     valueUsd: fin(f.valueUsd) ? f.valueUsd : null,
     ...(priced ? {} : { priceNote: 'No price was recorded for this trade.' }),
-    // its settle price when its own coins price it (USDC, allUSDC, a rate in its transaction); one that needs the
-    // minute's quote of a coin is priced by the server's next page
     ...(settle ? { settle } : {}),
     maker: maker ?? null,
     makerLabelPlain: (f.kind === 'buy' ? f.toLabelPlain : f.fromLabelPlain) ?? null,

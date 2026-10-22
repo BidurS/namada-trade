@@ -3,12 +3,15 @@
  * (2026-10-21). Reads the remote D1 with read-only SELECTs and a public Osmosis node, and writes SQL to
  * scripts/out/repair/settle.sql for the owner to check and apply (scripts/d1-apply.ts). Writes nothing itself.
  *
- *   node --experimental-strip-types scripts/repair-settle.ts [days=40]
+ *   npx tsx scripts/repair-settle.ts [days=40]             # rows without a settle record: add one
+ *   npx tsx scripts/repair-settle.ts [days=40] --recheck   # rows with one: replace it where the current parser's differs
  *
- * Each swap row of the last `days` days (public nodes keep about six weeks) without a settle record has its
- * transaction read again and parsed by the current parser. The record is added only when the parser makes the same
- * row (same id, kind and trader); the row's other columns are left as they are. Rows it cannot read or match are
- * listed, not touched.
+ * Each swap row of the last `days` days (public nodes keep about six weeks) has its transaction read again and parsed
+ * by the current parser. The record is written only when the parser makes the same row (same id, kind and trader);
+ * the row's other columns are left as they are. A recheck replaces a record only while it is still the one read (a
+ * row the live parser has rewritten since is left alone), and only when the current parser's record differs (the
+ * rate rule of 2026-10-21: a coin's rate summed over the transaction's hops of at least RATE_MIN_BASE a side). Rows
+ * it cannot read or match are listed, not touched.
  */
 import { mkdirSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
@@ -19,8 +22,16 @@ import { OSMOSIS } from '../worker/src/config';
 import { settleOf, quotesNeeded, type SettleMeta } from '../shared/settle';
 
 const RPCS = [OSMOSIS.publicRpc, 'https://osmosis-rpc.polkachu.com'];
-const days = Number(process.argv[2] ?? 40);
+const args = process.argv.slice(2);
+const recheck = args.includes('--recheck');
+const days = Number(args.find((a) => !a.startsWith('--')) ?? 40);
 const sqlStr = (s: string) => `'${s.replace(/'/g, "''")}'`;
+
+/** Two settle records alike: the same keys and values (a stored record's numbers came through JSON, so exact). */
+const sameRecord = (a: SettleMeta, b: SettleMeta): boolean => {
+  const norm = (x: unknown): unknown => (x && typeof x === 'object' ? Object.fromEntries(Object.entries(x).sort(([k], [l]) => (k < l ? -1 : 1)).map(([k, v]) => [k, norm(v)])) : x);
+  return JSON.stringify(norm(a)) === JSON.stringify(norm(b));
+};
 
 async function tx(hash: string): Promise<any> {
   for (let i = 0; i < 6; i++) {
@@ -35,8 +46,8 @@ async function tx(hash: string): Promise<any> {
 }
 
 const since = Date.now() - days * 86_400_000;
-const rows = d1<{ id: string; ts: number; kind: string; tx_hash: string; amount_num: number; meta: string | null }>(
-  `SELECT id, ts, kind, tx_hash, amount_num, meta FROM flows WHERE chain = 'osmosis' AND kind IN ('buy','sell') AND ts >= ${since} AND json_extract(meta, '$.settle') IS NULL ORDER BY ts DESC`,
+const rows = d1<{ id: string; ts: number; kind: string; tx_hash: string; amount_num: number; meta: string | null; settle: string | null }>(
+  `SELECT id, ts, kind, tx_hash, amount_num, meta, json_extract(meta, '$.settle') AS settle FROM flows WHERE chain = 'osmosis' AND kind IN ('buy','sell') AND ts >= ${since} AND json_extract(meta, '$.settle') IS ${recheck ? 'NOT ' : ''}NULL ORDER BY ts DESC`,
 );
 const pools = await fetchNamPools();
 const ctx: OsmoCtx = {
@@ -44,7 +55,7 @@ const ctx: OsmoCtx = {
   priceUsd: null,
   assets: osmoAssets(),
 };
-console.error(`${rows.length} swap rows without a settle record since ${new Date(since).toISOString()}; ${ctx.poolAddrs.size} pool addresses`);
+console.error(`${rows.length} swap rows ${recheck ? 'with' : 'without'} a settle record since ${new Date(since).toISOString()}; ${ctx.poolAddrs.size} pool addresses`);
 
 const out: string[] = [], skipped: string[] = [];
 const byHash = new Map<string, typeof rows>();
@@ -66,6 +77,14 @@ const work = async () => {
       const s = f.meta.settle as SettleMeta | undefined;
       if (!s) { skipped.push(`${r.id}\tno settle record (no coin of the trader's own came back)`); continue; }
       const p = settleOf(r.kind as 'buy' | 'sell', s);
+      if (recheck) {
+        const old = JSON.parse(r.settle!) as SettleMeta;
+        if (sameRecord(old, s)) continue;
+        const q = settleOf(r.kind as 'buy' | 'sell', old);
+        console.log([r.id.slice(8, 20), r.kind, JSON.stringify(old.rates ?? {}), JSON.stringify(s.rates ?? {}), q ? q.usdPerNam.toPrecision(6) : '-', p ? p.usdPerNam.toPrecision(6) : `needs ${quotesNeeded(s).join(',')}`].join('\t'));
+        out.push(`UPDATE flows SET meta = json_set(meta, '$.settle', json(${sqlStr(JSON.stringify(s))})) WHERE id = ${sqlStr(r.id)} AND json_extract(meta, '$.settle') = ${sqlStr(r.settle!)};`);
+        continue;
+      }
       console.log([r.id.slice(8, 20), r.kind, r.amount_num.toFixed(0), (-s.nam).toFixed(2), JSON.stringify(s.coins), p ? p.usdPerNam.toPrecision(4) : `needs ${quotesNeeded(s).join(',')}`].join('\t'));
       out.push(`UPDATE flows SET meta = json_set(COALESCE(meta, '{}'), '$.settle', json(${sqlStr(JSON.stringify(s))})) WHERE id = ${sqlStr(r.id)} AND json_extract(meta, '$.settle') IS NULL;`);
     }
@@ -74,6 +93,7 @@ const work = async () => {
 await Promise.all([work(), work(), work()]);
 const dir = join(import.meta.dirname, 'out', 'repair');
 mkdirSync(dir, { recursive: true });
-writeFileSync(join(dir, 'settle.sql'), out.join('\n') + '\n');
-writeFileSync(join(dir, 'settle-skipped.tsv'), skipped.join('\n') + '\n');
-console.error(`${out.length} updates to ${join(dir, 'settle.sql')}; ${skipped.length} left (settle-skipped.tsv)`);
+const name = recheck ? 'settle-recheck' : 'settle';
+writeFileSync(join(dir, `${name}.sql`), out.join('\n') + '\n');
+writeFileSync(join(dir, `${name}-skipped.tsv`), skipped.join('\n') + '\n');
+console.error(`${out.length} updates to ${join(dir, `${name}.sql`)}; ${skipped.length} left (${name}-skipped.tsv)`);

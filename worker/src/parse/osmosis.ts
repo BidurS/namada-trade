@@ -5,6 +5,8 @@ import type { SettleMeta } from '../../../shared/settle';
 
 /** A swap's cuts (fees other accounts keep) may be at most 1/20 of the swap's NAM for its trader to be matched. */
 export const CUT_SHARE_MAX_DIV = 20n;
+/** A swap sets a coin's rate for a settle price only with at least this many base units on each side (0.01 of a six-decimal coin): rounding then moves its rate by at most 1/10,000. */
+export const RATE_MIN_BASE = 10_000n;
 
 export interface RawEvent {
   type: string;
@@ -354,24 +356,27 @@ export function parseOsmosisTx(tx: NormTx, ctx: OsmoCtx): OsmoParsed {
         (s.gas ??= {})[sym] = (s.gas[sym] ?? 0) + Number(c.amount) / 10 ** (a?.decimals ?? 6);
       }
     }
-    // A coin other than USDC is priced at this transaction's own swap of it against USDC in a pool trusted for its
-    // price: the trader's own hop when there is one, else the first in the transaction.
+    // A coin other than USDC is priced at this transaction's own swaps of it against USDC in a pool trusted for its
+    // price: their USDC over their coin, summed over the trader's own hops when there are any, else over the
+    // transaction's others, so each hop counts for its size. A hop under RATE_MIN_BASE base units on either side is
+    // left out: its rounding alone can move its rate by half (42 uosmo for 1 uusdc reads $0.024 an OSMO), and a trader
+    // could put one in their own transaction to set their trade's price.
     const usdc = ctx.assets.get(OSMOSIS.usdcDenom);
     for (const sym of new Set([...Object.keys(s.coins), ...Object.keys(s.gas ?? {})])) {
       const denom = [...ctx.assets].find(([, a]) => a.symbol === sym && !a.stable)?.[0];
       if (!denom || !usdc) continue;
-      let own: number | null = null, other: number | null = null;
+      const own = { u: 0n, x: 0n }, other = { u: 0n, x: 0n };
       tx.events.forEach((e, i) => {
         if (e.type !== 'token_swapped' || OSMOSIS.ratePools[ev[i].pool_id] !== denom) return;
         const coins = [...parseCoins(ev[i].tokens_in), ...parseCoins(ev[i].tokens_out)];
         const u = coins.find((c) => c.denom === OSMOSIS.usdcDenom), x = coins.find((c) => c.denom === denom);
-        if (!u || !x || x.amount === '0') return;
-        const r = (Number(u.amount) / 10 ** usdc.decimals) / (Number(x.amount) / 10 ** ctx.assets.get(denom)!.decimals);
-        if (msgs.has(msgOf[i])) own ??= r;
-        else other ??= r;
+        if (!u || !x || BigInt(u.amount) < RATE_MIN_BASE || BigInt(x.amount) < RATE_MIN_BASE) return;
+        const sum = msgs.has(msgOf[i]) ? own : other;
+        sum.u += BigInt(u.amount);
+        sum.x += BigInt(x.amount);
       });
-      const rate = own ?? other;
-      if (rate != null) (s.rates ??= {})[sym] = rate;
+      const { u, x } = own.x > 0n ? own : other;
+      if (x > 0n) (s.rates ??= {})[sym] = (Number(u) / 10 ** usdc.decimals) / (Number(x) / 10 ** ctx.assets.get(denom)!.decimals);
     }
     return s;
   };

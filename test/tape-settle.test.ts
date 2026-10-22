@@ -5,6 +5,7 @@
 import { describe, it, expect, vi, afterEach } from 'vitest';
 import { app } from '../worker/src/api';
 import * as S from '../worker/src/series-api';
+import { settlePrices } from '../worker/src/analytics';
 import { testD1, type TestD1 } from './d1-sqlite';
 import { settleOf, settleUsd, tradeValue, type Settle, type SettleMeta } from '../shared/settle';
 import { foldTrades as foldOnPage, tradeOfFlow } from '../web/src/screens/trade/series';
@@ -97,6 +98,20 @@ describe('GET /api/series/trades: each row\'s settle price', () => {
   });
 });
 
+describe('settlePrices when a quote cannot be read', () => {
+  it('a trade that needed a quote has no settle price (never one that leaves its gas out as if the coin had no price); one that needed none is priced', async () => {
+    const db = { batch: async () => { throw new Error('D1 is busy'); }, prepare: () => ({ bind: () => ({}) }) };
+    const [gas, coin, own] = await settlePrices(db as any, [
+      { kind: 'buy', ts: NOW, meta: { settle: { nam: 1000, coins: { USDC: -0.8 }, gas: { OSMO: 0.05 } } } },
+      { kind: 'buy', ts: NOW, meta: { settle: { nam: 1000, coins: { OSMO: -20 } } } },
+      { kind: 'buy', ts: NOW, meta: { settle: { nam: 1000, coins: { USDC: -0.8 }, gas: { USDC: 0.01 } } } },
+    ]);
+    expect(gas).toBeNull();
+    expect(coin).toBeNull();
+    expect(own).toMatchObject({ usdPerNam: 0.81 / 1000, gasLeftOut: false });
+  });
+});
+
 describe('the page\'s rows and runs', () => {
   const flow = (o: Partial<Flow>): Flow => ({
     id: 'osmosis:L1:swap', chain: 'osmosis', height: 1, ts: NOW, txHash: 'L1', kind: 'buy', from: null, to: osmo(8), amount: 1000,
@@ -108,6 +123,12 @@ describe('the page\'s rows and runs', () => {
     const needsQuote = tradeOfFlow(flow({ meta: { trader: osmo(8), settle: { nam: 1000, coins: { OSMO: -20 } } } }))!;
     expect(needsQuote.settle).toBeUndefined();
     expect(needsQuote.priceUsd).toBe(0.0008);
+    // review, 2026-10-21: paid in USDC with its gas in OSMO and no OSMO rate in the transaction (the usual fee coin) was
+    // priced here without its gas, saying OSMO had no price for that minute; it waits for the server's quote instead
+    const gasQuote = tradeOfFlow(flow({ meta: { trader: osmo(8), settle: { nam: 1000, coins: { USDC: -0.8 }, gas: { OSMO: 0.05 } } } }))!;
+    expect(gasQuote.settle).toBeUndefined();
+    const gasRated = tradeOfFlow(flow({ meta: { trader: osmo(8), settle: { nam: 1000, coins: { USDC: -0.8 }, gas: { OSMO: 0.05 }, rates: { OSMO: 0.04 } } } }))!;
+    expect(gasRated.settle).toMatchObject({ usdPerNam: 0.802 / 1000, gasUsd: 0.002, gasLeftOut: false });
   });
   it('the page folds and sums a run exactly as the server does', () => {
     const settle = settleOf('buy', { nam: 1010, coins: { USDC: -0.8 } })!;

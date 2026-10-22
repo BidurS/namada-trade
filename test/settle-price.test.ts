@@ -53,6 +53,24 @@ describe('a trade\'s settle record (meta.settle)', () => {
     expect(settleOf('sell', s)).toBeNull();
     expect(settleOf('sell', s, { OSMO: 0.05 })!.coins[0]).toMatchObject({ usdEach: 0.05, rate: 'quote' });
   });
+  it('a hop too small to price (under RATE_MIN_BASE a side) sets no rate: a trader cannot set their own price with dust', () => {
+    // review, 2026-10-21: the trader's own hop moved to another pool and ProtoRev's 1464 hop made 42 uosmo for 1 uusdc
+    // read $0.0238 an OSMO and settled the sale at half its price
+    const hop = (tx: any, own: boolean) => tx.tx_result.events.find((e: any) => e.type === 'token_swapped'
+      && e.attributes.some((a: any) => a.key === 'pool_id' && a.value === '1464') && e.attributes.some((a: any) => a.key === 'msg_index') === own);
+    const set = (e: any, k: string, v: string) => { e.attributes.find((a: any) => a.key === k).value = v; };
+    const USDC = 'ibc/498A0751C798A0D9A389AA3691123DADA57DAA4FE165D5C75894505B876BA6E4';
+    const a = JSON.parse(JSON.stringify(raw));
+    set(hop(a, true), 'pool_id', '9999');
+    set(hop(a, false), 'tokens_in', '42uosmo');
+    set(hop(a, false), 'tokens_out', `1${USDC}`);
+    expect((swapOf(a).meta.settle as SettleMeta).rates).toBeUndefined();
+    // the trader's own hop as dust: ProtoRev's hop through 1464 in the same transaction prices the OSMO instead
+    const b = JSON.parse(JSON.stringify(raw));
+    set(hop(b, true), 'tokens_in', `1${USDC}`);
+    set(hop(b, true), 'tokens_out', '42uosmo');
+    expect((swapOf(b).meta.settle as SettleMeta).rates?.OSMO).toBeCloseTo(3.541751 / 74.055378, 12);
+  });
   it('a transaction without msg_index gets no settle record (its fee and post-handler transfers look like the swap\'s)', () => {
     const old = JSON.parse(JSON.stringify(raw));
     for (const e of old.tx_result.events) e.attributes = e.attributes.filter((a: any) => a.key !== 'msg_index');
