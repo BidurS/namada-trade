@@ -116,8 +116,11 @@
     /* the header is full at 1024 and from 1200 (six tabs, the price, Rewind, the status pill): the field takes the
        room the row has left, up to 260 px, instead of a fixed width that would push the row off the screen. It says
        as much as fits (container query below): the full words, or "Search", and the "/" hint where there is a
-       keyboard. Measured (live data, signed out): 120 px at 1024 ("Search" and "/"), 196 at 1100, 260 from 1170 to
-       1199 (the words), 76 from 1200 (the icon and "/": the wordmark, "Rewind" and "checks" take the rest). */
+       keyboard. The Rewind control is its icon at every desktop width (its name is its aria-label): with its word, the
+       field had 44 px from 1200 (2026-10-22, live data, signed out: the wordmark, "checks", the price's 24 h change and
+       the Alerts count take the rest of the 1,136 px row, which stops growing at 1200), so neither the "/" hint nor
+       "Search" showed. Measured without it: 81 px at 1024 ("/"), 157 at 1100 ("Search" and "/"), 256 at 1199 (the
+       words), 94 from 1200 (the icon and "/"). */
     .hdr__in { gap: 6px; }
     .tabs a { padding: 0 8px; }
     .tabs a[aria-current="page"]::before { left: 8px; right: 8px; }
@@ -133,9 +136,12 @@
     @container (max-width: 95px) { .hsearch__w { display: none; } .hsearch__k { margin-left: auto; } }
     @container (max-width: 45px) { .hsearch .ico { margin-inline: auto; } }
   }
-  @media (min-width: 1024px) and (max-width: 1199px) {
-    .brand__word, .hbtn--rewind > span, .hbtn__more { display: none; }
+  @media (min-width: 1024px) {
+    .hbtn--rewind > span { display: none; }
     .hbtn--rewind { padding: 0 10px; }
+  }
+  @media (min-width: 1024px) and (max-width: 1199px) {
+    .brand__word, .hbtn__more { display: none; }
   }
   @media (pointer: fine) { .kbd-hint { display: inline; } }
   @media (min-width: 1024px) and (pointer: fine) {
@@ -244,7 +250,7 @@
   .pal__scope { flex: none; display: inline-flex; align-items: center; gap: 2px; max-width: min(60%, 240px); height: 32px; padding: 0 2px 0 12px; background: var(--surface-2); border: 1px solid var(--line-strong); border-radius: var(--r-pill); color: var(--ink); font-size: var(--t-13); line-height: 18px; font-weight: var(--w-medium); white-space: nowrap; }
   .pal__scope-t { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
   .pal__scope-x { position: relative; flex: none; display: grid; place-items: center; width: 28px; height: 28px; padding: 0; background: none; border: 0; border-radius: 50%; color: var(--ink); }
-  .pal__scope-x::after { content: ""; position: absolute; inset: -8px; }
+  .pal__scope-x::after { content: ""; position: absolute; inset: -9px; } /* 46 px: exactly 44 measured 43.99 at 412 px */
   .pal__scope-x:hover { background: var(--line); }
   .pal__scope-x .ico { width: 14px; height: 14px; stroke-width: 2; }
   /* "12 results in 4 groups": takes room only while something is typed */

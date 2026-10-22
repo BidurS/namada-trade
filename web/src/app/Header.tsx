@@ -58,7 +58,9 @@ export function Header() {
 
   const status = price.stamp ? uiStatus(price.stamp.status) : 'none';
   const priceText = price.value != null ? fmtUsdRule(price.value) : null;
-  const changeText = price.change != null ? fmtPctSigned(price.change, 1) : '';
+  // A change of 100% or more without its decimal ("+137%"): the digit says nothing at that size, and its width left the
+  // 375 px header 3 px too wide after the 2026-10-21 crash and rebound ("+136.6%").
+  const changeText = price.change != null ? fmtPctSigned(price.change, Math.abs(price.change) >= 100 ? 0 : 1) : '';
   // the pulse means "streaming": not while the hub's Osmosis feed is down
   const live = !rewound && stream.connected && osmosisStreaming(stream, now) !== false && visible && status === 'fresh';
   const priceAria = priceText
