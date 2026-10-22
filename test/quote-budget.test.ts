@@ -52,7 +52,7 @@ const ask = async (q: string, extra: Record<string, unknown> = {}) => {
   return { status: r.status, body: (await r.json()) as any };
 };
 
-describe('D31: a visitor\'s quote is bounded in Osmosis calls', () => {
+describe('a visitor\'s quote is bounded in Osmosis calls', () => {
   it('the app\'s own requests answer as before (home: 5,000 sell; Trade: a typed buy), 2 and 3 calls', async () => {
     edge();
     const calls = sqs({ exact: true });
@@ -105,16 +105,37 @@ describe('D31: a visitor\'s quote is bounded in Osmosis calls', () => {
     expect(calls.length).toBeLessThanOrEqual(6);
   });
 
-  it('a visitor\'s quote asks each URL once: 403 then 200 costs 1 call (15 before), and the answer says busy', async () => {
+  it('a visitor\'s quote asks a refused URL once more and no further: 403 then 200 quotes (2 calls), 403 twice is busy', async () => {
+    // the quote service refused about every other first ask from a location (2026-10-22): one retry, each a call of the budget
     vi.useFakeTimers();
     edge();
-    const calls = sqs({ fail: (_u, n) => (n <= 2 ? 403 : null) });
-    const p = ask('amount=1000&side=buy', { QUOTE_LIMITER: limiter() });
+    const calls = sqs({ fail: (_u, n) => (n <= 1 ? 403 : null) });
+    const p = ask('amount=1000&side=sell', { QUOTE_LIMITER: limiter() });
     await vi.runAllTimersAsync();
     const r = await p;
-    expect(calls).toHaveLength(1);
-    expect(r.body.quote).toBeNull();
-    expect(r.body.error).toBe('The Osmosis quote service is busy right now.');
+    expect(r.body.quote).not.toBeNull();
+    expect(calls.filter((u: string) => u.includes('/router/')).length).toBeLessThanOrEqual(2);
+    vi.useFakeTimers();
+    edge();
+    const refused = sqs({ fail: () => 403 });
+    const q = ask('amount=1001&side=sell', { QUOTE_LIMITER: limiter() });
+    await vi.runAllTimersAsync();
+    const b = await q;
+    expect(b.body.quote).toBeNull();
+    expect(refused.length).toBeLessThanOrEqual(4); // the price twice and the route twice at most, never the 15 of before
+  });
+
+  it('takes its spot from the quote the cron stored in the last two minutes, said with that time: no price call', async () => {
+    edge();
+    const calls = sqs({ exact: true });
+    const db = testD1();
+    const at = Date.now() - 30_000;
+    db.raw.prepare('INSERT INTO metrics (ts, key, value) VALUES (?, ?, ?)').run(at, 'price.usd', SPOT);
+    const r = await app.request('/api/quote?amount=5000&side=sell', {}, { DB: db } as any);
+    const body = (await r.json()) as any;
+    expect(body.quote).not.toBeNull();
+    expect(calls.some((u: string) => u.includes('/tokens/prices'))).toBe(false);
+    expect(body.quote.prov.note).toContain(new Date(at).toISOString());
   });
 
   it('the size table keeps its retries (no budget): 403, 403, 200 on the router still quotes', async () => {

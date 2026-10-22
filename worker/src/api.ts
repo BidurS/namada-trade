@@ -752,7 +752,11 @@ app.get('/api/quote', async (c) => {
   if (!(amount > 0)) return c.json({ quote: null, error: 'Enter an amount above zero.' }, 400);
   if (!(amount <= QUOTE_MAX_NAM)) return c.json({ quote: null, error: 'Enter an amount below one trillion NAM.' }, 400);
   if (side !== 'buy' && side !== 'sell') return c.json({ quote: null, error: 'side must be buy or sell.' }, 400);
-  return c.json(await quoteNamTrade(amount, side, undefined, quoteBudget(c.env)));
+  // The spot the quote is measured against: the Osmosis quote the cron stored in the last two minutes (said with its own
+  // time in the quote's note), so a visitor's quote asks the quote service for the route only.
+  const stored = await c.env.DB.prepare(`SELECT ts, value FROM metrics WHERE key = 'price.usd' AND ts >= ? ORDER BY ts DESC LIMIT 1`).bind(Date.now() - 120_000).first<{ ts: number; value: number }>().catch(() => null);
+  const spot = stored && Number(stored.value) > 0 ? { usd: Number(stored.value), at: Number(stored.ts) } : null;
+  return c.json(await quoteNamTrade(amount, side, spot?.usd, quoteBudget(c.env), spot?.at));
 });
 
 app.get('/api/quote/curve', async (c) => c.json(await quoteSlippageCurve()));

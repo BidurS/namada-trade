@@ -135,21 +135,36 @@ export async function quoteNamTrade(
   side: 'buy' | 'sell' = 'sell',
   knownSpotUsd?: number | null,
   budget?: QuoteBudget,
+  knownSpotAt?: number,
 ): Promise<{ quote: PriceQuote | null; error?: string; code?: QuoteErrorCode }> {
   // The same quote asked within 10 s (typing, preset clicks, two tabs, the home page's and the Trade page's opening
   // 5,000 NAM) is the stored answer, before anything is asked of SQS: the spot price included.
   const key = `quote2-${side}-${Math.round(amountNam)}`;
   return edgeCached(key, 10, async () => {
-    const tries = budget ? 1 : 3;
+    // With a budget each attempt spends one call of it, and a call refused (a 403, a 5xx) is asked once more after a
+    // pause: the quote service refuses about every other first ask from a location at times (2026-10-22), so one
+    // attempt alone left a visitor's quote 'busy' half the time.
     const call: typeof routerQuote = async (inBase, inDenom, outDenom) => {
-      if (budget && !(await budget())) throw new HttpError(429, 'quote budget', '');
-      return routerQuote(inBase, inDenom, outDenom, tries);
+      if (!budget) return routerQuote(inBase, inDenom, outDenom);
+      for (let a = 0; ; a++) {
+        if (!(await budget())) throw new HttpError(429, 'quote budget', '');
+        try {
+          return await routerQuote(inBase, inDenom, outDenom, 1);
+        } catch (e) {
+          if (a >= 1 || !(e instanceof HttpError) || (e.status !== 403 && e.status !== 429 && e.status < 500)) throw e;
+          await sleep(400 + Math.floor(Math.random() * 250));
+        }
+      }
     };
     let spotUsd = knownSpotUsd ?? null;
-    let spotAt = Date.now();
+    let spotAt = knownSpotUsd != null && knownSpotAt != null ? knownSpotAt : Date.now();
     if (spotUsd == null) {
-      if (budget && !(await budget())) return { quote: null, error: quoteErrorText('busy'), code: 'busy' as const };
-      const pr = await fetchNamPrice(tries);
+      let pr: Awaited<ReturnType<typeof fetchNamPrice>> = { usd: null, at: Date.now() };
+      for (let a = 0; a < (budget ? 2 : 1) && pr.usd == null; a++) {
+        if (budget && !(await budget())) return { quote: null, error: quoteErrorText('busy'), code: 'busy' as const };
+        if (a) await sleep(400 + Math.floor(Math.random() * 250));
+        pr = await fetchNamPrice(budget ? 1 : 3);
+      }
       spotUsd = pr.usd;
       spotAt = pr.at;
       if (spotUsd == null) return { quote: null, error: pr.error ?? quoteErrorText('no_price'), code: 'no_price' as const };
