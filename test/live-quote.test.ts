@@ -79,8 +79,9 @@ describe('the hub\'s quote for new moves', () => {
     expect(reads).toHaveLength(0);
     expect(await q.at(T0 - 2 * 3_600_000, T0)).toBe(0.0011);
     expect(reads).toEqual([T0 - 2 * 3_600_000]);
-    // no stored minute within five minutes before the move: none
-    expect(await q.at(T0 - 2 * 3_600_000 - 30_000 - QUOTE_MATCH_MS - 1, T0)).toBeNull();
+    // a stored minute exists, but more than five minutes before the move: none
+    expect(await q.at(T0 - 2 * 3_600_000 - 30_000 + QUOTE_MATCH_MS + 1, T0)).toBeNull();
+    expect(await q.at(T0 - 2 * 3_600_000 - 30_000 + QUOTE_MATCH_MS, T0)).toBe(0.0011);
   });
 });
 
@@ -126,6 +127,105 @@ describe('the live hub prices new trades again', () => {
     const r = row(db, `osmosis:${split.hash}:swap`);
     expect(r.price_usd).toBeNull();
     expect(JSON.parse(r.meta).priceSource).toBeUndefined();
+  });
+
+  it('a stream move is priced at the quote\'s age when it arrives, not at what the last tick held', async () => {
+    // review, 2026-10-22: a slow alarm tick (a long catch-up search) held a 4 min 50 s old stored quote past five minutes
+    vi.useFakeTimers({ now: T0, toFake: ['Date'] });
+    vi.stubGlobal('fetch', vi.fn(async () => new Response(null, { status: 204 })));
+    const db = testD1();
+    db.raw.prepare('INSERT INTO metrics (ts, key, value) VALUES (?, ?, ?)').run(T0 - 290_000, 'price.usd', 0.00082);
+    const hub: any = hubOf(db, async () => null);
+    await hub.refreshQuote();
+    expect(hub.osmoCtx.priceUsd).toBe(0.00082);
+    vi.setSystemTime(T0 + 120_000);
+    await hub.handleOsmosisMessage(msgOf(split));
+    expect(row(db, `osmosis:${split.hash}:swap`).price_usd).toBeNull();
+  });
+
+  it('only the hub\'s own answers are broadcast as the live price; the stored minute is not', async () => {
+    vi.useFakeTimers({ now: T0, toFake: ['Date'] });
+    const db = testD1();
+    db.raw.prepare('INSERT INTO metrics (ts, key, value) VALUES (?, ?, ?)').run(T0 - 50_000, 'price.usd', 0.00082);
+    const sent: any[] = [];
+    let answer: number | null = null;
+    const hub: any = hubOf(db, async () => answer);
+    hub.sessions = new Set([{ send: (m: string) => sent.push(JSON.parse(m)) }]);
+    await hub.refreshQuote();
+    expect(hub.lastPriceUsd).toBe(0.00082);
+    expect(sent).toEqual([]);
+    answer = 0.0009;
+    vi.setSystemTime(T0 + QUOTE_ASK_EVERY_MS);
+    await hub.refreshQuote();
+    expect(sent).toEqual([{ type: 'price', usd: 0.0009, at: T0 + QUOTE_ASK_EVERY_MS }]);
+  });
+
+  it('every alarm tick keeps the quote: over ten minutes with the service silent, each stream move gets the newest stored minute', async () => {
+    // review, 2026-10-22: no test drove the alarm, so removing its refresh brought the incident back unnoticed
+    vi.useFakeTimers({ now: T0, toFake: ['Date'] });
+    const db = testD1();
+    for (let m = -1; m <= 10; m++) db.raw.prepare('INSERT INTO metrics (ts, key, value) VALUES (?, ?, ?)').run(T0 + m * 60_000 + 2000, 'price.usd', 0.0008 + m * 1e-6);
+    const hub: any = hubOf(db, async () => null);
+    Object.assign(hub, { ctx: { storage: { setAlarm: async () => {} } }, isPollingNamada: false, lastLiveReport: 0, lastSweep: Infinity, needSweep: false,
+      scanNamada: async () => {}, sweepOsmosis: async () => {}, ensureOsmosisWs: () => {} });
+    for (let t = T0; t <= T0 + 10 * 60_000; t += 6000) {
+      vi.setSystemTime(t);
+      await hub.alarm();
+      // the newest minute stored by now (one is stored 2 s into each minute); it is read at most QUOTE_STORED_EVERY_MS late
+      const newest = 0.0008 + Math.floor((t - T0 - 2000) / 60_000) * 1e-6;
+      expect(hub.quote.current(t)?.usd, `at +${(t - T0) / 1000} s`).toBeDefined();
+      expect(Math.abs(hub.quote.current(t).usd - newest)).toBeLessThanOrEqual(1e-6 + 1e-12);
+    }
+  });
+
+  it('a whale found late with no quote for its minute is alerted without a dollar value, as its row has none', async () => {
+    vi.useFakeTimers({ now: T0, toFake: ['Date'] });
+    const blockTs = T0 - 3_600_000;
+    const events = [{ type: 'transfer', attributes: [{ key: 'recipient', value: 'osmo1lq8recv' }, { key: 'sender', value: 'osmo1lq8send' }, { key: 'amount', value: `${50_000 * 1e6}${NAM.osmoDenom}` }] }];
+    const posts: any[] = [];
+    vi.stubGlobal('fetch', vi.fn(async (u: string, init?: RequestInit) => {
+      const url = String(u);
+      if (url.includes('discord.com')) { posts.push(JSON.parse(String(init?.body ?? '{}'))); return new Response(null, { status: 204 }); }
+      if (url.endsWith('/status')) return Response.json({ result: { sync_info: { latest_block_height: '200' } } });
+      if (url.includes('/tx_search')) return Response.json({ result: { txs: [{ hash: 'LQ8AAA', height: '100', tx_result: { code: 0, events } }] } });
+      if (url.includes('/block?height=')) return Response.json({ result: { block: { header: { time: new Date(blockTs).toISOString() } } } });
+      throw new Error(`unexpected ${url}`);
+    }));
+    const db = testD1();
+    await db.prepare("INSERT INTO kv (key, value, updated_at) VALUES ('osmosis.cursor', ?, 0)").bind(JSON.stringify({ height: 50, at: 0 })).run();
+    const hub: any = hubOf(db, async () => 0.0008);
+    hub.env.DISCORD_WEBHOOK_URL = 'https://discord.com/api/webhooks/77/op';
+    await hub.refreshQuote();
+    await hub.sweepOsmosis();
+    expect((db.raw.prepare("SELECT price_usd FROM flows WHERE tx_hash = 'LQ8AAA'").get() as any).price_usd).toBeNull();
+    expect(posts).toHaveLength(1);
+    expect(JSON.stringify(posts[0])).not.toContain('$');
+  });
+
+  it('a transaction whose minute\'s quote cannot be read is left for the next search, never stored unpriced', async () => {
+    vi.useFakeTimers({ now: T0, toFake: ['Date'] });
+    const blockTs = T0 - 3_600_000;
+    const events = [{ type: 'transfer', attributes: [{ key: 'recipient', value: 'osmo1lq7recv' }, { key: 'sender', value: 'osmo1lq7send' }, { key: 'amount', value: `${5_000 * 1e6}${NAM.osmoDenom}` }] }];
+    vi.stubGlobal('fetch', vi.fn(async (u: string) => {
+      const url = String(u);
+      if (url.endsWith('/status')) return Response.json({ result: { sync_info: { latest_block_height: '200' } } });
+      if (url.includes('/tx_search')) return Response.json({ result: { txs: [{ hash: 'LQ7AAA', height: '100', tx_result: { code: 0, events } }] } });
+      if (url.includes('/block?height=')) return Response.json({ result: { block: { header: { time: new Date(blockTs).toISOString() } } } });
+      throw new Error(`unexpected ${url}`);
+    }));
+    const db = testD1();
+    await db.prepare("INSERT INTO kv (key, value, updated_at) VALUES ('osmosis.cursor', ?, 0)").bind(JSON.stringify({ height: 50, at: 0 })).run();
+    let down = true;
+    const reader = storedQuoteReader(db as any);
+    const hub: any = hubOf(db, async () => null);
+    hub.quote = new HubQuote(async () => null, async (ts) => { if (down) throw new Error('D1_ERROR'); return reader(ts); });
+    db.raw.prepare('INSERT INTO metrics (ts, key, value) VALUES (?, ?, ?)').run(blockTs - 30_000, 'price.usd', 0.0011);
+    await hub.sweepOsmosis();
+    const count = () => (db.raw.prepare("SELECT COUNT(*) AS n FROM flows WHERE tx_hash = 'LQ7AAA'").get() as any).n;
+    expect(count()).toBe(0);
+    down = false;
+    await hub.sweepOsmosis();
+    expect((db.raw.prepare("SELECT price_usd FROM flows WHERE tx_hash = 'LQ7AAA'").get() as any).price_usd).toBe(0.0011);
   });
 
   it('the catch-up search prices a transaction two hours old at its own minute\'s stored quote', async () => {

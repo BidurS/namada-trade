@@ -157,7 +157,7 @@ describe('the wrapper names the fee payer', () => {
 describe('the live scan reads the fee payer from the block for such a block', () => {
   const H = 9_000_001;
   const TIME = '2026-10-21T08:00:00Z';
-  function scan(block: () => Response | Promise<Response>, events: any[]) {
+  function scan(block: () => Response | Promise<Response>, events: any[], quote = new HubQuote(async () => null, async () => null)) {
     const urls: string[] = [];
     vi.stubGlobal('fetch', vi.fn(async (u: string) => {
       const url = String(u);
@@ -169,11 +169,12 @@ describe('the live scan reads the fee payer from the block for such a block', ()
       throw new Error(`unexpected ${url}`);
     }));
     const db = testD1();
-    const hub: any = Object.assign(Object.create(LiveHub.prototype), { env: { DB: db }, sessions: new Set(), lastPriceUsd: null, namadaHeight: 0, quote: new HubQuote(async () => null, async () => null) });
+    const hub: any = Object.assign(Object.create(LiveHub.prototype), { env: { DB: db }, sessions: new Set(), lastPriceUsd: null, namadaHeight: 0, quote });
     const flows = () => db.raw.prepare('SELECT id, kind, to_addr, amount_num, meta FROM flows ORDER BY id').all()
       .map((r: any) => [r.id, r.kind, r.to_addr, r.amount_num, JSON.parse(r.meta).maspFeeNam ?? null]);
     const cursor = () => db.raw.prepare("SELECT value FROM kv WHERE key = 'namada.cursor'").get()?.value;
-    return { run: () => hub.scanNamada(), urls, flows, cursor };
+    const prices = () => db.raw.prepare('SELECT price_usd FROM flows ORDER BY id').all().map((r: any) => r.price_usd);
+    return { run: () => hub.scanNamada(), urls, flows, cursor, prices };
   }
   const shape = () => [ev(W6957587, 'C'.repeat(64), [[MASP, NAMT, '62501']], [[PAYER, NAMT, '62500'], [RCPT4349059, NAMT, '1']])];
 
@@ -193,6 +194,26 @@ describe('the live scan reads the fee payer from the block for such a block', ()
       [`namada:${W6957587}:0:1`, 'unshield', RCPT4349059, 0.000001, null],
     ]);
     expect(s.cursor()).toBe(String(H));
+  });
+
+  // review of the live quote, 2026-10-22: a block the scan reaches late is priced at the quote stored for its own
+  // minute, never the hub's current one; a stored quote that cannot be read holds the block for the next tick.
+  const plain = () => [ev('AB'.repeat(32), 'C'.repeat(64), [['tnam1qq6wus66shjjwhe48c3udfyrh05vq62s0ysy3flp', NAMT, '1000000']], [[PAYER, NAMT, '1000000']])];
+  it('a block behind the head is priced at its own minute\'s stored quote', async () => {
+    const at = Date.parse(TIME);
+    const quote = new HubQuote(async () => 0.0008, async (ts) => (ts >= at - 30_000 ? { usd: 0.0011, at: at - 30_000 } : null));
+    await quote.refresh(Date.now());
+    const s = scan(() => { throw new Error('not asked'); }, plain(), quote);
+    await s.run();
+    expect(s.prices()).toEqual([0.0011]);
+    expect(s.cursor()).toBe(String(H));
+  });
+  it('a stored quote that cannot be read holds the block: nothing written, the cursor stays below it', async () => {
+    const quote = new HubQuote(async () => null, async () => { throw new Error('D1_ERROR: Network connection lost.'); });
+    const s = scan(() => { throw new Error('not asked'); }, plain(), quote);
+    await s.run();
+    expect(s.flows()).toEqual([]);
+    expect(s.cursor() === undefined || Number(s.cursor()) < H).toBe(true);
   });
 
   it('a block with no pool fee to read costs no extra call', async () => {

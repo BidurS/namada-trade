@@ -67,12 +67,13 @@ export class HubQuote {
 
   /**
    * The quote for a move at `ts` read at `now`: the current one when the move is at most QUOTE_ASK_EVERY_MS older than
-   * now; else the stored quote at or before `ts`, at most QUOTE_MATCH_MS before it; null when there is none.
+   * now; else the stored quote at or before `ts`, at most QUOTE_MATCH_MS before it; null when there is none. Throws
+   * when the stored quote cannot be read, so the caller holds the move for a retry rather than store it unpriced.
    */
   async at(ts: number, now: number): Promise<number | null> {
     const c = this.current(now);
     if (c && now - ts <= QUOTE_ASK_EVERY_MS) return c.usd;
-    const s = await this.stored(ts).catch(() => null);
+    const s = await this.stored(ts);
     return s && ok(s.usd) && s.at <= ts && ts - s.at <= QUOTE_MATCH_MS ? s.usd : null;
   }
 }

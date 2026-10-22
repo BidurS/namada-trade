@@ -116,14 +116,18 @@ export class LiveHub extends DurableObject<Env> {
     await this.refreshQuote();
   }
 
-  /** The quote for moves now (HubQuote.refresh): it prices the stream's moves; a change is broadcast. */
+  /**
+   * The quote for moves now (HubQuote.refresh), kept in osmoCtx.priceUsd and lastPriceUsd. A change is broadcast only
+   * when it is the hub's own answer from the quote service: the page shows a streamed price as live, and the cron's
+   * stored minute reaches it through its own polls, labelled as stored.
+   */
   private async refreshQuote() {
     const q = await this.quote.refresh(Date.now()).catch(() => null);
     const usd = q?.usd ?? null;
     this.osmoCtx.priceUsd = usd;
     if (usd !== this.lastPriceUsd) {
       this.lastPriceUsd = usd;
-      if (q) this.broadcast({ type: 'price', usd: q.usd, at: q.at });
+      if (q?.source === 'live') this.broadcast({ type: 'price', usd: q.usd, at: q.at });
     }
   }
 
@@ -216,7 +220,8 @@ export class LiveHub extends DurableObject<Env> {
 
     if (norm.height > this.osmoHeight) this.osmoHeight = norm.height;
 
-    const parsed = parseOsmosisTx(norm, this.osmoCtx);
+    // priced at the quote for now, its age checked here (a slow alarm tick can hold the last refresh for minutes)
+    const parsed = parseOsmosisTx(norm, { ...this.osmoCtx, priceUsd: this.quote.current(Date.now())?.usd ?? null });
     if (!parsed.flows.length && !parsed.moves.length) return;
 
     // Persist to D1, in one batch. A write that fails (a transient D1 error) is neither broadcast nor alerted, and it
@@ -275,10 +280,11 @@ export class LiveHub extends DurableObject<Env> {
     for (const f of flows) {
       if (isNamWhale(f, threshold)) f.whale = true;
       if (offeredForAlerts(f, minNam)) {
+        // valued by the row's own price only: a move found late with no quote for its minute is never valued at today's
         await sendDiscordWhaleAlert(
           this.env.DISCORD_WEBHOOK_URL,
           f,
-          this.lastPriceUsd,
+          null,
           this.env.DB,
           threshold,
         );
@@ -377,11 +383,20 @@ export class LiveHub extends DurableObject<Env> {
         console.error(`Namada block ${h}: block_results unavailable from every RPC; retrying next tick:`, e);
         break;
       }
+      // The quote for the block's own minute (the scan may be behind). One that cannot be read holds the block for the
+      // next tick, as a block that cannot be fetched does (inside the try below it would be skipped as not scanned).
+      let priceUsd: number | null = null;
+      if (blk.events && blk.events.length > 0) {
+        try {
+          priceUsd = await this.quote.at(blk.ts, Date.now());
+        } catch (e) {
+          console.error(`Namada block ${h}: its minute's stored quote could not be read; retrying next tick:`, e);
+          break;
+        }
+      }
       let retryBlock = false;
       try {
         if (blk.events && blk.events.length > 0) {
-          // the quote for the block's own minute (the scan may be behind)
-          const priceUsd = await this.quote.at(blk.ts, Date.now());
           let parsed = parseNamadaBlock(blk, priceUsd);
           // The shielded pool's fee is tied to the account that paid gas only when the wrapper names it (no event
           // does): the block's tx bytes are fetched only for a block whose pool fee the events alone had to read.
@@ -524,8 +539,15 @@ export class LiveHub extends DurableObject<Env> {
         if (!Number.isFinite(ts)) { complete = false; continue; } // no block time: never written with a made-up one
         times.set(h, ts);
       }
-      // A transaction found late is priced at its own minute's quote, never the current one.
-      const priceUsd = await this.quote.at(times.get(h)!, Date.now());
+      // A transaction found late is priced at its own minute's quote, never the current one; one whose quote could not
+      // be read is left for the next search, as one without a block time is.
+      let priceUsd: number | null;
+      try {
+        priceUsd = await this.quote.at(times.get(h)!, Date.now());
+      } catch {
+        complete = false;
+        continue;
+      }
       const parsed = parseOsmosisTx(normFromTxSearch(t, times.get(h)!), { ...this.osmoCtx, priceUsd });
       if (!parsed.flows.length && !parsed.moves.length) continue;
       for (const f of parsed.flows) f.meta = { ...(f.meta ?? {}), tsSource: 'block', via: 'catch-up search' };
