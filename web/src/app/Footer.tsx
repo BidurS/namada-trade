@@ -48,7 +48,7 @@ export function Footer() {
           <button type="button" className="foot__coffee" aria-haspopup="dialog" onClick={() => setCoffee(true)}>
             <Icon name="shield" />
             Buy me a coffee
-            <span className="foot__coffee-sub">in shielded NAM</span>
+            <span className="foot__coffee-sub">shielded NAM or ZEC</span>
           </button>
           {coffee ? <Suspense fallback={null}><DonateSheet onClose={() => setCoffee(false)} /></Suspense> : null}
         </div>

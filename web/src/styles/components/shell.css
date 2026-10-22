@@ -311,6 +311,8 @@
   .foot__coffee-sub { font-weight: var(--w-regular); opacity: .8; }
   .foot__coffee:hover { filter: brightness(.95); }
   @media (max-width: 359px) { .foot__coffee-sub { display: none; } }
+  /* "shielded NAM or ZEC" fits on one line from 360 px with a little less side padding below 375 px */
+  @media (min-width: 360px) and (max-width: 374px) { .foot__coffee { padding: 0 var(--s-3); } }
   .sh-coffee__body { display: grid; gap: var(--s-3); }
   .sh-coffee__k { font-size: var(--t-13); color: var(--c-ink-2); }
   .sh-coffee__addr { font-size: var(--t-15); line-height: 22px; overflow-wrap: anywhere; word-break: break-all; padding: var(--s-3); border: 1px solid var(--c-line); border-radius: 8px; user-select: all; }

@@ -84,7 +84,7 @@ describe('search-facing route copy', () => {
     }
     for (const [where, s] of visibleStrings()) {
       // addresses and URLs are identifiers, not figures (the donation address and the repository link carry digits)
-      if (where === 'SITE.donateShielded' || where === 'SITE.repo') continue;
+      if (where === 'SITE.donateShielded' || where === 'SITE.donateZcash' || where === 'SITE.repo') continue;
       if (where.startsWith('BODY.') || where.startsWith('SITE.') || where.startsWith('NOT_FOUND')) expect(s, where).not.toMatch(/\d/);
     }
   });

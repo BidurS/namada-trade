@@ -258,6 +258,12 @@ test.describe('once', () => {
     await expect(sheet).toContainText('znam13nhljeczcggkq4jqfn64mzdsp8d56wgt6t33ja5chzdfqjxnhghwrm2a6hs7tph5uffsj2rv379');
     await expect(sheet.getByRole('button', { name: /Copy address/ })).toBeVisible();
     await expect(sheet.locator('img[alt^="QR code"]')).toBeVisible();
+    // the Zcash side (owner, 2026-10-21): the switch shows the unified address with its own QR code
+    await sheet.getByRole('radio', { name: 'Zcash' }).check();
+    await expect(sheet).toContainText('Shielded Zcash address');
+    await expect(sheet).toContainText('u1xpk2qkpfdu48myyvpm3rfqujkz94xfn0tsuwt3ql6mddutsvh92mt7g5h752xce7meeywx9gqad8m9g97ygz3x5jertlkj8kycv74wvh90v85ecxycakh24ggk077w8pzkg3xtw32nawyu00ns4ckeva7537f9f9navw5uhus5c5kxkd');
+    await expect(sheet.locator('img[alt="QR code of the shielded Zcash address"]')).toBeVisible();
+    await expect(sheet).not.toContainText('znam13nhljeczcggkq4jqfn64mzdsp8d56wgt6t33ja5chzdfqjxnhghwrm2a6hs7tph5uffsj2rv379');
     await page.keyboard.press('Escape');
     await expect(sheet).toHaveCount(0);
   });
