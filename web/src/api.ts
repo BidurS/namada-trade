@@ -11,6 +11,7 @@ export type {
 };
 
 import { authFetch } from './lib/auth';
+import { encodeFlowCursor } from '../../shared/paging';
 import { filterFlows, plainNotes, serverIgnoredFlowFilter, withAddressReport, withFlow, withHolder, withOverview, withPressure } from './lib/compat';
 
 const at = (asOf: number | null, q: URLSearchParams = new URLSearchParams()) => {
@@ -310,10 +311,39 @@ export interface FlowsCursorPage extends FlowsResponse {
   exact: boolean;
 }
 
+/** The most requests one page of a text search makes (each reads at most SEARCH_SCAN = 10,000 moves on the server). */
+export const SEARCH_READS = 12;
+
 export async function fetchFlowsPage(o: FlowsCursorQuery = {}, opts: RequestOpts = {}): Promise<FlowsCursorPage> {
-  const r = await get<FlowsResponse>(`/api/flows?${flowsParams(o)}`, opts);
+  // A text search pages by cursor only (the server refuses page= without a position): page n without one is read from
+  // the head, its first rows skipped.
+  const fromHead = o.before == null || o.before === '';
+  const skip = o.search && fromHead ? ((o.page ?? 1) - 1) * (o.limit ?? 50) : 0;
+  const r = await get<FlowsResponse>(`/api/flows?${flowsParams(o.search && fromHead ? { ...o, page: undefined } : o)}`, opts);
   const cursorPaged = r.next !== undefined;
-  if (cursorPaged) return { ...r, flows: r.flows.map(withFlow), next: r.next ?? null, cursorPaged, ignored: [], exact: true };
+  if (cursorPaged) {
+    // A text search stops after SEARCH_SCAN moves read: fewer rows than a page, and a `next`. The rest is read on from
+    // there, so a page holds the rows one walk would give.
+    let flows = r.flows;
+    let next = r.next ?? null;
+    const want = skip + r.limit;
+    for (let n = 1; o.search && next && flows.length < want && n < SEARCH_READS; n++) {
+      const m = await get<FlowsResponse>(`/api/flows?${flowsParams({ ...o, page: undefined, before: next })}`, opts);
+      flows = flows.concat(m.flows);
+      next = m.next ?? null;
+    }
+    if (flows.length > want) {
+      const l = flows[want - 1];
+      flows = flows.slice(0, want);
+      next = encodeFlowCursor({ ts: l.ts, height: l.height, id: l.id });
+    }
+    flows = flows.slice(skip);
+    // read from the head to the oldest move: these are every match there is
+    const whole = !!o.search && fromHead && (o.page ?? 1) === 1 && next == null;
+    const total = r.total ?? (whole ? flows.length : null);
+    const last = r.last === undefined && whole && !flows.length && o.since == null ? null : r.last;
+    return { ...r, total, last, flows: flows.map(withFlow), next, cursorPaged, ignored: [], exact: true };
+  }
   const ignored: FlowsCursorPage['ignored'] = [...newFiltersOf(o), ...(o.before != null && o.before !== '' ? (['before'] as const) : [])];
   const flows = filterNew(r.flows, o);
   return { ...r, flows: flows.map(withFlow), next: null, cursorPaged, ignored, exact: flows.length === r.flows.length && !ignored.length };

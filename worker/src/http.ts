@@ -37,12 +37,37 @@ export const CACHE_PARAMS: Record<string, string[]> = {
   '/api/export/flows': ['chain', 'kind', 'whale', 'minNam', 'arb', 'pairs', 'search', 'at', 'limit', 'format', 'since', 'addr', 'hash', 'height'],
 };
 
-/** The cache key for a request: its path and the parameters the route reads, sorted. */
-export function cacheKeyUrl(url: URL): string {
-  const keep = CACHE_PARAMS[url.pathname];
+/**
+ * The address report (GET /api/address/:addr): the address is the path and the route reads no parameter, so its
+ * copy is keyed on the path alone (the app sends none: web/src/api.ts fetchAddressReport). The charset and lengths
+ * are chainOf's; any other path is answered 400 and never stored.
+ */
+export const ADDRESS_REPORT = /^\/api\/address\/(?:osmo1|tnam1)[02-9ac-hj-np-z]{38,80}$/;
+/** The parameters a cached route reads (CACHE_PARAMS, or none for the address report); undefined: not a cached route. */
+export const cacheParamsOf = (path: string): string[] | undefined => CACHE_PARAMS[path] ?? (ADDRESS_REPORT.test(path) ? [] : undefined);
+
+/**
+ * `?at=` as every route reads it (worker/src/api.ts asOfParam, api-series.ts asOfOf): a finite time after 0 and
+ * before now is a rewound read, written as the route reads it (String(Number(raw)): "1.7e12" and "1700000000000" are
+ * one copy); anything else (unreadable, empty, 0, negative, Infinity, a future time) is answered live, so it is null:
+ * the live copy, and no replay limit. Read any other way, each spelling of a live `at` was a copy of its own under
+ * the replay budget, and on /api/overview each one asked the Osmosis quote service twice.
+ */
+export function rewoundAt(url: URL, now = Date.now()): string | null {
+  const raw = url.searchParams.get('at');
+  const at = raw ? Number(raw) : NaN;
+  return Number.isFinite(at) && at > 0 && at < now ? String(at) : null;
+}
+
+/** The cache key for a request: its path and the parameters the route reads, sorted (`at` as rewoundAt reads it). */
+export function cacheKeyUrl(url: URL, now = Date.now()): string {
+  const keep = cacheParamsOf(url.pathname);
   const out = new URL(url.origin + url.pathname);
   if (!keep) return url.toString();
-  for (const k of [...keep].sort()) { const v = url.searchParams.get(k); if (v != null) out.searchParams.set(k, v); }
+  for (const k of [...keep].sort()) {
+    const v = k === 'at' ? rewoundAt(url, now) : url.searchParams.get(k);
+    if (v != null) out.searchParams.set(k, v);
+  }
   return out.toString();
 }
 
@@ -93,7 +118,7 @@ export function seriesFromDays(now: number): Set<string> {
 }
 export function isReplay(url: URL): boolean {
   const p = url.pathname;
-  if (p === '/api/metrics/history' || url.searchParams.has('at') || url.searchParams.has('since')) return true;
+  if (p === '/api/metrics/history' || rewoundAt(url) != null || url.searchParams.has('since')) return true;
   // Orderflow and pressure aggregate the flows table over the window asked for; the ranges the pages offer are a
   // few cache entries each, any other value is a cache miss that reaches D1.
   if (p === '/api/orderflow') return !ORDERFLOW_HOURS.has(url.searchParams.get('hours') ?? '720');
@@ -115,6 +140,9 @@ export function isReplay(url: URL): boolean {
   }
   if (p === '/api/flows' || p === '/api/holders') {
     // a size, a cursor or a date jump: every value is its own cache entry
+    // so is an address (every start of 8 to 62 characters of every address, or a whole one); a hub's count reads
+    // every move it made (the MASP's 20,128 on 2026-10-22)
+    if (p === '/api/flows' && url.searchParams.has('addr')) return true;
     if (['minNam', 'min', 'max', 'after', 'before'].some((k) => url.searchParams.has(k))) return true;
     // a page past the first, or the first spelled any other way ("-5", "0.3", "01"): the route reads them all as a
     // page number, so each spelling would be a cache entry of its own
@@ -143,6 +171,15 @@ export async function rateLimited(request: Request, env: Env): Promise<Response 
   if (kind === 'search') return limitBy(env.SEARCH_LIMITER ?? env.HEAVY_LIMITER, request, url, SEARCH_LIMIT_WORDS);
   return limitBy(env.HEAVY_LIMITER, request, url, 'Too many requests of this kind from your address; try again in a minute.');
 }
+/**
+ * /ws upgrade attempts, 60 a minute per client address (WS_LIMITER), counted before the one LiveHub object sees them:
+ * its admission (ws-admit.ts) bounds open sockets only, and every attempt, refused or accepted, is an event in the
+ * object that runs the 6 s Namada scan. A page opens one socket per load and retries a close after 3 s, doubling to
+ * 30 s (web/src/app/overview.tsx), so it stays far below.
+ */
+export const WS_LIMIT_WORDS = 'Too many live connection attempts from your address; try again in a minute.';
+export const wsLimited = (request: Request, env: Env): Promise<Response | null> => limitBy(env.WS_LIMITER, request, new URL(request.url), WS_LIMIT_WORDS);
+
 export async function replayLimited(request: Request, env: Env): Promise<Response | null> {
   const url = new URL(request.url);
   if (!isReplay(url)) return null;
@@ -206,7 +243,7 @@ export async function cachedApi(request: Request, env: Env, ctx: ExecutionContex
   const isExport = EXPORTS.test(url.pathname);
   // The cached routes are public market reads that never look at a session (test/review2-worker-round2.test.ts pins
   // it), so an Authorization header changes nothing about the answer and does not get past the cache.
-  const cacheable = request.method === 'GET' && (CACHEABLE_API.test(url.pathname) || isExport);
+  const cacheable = request.method === 'GET' && (CACHEABLE_API.test(url.pathname) || isExport || ADDRESS_REPORT.test(url.pathname));
   if (!cacheable) return apiHeaders(await fetchApp(request, env, ctx), null);
   const cache = caches.default;
   const key = new Request(cacheKeyUrl(url), { method: 'GET' });

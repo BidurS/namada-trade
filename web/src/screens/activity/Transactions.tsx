@@ -94,6 +94,8 @@ interface Loaded {
   flows: Flow[];
   /** the count of these filters: from this answer, or kept from the page that carried it; null when not known */
   total: number | null;
+  /** more than this many match: an address start the server does not count past FEW_ROWS (FlowsResponse.totalOver); `total` is then null */
+  over: number | null;
   page: number;
   size: number;
   cursor: string | null;
@@ -178,7 +180,7 @@ export default function Transactions({
         // an older server pages by number: more when its count says so; this one says it by `next`
         const more = r.cursorPaged ? r.next != null : page * size < (r.total ?? 0);
         // a position this server does not know is not a filter it ignored: it paged by number (always sent)
-        setData({ key, flows: r.flows, total, page, size, cursor: position, exact, more, asOf: r.asOf ?? null, last: r.last, firstTs: r.firstTs ?? p.firstTs, ignored: r.ignored.filter((k) => k !== 'before') });
+        setData({ key, flows: r.flows, total, over: r.totalOver ?? null, page, size, cursor: position, exact, more, asOf: r.asOf ?? null, last: r.last, firstTs: r.firstTs ?? p.firstTs, ignored: r.ignored.filter((k) => k !== 'before') });
       })
       .catch(() => {
         if (!ctl.signal.aborted) setError(page > 1 ? 'This page of moves could not be fetched from this site’s server.' : 'The list of moves could not be fetched from this site’s server.');
@@ -380,16 +382,16 @@ export default function Transactions({
 
   const busy = !!data && (data.key !== key || !current || past);
   const csv =
-    fresh && (total ?? 0) > 0 ? (
+    fresh && ((total ?? 0) > 0 || (total == null && rows.length > 0)) ? (
       <a className="link act-csv" href={flowsCsvHref(q)} download>
         <span>Download page data</span>
         {/* the export holds at most the newest CSV_MAX moves (worker/src/api.ts /api/export/flows) */}
-        <span className="act-csv__n">{!exact || (total != null && total > CSV_MAX) ? `CSV, newest ${fmtCount(CSV_MAX)}` : 'CSV, all of them'}</span>
+        <span className="act-csv__n">{!exact || total == null || fresh.over != null || total > CSV_MAX ? `CSV, newest ${fmtCount(CSV_MAX)}` : 'CSV, all of them'}</span>
       </a>
     ) : null;
   const empty = !!fresh && !busy && rows.length === 0;
   /** Behind a position the server does not count; a count seen this visit is kept, else the pages are "of —". */
-  const unknownWhy = fresh && fresh.total == null ? 'The number of pages is not known: this site’s server counts the moves only on the first page of a list, and this page was opened from its own link. Open the first page to count them.' : 'The number of pages is not known: this site’s server did not count the moves these filters select, so only the next page is offered.';
+  const unknownWhy = fresh && fresh.over != null ? `The number of pages is not known: more than ${fmtCount(fresh.over)} moves match this address start, and this site’s server does not count past that. Type the whole address to count its moves.` : fresh && fresh.total == null && applied.search ? 'The number of pages is not known: a search by text is not counted, so only the next page is offered.' : fresh && fresh.total == null ? 'The number of pages is not known: this site’s server counts the moves only on the first page of a list, and this page was opened from its own link. Open the first page to count them.' : 'The number of pages is not known: this site’s server did not count the moves these filters select, so only the next page is offered.';
   const pager = (where: 'head' | 'foot') =>
     fresh ? (
       <Pager
@@ -443,6 +445,13 @@ export default function Transactions({
                   'No move on this page matches the filters'
                 )}
                 {dated && before != null ? <>, before {fmtDayMonthYear(before)} (UTC)</> : rewound && at ? <>, at or before {fmtUtcLong(at)}</> : null}, newest first; this site’s server could not apply every filter, so the moves were not counted.
+              </>
+            ) : total == null && fresh.over != null ? (
+              <>
+                More than <Num v={fresh.over} fmt={fmtCount} /> moves found that match the filters
+                {dated && before != null ? <>, before {fmtDayMonthYear(before)} (UTC)</> : rewound && at ? <>, at or before {fmtUtcLong(at)}</> : null}, newest first
+                {fresh.asOf != null && !rewound && !dated ? <> · <span className="act-at">read at {fmtUtcClock(fresh.asOf)}</span></> : null}
+                .
               </>
             ) : total == null ? (
               <>

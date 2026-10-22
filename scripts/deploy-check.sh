@@ -17,6 +17,11 @@ for i in 1 2 3 4 5; do out=$(npx wrangler d1 execute namada-trade-db --remote --
 echo "$out" | python3 -c "
 import sys,json; r=json.load(sys.stdin)[0]['results'][0]; print('0008 objects:', r)
 sys.exit(0 if r['triggers'] >= 8 and r['objects'] == 7 else 1)" || { echo "FAIL migration 0008 is not in place: not deploying"; exit 1; }
+# 0009 (the session rows' partial indexes): the Worker names them (auth.ts INDEXED BY), so they must be there first
+for i in 1 2 3 4 5; do out=$(npx wrangler d1 execute namada-trade-db --remote --json --command "SELECT COUNT(*) n FROM sqlite_master WHERE type='index' AND name IN ('kv_session_addr','kv_session_expiry','kv_session_legacy')" 2>&1) && ! echo "$out" | grep -q 7403 && break; echo "retrying (Cloudflare 7403)"; sleep 6; done
+echo "$out" | python3 -c "
+import sys,json; n=json.load(sys.stdin)[0]['results'][0]['n']; print('0009 indexes:', n)
+sys.exit(0 if n == 3 else 1)" || { echo "FAIL migration 0009 is not in place: not deploying"; exit 1; }
 
 echo "== 2. deploy"
 npm run deploy 2>&1 | grep -E "Current Version ID|Deployed|rror"
@@ -38,6 +43,7 @@ check "CSP is enforced"                1 "$(curl -s -I "$H/" | grep -ci '^conten
 day=$(python3 -c "import datetime; print((datetime.datetime.now(datetime.timezone.utc) - datetime.timedelta(days=30)).strftime('%Y-%m-%d'))")
 check "series answers by day"          200 "$(curl -s -o /dev/null -w '%{http_code}' "$H/api/series?key=price.usd&from=$day&step=1h")"
 check "an encoded parameter name is a 404" 404 "$(curl -s -o /dev/null -w '%{http_code}' "$H/api/alerts/rules?%62igSwap=1&bigSwap=2")"
+check "a caller alert size is a 400"     400 "$(curl -s -o /dev/null -w '%{http_code}' "$H/api/alerts/recent?bigSwap=1")"
 check "a count the app never sends is a 400" 400 "$(curl -s -o /dev/null -w '%{http_code}' "$H/api/flows?count=x")"
 check "an unknown series key is 404"   404 "$(curl -s -o /dev/null -w '%{http_code}' "$H/api/series?key=no.such.key")"
 check "the tape answers"               200 "$(curl -s -o /dev/null -w '%{http_code}' "$H/api/series/trades?limit=60")"

@@ -185,6 +185,12 @@ export const MAX_API_KEYS = 20;
 export const keyPrefix = (prefix: string) => `(key >= '${prefix}:' AND key < '${prefix};')`;
 /** A stored session row from before tokens were hashed: its value still holds the token. */
 export const LEGACY_SESSION_SQL = `${keyPrefix('session')} AND json_extract(value, '$.token') IS NOT NULL`;
+/**
+ * The session and API-key rows of one address (bind: the address), on migration 0009's partial index: the rows of
+ * that address only (at most MAX_SESSIONS + MAX_API_KEYS live, plus any expired since the last sweep), never every
+ * session row on the site. The range terms are keyPrefix('session') as written, which the index's WHERE repeats.
+ */
+const SESSIONS_OF = `kv INDEXED BY kv_session_addr WHERE ${keyPrefix('session')} AND json_extract(value, '$.address') = ?`;
 
 export const tokenHash = (token: string) => hex.encode(sha256(new TextEncoder().encode(token)));
 const sessionKey = (token: string) => `session:${tokenHash(token)}`;
@@ -200,7 +206,8 @@ async function linkedCounterpart(db: D1Database, address: string): Promise<strin
 
 /** Every stored session row of an address (hashed keys and rows written before hashing), newest first. */
 async function sessionRows(db: D1Database, address: string): Promise<{ key: string; s: Stored }[]> {
-  const r = await db.prepare(`SELECT key, value FROM kv WHERE ${keyPrefix('session')} AND json_extract(value, '$.address') = ?`).bind(address).all<{ key: string; value: string }>().catch(() => ({ results: [] as { key: string; value: string }[] }));
+  // No catch: a failed read is an error (a 500), never "no rows", which would lift MAX_API_KEYS and the device cap.
+  const r = await db.prepare(`SELECT key, value FROM ${SESSIONS_OF}`).bind(address).all<{ key: string; value: string }>();
   const out: { key: string; s: Stored }[] = [];
   for (const row of r.results || []) {
     try { out.push({ key: row.key, s: JSON.parse(row.value) as Stored }); } catch {}
@@ -279,18 +286,19 @@ export async function listSessions(db: D1Database, address: string, currentToken
 export async function revokeSession(db: D1Database, address: string, id: string, byApiKey = false): Promise<boolean | 'forbidden'> {
   if (!/^[0-9a-f]{8,64}$/.test(id)) return false;
   if (byApiKey) {
-    const kinds = await db.prepare(`SELECT json_extract(value, '$.via') via FROM kv WHERE key LIKE ? AND json_extract(value, '$.address') = ?`).bind(`session:${id}%`, address).all<{ via: string }>().catch(() => null);
+    const kinds = await db.prepare(`SELECT json_extract(value, '$.via') via FROM ${SESSIONS_OF} AND key LIKE ?`).bind(address, `session:${id}%`).all<{ via: string }>().catch(() => null);
     if (!kinds || (kinds.results || []).some((k) => k.via !== 'api')) return 'forbidden';
   }
-  const r = await db.prepare(`DELETE FROM kv WHERE key LIKE ? AND json_extract(value, '$.address') = ?`).bind(`session:${id}%`, address).run().catch(() => null);
+  const r = await db.prepare(`DELETE FROM ${SESSIONS_OF} AND key LIKE ?`).bind(address, `session:${id}%`).run().catch(() => null);
   await db.prepare(`DELETE FROM kv WHERE ${keyPrefix('pair')} AND json_extract(value, '$.address') = ? AND json_extract(value, '$.by') LIKE ?`).bind(address, `${id}%`).run().catch(() => {});
   return Number(r?.meta?.changes ?? 0) > 0;
 }
 
 /** Every session, API key and pending pair code of the address, wherever it was made, plus the old per-address index row. */
 export async function revokeAllSessions(db: D1Database, address: string) {
-  await db.prepare(`DELETE FROM kv WHERE ${keyPrefix('session')} AND json_extract(value, '$.address') = ?`).bind(address).run().catch(() => {});
-  await db.prepare(`DELETE FROM kv WHERE ${keyPrefix('pair')} AND json_extract(value, '$.address') = ?`).bind(address).run().catch(() => {});
+  // No catch on these two: DELETE /api/me answers success only once they are gone (a failure is a 500 to retry).
+  await db.prepare(`DELETE FROM ${SESSIONS_OF}`).bind(address).run();
+  await db.prepare(`DELETE FROM kv WHERE ${keyPrefix('pair')} AND json_extract(value, '$.address') = ?`).bind(address).run();
   await db.prepare('DELETE FROM kv WHERE key = ?').bind(`sessions:${address}`).run().catch(() => {});
 }
 
@@ -381,9 +389,13 @@ export async function claimPairCode(db: D1Database, codeIn: string): Promise<{ s
 /** Alert claim rows (sources/discord.ts) are kept this long; nothing alerts for a move older than a day (LATE_ALERT_MAX_AGE_MS). */
 export const ALERT_CLAIM_KEEP_MS = 30 * 86400000;
 export async function sweepAuth(db: D1Database) {
-  await db.prepare(`DELETE FROM kv WHERE (${keyPrefix('session')} OR ${keyPrefix('authnonce')} OR ${keyPrefix('pair')}) AND CAST(json_extract(value, '$.expiresAt') AS INTEGER) < ?`).bind(Date.now()).run().catch(() => {});
+  // Sessions and keys on migration 0009's expiry index (the expired rows only; the planner left alone prefers the key
+  // range, every session row); nonces and pair codes live minutes, so their ranges stay small.
+  const now = Date.now();
+  await db.prepare(`DELETE FROM kv INDEXED BY kv_session_expiry WHERE ${keyPrefix('session')} AND CAST(json_extract(value, '$.expiresAt') AS INTEGER) < ?`).bind(now).run().catch(() => {});
+  await db.prepare(`DELETE FROM kv WHERE (${keyPrefix('authnonce')} OR ${keyPrefix('pair')}) AND CAST(json_extract(value, '$.expiresAt') AS INTEGER) < ?`).bind(now).run().catch(() => {});
   await db.prepare(`DELETE FROM kv WHERE ${keyPrefix('sessions')}`).run().catch(() => {});
-  await db.prepare(`DELETE FROM kv WHERE ${LEGACY_SESSION_SQL}`).run().catch(() => {});
+  await db.prepare(`DELETE FROM kv INDEXED BY kv_session_legacy WHERE ${LEGACY_SESSION_SQL}`).run().catch(() => {});
   // Plaintext alert settings from before sign-in existed (`webhook:user:<address>`): never read since 2026-10-21;
   // a row brought back by a restore of an old copy is deleted here.
   await db.prepare(`DELETE FROM kv WHERE ${keyPrefix('webhook:user')}`).run().catch(() => {});

@@ -57,14 +57,19 @@ export interface Flow {
 export interface FlowsResponse {
   /**
    * Moves that match the filters, counted on the head page only. null behind a cursor (`?before=` a cursor): the
-   * head page said it, and with `count=none`; a client never reads an absent count as 0.
+   * head page said it, and with `count=none`; a client never reads an absent count as 0. A text search (`search=`)
+   * is never counted by a second walk: null unless its head page holds every match.
    */
   total: number | null;
   /** 1 behind a cursor (the client counts its own position) */
   page: number;
   limit: number;
   flows: Flow[];
-  /** the cursor for the older rows (send it back as `?before=`); null on the last page. Absent on older servers. */
+  /**
+   * the cursor for the older rows (send it back as `?before=`); null on the last page. Absent on older servers. A text
+   * search reads at most SEARCH_SCAN moves a request (worker/src/flows-query.ts): its page can hold fewer rows than
+   * `limit`, or none, and still carry `next`; read on from it.
+   */
   next?: string | null;
   /** when the page was read; with `?at=` the rewound time */
   asOf?: number;
@@ -75,6 +80,11 @@ export interface FlowsResponse {
    * age, for "The last one was 2.3 days ago. Rewind to it." null when none is recorded; absent when not searched.
    */
   last?: { id: string; ts: number; chain: Chain } | null;
+  /**
+   * On a head page whose address start (`addr`, not a whole address) matches more than this many moves
+   * (worker/src/flows-query.ts FEW_ROWS): `total` is null and the moves are not counted further. Absent otherwise.
+   */
+  totalOver?: number;
 }
 
 /**

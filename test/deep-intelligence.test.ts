@@ -458,6 +458,10 @@ describe('6. Dune-Grade Live Charts & Long-Term Multi-Year Analytics', () => {
     insert(db, 'metrics', [
       { key: 'supply.pos_bonded', ts: NOW - 200 * D, value: 410_000_000 },
       { key: 'supply.total_stake', ts: NOW - 2 * D, value: 455_000_000 },
+      // the hourly job's rollup of that hour (series.ts rollupStmts): a range in buckets of an hour or more reads the rollups
+      { key: 'supply.total_stake.1h', ts: NOW - 2 * D, value: 455_000_000 },
+      { key: 'supply.total_stake.1h.lo', ts: NOW - 2 * D, value: 455_000_000 },
+      { key: 'supply.total_stake.1h.hi', ts: NOW - 2 * D, value: 455_000_000 },
       { key: 'price.swap_1h', ts: NOW - 1 * D, value: 0.085 },
     ]);
     insert(db, 'flows', [

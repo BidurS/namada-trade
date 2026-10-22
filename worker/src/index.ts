@@ -5,7 +5,7 @@ import type { Env } from './util';
 import { configureAlerts } from './sources/discord';
 import { seoHtml, robotsTxt, sitemapXml, classifyPath } from './seo';
 import { redirectLocation } from '../../shared/routes';
-import { cachedApi as cachedApiWith, inlineScriptHashes, pagePolicies, ENFORCE_SCRIPT_POLICY } from './http';
+import { cachedApi as cachedApiWith, inlineScriptHashes, pagePolicies, ENFORCE_SCRIPT_POLICY, wsLimited } from './http';
 
 const cachedApi = (request: Request, env: Env, ctx: ExecutionContext) => cachedApiWith(request, env, ctx, (r, e, c) => app.fetch(r, e, c));
 
@@ -38,6 +38,9 @@ export default {
     // Route WebSocket requests to the LiveHub Durable Object (only upgrades: a plain request never costs it a call)
     if (url.pathname === '/ws') {
       if (request.headers.get('Upgrade') !== 'websocket') return new Response('Expected websocket upgrade', { status: 426 });
+      // attempts per address, before the hub sees them (the plain request above never spends the budget)
+      const limited = await wsLimited(request, env);
+      if (limited) return limited;
       const id = env.LIVE.idFromName('namada-trade-live-hub');
       const obj = env.LIVE.get(id);
       return obj.fetch(request);

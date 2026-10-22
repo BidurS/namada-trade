@@ -99,10 +99,10 @@ describe('the last alert of any age (W5)', () => {
     const busy = await get(`at=${NOW}`);
     expect(busy.hits.map((h) => h.flowId)).toEqual(['new']);
     expect(busy.last).toEqual(busy.hits[0]);
-    // a disabled rule (unreachable threshold) is not the "last one" either
-    const off = await get(`at=${NOW}&bigSwap=${Number.MAX_SAFE_INTEGER}`);
-    expect(off.hits).toEqual([]);
-    expect(off.last?.flowId).toBe('old');
+    // a disabled rule (unreachable threshold) is not the "last one" either; the route itself reads only the site's
+    // own sizes and refuses a caller's (security review, 2026-10-22: a size above every move walked every flow)
+    expect((await app.request(`/api/alerts/recent?at=${NOW}&bigSwap=1`, {}, { DB: db } as any)).status).toBe(400);
+    expect(await lastAlertBefore(db as any, NOW, { ...DEFAULT_THRESHOLDS, bigSwap: Number.MAX_SAFE_INTEGER })).toMatchObject({ flowId: 'old' });
   });
 
   it('GET /api/alerts/recent omits `last` when its own search fails, so the client never reads "none on record"', async () => {

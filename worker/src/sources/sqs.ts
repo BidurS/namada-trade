@@ -20,16 +20,19 @@ function classify(e: unknown): QuoteErrorCode {
   return 'unavailable';
 }
 
-/** SQS answers bursts from one IP with 403/429. Retry those with jittered backoff; everything else fails fast. */
-async function sqsGet(url: string, timeoutMs = 12000): Promise<any> {
+/**
+ * SQS answers bursts from one IP with 403/429. Retry those with jittered backoff (up to `tries` attempts in all;
+ * a visitor's quote makes one: QuoteBudget); everything else fails fast.
+ */
+async function sqsGet(url: string, timeoutMs = 12000, tries = 3): Promise<any> {
   let last: unknown;
-  for (let i = 0; i < 3; i++) {
+  for (let i = 0; i < tries; i++) {
     try {
       return await fetchJson(url, { timeoutMs, retries: 0 });
     } catch (e) {
       last = e;
       if (!(e instanceof HttpError) || (e.status !== 403 && e.status !== 429 && e.status < 500)) throw e;
-      await sleep(350 * 2 ** i + Math.floor(Math.random() * 250));
+      if (i < tries - 1) await sleep(350 * 2 ** i + Math.floor(Math.random() * 250));
     }
   }
   throw last;
@@ -53,11 +56,11 @@ async function edgeCached<T>(key: string, ttlSec: number, make: () => Promise<T>
  * The NAM quote in USD, and in the same answer OSMO's (`osmoUsd`, stored each minute as price.osmo_usd so a trade
  * paid in OSMO with no OSMO/USDC swap of its own can be valued at its minute: shared/settle.ts).
  */
-export async function fetchNamPrice(): Promise<{ usd: number | null; osmoUsd?: number | null; at: number; error?: string }> {
+export async function fetchNamPrice(tries = 3): Promise<{ usd: number | null; osmoUsd?: number | null; at: number; error?: string }> {
   const at = Date.now();
   try {
     const url = `${OSMOSIS.sqs}/tokens/prices?base=${encodeURIComponent(NAM.osmoDenom)},uosmo`;
-    const res = await sqsGet(url, 10000);
+    const res = await sqsGet(url, 10000, tries);
     const p = res[NAM.osmoDenom]?.[OSMOSIS.allUsdc], o = res.uosmo?.[OSMOSIS.allUsdc];
     const usd = p ? parseFloat(p) : null;
     const osmo = o ? parseFloat(o) : null;
@@ -131,26 +134,43 @@ export async function quoteNamTrade(
   amountNam: number,
   side: 'buy' | 'sell' = 'sell',
   knownSpotUsd?: number | null,
+  budget?: QuoteBudget,
 ): Promise<{ quote: PriceQuote | null; error?: string; code?: QuoteErrorCode }> {
-  let spotUsd = knownSpotUsd ?? null;
-  let spotAt = Date.now();
-  if (spotUsd == null) {
-    const pr = await fetchNamPrice();
-    spotUsd = pr.usd;
-    spotAt = pr.at;
-    if (spotUsd == null) return { quote: null, error: pr.error ?? quoteErrorText('no_price'), code: 'no_price' };
-  }
-  // The same quote asked within 10 s (typing, preset clicks, two tabs) is served from the edge, not SQS.
+  // The same quote asked within 10 s (typing, preset clicks, two tabs, the home page's and the Trade page's opening
+  // 5,000 NAM) is the stored answer, before anything is asked of SQS: the spot price included.
   const key = `quote2-${side}-${Math.round(amountNam)}`;
-  return edgeCached(key, 10, () => (side === 'sell' ? quoteSell(amountNam, spotUsd!, spotAt) : quoteBuyFor(amountNam, spotUsd!, spotAt)), (v) => !!v.quote);
+  return edgeCached(key, 10, async () => {
+    const tries = budget ? 1 : 3;
+    const call: typeof routerQuote = async (inBase, inDenom, outDenom) => {
+      if (budget && !(await budget())) throw new HttpError(429, 'quote budget', '');
+      return routerQuote(inBase, inDenom, outDenom, tries);
+    };
+    let spotUsd = knownSpotUsd ?? null;
+    let spotAt = Date.now();
+    if (spotUsd == null) {
+      if (budget && !(await budget())) return { quote: null, error: quoteErrorText('busy'), code: 'busy' as const };
+      const pr = await fetchNamPrice(tries);
+      spotUsd = pr.usd;
+      spotAt = pr.at;
+      if (spotUsd == null) return { quote: null, error: pr.error ?? quoteErrorText('no_price'), code: 'no_price' as const };
+    }
+    return side === 'sell' ? quoteSell(amountNam, spotUsd, spotAt, call) : quoteBuyFor(amountNam, spotUsd, spotAt, call);
+  }, (v) => !!v.quote);
 }
+
+/**
+ * A visitor's quote (the /api/quote route) asks this before each SQS call it makes, and makes each call once: true
+ * spends one call of the budget, false means it is spent (the answer is 'busy'). The size table, the cron and the
+ * live hub pass none and keep their retries.
+ */
+export type QuoteBudget = () => Promise<boolean>;
 
 type Raw = { inBase: string; out: number; impactPct: number; feePct: number; route: string[] };
 
 /** One exact-in router call: `inBase` base units of `inDenom` for `outDenom`. */
-async function routerQuote(inBase: string, inDenom: string, outDenom: string): Promise<Raw> {
+async function routerQuote(inBase: string, inDenom: string, outDenom: string, tries = 3): Promise<Raw> {
   const url = `${OSMOSIS.sqs}/router/quote?tokenIn=${inBase}${encodeURIComponent(inDenom)}&tokenOutDenom=${encodeURIComponent(outDenom)}`;
-  const res = await sqsGet(url, 12000);
+  const res = await sqsGet(url, 12000, tries);
   const route: string[] = [];
   for (const r of res.route || []) for (const pool of r.pools || []) route.push(`Pool #${pool.id} (${pool.type === 2 ? 'CL' : 'AMM'})`);
   return {
@@ -181,10 +201,10 @@ function quoteOf(amountNam: number, side: 'buy' | 'sell', inAmount: number, outA
   };
 }
 
-async function quoteSell(amountNam: number, spotUsd: number, spotAt: number): Promise<{ quote: PriceQuote | null; error?: string; code?: QuoteErrorCode }> {
+async function quoteSell(amountNam: number, spotUsd: number, spotAt: number, call: typeof routerQuote = routerQuote): Promise<{ quote: PriceQuote | null; error?: string; code?: QuoteErrorCode }> {
   const namBase = BigInt(Math.max(1, Math.round(amountNam * 10 ** NAM.decimals))).toString();
   try {
-    const raw = await routerQuote(namBase, NAM.osmoDenom, OSMOSIS.usdcDenom);
+    const raw = await call(namBase, NAM.osmoDenom, OSMOSIS.usdcDenom);
     if (!(raw.out > 0)) return { quote: null, error: quoteErrorText('no_route'), code: 'no_route' };
     return { quote: quoteOf(amountNam, 'sell', amountNam, raw.out, raw, spotUsd, spotAt) };
   } catch (e) {

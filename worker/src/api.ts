@@ -16,28 +16,30 @@ import { toNam, chainOf } from './util';
 import { OSMOSIS, INTERNAL_LABELS } from './config';
 import {
   flowsFilterFromQuery, flowsFilterError, flowsMode, flowsPageSql, flowsRowsSql, flowsCountSql, flowsLastSql, flowOrder, afterPosition,
-  FEW_ROWS, FIRST_TS_SQL, HASH_COLUMNS, type FlowsFilter,
+  FEW_ROWS, FIRST_TS_SQL, HASH_COLUMNS, searchCanMatch, scanFloorSql, type FlowsFilter,
 } from './flows-query';
 import {
   LIQUID_STALE_MS, BALANCE_LISTING_SRC, BOND_LISTING_SRC, holderStatus, liquidChanges, chunks, listingTimes, confirmedAt,
-  holderFigureValues, readHolderCounts, walkCountSql, walkCategorySql, holderPageSql, holderCandidatesSql, holderOrder, holderAfter,
-  labelWords, wordKeys, wordCond, labelMatches, labelMatch, LISTED, SORT_COL, CANDIDATES_MAX, sqlWordKeys, wordCondCost, D1_MAX_PARAMS, HOLDER_CHAINS_OF,
+  holderFigureValues, readHolderCounts, readChainMarks, placeOn, walkCountSql, walkCategorySql, holderPageSql, holderCandidatesSql, holderOrder, holderAfter,
+  labelWords, wordKeys, wordCond, labelMatches, labelMatch, SORT_COL, CANDIDATES_MAX, sqlWordKeys, wordCondCost, D1_MAX_PARAMS, HOLDER_CHAINS_OF,
   type ListingTimes, type HolderBaseRow, type HolderChain, type HolderSort, type HolderWalk, type WordKeys,
 } from './holders';
 import { label_plain, category_plain, labelAuthorShort, tagByline } from './labels';
 import { counterpartiesOf } from '../../shared/flow-rules';
 import {
-  FLOW_SELECT, flowSelect, rowToFlow, safeParseJson, provAt, metricAt, coverageOf, pressure, blindSpot, alertsBetween, lastAlertBefore, metricSeries, osmosisNetIbc, orderflowSeries,
+  FLOW_SELECT, flowSelect, rowToFlow, safeParseJson, provAt, metricAt, coverageOf, pressure, blindSpot, alertsBetween, lastAlertBefore, metricSeries, metricSeriesRolled, type HistoryPoint, osmosisNetIbc, orderflowSeries,
 } from './analytics';
 import { NAM_AMOUNT, NOT_LEGACY_TWIN as NOT_TWIN } from './flows-query';
 import { INTERNAL_ADDRESSES } from '../../shared/alerts';
 import { alertRules, DEFAULT_THRESHOLDS, type AlertThresholds } from '../../shared/alerts';
 import { issueNonce, login, logout, sessionFromRequest, createPairCode, claimPairCode, listSessions, revokeSession, revokeAllSessions, createSession, tokenHash } from './auth';
 import { loadSettings, saveSettings, deleteSettings, defaultPrefs, publicView, applyUpdate, requireKey, type StoredSettings } from './settings';
-import { clampLimit, prefixRange, decodeHolderCursor, encodeHolderCursor, encodeFlowCursor, parseBeforeParam, type HolderCursor, type BeforeParam } from '../../shared/paging';
+import { clampLimit, prefixRange, decodeHolderCursor, encodeHolderCursor, encodeFlowCursor, parseBeforeParam, type HolderCursor, type BeforeParam, type FlowCursor } from '../../shared/paging';
 import { parse, isWholeAddress, INPUT_MAX, type Parsed } from '../../shared/search-grammar';
 import { EXPLORERS, NAMADA as NAMADA_SHARED } from '../../shared/config';
 import { seriesApp } from './api-series';
+import { ROLLUP_KEYS } from './series-sql';
+import { DAY_HOURS, HISTORY_ALL_DAYS } from '../../shared/history';
 import { SINGLE_POOL_USDC_SWAP } from './cron';
 
 /** A check that has not run for this long is served as 'stale': its last result is kept, but it no longer counts as
@@ -295,12 +297,25 @@ app.get('/api/orderflow', async (c) => {
 
 app.get('/api/alerts/rules', (c) => c.json({ rules: alertRules(thresholdsParam(c)), defaults: DEFAULT_THRESHOLDS }));
 
+/**
+ * How far back /api/alerts/recent reads: the widest window the app asks for (web/src/api.ts LAST_WINDOW_MS, 30
+ * days) and a day for a client clock off. An older `since` reads from here, and the answer's `since` says so (the
+ * Alerts page prints it): since=1 read every alert-kind flow (47,743 rows on 2026-10-22), 30 days 2,092.
+ */
+export const ALERTS_SINCE_MAX_MS = 31 * D;
+const THRESHOLD_KEYS = Object.keys(DEFAULT_THRESHOLDS) as (keyof AlertThresholds)[];
+
 // Hits in [since, until) plus `last`, the most recent hit before `until` of any age (W5).
 app.get('/api/alerts/recent', async (c) => {
+  // The site's own alert sizes only (no page sends one): a size above every move made the search for `last` walk
+  // every flow (56,402 rows on 2026-10-22), each value a cache entry of its own. Refused, so never cached.
+  if (THRESHOLD_KEYS.some((k) => c.req.query(k) !== undefined)) {
+    return c.json({ error: `Alerts are read at the site's own sizes; leave out ${THRESHOLD_KEYS.join(', ')}.` }, 400);
+  }
   const { asOf } = asOfParam(c);
   const sinceQ = Number(c.req.query('since'));
-  const since = Number.isFinite(sinceQ) && sinceQ > 0 ? sinceQ : asOf - D;
-  const th = thresholdsParam(c);
+  const since = Number.isFinite(sinceQ) && sinceQ > 0 ? Math.max(sinceQ, asOf - ALERTS_SINCE_MAX_MS) : asOf - D;
+  const th = DEFAULT_THRESHOLDS;
   const hits = await alertsBetween(c.env.DB, since, asOf, th);
   // A failed or abandoned search omits `last` (not known), so the client runs its own 30-day read instead of
   // reading it as "none on record".
@@ -614,11 +629,22 @@ app.get('/api/holders', async (c) => {
 // `?before=`; `?before=<unix ms>` jumps to a date. The count (`total`) is taken on the head page only (no `before`),
 // and not at all with `count=none` (Home's latest moves and the live feed's first rows show rows, not a count);
 // behind a cursor it is null (the head page said it). `?page=` still pages by offset for links made before (W1).
+// `search=` (address or record contains the text, no index serves it): text no address or record can hold answers an
+// empty page at once; any other text reads at most SEARCH_SCAN moves a request, is never counted by a second walk,
+// and pages by cursor only (`page=` past the first without `before` is refused).
 const flowSelectOf = (hint: string) => flowSelect(hint);
-interface FlowsRead { flows: Flow[]; total: number | null; next: string | null; rows: number }
+interface FlowsRead { flows: Flow[]; total: number | null; next: string | null; rows: number; over?: number }
 
-async function readFlows(db: D1Database, f: FlowsFilter, before: BeforeParam | null, limit: number, offset: number, count: boolean): Promise<FlowsRead> {
+/**
+ * `countWide`: count an address start that matches more than FEW_ROWS moves too (the export, under HEAVY_LIMITER).
+ * The list does not: that count reads every stored move on flows_ts (56,402 rows for the MASP's start on 2026-10-22),
+ * so its head page says "more than FEW_ROWS" (`over`), which the rows read here already show.
+ */
+async function readFlows(db: D1Database, f: FlowsFilter, before: BeforeParam | null, limit: number, offset: number, count: boolean, scan = false, countWide = false): Promise<FlowsRead> {
+  // text no address or record can hold selects nothing: no walk
+  if (f.search && !searchCanMatch(f.search)) return { flows: [], total: count ? 0 : null, next: null, rows: 0 };
   let mode = flowsMode(f);
+  let wide = false;
   if (mode === 'rows') {
     const q = flowsRowsSql(flowSelectOf, f);
     const all = (await db.prepare(q.sql).bind(...q.params).all<any>()).results || [];
@@ -633,9 +659,17 @@ async function readFlows(db: D1Database, f: FlowsFilter, before: BeforeParam | n
       };
     }
     mode = 'time';
+    wide = true;
   }
-  const pageQ = flowsPageSql(flowSelectOf, f, mode, before, limit + 1, offset);
-  const countQ = count ? flowsCountSql(f, mode) : null;
+  // A text search (`LIKE '%…%'`, no index serves it) with `scan`: the page reads at most SEARCH_SCAN entries of its
+  // index, up to the window's end (scanFloorSql), and `next` goes on from there when it found fewer than a page.
+  const text = !!f.search;
+  const endQ = text && scan && (mode === 'time' || mode === 'kind') ? scanFloorSql(f, mode, before) : null;
+  const ends = endQ ? (await db.prepare(endQ.sql).bind(...endQ.params).all<FlowCursor>()).results || [] : [];
+  const floor = ends.length === 2 ? ends[0] : null;
+  const pageQ = flowsPageSql(flowSelectOf, f, mode, before, limit + 1, offset, floor);
+  // a text search is never counted by a second walk: its count is the page's own rows when the walk read every match
+  const countQ = count && !text && (!wide || countWide) ? flowsCountSql(f, mode) : null;
   const [rowsRes, countRes] = await Promise.all([
     db.prepare(pageQ.sql).bind(...pageQ.params).all<any>(),
     countQ ? db.prepare(countQ.sql).bind(...countQ.params).first<{ total: number }>() : Promise.resolve(null),
@@ -643,9 +677,12 @@ async function readFlows(db: D1Database, f: FlowsFilter, before: BeforeParam | n
   const got = rowsRes.results || [];
   const shown = got.slice(0, limit);
   const last = shown[shown.length - 1];
+  const full = got.length > limit;
   return {
-    flows: shown.map(rowToFlow), total: countQ ? Number(countRes?.total ?? 0) : null, rows: got.length,
-    next: last && got.length > limit ? encodeFlowCursor({ ts: last.ts, height: last.height, id: last.id }) : null,
+    flows: shown.map(rowToFlow), rows: got.length,
+    ...(count && wide && !countQ ? { over: FEW_ROWS } : {}),
+    total: countQ ? Number(countRes?.total ?? 0) : count && text && !full && !floor ? offset + got.length : null,
+    next: last && full ? encodeFlowCursor({ ts: last.ts, height: last.height, id: last.id }) : floor ? encodeFlowCursor(floor) : null,
   };
 }
 
@@ -665,8 +702,10 @@ app.get('/api/flows', async (c) => {
   const countQ = c.req.query('count');
   if (countQ != null && countQ !== '' && countQ !== 'none') return c.json({ error: 'count must be none (rows only), or left out.' }, 400);
   const count = head && countQ !== 'none';
-  const r = await readFlows(db, f, before, limit, head ? (page - 1) * limit : 0, count);
-  const res: FlowsResponse = { total: r.total, page: head ? page : 1, limit, flows: r.flows, next: r.next, asOf };
+  // A text search pages by cursor only: an offset counts matches, and a window can end before it is reached.
+  if (f.search && head && page > 1) return c.json({ error: 'A search by text is paged with before=<next>, not page=.' }, 400);
+  const r = await readFlows(db, f, before, limit, head ? (page - 1) * limit : 0, count, true);
+  const res: FlowsResponse = { total: r.total, ...(r.over != null ? { totalOver: r.over } : {}), page: head ? page : 1, limit, flows: r.flows, next: r.next, asOf };
   // The oldest move for this chain filter (for "The flow index starts on …"), on the head page and on a date jump.
   if (head || before?.kind === 'time') {
     const chains: ('namada' | 'osmosis')[] = f.chain === 'namada' || f.chain === 'osmosis' ? [f.chain] : ['namada', 'osmosis'];
@@ -675,7 +714,10 @@ app.get('/api/flows', async (c) => {
   }
   // An empty head page: the newest move that matches every filter but the time window, of any age.
   if (head && page === 1 && !r.flows.length) {
-    if (f.since == null) res.last = null;
+    // A text search does not look further back than its window: no move holds text it cannot match; otherwise "none at
+    // any time" only when it read to the oldest move (no `next`), and no lookup past a time window.
+    if (f.search) { if (!searchCanMatch(f.search) || (f.since == null && !r.next)) res.last = null; }
+    else if (f.since == null) res.last = null;
     else {
       const q = flowsLastSql(f, flowsMode(f));
       const rows = ((await db.prepare(q.sql).bind(...q.params).all<{ id: string; ts: number; chain: Chain; height: number }>().catch(() => null))?.results ?? []).sort(flowOrder);
@@ -694,13 +736,23 @@ app.get('/api/pools', async (c) => {
 
 /** Far above all NAM in existence (about 1.15 billion): a larger size is refused before any quote service is asked. */
 export const QUOTE_MAX_NAM = 1e12;
+/**
+ * The SQS calls every visitor's quotes may make together: QUOTE_LIMITER (wrangler.jsonc, 6 per 10 s) under one fixed
+ * key. Its counters are per Cloudflare location, as is the outbound address the quote service limits, which the size
+ * table, the overview and the cron share: no burst wider than the size table's own 6 at once, whoever asks and from
+ * however many addresses. Past it a quote answers 'busy' and the ticket shows the size table; a repeat within 10 s is
+ * the stored answer and spends nothing. Not bound (tests): no budget, as the other limiters.
+ */
+export const QUOTE_BUDGET_KEY = 'all:/api/quote';
+const quoteBudget = (env: Env) => async () =>
+  !env.QUOTE_LIMITER || (await env.QUOTE_LIMITER.limit({ key: QUOTE_BUDGET_KEY }).catch(() => ({ success: true }))).success;
 app.get('/api/quote', async (c) => {
   const amount = parseFloat(c.req.query('amount') || '1000');
   const side = c.req.query('side') || 'sell';
   if (!(amount > 0)) return c.json({ quote: null, error: 'Enter an amount above zero.' }, 400);
   if (!(amount <= QUOTE_MAX_NAM)) return c.json({ quote: null, error: 'Enter an amount below one trillion NAM.' }, 400);
   if (side !== 'buy' && side !== 'sell') return c.json({ quote: null, error: 'side must be buy or sell.' }, 400);
-  return c.json(await quoteNamTrade(amount, side));
+  return c.json(await quoteNamTrade(amount, side, undefined, quoteBudget(c.env)));
 });
 
 app.get('/api/quote/curve', async (c) => c.json(await quoteSlippageCurve()));
@@ -773,21 +825,27 @@ app.get('/api/address/:addr', async (c) => {
   }
 
   // Its places in the holder list's two orders, as the list ranks it (the stored row, protocol accounts and pools
-  // left out): the entries at or ahead of it on holders_total and on holders_rank, index entries only (the cost
-  // grows with the place: about 1 ms per 10,000). An address the list does not hold yet is placed by its live
-  // spendable balance (no total: its stake is not on the index).
+  // left out): from the nearest place mark the cron keeps (holders.ts placeOn), a walk of at most RANK_WALK_MAX index
+  // entries. An address the list does not hold yet is placed by its live spendable balance (no total: its stake is not
+  // on the index). A place the walk does not reach is not given, and then neither is the other ("Not ranked" would be false).
   const onList = !!holderRow && Number(holderRow.total_num) > 0 && !INTERNAL_LABELS[addr] && labelRow?.category !== 'pool';
-  const placeOf = async (by: HolderSort, value: number) => {
-    const q = walkCountSql({ chain, by }, { value, address: addr });
-    return (await db.prepare(q.sql).bind(...q.params).first<{ n: number }>().catch(() => null))?.n ?? null;
-  };
+  const unlisted = !onList && liveBal > 0 && !INTERNAL_LABELS[addr] && labelRow?.category !== 'pool';
   let rank: number | null = null;
   let rankTotal: number | null = null;
-  if (onList) {
-    [rankTotal, rank] = await Promise.all([placeOf('total', Number(holderRow.total_num)), Number(holderRow.balance_num) > 0 ? placeOf('liquid', Number(holderRow.balance_num)) : Promise.resolve(null)]);
-  } else if (liveBal > 0 && !INTERNAL_LABELS[addr] && labelRow?.category !== 'pool') {
-    const rk = await db.prepare(`SELECT COUNT(*) + 1 rk FROM holders h INDEXED BY holders_rank WHERE h.chain = ? AND ${LISTED('h.')} AND h.balance_num > ?`).bind(chain, liveBal).first<{ rk: number }>().catch(() => null);
-    rank = rk?.rk ?? null;
+  if (onList || unlisted) {
+    const marks = await readChainMarks(db, chain, now);
+    if (onList) {
+      const spendable = Number(holderRow.balance_num) > 0;
+      const [t, l] = await Promise.all([
+        placeOn(db, chain, 'total', { value: Number(holderRow.total_num), address: addr }, marks),
+        spendable ? placeOn(db, chain, 'liquid', { value: Number(holderRow.balance_num), address: addr }, marks) : Promise.resolve(null),
+      ]);
+      if (t != null && (l != null || !spendable)) { rankTotal = t; rank = l; }
+    } else {
+      // the holders with more spendable NAM: an address of '' is ahead of every address of the same balance
+      const more = await placeOn(db, chain, 'liquid', { value: liveBal, address: '' }, marks);
+      rank = more == null ? null : more + 1;
+    }
   }
 
   // Its newest 300 moves and their count: a whole address reads its sending rows on flows_from and its receiving
@@ -1315,11 +1373,12 @@ const isoOrBlank = (ms: number | null | undefined) => (ms ? new Date(ms).toISOSt
 /** Far above the holder count (about 3,600 in Oct 2026), so a filtered export is never silently cut. */
 export const HOLDER_EXPORT_MAX = 10_000;
 export const FLOW_EXPORT_MAX = 5_000;
-const exportHeaders = (type: string, filename: string, total: number, count: number) => ({
+/** `total` null: not counted (a text search); the count header is then left out and `cut` says whether more match. */
+const exportHeaders = (type: string, filename: string, total: number | null, count: number, cut = total != null && count < total) => ({
   'Content-Type': type,
   'Content-Disposition': `attachment; filename="${filename}"`,
-  'X-Total-Count': String(total),
-  'X-Truncated': count < total ? 'true' : 'false',
+  ...(total != null ? { 'X-Total-Count': String(total) } : {}),
+  'X-Truncated': cut ? 'true' : 'false',
   'Access-Control-Expose-Headers': 'X-Total-Count, X-Truncated',
 });
 
@@ -1384,17 +1443,18 @@ app.get('/api/export/flows', async (c) => {
   const bad = flowsFilterError((k) => c.req.query(k));
   if (bad) return c.json({ error: bad }, 400);
   // The same rows and order as the moves list's head page (readFlows: the index its filters walk), newest first.
-  const r = await readFlows(db, flowsFilterFromQuery((k) => c.req.query(k), asOf), null, limit, 0, true);
+  const r = await readFlows(db, flowsFilterFromQuery((k) => c.req.query(k), asOf), null, limit, 0, true, false, true);
   const flows = r.flows;
-  const matching = r.total ?? flows.length;
-  const cut = flows.length < matching;
-  if (format === 'json') return c.json({ count: flows.length, total: matching, truncated: cut, asOf, flows }, 200, { 'X-Total-Count': String(matching), 'X-Truncated': String(cut) });
+  // null: a text search, not counted (one walk); `next` then says whether more match than the file holds
+  const matching = r.total;
+  const cut = matching != null ? flows.length < matching : r.next != null;
+  if (format === 'json') return c.json({ count: flows.length, total: matching, truncated: cut, asOf, flows }, 200, { ...(matching != null ? { 'X-Total-Count': String(matching) } : {}), 'X-Truncated': String(cut) });
   const meta = (f: { meta?: Record<string, unknown> | null }, k: string) => (f.meta && typeof f.meta[k] === 'string' ? (f.meta[k] as string) : '');
   const csv = csvOf(
     ['time_utc', 'chain', 'kind', 'nam', 'value_usd', 'price_usd', 'from', 'from_label', 'to', 'to_label', 'tx_hash', 'time_source', 'price_source'],
     flows.map((f) => [isoOrBlank(f.ts), f.chain, f.kind, f.amount, f.valueUsd ?? '', f.priceUsd ?? '', f.from ?? '', f.fromLabelPlain ?? '', f.to ?? '', f.toLabelPlain ?? '', f.txHash, meta(f, 'tsSource') || 'block', meta(f, 'priceSource')]),
   );
-  return new Response(csv, { headers: exportHeaders('text/csv; charset=utf-8', `namada-trade-moves-${cut ? `newest-${flows.length}-of-${matching}-` : ''}${Date.now()}.csv`, matching, flows.length) });
+  return new Response(csv, { headers: exportHeaders('text/csv; charset=utf-8', `namada-trade-moves-${cut ? `newest-${flows.length}-${matching != null ? `of-${matching}-` : ''}` : ''}${Date.now()}.csv`, matching, flows.length, cut) });
 });
 
 // ---------------------------------------------------------------- integrity, cron, labels, metrics
@@ -1460,15 +1520,35 @@ export function historyBucketMs(key: string, hours: number): number {
   return D;
 }
 
+/** The longest metric history one request covers: the app's "All" (shared/history.ts HISTORY_ALL_DAYS, 1,200 days). */
+export const HISTORY_MAX_HOURS = HISTORY_ALL_DAYS * DAY_HOURS;
+/**
+ * The keys the app charts from this route (web/src/api.ts fetchMetricSeries: home/data.ts, trade/data.ts
+ * chartFromHistory, supply/Unlocks.tsx); every other stored series is served by /api/series. A minute key among
+ * them has hourly rollups (series-sql.ts ROLLUP_KEYS).
+ */
+export const HISTORY_KEYS: readonly string[] = ['price.swap_1h', 'price.usd', 'supply.total_stake'];
+/** A whole number as the app writes it: no sign, no leading zero, no fraction or exponent. */
+const WHOLE = /^[1-9]\d{0,14}$/;
+
 // Each point is the LAST reading of its bucket (value, at ts), with the bucket's lowest and highest reading (lo, hi)
-// and how many readings it holds (n); `bucketMs` says how long a bucket is.
+// and how many readings it holds (n); `bucketMs` says how long a bucket is. Only HISTORY_KEYS, and a minute key at a
+// bucket of an hour or more is read from its rollups (metricSeriesRolled), so a request reads at most 3 rows per hour
+// of its window (and the fixed supply.pos_bonded stretch below) whatever the key's age. `hours` and `at` in any other spelling
+// than the app's (web/src/api.ts fetchMetricSeries) are refused, so they never become cache entries of their own.
 app.get('/api/metrics/history', async (c) => {
   const key = c.req.query('key') || 'price.usd';
-  const hours = Math.min(24 * 1500, Math.max(1, parseInt(c.req.query('hours') || '24', 10) || 24));
+  if (!HISTORY_KEYS.includes(key)) return c.json({ error: 'No such series.', reason: `Served keys: ${HISTORY_KEYS.join(', ')}; every other stored series is at /api/series.` }, 404);
+  const rawHours = c.req.query('hours'), rawAt = c.req.query('at');
+  if (rawHours != null && !(WHOLE.test(rawHours) && Number(rawHours) <= HISTORY_MAX_HOURS)) return c.json({ error: `hours must be a whole number from 1 to ${HISTORY_MAX_HOURS}.` }, 400);
+  if (rawAt != null && !WHOLE.test(rawAt)) return c.json({ error: 'at must be a time in unix milliseconds.' }, 400);
+  const hours = rawHours == null ? 24 : Number(rawHours);
   const { asOf } = asOfParam(c);
   const bucket = historyBucketMs(key, hours);
   const from = asOf - hours * H;
-  let history = await metricSeries(c.env.DB, key, from, asOf, bucket);
+  let history: HistoryPoint[] = (ROLLUP_KEYS as readonly string[]).includes(key) && bucket >= H
+    ? await metricSeriesRolled(c.env.DB, key, from, asOf, bucket)
+    : await metricSeries(c.env.DB, key, from, asOf, bucket);
 
   // For long-term staked NAM history (>14 days), stitch earlier `supply.pos_bonded` readings before `supply.total_stake` was introduced.
   if (key === 'supply.total_stake' && hours > 24 * 14) {

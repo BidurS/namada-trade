@@ -16,8 +16,23 @@
 //   ?height=<n>             moves of this block
 //   ?before=<cursor|ms>     the page after a row already shown (a cursor), or moves older than a time (a date jump)
 // Newest first (FLOWS_ORDER); `limit` stays clamped to 10…100 by the route.
-import { ADDRESS_PREFIX_MIN, HASH_PREFIX_MIN, HASH_MAX, isWholeAddress } from '../../shared/search-grammar';
-import { prefixRange, parseBeforeParam, type BeforeParam } from '../../shared/paging';
+import { ADDRESS_PREFIX_MIN, HASH_PREFIX_MIN, HASH_MAX, INPUT_MAX, isWholeAddress } from '../../shared/search-grammar';
+import { prefixRange, parseBeforeParam, type BeforeParam, type FlowCursor } from '../../shared/paging';
+
+/**
+ * The most entries of its index one text search (`?search=`) reads per request in the 'time' and 'kind' modes; the
+ * answer's `next` goes on from where it stopped. A `LIKE '%…%'` no index serves walked all 56,402 flows twice for a
+ * term that matches nothing (the page, then the head count: 112,804 rows read, about 252 ms of D1 time, 2026-10-22).
+ * 10,000 entries reached back to 1 Jan 2026 that day: the window's end (a covering read, 10,000 rows, 2.4 ms) and the
+ * page inside it (10,001 rows, 23.5 ms).
+ */
+export const SEARCH_SCAN = 10_000;
+/**
+ * Can this text be part of an address or a record? Addresses are lower-case bech32, at most 63 characters, records
+ * upper-case hex, 64 (no other character in any of the 56,402 flows, 2026-10-22); LIKE ignores ASCII case. A space,
+ * a LIKE wildcard (`%`, `_`) or any other character is in none: such text selects nothing, without a walk.
+ */
+export const searchCanMatch = (s: string): boolean => s.length <= HASH_MAX && /^[0-9a-z]+$/i.test(s);
 
 export interface FlowsFilter {
   asOf: number;
@@ -47,7 +62,9 @@ const ADDRESS_START = /^(tnam1|osmo1)[02-9ac-hj-np-z]+$/;
 export function flowsFilterFromQuery(q: (k: string) => string | undefined, asOf: number): FlowsFilter {
   const min = Number(q('minNam'));
   const since = Number(q('since'));
-  const addr = (q('addr') || '').trim().toLowerCase();
+  // read as sent: another spelling of the same start (upper case, a space, a '+') is refused by flowsFilterError, never
+  // read as that start under a cache key of its own (the app lower-cases what is typed: shared/search-grammar.ts)
+  const addr = q('addr') || '';
   const hash = (q('hash') || '').trim().toUpperCase();
   const height = Number(q('height'));
   return {
@@ -86,9 +103,10 @@ export function flowsFilterError(q: (k: string) => string | undefined): string |
   for (const [k, sw] of Object.entries(FLOW_SWITCHES)) { const v = q(k); if (v && v !== sw.value) return sw.words; }
   const f = flowsFilterFromQuery(q, 0);
   if (q('since') && f.since == null) return 'since must be a time in unix milliseconds.';
-  if (q('addr') && f.addr == null) return `addr must be a whole address, or the first ${ADDRESS_PREFIX_MIN} or more characters of one.`;
+  if (q('addr') && f.addr == null) return `addr must be a whole address, or the first ${ADDRESS_PREFIX_MIN} or more characters of one, in lower case.`;
   if (q('hash') && f.hash == null) return `hash must be ${HASH_PREFIX_MIN} to ${HASH_MAX} hexadecimal characters of a record.`;
   if (q('height') && f.height == null) return 'height must be a block number.';
+  if ((q('search') ?? '').length > INPUT_MAX) return `search must be at most ${INPUT_MAX} characters.`;
   return null;
 }
 
@@ -177,6 +195,9 @@ export const FLOWS_ORDER = 'ORDER BY f.ts DESC, f.height DESC, f.id DESC';
 /** The keyset condition of a page: rows after `c` in FLOWS_ORDER (a range on ts, then the rows of equal time filtered). */
 export const AFTER_CURSOR = 'f.ts <= ? AND NOT (f.ts = ? AND (f.height > ? OR (f.height = ? AND f.id >= ?)))';
 
+/** Rows at or after `floor` in FLOWS_ORDER (not older than it): the end of the window a text search reads. */
+export const NOT_BELOW = 'f.ts >= ? AND NOT (f.ts = ? AND (f.height < ? OR (f.height = ? AND f.id < ?)))';
+
 /** FLOWS_ORDER as a comparison, for rows put in order here (a page read by hash, block or address start). */
 export function flowOrder(a: { ts: number; height: number; id: string }, b: { ts: number; height: number; id: string }): number {
   return b.ts - a.ts || b.height - a.height || (a.id < b.id ? 1 : a.id > b.id ? -1 : 0);
@@ -217,12 +238,13 @@ export const modeIndex = (m: FlowsMode) => (m === 'kind' ? 'INDEXED BY flows_kin
  * (and its label joins, analytics.ts flowSelect), `before` the cursor or time, `limit` the rows asked plus one (the
  * extra row says there is a next page), `offset` an old `?page=` link's offset (head pages only).
  */
-export function flowsPageSql(select: (hint: string) => string, f: FlowsFilter, mode: Exclude<FlowsMode, 'rows'>, before: BeforeParam | null, limit: number, offset: number): { sql: string; params: unknown[] } {
+export function flowsPageSql(select: (hint: string) => string, f: FlowsFilter, mode: Exclude<FlowsMode, 'rows'>, before: BeforeParam | null, limit: number, offset: number, floor: FlowCursor | null = null): { sql: string; params: unknown[] } {
   const { conds, params } = flowsConditions(f);
   const key: string[] = [];
   const keyParams: unknown[] = [];
   if (before?.kind === 'cursor') { key.push(AFTER_CURSOR); const c = before.cursor; keyParams.push(c.ts, c.ts, c.height, c.height, c.id); }
   else if (before?.kind === 'time') { key.push('f.ts < ?'); keyParams.push(before.ts); }
+  if (floor) { key.push(NOT_BELOW); keyParams.push(floor.ts, floor.ts, floor.height, floor.height, floor.id); }
   if (mode === 'address') {
     // Each side in the feed's order on its own index; a row from the address to itself is the sending side's.
     const a = f.addr!;
@@ -238,6 +260,22 @@ export function flowsPageSql(select: (hint: string) => string, f: FlowsFilter, m
     sql: `${select(modeIndex(mode))} WHERE ${[...conds, ...key].join(' AND ')} ${FLOWS_ORDER} LIMIT ? OFFSET ?`,
     params: [...params, ...keyParams, limit, offset],
   };
+}
+
+/**
+ * The end of a text search's window: the SEARCH_SCAN-th entry of the index the page walks, from its position (the
+ * head, a cursor or a date), and the entry after it if there is one. Only the index's own columns are read (a covering
+ * read); the time window (`since`) and, in 'kind' mode, the kind are the range of that read. Fewer than two rows: the
+ * walk reaches the oldest move inside the window, so it is not cut.
+ */
+export function scanFloorSql(f: FlowsFilter, mode: 'time' | 'kind', before: BeforeParam | null): { sql: string; params: unknown[] } {
+  const conds = ['f.ts <= ?'];
+  const params: unknown[] = [f.asOf];
+  if (mode === 'kind') { conds.push('f.kind = ?'); params.push(f.kind); }
+  if (f.since != null) { conds.push('f.ts >= ?'); params.push(f.since); }
+  if (before?.kind === 'cursor') { conds.push(AFTER_CURSOR); const c = before.cursor; params.push(c.ts, c.ts, c.height, c.height, c.id); }
+  else if (before?.kind === 'time') { conds.push('f.ts < ?'); params.push(before.ts); }
+  return { sql: `SELECT f.ts, f.height, f.id FROM flows f ${modeIndex(mode)} WHERE ${conds.join(' AND ')} ${FLOWS_ORDER} LIMIT 2 OFFSET ?`, params: [...params, SEARCH_SCAN - 1] };
 }
 
 /**

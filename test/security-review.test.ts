@@ -6,7 +6,7 @@ import { ed25519 } from '@noble/curves/ed25519.js';
 import { sha256 } from '@noble/hashes/sha2.js';
 import { base64, hex } from '@scure/base';
 import { app, PAGE_MAX, TAGS_PER_AUTHOR, TAGS_PER_DAY, QUOTE_MAX_NAM, MAX_BODY_BYTES } from '../worker/src/api';
-import { cachedApi, rateLimited, isHeavy, isReplay, cacheKeyUrl, CACHEABLE_API } from '../worker/src/http';
+import { cachedApi, rateLimited, isHeavy, isReplay, cacheKeyUrl, CACHEABLE_API, rewoundAt } from '../worker/src/http';
 import { testD1, insert } from './d1-sqlite';
 import {
   createSession, issueNonce, login, loginMessage, verifyNamada, namadaImplicitAddress, createPairCode, claimPairCode, sweepAuth, ALERT_CLAIM_KEEP_MS, type Session,
@@ -659,5 +659,54 @@ describe('C1/C14 (review 3): the key, the limiters and the route read one query 
     }
     const { category_plain } = await import('../shared/labels');
     expect(category_plain('constructor')).toBe('Constructor');
+  });
+});
+
+// ------------------------------------------------------------------ Group D (review of 2026-10-22): `?at=` read as the routes read it
+describe('D: an `at` the routes answer live is the live copy, under no replay budget', () => {
+  const u = (s: string) => new URL(`https://namada.trade${s}`);
+  /** The Osmosis quote service, answered empty; the URLs it was asked for. */
+  function quoteService() {
+    const asked: string[] = [];
+    vi.stubGlobal('fetch', vi.fn(async (r: RequestInfo | URL) => {
+      const s = String(r instanceof Request ? r.url : r);
+      asked.push(s);
+      return new Response(s.includes('/tokens/prices') ? '{}' : '[]', { status: 200, headers: { 'content-type': 'application/json' } });
+    }));
+    return asked;
+  }
+  it('is keyed and limited as the live read; a past time keeps its own key, written as the route reads it', () => {
+    for (const v of ['x1', 'x2', '0', '-1', 'Infinity', 'NaN', '', '1e99', String(Date.now() + D)]) {
+      expect(cacheKeyUrl(u(`/api/overview?at=${encodeURIComponent(v)}`)), v).toBe('https://namada.trade/api/overview');
+      expect(isReplay(u(`/api/overview?at=${encodeURIComponent(v)}`)), v).toBe(false);
+      expect(rewoundAt(u(`/api/overview?at=${encodeURIComponent(v)}`)), v).toBeNull();
+    }
+    expect(cacheKeyUrl(u('/api/overview?at=1792500000000'))).toBe('https://namada.trade/api/overview?at=1792500000000');
+    expect(cacheKeyUrl(u('/api/overview?at=1.7925e12'))).toBe('https://namada.trade/api/overview?at=1792500000000');
+    expect(isReplay(u('/api/overview?at=1792500000000'))).toBe(true);
+    expect(cacheKeyUrl(u('/api/flows?chain=namada&at=-1'))).toBe('https://namada.trade/api/flows?chain=namada');
+    expect(cacheKeyUrl(u('/api/series/volume?at=soon'))).toBe('https://namada.trade/api/series/volume');
+  });
+  it('answers every spelling from one live copy: one pair of quote-service calls, no replay budget spent', async () => {
+    const e = edge();
+    const asked = quoteService();
+    const limiter = { limit: vi.fn(async () => ({ success: false })) };
+    const db = testD1();
+    const fetchApp = (r: Request, en: any, c: any) => app.fetch(r, en, c);
+    for (const v of ['x1', 'x2', '0', '-1', String(Date.now() + D)]) {
+      const r = await cachedApi(new Request(`https://namada.trade/api/overview?at=${v}`, { headers: { 'cf-connecting-ip': '1.2.3.4' } }), env(db, { REPLAY_LIMITER: limiter }), e.ctx, fetchApp);
+      expect(r.status, v).toBe(200);
+      expect(((await r.json()) as any).asOf, v).toBeNull();
+      await e.settle();
+    }
+    expect(asked).toHaveLength(2);
+    expect([...e.store.keys()]).toEqual(['https://namada.trade/api/overview']);
+    expect(limiter.limit).not.toHaveBeenCalled();
+    // a time in the past is a rewound read: its own copy, under the replay budget, and no quote-service call
+    const past = Date.now() - 3_600_000;
+    expect((await cachedApi(new Request(`https://namada.trade/api/overview?at=${past}`, { headers: { 'cf-connecting-ip': '1.2.3.4' } }), env(db, { REPLAY_LIMITER: limiter }), e.ctx, fetchApp)).status).toBe(429);
+    const ok = await cachedApi(new Request(`https://namada.trade/api/overview?at=${past}`), env(db), e.ctx, fetchApp);
+    expect(((await ok.json()) as any).asOf).toBe(past);
+    expect(asked).toHaveLength(2);
   });
 });

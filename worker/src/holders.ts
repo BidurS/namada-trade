@@ -223,6 +223,99 @@ export function walkCountSql(w: HolderWalk, ahead: HolderPosition | null = null)
   return { sql: `SELECT ${arms.map((a) => a.sql).join(' + ')} n`, params: arms.flatMap((a) => a.params) };
 }
 
+// ---------------------------------------------------------------- places: marks on the list's orders (the address sheet's ranks)
+//
+// An exact place is a count of every entry ahead of it (walkCountSql with `ahead`): for the bottom of the Namada list
+// 64,825 entries and 194,513 rows read per order on 2026-10-22, and the address sheet asked for two on every open.
+// The cron keeps the position of every MARK_GAP-th entry of each order (kv holders.marks, built with the holder
+// counts); a place is its mark's place plus a walk from the mark to the address, at most RANK_WALK_MAX entries
+// (1,029 rows read for the same holder, the same place). A row written since the build that crossed the mark is
+// counted on both sides of it (or neither), so a place past the first mark can be off by such rows until the next
+// build. A walk that does not reach the address within RANK_WALK_MAX (the marks missing, old, or behind a large write)
+// gives no place at all.
+
+/** kv key of the place marks (HolderMarks). */
+export const HOLDER_MARKS_KV = 'holders.marks';
+/** One mark every this many places of each order. */
+export const MARK_GAP = 500;
+/** The most entries a place walks from its mark (or from the top without marks). */
+export const RANK_WALK_MAX = 4 * MARK_GAP;
+/** The orders the address sheet places an address on. */
+export type MarkSort = 'total' | 'liquid';
+export const MARK_SORTS: readonly MarkSort[] = ['total', 'liquid'];
+/** One chain's marks: per order, the position [value, address] of the entry at place (i + 1) * gap, in the order. */
+export type ChainMarks = { at: number } & Record<MarkSort, [number, string][]>;
+export interface HolderMarks { v: 1; gap: number; namada: ChainMarks | null; osmosis: ChainMarks | null }
+
+/** Every MARK_GAP-th entry of one order: one walk of its index in the order (the window reads it so: no sort). */
+export function marksSql(chain: 'namada' | 'osmosis', by: MarkSort): { sql: string; params: unknown[] } {
+  const col = `h.${SORT_COL[by]}`;
+  const { conds, params } = walkConds(chain, { chain, by });
+  return {
+    sql: `SELECT v, address FROM (SELECT ${col} v, h.address address, ROW_NUMBER() OVER (ORDER BY ${col} DESC, h.address) rn
+          FROM holders h INDEXED BY ${SORT_INDEX[by]} WHERE ${conds.join(' AND ')}) WHERE rn % ? = 0`,
+    params: [...params, MARK_GAP],
+  };
+}
+
+const byPosition = (a: [number, string], b: [number, string]) => b[0] - a[0] || (a[1] < b[1] ? -1 : a[1] > b[1] ? 1 : 0);
+async function chainMarks(db: D1Database, chain: 'namada' | 'osmosis', now: number): Promise<ChainMarks> {
+  const [total, liquid] = await Promise.all(MARK_SORTS.map(async (by) => {
+    const q = marksSql(chain, by);
+    const rows = (await db.prepare(q.sql).bind(...q.params).all<{ v: number; address: string }>()).results || [];
+    return rows.map((r) => [Number(r.v), r.address] as [number, string]).sort(byPosition);
+  }));
+  return { at: now, total, liquid };
+}
+
+async function storedMarks(db: D1Database): Promise<HolderMarks | null> {
+  const r = await db.prepare('SELECT value FROM kv WHERE key = ?').bind(HOLDER_MARKS_KV).first<{ value: string }>().catch(() => null);
+  if (!r?.value) return null;
+  try {
+    const m = JSON.parse(r.value) as HolderMarks;
+    return m && m.v === 1 && m.gap > 0 ? m : null;
+  } catch { return null; }
+}
+
+/** One chain's stored marks when no older than HOLDER_FIGURES_SERVE_MS (as the counts), else null: places are then walked from the top. */
+export async function readChainMarks(db: D1Database, chain: 'namada' | 'osmosis', now: number): Promise<{ gap: number; marks: ChainMarks } | null> {
+  const m = await storedMarks(db);
+  const c = m?.[chain];
+  return m && c && Number.isFinite(c.at) && now - c.at < HOLDER_FIGURES_SERVE_MS ? { gap: m.gap, marks: c } : null;
+}
+
+/** The last mark at or ahead of `p` in the order, and its place; no mark ahead: the top (place 0). */
+export function markFor(marks: [number, string][] | null | undefined, gap: number, p: HolderPosition): { mark: HolderPosition | null; base: number } {
+  const list = marks ?? [];
+  let lo = 0, hi = list.length;
+  while (lo < hi) {
+    const mid = (lo + hi) >> 1;
+    const [v, a] = list[mid];
+    if (v > p.value || (v === p.value && a <= p.address)) lo = mid + 1; else hi = mid;
+  }
+  return lo === 0 ? { mark: null, base: 0 } : { mark: { value: list[lo - 1][0], address: list[lo - 1][1] }, base: lo * gap };
+}
+
+/** The listed entries after `from` (the top when null) and at or ahead of `p`: one range of the order's index, at most RANK_WALK_MAX + 1. */
+export function rankWalkSql(chain: 'namada' | 'osmosis', by: MarkSort, p: HolderPosition, from: HolderPosition | null): { sql: string; params: unknown[] } {
+  const col = `h.${SORT_COL[by]}`;
+  const { conds, params } = walkConds(chain, { chain, by });
+  conds.push(aheadCond(col)); params.push(p.value, p.value, p.address);
+  if (from) { conds.push(afterCond(col)); params.push(from.value, from.value, from.address); }
+  return { sql: `SELECT COUNT(*) n FROM (SELECT 1 FROM holders h INDEXED BY ${SORT_INDEX[by]} WHERE ${conds.join(' AND ')} LIMIT ?)`, params: [...params, RANK_WALK_MAX + 1] };
+}
+
+/**
+ * The place of position `p` on one order (`p` on the list: its own place; an address of '' with a value: how many
+ * entries hold more): the mark's place plus the walk from it. null when the walk passes RANK_WALK_MAX or fails.
+ */
+export async function placeOn(db: D1Database, chain: 'namada' | 'osmosis', by: MarkSort, p: HolderPosition, marks: { gap: number; marks: ChainMarks } | null): Promise<number | null> {
+  const { mark, base } = markFor(marks?.marks[by], marks?.gap ?? MARK_GAP, p);
+  const q = rankWalkSql(chain, by, p, mark);
+  const n = (await db.prepare(q.sql).bind(...q.params).first<{ n: number }>().catch(() => null))?.n;
+  return n == null || n > RANK_WALK_MAX ? null : base + Number(n);
+}
+
 /**
  * Holders by category over a walk (the "What" chips' counts): one pass over the walk's entries with one sum per
  * category asked (no GROUP BY, so no sort), and the unlabelled ones. `cats` are lower-case categories.
@@ -480,10 +573,19 @@ export async function refreshHolderFigures(db: D1Database, now: number, parts: {
   if (namada) out.namada = { ...namada, listed };
   if (osmosis) out.osmosis = osmosis;
   const counts = holderCountsOf(out);
+  // The place marks of the parts recomputed, at the same moment (the other part's are kept).
+  const [prevMarks, nm, om] = await Promise.all([
+    storedMarks(db),
+    parts.namada ? chainMarks(db, 'namada', now).catch(() => null) : Promise.resolve(null),
+    parts.osmosis ? chainMarks(db, 'osmosis', now).catch(() => null) : Promise.resolve(null),
+  ]);
+  const keep = prevMarks?.gap === MARK_GAP ? prevMarks : null;
+  const marks: HolderMarks = { v: 1, gap: MARK_GAP, namada: nm ?? keep?.namada ?? null, osmosis: om ?? keep?.osmosis ?? null };
   const put = 'INSERT OR REPLACE INTO kv (key, value, updated_at) VALUES (?, ?, ?)';
   await db.batch([
     db.prepare(put).bind(HOLDER_FIGURES_KV, JSON.stringify(out), now),
     ...(counts ? [db.prepare(put).bind(HOLDER_COUNTS_KV, JSON.stringify(counts), now)] : []),
+    db.prepare(put).bind(HOLDER_MARKS_KV, JSON.stringify(marks), now),
   ]);
   return out;
 }

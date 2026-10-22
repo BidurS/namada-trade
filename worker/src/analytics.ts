@@ -91,6 +91,62 @@ export async function metricSeries(db: D1Database, key: string, from: number, to
   return r.results || [];
 }
 
+/** A history point; `n` is absent when the bucket holds a rolled-up hour (a rollup keeps no count of its readings). */
+export type HistoryPoint = Omit<SeriesPoint, 'n'> & { n?: number };
+/** One key's rows in [?2, ?3) in index order: `SEARCH metrics USING INDEX sqlite_autoindex_metrics_1 (key=? AND ts>? AND ts<?)`, rows read = rows returned. */
+export const METRIC_RANGE_SQL = 'SELECT key, ts, value FROM metrics WHERE key = ?1 AND ts >= ?2 AND ts < ?3 ORDER BY ts';
+/** The same over a key's three hourly rollup keys (series.ts rollupStmts). */
+export const ROLLUP_RANGE_SQL = 'SELECT key, ts, value FROM metrics WHERE key IN (?1, ?2, ?3) AND ts >= ?4 AND ts < ?5 ORDER BY key, ts';
+
+/**
+ * metricSeries for a minute key with hourly rollups (series-sql.ts ROLLUP_KEYS) at a bucket of an hour or more:
+ * every complete hour of [from, to] from its rollup rows (`<key>.1h` the hour's last reading, `.1h.lo`, `.1h.hi`,
+ * labelled with the hour's start, as /api/series labels them), and from the minute readings only the partial hour at
+ * each end and the two hours before the last, which the hourly job may not have rolled yet (an hour with a rollup
+ * row is read from it). Rows read: at most 3 per hour of the window plus 240 minute rows, whatever the key's age;
+ * metricSeries reads every minute row of the window (21,131 rows for price.usd since 15 Oct on 2026-10-22).
+ */
+export async function metricSeriesRolled(db: D1Database, key: string, from: number, to: number, bucketMs: number): Promise<HistoryPoint[]> {
+  const hs = Math.ceil(from / H) * H; // the first complete hour
+  const he = Math.floor((to + 1) / H) * H; // the end of the last complete hour
+  const tail = Math.max(hs, he - 2 * H);
+  type Row = { key: string; ts: number; value: number };
+  const range = (sql: string, ...p: unknown[]) => db.prepare(sql).bind(...p).all<Row>().then((r) => r.results || [], () => [] as Row[]);
+  const [rolled, head, minutes] = await Promise.all([
+    hs < he ? range(ROLLUP_RANGE_SQL, `${key}.1h`, `${key}.1h.lo`, `${key}.1h.hi`, hs, he) : Promise.resolve([] as Row[]),
+    from < hs ? range(METRIC_RANGE_SQL, key, from, Math.min(hs, to + 1)) : Promise.resolve([] as Row[]),
+    range(METRIC_RANGE_SQL, key, tail, to + 1),
+  ]);
+  const hours = new Map<number, HistoryPoint>();
+  for (const r of rolled) {
+    if (r.key !== `${key}.1h`) continue;
+    const v = Number(r.value);
+    hours.set(Number(r.ts), { ts: Number(r.ts), value: v, lo: v, hi: v });
+  }
+  for (const r of rolled) {
+    const p = hours.get(Number(r.ts));
+    if (!p || r.key === `${key}.1h`) continue;
+    if (r.key === `${key}.1h.lo`) p.lo = Math.min(p.lo, Number(r.value));
+    else p.hi = Math.max(p.hi, Number(r.value));
+  }
+  const rolledHours = new Set(hours.keys());
+  for (const r of [...head, ...minutes]) {
+    const ts = Number(r.ts), v = Number(r.value), h = Math.floor(ts / H) * H;
+    if (rolledHours.has(h)) continue;
+    const p = hours.get(h);
+    if (!p) hours.set(h, { ts, value: v, lo: v, hi: v, n: 1 });
+    else { p.ts = ts; p.value = v; p.lo = Math.min(p.lo, v); p.hi = Math.max(p.hi, v); p.n = (p.n ?? 0) + 1; }
+  }
+  const out = new Map<number, HistoryPoint>();
+  for (const h of [...hours.keys()].sort((a, b) => a - b)) {
+    const p = hours.get(h)!, b = Math.floor(h / bucketMs), q = out.get(b);
+    if (!q) { out.set(b, { ...p }); continue; }
+    q.ts = p.ts; q.value = p.value; q.lo = Math.min(q.lo, p.lo); q.hi = Math.max(q.hi, p.hi);
+    if (q.n != null && p.n != null) q.n += p.n; else delete q.n;
+  }
+  return [...out.values()];
+}
+
 export async function flowCoverage(db: D1Database, asOf: number): Promise<{ osmosis: number | null; namada: number | null }> {
   const r = await db
     .prepare(`SELECT (SELECT MAX(ts) FROM flows WHERE chain='osmosis' AND ts <= ?) AS o, (SELECT MAX(ts) FROM flows WHERE chain='namada' AND ts <= ?) AS n`)
