@@ -56,16 +56,19 @@ async function edgeCached<T>(key: string, ttlSec: number, make: () => Promise<T>
  * The NAM quote in USD, and in the same answer OSMO's (`osmoUsd`, stored each minute as price.osmo_usd so a trade
  * paid in OSMO with no OSMO/USDC swap of its own can be valued at its minute: shared/settle.ts).
  */
-export async function fetchNamPrice(tries = 3): Promise<{ usd: number | null; osmoUsd?: number | null; at: number; error?: string }> {
+export async function fetchNamPrice(tries = 3): Promise<{ usd: number | null; osmoUsd?: number | null; coinUsd?: Record<string, number>; at: number; error?: string }> {
   const at = Date.now();
   try {
-    const url = `${OSMOSIS.sqs}/tokens/prices?base=${encodeURIComponent(NAM.osmoDenom)},uosmo`;
+    const denoms = [NAM.osmoDenom, ...Object.values(OSMOSIS.quotedCoins)];
+    const url = `${OSMOSIS.sqs}/tokens/prices?base=${denoms.map(encodeURIComponent).join(',')}`;
     const res = await sqsGet(url, 10000, tries);
-    const p = res[NAM.osmoDenom]?.[OSMOSIS.allUsdc], o = res.uosmo?.[OSMOSIS.allUsdc];
-    const usd = p ? parseFloat(p) : null;
-    const osmo = o ? parseFloat(o) : null;
-    const osmoUsd = osmo != null && Number.isFinite(osmo) && osmo > 0 ? osmo : null;
-    return usd && usd > 0 ? { usd, osmoUsd, at } : { usd: null, osmoUsd, at, error: quoteErrorText('no_price') };
+    const read = (d: string) => { const v = parseFloat(res[d]?.[OSMOSIS.allUsdc]); return Number.isFinite(v) && v > 0 ? v : null; };
+    const usd = read(NAM.osmoDenom);
+    // each quoted coin's USD (OSMOSIS.quotedCoins), stored each minute under shared/settle.ts QUOTE_KEYS
+    const coinUsd: Record<string, number> = {};
+    for (const [symbol, d] of Object.entries(OSMOSIS.quotedCoins)) { const v = read(d); if (v != null) coinUsd[symbol] = v; }
+    const osmoUsd = coinUsd.OSMO ?? null;
+    return usd ? { usd, osmoUsd, coinUsd, at } : { usd: null, osmoUsd, coinUsd, at, error: quoteErrorText('no_price') };
   } catch (e) {
     return { usd: null, at, error: quoteErrorText(classify(e)) };
   }

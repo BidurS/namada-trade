@@ -946,7 +946,7 @@ export async function runCron(env: Env) {
     }
     if (epoch != null && epoch > 0) metricStmts.push(stmt.metric(now, 'epoch', epoch));
     if (price.usd) metricStmts.push(stmt.metric(now, 'price.usd', price.usd));
-    if (price.osmoUsd) metricStmts.push(stmt.metric(now, QUOTE_KEYS.OSMO, price.osmoUsd));
+    for (const [symbol, v] of Object.entries(price.coinUsd ?? {})) if (QUOTE_KEYS[symbol]) metricStmts.push(stmt.metric(now, QUOTE_KEYS[symbol], v));
     if (poolRes.pools.length) {
       // Pool depth is recorded so replay can show what liquidity looked like at the time.
       metricStmts.push(stmt.metric(now, 'dex.liquidity_usd', poolRes.pools.reduce((a, p) => a + p.liquidityUsd, 0)), stmt.metric(now, 'dex.pool_count', poolRes.pools.length));

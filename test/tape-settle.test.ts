@@ -7,7 +7,8 @@ import { app } from '../worker/src/api';
 import * as S from '../worker/src/series-api';
 import { settlePrices } from '../worker/src/analytics';
 import { testD1, type TestD1 } from './d1-sqlite';
-import { settleOf, settleUsd, tradeValue, type Settle, type SettleMeta } from '../shared/settle';
+import { settleOf, settleUsd, tradeValue, QUOTE_KEYS, type Settle, type SettleMeta } from '../shared/settle';
+import { osmoAssets } from '../worker/src/parse/osmosis';
 import { foldTrades as foldOnPage, tradeOfFlow } from '../web/src/screens/trade/series';
 import { settleGasNote, settleWords } from '../web/src/lib/settle';
 import type { Flow, TradeRow, TradesResponse } from '../shared/types';
@@ -95,6 +96,29 @@ describe('GET /api/series/trades: each row\'s settle price', () => {
     expect(g.n).toBe(2);
     expect(g.usd).toBeCloseTo(0.81 + 1.1, 12);
     expect(g.avgPriceUsd).toBeCloseTo((0.81 + 1.1) / 2200, 12);
+  });
+});
+
+describe('trades paid in other coins (2026-10-22: 163 settle records named a coin the asset map did not know, 64 of them ATOM)', () => {
+  it('a trade paid in ATOM is priced at the ATOM quote the cron stored for its minute; one paid in allUSDT at a dollar', async () => {
+    const db = testD1();
+    db.raw.prepare('INSERT INTO metrics (ts, key, value) VALUES (?, ?, ?)').run(NOW - 40_000, 'price.atom_usd', 1.7);
+    const [atom, usdt, none] = await settlePrices(db as any, [
+      { kind: 'buy', ts: NOW, meta: { settle: { nam: 10000, coins: { ATOM: -5 } } } },
+      { kind: 'sell', ts: NOW, meta: { settle: { nam: -10000, coins: { allUSDT: 8.4 } } } },
+      { kind: 'buy', ts: NOW, meta: { settle: { nam: 10000, coins: { TIA: -16 } } } },
+    ]);
+    expect(atom).toMatchObject({ usdPerNam: (5 * 1.7) / 10000 });
+    expect(atom!.coins[0]).toMatchObject({ symbol: 'ATOM', rate: 'quote', usdEach: 1.7 });
+    expect(usdt).toMatchObject({ usdPerNam: 8.4 / 10000 });
+    expect(settleWords(usdt!)).toContain('Osmosis’s alloyed USDT, counted at a dollar');
+    expect(none).toBeNull(); // no TIA quote stored for that minute: no settle price, never a made-up one
+  });
+  it('the parser names those coins, so their trades keep the coin in the settle record', () => {
+    const assets = osmoAssets();
+    const symbols = [...assets.values()].map((a) => a.symbol);
+    for (const s of ['ATOM', 'TIA', 'ETH', 'KYVE', 'allUSDT']) expect(symbols).toContain(s);
+    for (const [symbol] of Object.entries(QUOTE_KEYS)) expect(symbols).toContain(symbol);
   });
 });
 

@@ -44,6 +44,20 @@ export const OSMOSIS = {
    * is anyone's and could be given any rate.
    */
   ratePools: { '1464': 'uosmo' } as Readonly<Record<string, string>>,
+  /**
+   * The coins besides NAM the cron stores an Osmosis quote of each minute (shared/settle.ts QUOTE_KEYS), so a trade paid
+   * in one of them has a settle price at its minute: OSMO, and the coins NAM trades were most often paid in (ATOM, TIA,
+   * ETH, KYVE: about 700,000 NAM of trades between 11 Aug and 21 Oct 2026).
+   */
+  quotedCoins: {
+    OSMO: 'uosmo',
+    ATOM: 'ibc/27394FB092D2ECCD56123C74F36E4C1F926001CEADA9CA97EA622B25F41E5EB2',
+    TIA: 'ibc/D79E7D83AB399BFFF93433E54FAA480C191248FC556924A2A8351AE2638B3877',
+    ETH: 'factory/osmo1k6c8jln7ejuqwtqmay3yvzrg3kueaczl96pk067ldg8u835w0yhsw27twm/alloyed/allETH',
+    KYVE: 'ibc/613BF0BF2F2146AE9941E923725745E931676B2C14E9768CD609FA0849B2AE13',
+  } as Readonly<Record<string, string>>,
+  /** Osmosis's alloyed USDT, 1:1 with the USDTs it holds */
+  allUsdt: 'factory/osmo1em6xs47hd82806f5cxgyufguxrrc7l0aqx7nzzptjuqgswczk8csavdxek/alloyed/allUSDT',
   /** Noble USDC on Osmosis */
   usdcDenom: 'ibc/498A0751C798A0D9A389AA3691123DADA57DAA4FE165D5C75894505B876BA6E4',
   allUsdc: 'factory/osmo147h5x9pcj7lm0cttlaefx6sqq5vdfnmwfcqxkmjd7exqm9gc7grqhr75m0/alloyed/allUSDC',

@@ -31,15 +31,18 @@ export interface OsmoCtx {
 }
 
 /**
- * The coins the parser names: Noble USDC (the stable a trade's own price may be set in), OSMO, and allUSDC, Osmosis's
- * alloyed USDC (one fixed denom, 1:1 with the USDCs it holds; the Osmosis quote service prices everything in it).
- * Any other coin is labelled by shortDenom and has no USD settle price.
+ * The coins the parser names: Noble USDC (the stable a trade's own price may be set in), allUSDC and allUSDT
+ * (Osmosis's alloyed USDC and USDT: one fixed denom each, 1:1 with the coins it holds; the quote service prices every
+ * coin in allUSDC), and the coins the cron quotes each minute (OSMOSIS.quotedCoins). Any other coin is labelled by
+ * shortDenom and has no USD settle price.
  */
 export function osmoAssets(): OsmoCtx['assets'] {
-  return new Map([
+  const decimals: Record<string, number> = { OSMO: 6, ATOM: 6, TIA: 6, ETH: 18, KYVE: 6 };
+  return new Map<string, { symbol: string; decimals: number; stable?: boolean }>([
     [OSMOSIS.usdcDenom, { symbol: 'USDC', decimals: 6, stable: true }],
-    ['uosmo', { symbol: 'OSMO', decimals: 6 }],
     [OSMOSIS.allUsdc, { symbol: 'allUSDC', decimals: 6 }],
+    [OSMOSIS.allUsdt, { symbol: 'allUSDT', decimals: 6 }],
+    ...Object.entries(OSMOSIS.quotedCoins).map(([symbol, denom]) => [denom, { symbol, decimals: decimals[symbol] ?? 6 }] as [string, { symbol: string; decimals: number }]),
   ]);
 }
 

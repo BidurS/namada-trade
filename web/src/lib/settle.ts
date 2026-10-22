@@ -8,7 +8,7 @@ const coinWords = (c: SettledCoin) => `${fmtCoin(Math.abs(c.amount), c.rate === 
 
 const valuedWords = (c: SettledCoin) =>
   c.rate === 'stable'
-    ? c.symbol === 'USDC' ? '' : ` (Osmosis’s alloyed USDC, counted at a dollar)`
+    ? c.symbol === 'USDC' ? '' : ` (Osmosis’s alloyed ${c.symbol.replace(/^all/, '')}, counted at a dollar)`
     : ` (${fmtUsdRule(Math.abs(c.amount) * c.usdEach)} at ${fmtUsdRule(c.usdEach)} per ${c.symbol}, ${c.rate === 'tx' ? `this transaction’s own ${c.symbol}/USDC rate` : `the Osmosis ${c.symbol} quote for that minute`})`;
 
 const listWords = (cs: SettledCoin[]) => cs.map((c) => coinWords(c) + valuedWords(c)).join(' and ');

@@ -21,13 +21,13 @@ export interface SettleMeta {
 }
 
 /**
- * The coins counted at a dollar: Noble USDC, and allUSDC, Osmosis's alloyed USDC (1:1 with the USDCs it holds; the
- * Osmosis quote service prices every coin in it).
+ * The coins counted at a dollar: Noble USDC, and allUSDC and allUSDT, Osmosis's alloyed USDC and USDT (1:1 with the
+ * coins they hold; the Osmosis quote service prices every coin in allUSDC).
  */
-export const SETTLE_STABLES: readonly string[] = ['USDC', 'allUSDC'];
+export const SETTLE_STABLES: readonly string[] = ['USDC', 'allUSDC', 'allUSDT'];
 
 /** The metric that holds a coin's Osmosis quote each minute (worker/src/cron.ts), for a coin with no rate in its transaction. */
-export const QUOTE_KEYS: Record<string, string> = { OSMO: 'price.osmo_usd' };
+export const QUOTE_KEYS: Record<string, string> = { OSMO: 'price.osmo_usd', ATOM: 'price.atom_usd', TIA: 'price.tia_usd', ETH: 'price.eth_usd', KYVE: 'price.kyve_usd' };
 
 export interface SettledCoin {
   symbol: string;
