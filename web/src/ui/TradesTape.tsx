@@ -7,10 +7,16 @@
 // Words, never verdicts: "Repeated small buys" is a category tag that describes a pattern the server's rule found
 // (the rule is printed under the tape by the screen), never a claim about intent. Buy and sell hues sit on the
 // kind tag only. A trade without a price shows "—" with the reason, never a pool price standing in for its own.
+//
+// A trade's value is what it settled at for its trader when that is known (shared/settle.ts: every coin their balance
+// changed by, fees and gas in, per NAM they gave or got), with the coins and rates in its details; else its recorded
+// value with the price's basis.
 import { useId, useState } from 'react';
 import type { TradeGroup, TradeRow } from '../../../shared/types';
 import { MINUS, NBSP, explorerTx, fmtAgo, fmtCoin, fmtCount, fmtDayClock, fmtNamRule, fmtUsdRule } from '../lib/format';
 import { PRICE_SHORT, coinWord } from '../lib/flows';
+import { settleGasNote, settleWords } from '../lib/settle';
+import { settleUsd } from '../../../shared/settle';
 import { AddrName } from './ListBits';
 import { Icon } from './Icon';
 import { Tag } from './Tag';
@@ -107,7 +113,9 @@ function TapeRow({ g, now, fresh, onMaker, filtered }: { g: TapeGroup; now: numb
         {fin(g.usd) ? (
           <>
             <span data-num="" data-status="fresh">{fmtUsdRule(g.usd)}</span>
-            {g.n > 1 && fin(g.avgPriceUsd) ? <span className="tr__avg">, average <span data-num="">{fmtUsdRule(g.avgPriceUsd)}</span></span> : one && fin(one.priceUsd) ? <span className="tr__avg"> at <span data-num="">{fmtUsdRule(one.priceUsd)}</span></span> : null}
+            {g.n > 1 && fin(g.avgPriceUsd) ? <span className="tr__avg">, average <span data-num="">{fmtUsdRule(g.avgPriceUsd)}</span></span>
+              : one?.settle ? <span className="tr__avg"> settled at <span data-num="">{fmtUsdRule(one.settle.usdPerNam)}</span></span>
+              : one && fin(one.priceUsd) ? <span className="tr__avg"> at <span data-num="">{fmtUsdRule(one.priceUsd)}</span></span> : null}
             {g.unpriced > 0 ? <span className="tr__why"> ({fmtCount(g.unpriced)} without a price)</span> : null}
           </>
         ) : (
@@ -146,10 +154,19 @@ function TapeRow({ g, now, fresh, onMaker, filtered }: { g: TapeGroup; now: numb
                 </span>
                 <span className="tr__oneN"><span data-num="">{fmtNamRule(r.nam)}</span>{NBSP}NAM</span>
                 <span className="tr__oneV">
-                  {fin(r.valueUsd) ? <><span data-num="">{fmtUsdRule(r.valueUsd)}</span>{fin(r.priceUsd) ? <> at <span data-num="">{fmtUsdRule(r.priceUsd)}</span></> : null}</> : <><span data-num="" data-status="none">—</span> {r.priceNote ?? 'no price was recorded for this trade'}</>}
-                  {/* a trade's own price needs no note; any other basis is said */}
-                  {fin(r.priceUsd) && r.priceSource !== 'execution' ? <span className="tr__why"> · {PRICE_SHORT[r.priceSource === 'swap_1h' || r.priceSource === 'spot' ? r.priceSource : 'unstated']}</span> : null}
-                  {fin(r.counterAmount) && coinWord(r.counterSymbol) ? <span className="tr__why"> · {r.kind === 'buy' ? 'paid' : 'got'} <span data-num="">{fmtCoin(r.counterAmount)}</span> {coinWord(r.counterSymbol)}</span> : null}
+                  {r.settle ? (
+                    <>
+                      <span data-num="">{fmtUsdRule(settleUsd(r.settle))}</span> settled at <span data-num="">{fmtUsdRule(r.settle.usdPerNam)}</span>
+                      <span className="tr__why"> · {settleWords(r.settle)}{settleGasNote(r.settle) ? `. ${settleGasNote(r.settle)}` : ''}</span>
+                    </>
+                  ) : (
+                    <>
+                      {fin(r.valueUsd) ? <><span data-num="">{fmtUsdRule(r.valueUsd)}</span>{fin(r.priceUsd) ? <> at <span data-num="">{fmtUsdRule(r.priceUsd)}</span></> : null}</> : <><span data-num="" data-status="none">—</span> {r.priceNote ?? 'no price was recorded for this trade'}</>}
+                      {/* a trade's own price needs no note; any other basis is said */}
+                      {fin(r.priceUsd) && r.priceSource !== 'execution' ? <span className="tr__why"> · {PRICE_SHORT[r.priceSource === 'swap_1h' || r.priceSource === 'spot' ? r.priceSource : 'unstated']}</span> : null}
+                      {fin(r.counterAmount) && coinWord(r.counterSymbol) ? <span className="tr__why"> · {r.kind === 'buy' ? 'paid' : 'got'} <span data-num="">{fmtCoin(r.counterAmount)}</span> {coinWord(r.counterSymbol)}</span> : null}
+                    </>
+                  )}
                   {r.route.length ? <span className="tr__why"> · through {r.route.length === 1 ? 'pool' : 'pools'} {r.route.map((p) => `#${p}`).join(', ')}</span> : null}
                 </span>
                 <a className="xrec" href={explorerTx('osmosis', r.explorerHash || r.txHash)} target="_blank" rel="noreferrer noopener" aria-label={`The record of this trade on an Osmosis explorer, block ${fmtCount(r.height)} (opens another site)`}>

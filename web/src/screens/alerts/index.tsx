@@ -8,7 +8,8 @@
 // offered; the rule list and your own choices are current (they are not recorded over time).
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import type { AlertHit, AlertRuleId, AlertsRecentResponse } from '../../../../shared/types';
-import type { Settle, SettledCoin } from '../../../../shared/settle';
+import type { Settle } from '../../../../shared/settle';
+import { settleGasNote, settleWords } from '../../lib/settle';
 import { BODY } from '../../../../shared/copy';
 import type { ScreenProps } from '../../app/index';
 import { useClock, useHeaderPrice, useOverlays, useOverview, useReplay, useSession } from '../../app/index';
@@ -18,7 +19,7 @@ import {
   SourceLine, Switch, Tag, derive, uiStatus, type SegOption, type Stamp,
 } from '../../ui/index';
 import { Icon } from '../../ui/Icon';
-import { explorerTx, fmtAge, fmtAgo, fmtCoin, fmtCount, fmtDateline, fmtNamRule, fmtUsdRule, fmtUtcLong } from '../../lib/format';
+import { explorerTx, fmtAge, fmtAgo, fmtCount, fmtDateline, fmtNamRule, fmtUsdRule, fmtUtcLong } from '../../lib/format';
 import { useUserSettings } from '../settings/account';
 import { plainError } from '../sheets/util';
 import { hitKind, hitTx, useAlertRules, type RuleView } from './rules';
@@ -319,18 +320,8 @@ function HitPrice({ h }: { h: AlertHit }) {
 }
 
 function Settled({ s }: { s: Settle }) {
-  const coin = (c: SettledCoin) => `${fmtCoin(Math.abs(c.amount), c.rate === 'stable' ? 2 : 4)} ${c.symbol}`;
-  const valued = (c: SettledCoin) => c.rate === 'stable' ? (c.symbol === 'USDC' ? '' : ` (Osmosis's alloyed USDC, counted at a dollar)`)
-    : ` (${fmtUsdRule(Math.abs(c.amount) * c.usdEach)} at ${fmtUsdRule(c.usdEach)} per ${c.symbol}, ${c.rate === 'tx' ? `this transaction's own ${c.symbol}/USDC rate` : `the Osmosis ${c.symbol} quote for that minute`})`;
-  const list = (cs: SettledCoin[]) => cs.map((c) => coin(c) + valued(c)).join(' and ');
-  const got = s.coins.filter((c) => c.amount > 0), paid = s.coins.filter((c) => c.amount < 0);
-  const sale = got.length > 0 && s.coins.reduce((a, c) => a + c.amount * c.usdEach, 0) > 0;
-  const nam = `${fmtNamRule(s.nam)} NAM`;
-  const trade = sale
-    ? `gave ${nam}, fees in, for ${list(got)}${paid.length ? `, and paid ${list(paid)}` : ''}`
-    : `paid ${list(paid)}, fees in, for ${nam}${got.length ? `, and got ${list(got)}` : ''}`;
-  const gas = s.gasUsd != null ? `, ${sale ? 'less' : 'plus'} ${fmtUsdRule(s.gasUsd)} of gas` : '';
-  return <>Settled at {fmtUsdRule(s.usdPerNam)} a NAM: {trade}{gas}.{s.gasLeftOut ? ' Its gas is left out: its coin has no price for that minute.' : ''}</>;
+  const note = settleGasNote(s);
+  return <>Settled at {fmtUsdRule(s.usdPerNam)} a NAM: {settleWords(s)}.{note ? ` ${note}` : ''}</>;
 }
 
 function LastOne({ hit, now }: { hit: AlertHit; now: number }) {

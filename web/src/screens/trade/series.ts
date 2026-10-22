@@ -9,6 +9,7 @@ import type {
 import { SERIES_MAX_POINTS, SERIES_STEP_MS, TRADE_FOLD_MS, TRADE_FOLD_UNDER_NAM } from '../../../../shared/types';
 import { DAY_MS, HISTORY_FETCH_DAYS, type HistoryRange } from '../../../../shared/history';
 import { isBotFlow } from '../../../../shared/flow-rules';
+import { settleMetaOf, settleOf, tradeValue } from '../../../../shared/settle';
 import { priceHow } from '../../lib/flows';
 
 const fin = (x: number | null | undefined): x is number => x != null && Number.isFinite(x);
@@ -220,6 +221,8 @@ export function tradeOfFlow(f: Flow): TradeRow | null {
   const how = priceHow(f);
   const priced = fin(f.priceUsd);
   const tsSource = typeof m.tsSource === 'string' ? m.tsSource : null;
+  const rec = settleMetaOf(m);
+  const settle = rec ? settleOf(f.kind, rec) : null;
   return {
     id: f.id,
     ts: f.ts,
@@ -233,6 +236,9 @@ export function tradeOfFlow(f: Flow): TradeRow | null {
     priceSource: !priced ? null : how === 'execution' || how === 'swap_1h' || how === 'spot' ? how : 'unknown',
     valueUsd: fin(f.valueUsd) ? f.valueUsd : null,
     ...(priced ? {} : { priceNote: 'No price was recorded for this trade.' }),
+    // its settle price when its own coins price it (USDC, allUSDC, a rate in its transaction); one that needs the
+    // minute's quote of a coin is priced by the server's next page
+    ...(settle ? { settle } : {}),
     maker: maker ?? null,
     makerLabelPlain: (f.kind === 'buy' ? f.toLabelPlain : f.fromLabelPlain) ?? null,
     makerLabelSource: (f.kind === 'buy' ? f.toLabelSource : f.fromLabelSource) ?? null,
@@ -245,7 +251,7 @@ export function tradeOfFlow(f: Flow): TradeRow | null {
   };
 }
 
-/** A group's sums from its rows (newest first): NAM, dollars over the priced rows, the average price over them. */
+/** A group's sums from its rows (newest first): NAM, dollars over the priced rows (shared/settle.ts tradeValue: a row's settle price first), the average price over them. */
 function sums(rows: TradeRow[]): Pick<TradeGroup, 'n' | 'nam' | 'usd' | 'unpriced' | 'avgPriceUsd' | 'firstTs' | 'lastTs'> {
   let nam = 0;
   let usd = 0;
@@ -253,9 +259,10 @@ function sums(rows: TradeRow[]): Pick<TradeGroup, 'n' | 'nam' | 'usd' | 'unprice
   let unpriced = 0;
   for (const r of rows) {
     nam += r.nam;
-    if (fin(r.valueUsd)) {
-      usd += r.valueUsd;
-      pricedNam += r.nam;
+    const v = tradeValue(r);
+    if (v) {
+      usd += v.usd;
+      pricedNam += v.nam;
     } else unpriced++;
   }
   const priced = rows.length - unpriced;

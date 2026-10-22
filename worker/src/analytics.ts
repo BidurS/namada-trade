@@ -6,7 +6,7 @@ import type {
 } from '../../shared/types';
 import type { BondListing } from './sources/namada';
 import { evaluateFlows, INTERNAL_ADDRESSES, isInternal, type AlertThresholds } from '../../shared/alerts';
-import { QUOTE_KEYS, quotesNeeded, settleMetaOf, settleOf } from '../../shared/settle';
+import { QUOTE_KEYS, quotesNeeded, settleMetaOf, settleOf, type Settle } from '../../shared/settle';
 import { SELLS_MOST_CUT } from '../../shared/supply-thresholds';
 import { kvGetJson, kvSet } from './db';
 import { NAM_AMOUNT, NOT_LEGACY_TWIN } from './flows-query';
@@ -1231,37 +1231,48 @@ export const QUOTE_MATCH_MS = 5 * 60_000;
 const quoteAt = (db: D1Database, key: string, ts: number) =>
   db.prepare(`SELECT ts, value FROM metrics WHERE key = ? AND ts <= ? AND ts >= ? ORDER BY ts DESC LIMIT 1`).bind(key, ts, ts - QUOTE_MATCH_MS);
 
+/** A trade's settle price needs a quote for one coin at the trade's minute: the trade, the coin, its metric. */
+type QuoteAsk = { i: number; sym: string; ts: number };
+
 /**
- * Each trade hit's price. First what it settled at for its trader (shared/settle.ts): every coin their balance changed
- * by, fees and gas in, USDC at a dollar and any other coin at the transaction's own rate for it or, without one, its
- * Osmosis quote stored for the trade's minute ('settled'). Else, for a row recorded before the parser kept those coins,
- * its own USDC per NAM ('paid', set by the rule). Else the NAM quote stored for its minute: the latest price.usd
- * reading at or before the trade, at most QUOTE_MATCH_MS before it, labelled 'quote' so it is never read as what the
- * trade paid. None found: the hit says no price is on record. One key seek per quote.
+ * Each trade's settle price (shared/settle.ts) from its settle record (meta.settle): USDC and allUSDC at a dollar, a
+ * coin with a rate in its own transaction at that rate, any other at its Osmosis quote stored for the trade's minute
+ * (the latest reading at or before the trade, at most QUOTE_MATCH_MS before it). null for a trade that is not a buy
+ * or a sell, has no record, or has a coin with no price. One key seek per coin a trade needs quoted, 50 to a batch;
+ * a batch that fails leaves its trades without a quote (so without a settle price when they needed one).
+ */
+export async function settlePrices(db: D1Database, trades: readonly { kind: string; ts: number; meta?: Record<string, unknown> | null }[]): Promise<(Settle | null)[]> {
+  const recs = trades.map((t) => (t.kind === 'buy' || t.kind === 'sell' ? settleMetaOf(t.meta) : null));
+  const asks: QuoteAsk[] = [];
+  recs.forEach((s, i) => { if (s) for (const sym of quotesNeeded(s)) if (QUOTE_KEYS[sym]) asks.push({ i, sym, ts: trades[i].ts }); });
+  const quotes: Record<string, number>[] = trades.map(() => ({}));
+  for (let k = 0; k < asks.length; k += 50) {
+    const part = asks.slice(k, k + 50);
+    const res = await db.batch(part.map((a) => quoteAt(db, QUOTE_KEYS[a.sym], a.ts))).catch(() => null);
+    res?.forEach((r, j) => {
+      const row = (r.results?.[0] ?? null) as { value: number } | null;
+      if (row && row.value > 0) quotes[part[j].i][part[j].sym] = row.value;
+    });
+  }
+  return recs.map((s, i) => (s ? settleOf(trades[i].kind as 'buy' | 'sell', s, quotes[i]) : null));
+}
+
+/**
+ * Each trade hit's price. First what it settled at for its trader (settlePrices: every coin their balance changed by,
+ * fees and gas in; 'settled'). Else, for a row recorded before the parser kept those coins, its own USDC per NAM
+ * ('paid', set by the rule). Else the NAM quote stored for its minute: the latest price.usd reading at or before the
+ * trade, at most QUOTE_MATCH_MS before it, labelled 'quote' so it is never read as what the trade paid. None found:
+ * the hit says no price is on record. One key seek per quote.
  */
 export async function withQuotes(db: D1Database, hits: AlertHit[], flows: Flow[] = []): Promise<AlertHit[]> {
   const byId = new Map(flows.map((f) => [f.id, f]));
   const trades = hits.filter((h) => h.ruleId === 'big_swap');
-  // the coin quotes the settle records need, one seek each
-  const asks: { h: AlertHit; f: Flow; sym: string }[] = [];
-  for (const h of trades) {
-    const f = byId.get(h.flowId), s = f && settleMetaOf(f.meta);
-    if (f && s) for (const sym of quotesNeeded(s)) if (QUOTE_KEYS[sym]) asks.push({ h, f, sym });
-  }
-  const quotes = new Map<AlertHit, Record<string, number>>();
-  for (let i = 0; i < asks.length; i += 50) {
-    const part = asks.slice(i, i + 50);
-    const res = await db.batch(part.map((a) => quoteAt(db, QUOTE_KEYS[a.sym], a.f.ts))).catch(() => null);
-    res?.forEach((r, j) => {
-      const row = (r.results?.[0] ?? null) as { value: number } | null;
-      if (row && row.value > 0) quotes.set(part[j].h, { ...quotes.get(part[j].h), [part[j].sym]: row.value });
-    });
-  }
-  for (const h of trades) {
-    const f = byId.get(h.flowId), s = f && settleMetaOf(f.meta);
-    const settle = f && s && (f.kind === 'buy' || f.kind === 'sell') ? settleOf(f.kind, s, quotes.get(h)) : null;
-    if (settle) h.price = { usd: settle.usdPerNam, source: 'settled', at: f!.ts, settle };
-  }
+  const withFlow = trades.filter((h) => byId.has(h.flowId));
+  const settles = await settlePrices(db, withFlow.map((h) => byId.get(h.flowId)!));
+  withFlow.forEach((h, i) => {
+    const settle = settles[i];
+    if (settle) h.price = { usd: settle.usdPerNam, source: 'settled', at: byId.get(h.flowId)!.ts, settle };
+  });
   const need = trades.filter((h) => !h.price);
   for (let i = 0; i < need.length; i += 50) {
     const part = need.slice(i, i + 50);

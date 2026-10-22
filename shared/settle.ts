@@ -1,6 +1,7 @@
 // What a trade settled at for its trader: the coins their balance changed by, NAM against everything else, with the
 // pools' and the taker's fees and the transaction fee in. The Osmosis parser records the coins (meta.settle,
-// worker/src/parse/osmosis.ts); the Worker prices them at the trade's minute; the Alerts page shows the result.
+// worker/src/parse/osmosis.ts); the Worker prices them at the trade's minute (worker/src/analytics.ts settlePrices); the
+// Alerts page and the trades tape show the result.
 
 /** A swap row's meta.settle: what the trader's balance changed by in the swap's own messages. */
 export interface SettleMeta {
@@ -38,6 +39,8 @@ export interface SettledCoin {
 }
 
 export interface Settle {
+  /** the trade's side: a sale gave NAM, a buy got it */
+  side: 'buy' | 'sell';
   /** USD per NAM the trader gave (a sale: what they got for it, less the transaction fee) or got (a buy: what they paid, plus the fee) */
   usdPerNam: number;
   /** the NAM the trader gave or got, fees in: more than the pools' NAM on a sale that paid its taker fee in NAM */
@@ -96,5 +99,19 @@ export function settleOf(side: 'buy' | 'sell', s: SettleMeta, quotes: Record<str
     gasUsd = (gasUsd ?? 0) + amount * r.usdEach;
   }
   const usd = side === 'sell' ? value - (gasUsd ?? 0) : -value + (gasUsd ?? 0);
-  return usd > 0 ? { usdPerNam: usd / nam, nam, coins, gasUsd, gasLeftOut } : null;
+  return usd > 0 ? { side, usdPerNam: usd / nam, nam, coins, gasUsd, gasLeftOut } : null;
+}
+
+/** The dollars a settle price comes to: what the trader got for their NAM less gas (a sale), or paid plus gas (a buy). */
+export const settleUsd = (s: Settle): number => s.usdPerNam * s.nam;
+
+/**
+ * A trade's dollars and the NAM they are per, for sums and averages over trades: its settle price when it has one
+ * (the trader's dollars over the NAM they gave or got, fees in), else its recorded value over its NAM; null when it
+ * has neither. The server's tape groups and the page's (worker/src/series-api.ts, web/src/screens/trade/series.ts)
+ * both sum with this, so their averages agree.
+ */
+export function tradeValue(r: { nam: number; valueUsd: number | null; settle?: Settle | null }): { usd: number; nam: number } | null {
+  if (r.settle) return { usd: settleUsd(r.settle), nam: r.settle.nam };
+  return r.valueUsd != null && Number.isFinite(r.valueUsd) ? { usd: r.valueUsd, nam: r.nam } : null;
 }

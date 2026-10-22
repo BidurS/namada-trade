@@ -28,7 +28,8 @@ import { fmtDay } from '../../shared/search-grammar';
 import { explorerHashOf } from '../../shared/flow-rules';
 import { label_plain, labelAuthorShort } from './labels';
 import { VALUE_WORDS } from '../../shared/copy';
-import { provAt, coverageOf, safeParseJson } from './analytics';
+import { provAt, coverageOf, safeParseJson, settlePrices } from './analytics';
+import { tradeValue } from '../../shared/settle';
 import { OSMOSIS, INTERNAL_LABELS } from './config';
 import { OSMOSIS_DATA_SOURCE } from './sources/osmosis-data';
 import { JOB_WINDOW_MS, OSMOSIS_SUMMARY_STALE_MS } from './series';
@@ -780,12 +781,14 @@ export function foldTrades(rows: TradeRow[]): TradeGroup[] {
     const common = g ? new Set(r.route.filter((p) => g!._pools.has(p))) : new Set<string>();
     if (g && r.maker != null && g.maker === r.maker && g.kind === r.kind && common.size > 0 && small(r) && small(g._last) && g._last.ts - r.ts <= TRADE_FOLD_MS) {
       g.ids.push(r.id); g.n++; g.nam += r.nam; g.firstTs = r.ts; g._pools = common;
-      if (r.valueUsd != null) { g.usd = (g.usd ?? 0) + r.valueUsd; g._pricedNam += r.nam; } else g.unpriced++;
+      const v = tradeValue(r);
+      if (v) { g.usd = (g.usd ?? 0) + v.usd; g._pricedNam += v.nam; } else g.unpriced++;
       if (!g.pattern && r.pattern) g.pattern = r.pattern;
       g._last = r;
       continue;
     }
-    g = { maker: r.maker, kind: r.kind, ids: [r.id], n: 1, nam: r.nam, usd: r.valueUsd, unpriced: r.valueUsd == null ? 1 : 0, avgPriceUsd: null, firstTs: r.ts, lastTs: r.ts, pattern: r.pattern, _pools: new Set(r.route), _pricedNam: r.valueUsd != null ? r.nam : 0, _last: r };
+    const v = tradeValue(r);
+    g = { maker: r.maker, kind: r.kind, ids: [r.id], n: 1, nam: r.nam, usd: v?.usd ?? null, unpriced: v ? 0 : 1, avgPriceUsd: null, firstTs: r.ts, lastTs: r.ts, pattern: r.pattern, _pools: new Set(r.route), _pricedNam: v?.nam ?? 0, _last: r };
     groups.push(g);
   }
   return groups.map(({ _pools, _pricedNam, _last, ...x }): TradeGroup => ({ ...x, avgPriceUsd: x.usd != null && _pricedNam > 0 ? x.usd / _pricedNam : null }));
@@ -837,6 +840,10 @@ export async function readTrades(db: DB, q: TradesQuery, asOf: number, replay: b
   const next = merged.length > q.limit ? encodeFlowCursor({ ts: page[page.length - 1].ts, height: page[page.length - 1].height, id: page[page.length - 1].id }) : null;
   const rows = page.map(tradeRowOf);
 
+  // Each trade's settle price (its settle record, priced at its minute: a quote seek per coin that needs one), read
+  // beside the makers' counts.
+  const settled = later(() => settlePrices(db, page.map((r) => ({ kind: r.kind, ts: r.ts, meta: safeParseJson(r.meta, {}) as Record<string, unknown> | null }))))
+    .then((ss) => ss.forEach((x, i) => { if (x) rows[i].settle = x; }));
   // The page's makers: their recorded trades (one grouped count per side) and their small buys for the pattern.
   const makers = [...new Set(rows.map((r) => r.maker).filter((m): m is string => !!m))];
   const buyCounts = new Map<string, number>(), sellCounts = new Map<string, number>(), small = new Map<string, number[]>();
@@ -855,6 +862,7 @@ export async function readTrades(db: DB, q: TradesQuery, asOf: number, replay: b
     }
     await Promise.all(reads);
   }
+  await settled;
   const pats = patternsOf(rows, small);
   rows.forEach((r, i) => {
     if (r.maker) r.makerTrades = { buys: buyCounts.get(r.maker) ?? 0, sells: sellCounts.get(r.maker) ?? 0 };

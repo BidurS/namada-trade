@@ -1336,6 +1336,13 @@ export interface TradeRow {
   priceSource: 'execution' | 'swap_1h' | 'spot' | 'unknown' | null;
   valueUsd: number | null;
   priceNote?: string;
+  /**
+   * What the trade settled at for its trader (shared/settle.ts): every coin their balance changed by, the pools' and
+   * the taker's fees and the gas in, per NAM they gave or got. Absent when the row has no settle record or a coin in
+   * it has no price at that minute; the row then shows priceUsd with its basis. The tape shows this ahead of priceUsd
+   * and sums it (shared/settle.ts tradeValue).
+   */
+  settle?: Settle;
   /** the trader (Flow.meta.trader: the account whose NAM the swap moved, else the signer), else the receiving (buy) or sending (sell) address */
   maker: string | null;
   makerLabelPlain: string | null;
@@ -1365,10 +1372,10 @@ export interface TradeGroup {
   ids: string[];
   n: number;
   nam: number;
-  /** dollars over the priced rows, and how many have no price; null when none is priced */
+  /** dollars over the priced rows (each its settle price's dollars when it has one: shared/settle.ts tradeValue), and how many have no price; null when none is priced */
   usd: number | null;
   unpriced: number;
-  /** dollars per NAM over the priced rows; null when none is priced */
+  /** those dollars per NAM over the same rows (a settled row's NAM is what its trader gave or got); null when none is priced */
   avgPriceUsd: number | null;
   firstTs: number;
   lastTs: number;
