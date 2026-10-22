@@ -20,7 +20,7 @@ export interface Env {
   SEARCH_LIMITER?: { limit(o: { key: string }): Promise<{ success: boolean }> };
   /** /ws upgrade attempts, 60 a minute per client address (worker/src/index.ts, http.ts wsLimited; wrangler.jsonc WS_LIMITER) */
   WS_LIMITER?: { limit(o: { key: string }): Promise<{ success: boolean }> };
-  /** The Osmosis quote service calls all visitors' quotes may make, 6 per 10 s per location (worker/src/api.ts quoteBudget) */
+  /** The Osmosis quote service calls all visitors' quotes may make, 10 per 10 s per location (worker/src/api.ts quoteBudget) */
   QUOTE_LIMITER?: { limit(o: { key: string }): Promise<{ success: boolean }> };
 }
 

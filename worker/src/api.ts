@@ -737,7 +737,7 @@ app.get('/api/pools', async (c) => {
 /** Far above all NAM in existence (about 1.15 billion): a larger size is refused before any quote service is asked. */
 export const QUOTE_MAX_NAM = 1e12;
 /**
- * The SQS calls every visitor's quotes may make together: QUOTE_LIMITER (wrangler.jsonc, 6 per 10 s) under one fixed
+ * The SQS calls every visitor's quotes may make together: QUOTE_LIMITER (wrangler.jsonc, 10 per 10 s) under one fixed
  * key. Its counters are per Cloudflare location, as is the outbound address the quote service limits, which the size
  * table, the overview and the cron share: no burst wider than the size table's own 6 at once, whoever asks and from
  * however many addresses. Past it a quote answers 'busy' and the ticket shows the size table; a repeat within 10 s is
