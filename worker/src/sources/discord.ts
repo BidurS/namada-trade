@@ -369,12 +369,16 @@ export function buildFlowDiscordBody(flow: Flow, usdPrice: number | null, custom
     `\`${codeSafe(addr.slice(0, 14))}...${codeSafe(addr.slice(-6))}\`${label ? ` (${plainMd(codeSafe(label))})` : ''}${chainOf(addr) ? '' : ' (not an address)'}`;
   if (flow.from) fields.push({ name: 'From', value: party(flow.from, flow.fromLabel), inline: true });
   if (flow.to) fields.push({ name: 'To', value: party(flow.to, flow.toLabel), inline: true });
-  // Owner decision 14: a move the live stream missed and the catch-up search found later says so, with the time
-  // it happened (Discord renders <t:…:f> in each reader's time zone).
-  if ((flow.meta as { via?: string } | undefined)?.via === 'catch-up search') {
+  // Owner decision 14: a move found late says so, with the time it happened (Discord renders <t:…:f> in each reader's
+  // time zone): one the Osmosis live stream missed and the catch-up search found later (meta.via 'catch-up search'),
+  // and one the Namada live scan read well after its block because it was behind (meta.via 'late scan', live-hub.ts
+  // LATE_SCAN_MS).
+  const via = (flow.meta as { via?: string } | undefined)?.via;
+  if (via === 'catch-up search' || via === 'late scan') {
+    const t = Math.floor(flow.ts / 1000);
     fields.push({
       name: 'Found late',
-      value: `The live feed missed this move; it happened <t:${Math.floor(flow.ts / 1000)}:f> (<t:${Math.floor(flow.ts / 1000)}:R>).`,
+      value: `${via === 'late scan' ? 'The live scan was behind and read this move late' : 'The live feed missed this move'}; it happened <t:${t}:f> (<t:${t}:R>).`,
       inline: false,
     });
   }

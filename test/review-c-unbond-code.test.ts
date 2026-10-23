@@ -51,14 +51,14 @@ function recode(tag: string | null, code: Uint8Array = hex.decode(UNBOND_CODE.to
   return base64.encode(out);
 }
 
-/** block_results for the re-encoded tx: its wrapper hash, both inner txs applied with their unbond keys. */
+/** block_results for the re-encoded tx: its wrapper hash, both inner txs applied (no VP rejecting them) with their unbond keys. */
 function blockFor(b64: string): NamadaBlock {
   const tx = decodeNamadaTx(txBytesFromBase64(b64));
   const key = (validator: string) => ({ segments: [{ AddressSeg: NAMADA.internal.pos }, { StringSeg: 'unbond' }, { AddressSeg: DELEGATOR }, { AddressSeg: validator }] });
   const batch: Record<string, unknown> = {};
   for (const c of tx.commitments) {
     const u = decodeUnbond(tx.data.get(c.dataHash)!);
-    batch[c.innerHash] = { Ok: { changed_keys: [key(u.validator)] } };
+    batch[c.innerHash] = { Ok: { changed_keys: [key(u.validator)], vps_result: { accepted_vps: [NAMADA.internal.pos], rejected_vps: [], errors: [], status_flags: '' } } };
   }
   return { height: H, ts: Date.parse('2026-06-17T16:24:26.115441785Z'), events: [{ type: 'tx/applied', attributes: [{ key: 'hash', value: tx.wrapperHash }, { key: 'batch', value: JSON.stringify(batch) }] }] };
 }

@@ -169,13 +169,15 @@ describe('the live scan follows only nodes at this chain\'s head', () => {
     expect(notes(db)).toEqual([]);
   });
 
-  it('a scan more than 50 blocks behind still jumps, and says which blocks it skipped', async () => {
+  it('a scan more than 50 blocks behind reads on from its cursor: every block read, none jumped, no note', async () => {
     const db = testD1();
     setCursor(db, '8300000');
-    chain({ five: { height: 8_300_100 }, papa: { height: 8_300_100 } });
+    const calls = chain({ five: { height: 8_300_100 }, papa: { height: 8_300_100 } });
     await hubOf(db).scanNamada();
     expect(cursor(db)).toBe('8300100');
-    expect(notes(db)).toEqual(['blocks 8300001 to 8300050 not scanned: the scan had fallen more than 50 blocks behind']);
+    const read = blockReads(calls).filter((c) => c.includes('/block_results')).map((c) => Number(c.split('height=')[1]));
+    expect(read).toEqual(Array.from({ length: 100 }, (_, i) => 8_300_001 + i));
+    expect(notes(db)).toEqual([]);
   });
 });
 

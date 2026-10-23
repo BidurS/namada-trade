@@ -663,14 +663,50 @@ async function pos() {
 }
 
 // ------------------------------------------------------------------ 6. unbond-gap
-// Bond/unbond requests between the end of the indexer pull (RPC index start) and the first block the live
-// decoder handled. History comes newest-first, so most addresses cost one request.
+// Bond and unbond requests between the end of the indexer pull (RPC index start) and the first block each live
+// decoder read (parse/namada-unbond.ts, parse/namada-bond.ts). That block is the `firstHeight` the decoder recorded in
+// its kv row (namada.unbonds.live, namada.bonds.live; live-hub.ts LiveUnbondStatus) when it was deployed: the scan
+// reads every block from there, so every request from there on is the decoder's, and none is taken from the indexer
+// (whose "applied" is not always the chain's, below). A row made before the decoders recorded it (the unbond
+// decoder's) has no firstHeight; the range then ends at the lowest row of that kind the live scan itself wrote
+// (meta.source 'namada-rpc'). Rows a repair wrote are not where the decoder started and are left out, as counted
+// they would end the range below it: a row for a block the scan never read (meta.restored, as the rows restored on
+// 2026-10-23) and a row scripts/rederive-namada.ts inserted for a block the scan read before it had that decoder
+// (meta.rederived). A live row such a run changed carries meta.rederived too and is left out as well; that can only
+// end the range at a later live row, and the indexer rows it then takes for blocks the scan read have the ids of the
+// live rows there (INSERT OR IGNORE keeps those). On 2026-10-23 no 'namada-rpc' bond or unbond row in D1 was marked
+// rederived. A kind with neither is looked for up to the head.
+// What it can find: the applied requests indexer.namada.net lists in the history of the addresses it asks about, which
+// are the addresses holding NAM now (holders, balance > 0) and those with a bond stored in the 500,000 blocks before
+// the range. What it cannot find: a request by any other address (one holding no NAM now with no stored bond: on
+// 2026-10-23 four unbond requests of 123,780 NAM and three bond requests of 1,499,999 NAM in block 7,770,519 were
+// missing this way and were restored from the chain's own blocks), a request the indexer does not list, and a
+// validator's request for its own stake (no source in the indexer's data). What it can take wrongly: the indexer's
+// "applied" is not always the chain's, which also asks the validity predicates (block 8,202,488's bond of 0.00001 NAM
+// from the staking account itself is "applied" there, and the chain's PoS VP rejected it).
+// A time is the block's own only for a request of 100,000 NAM or more, else interpolated between block anchors. For a
+// complete list, read the chain's blocks instead (the restore tools did, from the nodes' tx index).
+// History comes newest-first, so most addresses cost one request.
 async function unbondGap() {
   const from = d1<{ h: number }>(`SELECT MIN(height) h FROM flows WHERE chain='namada' AND (meta IS NULL OR json_extract(meta,'$.source') IS NULL)`)[0].h;
-  const liveMin = d1<{ h: number | null }>(`SELECT MIN(height) h FROM flows WHERE chain='namada' AND kind='unbond' AND json_extract(meta,'$.source')='namada-rpc'`)[0].h;
+  const KV = { unbond: 'namada.unbonds.live', bond: 'namada.bonds.live' } as const;
+  const firstRead = new Map<string, number>();
+  for (const r of d1<{ key: string; value: string }>(`SELECT key, value FROM kv WHERE key IN ('${KV.unbond}','${KV.bond}')`)) {
+    let v: unknown = null;
+    try { v = JSON.parse(r.value)?.firstHeight; } catch {}
+    if (typeof v === 'number' && Number.isSafeInteger(v) && v > 0) firstRead.set(r.key, v);
+  }
+  const liveStart = (kind: 'bond' | 'unbond'): { h: number; by: string } | null => {
+    const k = firstRead.get(KV[kind]);
+    if (k != null) return { h: k, by: `the first block it read (kv ${KV[kind]})` };
+    const h = d1<{ h: number | null }>(`SELECT MIN(height) h FROM flows WHERE chain='namada' AND kind='${kind}' AND json_extract(meta,'$.source')='namada-rpc' AND json_extract(meta,'$.restored') IS NULL AND json_extract(meta,'$.rederived') IS NULL`)[0].h;
+    return h == null ? null : { h, by: 'its lowest row' };
+  };
+  const live = { unbond: liveStart('unbond'), bond: liveStart('bond') };
   const head = Number((await getJson(`${NAMADA_RPCS[0]}/status`)).result.sync_info.latest_block_height);
-  const to = liveMin ?? head;
-  log(`unbond-gap: heights [${from}, ${to}) · live decoder ${liveMin ? `starts at ${liveMin}` : 'has not decoded anything yet'}`);
+  const end = { unbond: live.unbond?.h ?? head, bond: live.bond?.h ?? head };
+  const to = Math.max(end.unbond, end.bond);
+  for (const k of ['unbond', 'bond'] as const) log(`unbond-gap: ${k} requests in [${from}, ${end[k]}) · live ${k} decoder ${live[k] ? `starts at ${live[k]!.h}, ${live[k]!.by}` : 'has not decoded anything yet'}`);
 
   const addrs = [...new Set([
     ...d1<{ address: string }>(`SELECT address FROM holders WHERE chain='namada' AND balance_num > 0`).map((r) => r.address),
@@ -685,7 +721,7 @@ async function unbondGap() {
       for (let page = 1; page <= 50; page++) {
         const r = await getJson(`${INDEXER}/api/v1/chain/history?addresses=${addr}&page=${page}`);
         const rows: HistItem[] = r.results ?? [];
-        for (const it of rows) if (it.blockHeight >= from && it.blockHeight < to && it.tx.exitCode === 'applied' && (it.tx.kind === 'bond' || it.tx.kind === 'unbond')) items.set(it.tx.id, it);
+        for (const it of rows) if ((it.tx.kind === 'bond' || it.tx.kind === 'unbond') && it.blockHeight >= from && it.blockHeight < end[it.tx.kind] && it.tx.exitCode === 'applied') items.set(it.tx.id, it);
         if (!rows.length || rows[rows.length - 1].blockHeight < from || page >= (r.pagination?.totalPages ?? 0)) break;
       }
     } catch (e) { log(`  failed ${addr}: ${String(e).slice(0, 80)}`); }

@@ -1,7 +1,7 @@
 /**
- * Re-derive the Namada flows the block parser wrote (worker/src/parse/namada.ts and namada-unbond.ts: the live scan
- * and scripts/repair-review2.ts legacy, rows with meta.innerTxHash; and the unbond rows of source 'namada-rpc') with
- * the parser as it is now. The group C fixes of 2026-10-21 (7f1dd3c, d3887b1, 2294855, 50cb1ca) changed how a bridge
+ * Re-derive the Namada flows the block parser wrote (worker/src/parse/namada.ts, namada-unbond.ts and namada-bond.ts:
+ * the live scan and scripts/repair-review2.ts legacy, rows with meta.innerTxHash; and the unbond and bond rows of
+ * source 'namada-rpc') with the parser as it is now. The group C fixes of 2026-10-21 (7f1dd3c, d3887b1, 2294855, 50cb1ca) changed how a bridge
  * row binds its packet (meta.channel, meta.packetSequence), how a shielded withdrawal names its Osmosis receiver, and
  * how the shielded pool's fee is read (meta.maspFeeNam). Reads the remote D1 with read-only SELECTs and every block
  * those rows are in from the public Namada RPCs, and writes SQL for the owner to check and apply (scripts/d1-apply.ts).
@@ -10,7 +10,7 @@
  *   npx tsx scripts/rederive-namada.ts        # scripts/out/rederive/namada.sql + namada-report.json
  *
  * Each block is parsed as the live scan parses it (events, then with the wrappers' fee payers when the parse asks for
- * them, and the unbond requests when the block has any), and its rows compared with the stored ones by id. A row both
+ * them, and the unbond and bond requests when the block has any), and its rows compared with the stored ones by id. A row both
  * have gets an UPDATE of what the parser decides (ends, amount, kind and the parser's meta keys; its price follows a
  * changed amount), kept as stored: ts, height, price basis, tsSource, repairedFrom, source and any key the parser does
  * not write; each statement changes the row only while it is still as read. A row only the parser writes is inserted
@@ -25,6 +25,7 @@ import { blockResults, blockTxs } from '../worker/src/sources/namada';
 import { parseNamadaBlock } from '../worker/src/parse/namada';
 import { feePayersOf } from '../worker/src/parse/namada-tx';
 import { blockHasUnbond, parseNamadaUnbonds } from '../worker/src/parse/namada-unbond';
+import { blockHasBond, parseNamadaBonds } from '../worker/src/parse/namada-bond';
 import { QUOTE_MATCH_MS } from '../worker/src/analytics';
 import type { Flow } from '../shared/types';
 
@@ -68,6 +69,7 @@ for (const [h, stored] of [...byH].sort((a, b) => a[0] - b[0])) {
     if (p.feePayerWanted.length) p = parseNamadaBlock(blk, MARK, feePayersOf(await blockTxs(h)));
     flows = [...p.flows];
     if (blockHasUnbond(blk)) flows.push(...parseNamadaUnbonds(blk, await blockTxs(h), MARK).flows);
+    if (blockHasBond(blk)) flows.push(...parseNamadaBonds(blk, await blockTxs(h), MARK).flows);
   } catch (e) {
     unread.push(h); count('block not readable');
     continue;

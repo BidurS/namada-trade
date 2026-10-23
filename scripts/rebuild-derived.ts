@@ -3,7 +3,10 @@
  * the stored figures built from those flows, written again with the cron's own code. Reads the remote D1 with
  * read-only SELECTs and writes SQL for the owner to check and apply (scripts/d1-apply.ts). Writes nothing itself.
  *
- *   npx tsx scripts/rebuild-derived.ts [--mark 2026-10-22]   # scripts/out/rederive/derived.sql
+ *   npx tsx scripts/rebuild-derived.ts [--mark 2026-10-22] [--key rederived]   # scripts/out/rederive/derived.sql
+ *
+ * `--key`: the meta field the mark is in: `rederived` (the re-derive scripts, the default) or `restored` (rows a
+ * repair wrote that the live scan never did).
  *
  * - Each closed trade-hour holding a re-derived Osmosis buy or sell: its 16 keys (price.swap_1h.* and dex.swaps_1h.*,
  *   series.ts swapHourStmts) deleted, then written again, so a key the hour no longer has (no trusted swap left, a
@@ -30,6 +33,8 @@ const DAY_KEYS = ['active.namada_daily', 'active.osmosis_daily', 'dex.volume_nam
   'bridge.in_daily', 'bridge.out_daily', 'bridge.refunded_daily', 'masp.in_daily', 'masp.out_daily'];
 const args = process.argv.slice(2);
 const mark = (() => { const i = args.indexOf('--mark'); return i >= 0 ? args[i + 1] : '2026-10-22'; })();
+const key = (() => { const i = args.indexOf('--key'); return i >= 0 ? args[i + 1] : 'rederived'; })();
+if (!/^[a-z]+$/.test(key) || !/^[0-9-]+$/.test(mark)) throw new Error(`--key and --mark must be a word and a date: ${key} ${mark}`);
 const OUT = join(import.meta.dirname, 'out', 'rederive');
 mkdirSync(OUT, { recursive: true });
 const keys = (ks: string[]) => ks.map((k) => `'${k}'`).join(',');
@@ -42,11 +47,11 @@ function d1<T = any>(sql: string): T[] {
 }
 
 const now = Date.now();
-const touched = d1<{ chain: string; kind: string; ts: number }>(`SELECT chain, kind, ts FROM flows WHERE json_extract(meta, '$.rederived') = '${mark}'`);
+const touched = d1<{ chain: string; kind: string; ts: number }>(`SELECT chain, kind, ts FROM flows WHERE json_extract(meta, '$.${key}') = '${mark}'`);
 const hours = [...new Set(touched.filter((r) => r.chain === 'osmosis' && (r.kind === 'buy' || r.kind === 'sell')).map((r) => Math.floor(Number(r.ts) / H) * H))]
   .filter((h) => h + H <= Math.floor(now / H) * H).sort((a, b) => a - b);
 const days = [...new Set(touched.map((r) => Math.floor(Number(r.ts) / D) * D))].filter((d) => d + D <= Math.floor(now / D) * D).sort((a, b) => a - b);
-console.error(`${touched.length} re-derived rows: ${hours.length} closed trade-hours, ${days.length} closed days`);
+console.error(`${touched.length} rows with ${key} = ${mark}: ${hours.length} closed trade-hours, ${days.length} closed days`);
 
 const lines: string[] = [];
 for (const h of hours) {

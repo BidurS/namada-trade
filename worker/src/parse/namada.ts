@@ -114,7 +114,8 @@ const INTERNAL = new Set<string>(Object.values(I));
  * `transfer-from-wasm`, either side the staking account) is 'pos_balance', not a bond or a withdrawal: on
  * 2026-08-31 such a transfer moved 331,386,682 NAM out of the staking account and on 22 Sep and 1 Oct the same
  * amount came back, while the chain's total stake never moved and the receiving address had no bond
- * (docs/design/screener-plan.md 3.0). Holders' own bonds are recorded from the indexer and the live unbond decoder;
+ * (docs/design/screener-plan.md 3.0). Holders' own bonds and unbonds are recorded from the indexer and the live bond
+ * and unbond decoders (namada-bond.ts, namada-unbond.ts: a bond moves NAM to the staking account with no event);
  * the chain's staking logic moves NAM with its own descriptors (pos-claim-rewards, pos-withdraw-token).
  */
 export function classify(descriptor: string, from: string | null, to: string | null): Flow['kind'] {

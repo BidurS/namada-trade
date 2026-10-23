@@ -1,10 +1,10 @@
 /**
- * Minimal borsh decoder for Namada wrapper transactions, enough to pull PoS `Unbond` data out of a block.
+ * Minimal borsh decoder for Namada wrapper transactions, enough to pull PoS `Unbond` and `Bond` data out of a block.
  *
  * Verified against mainnet block 6957587 (wrapper 0F8F36AA…, two unbonds in one batch):
  *   - CometBFT tx bytes are a protobuf envelope `0a <varint len> <borsh Tx>`.
  *   - Tx = Header { chain_id, expiration: Option<DateTimeUtc>, timestamp, batch: Vec<TxCommitments>, atomic, tx_type }
- *          + Vec<Section>. TxCommitments = code_hash ‖ data_hash ‖ memo_hash (3 × 32 bytes).
+ *          + Vec<Section>. TxCommitments = code_hash ‖ data_hash ‖ memo_hash (3 × 32 bytes). `atomic` is a borsh bool.
  *   - wrapper hash = sha256(0x06 ‖ header bytes)           (Section::Header(header).get_hash())
  *   - inner hash   = sha256(wrapper hash ‖ sha256(commitment bytes))   (compute_inner_tx_hash)
  *   - Data section hash = sha256(section bytes as serialised in the tx).
@@ -13,7 +13,7 @@
  *     not hashed. Commitments reference these hashes.
  *   - Address (borsh) = enum tag + 20-byte hash: 0 Established, 1 Implicit, 2 Internal. The bech32m `tnam`
  *     raw form uses a different discriminant byte: 0 Implicit, 1 Established, 2 PoS, … (see rawDiscriminant).
- *   - Unbond = { validator: Address, amount: Uint (4 × u64 LE), source: Option<Address> }
+ *   - Unbond = Bond = { validator: Address, amount: Uint (4 × u64 LE), source: Option<Address> }
  *
  * Anything this decoder does not understand is reported as undecodable, never guessed.
  */
@@ -35,6 +35,11 @@ export interface DecodedTx {
    */
   feePayer: string | null;
   commitments: TxCommitment[];
+  /**
+   * The header's atomic flag: the inner txs of an atomic batch are committed together or not at all, so one that
+   * fails drops the writes of every other, though their own results in the tx/applied event still read Ok.
+   */
+  atomic: boolean;
   /** section hash -> { tag, codeHash } for Code sections (tag is e.g. "tx_unbond.wasm", codeHash the wasm checksum) */
   codes: Map<string, { tag: string | null; codeHash: string }>;
   /** section hash -> raw data bytes for Data sections */
@@ -50,6 +55,9 @@ export interface UnbondData {
   /** null = self-unbond (the validator unbonds its own stake) */
   source: string | null;
 }
+
+/** A bond's data: the same fields (source null = the validator bonds its own tokens). */
+export type BondData = UnbondData;
 
 class Reader {
   o = 0;
@@ -148,7 +156,9 @@ export function decodeNamadaTx(rawTx: Uint8Array): DecodedTx {
   const n = r.u32();
   const commitmentBytes: Uint8Array[] = [];
   for (let i = 0; i < n; i++) commitmentBytes.push(r.bytes(96));
-  r.u8(); // atomic
+  const atomicByte = r.u8();
+  if (atomicByte > 1) throw new Error(`bad atomic flag ${atomicByte}`);
+  const atomic = atomicByte === 1;
   const txType = r.u8(); // 0 Raw, 1 Wrapper, 2 Protocol
   let feePayer: string | null = null;
   if (txType === 1) {
@@ -186,7 +196,7 @@ export function decodeNamadaTx(rawTx: Uint8Array): DecodedTx {
   });
 
   // ---- Sections
-  const out: DecodedTx = { wrapperHash, feePayer, commitments, codes: new Map(), data: new Map(), stoppedAt: null };
+  const out: DecodedTx = { wrapperHash, feePayer, commitments, atomic, codes: new Map(), data: new Map(), stoppedAt: null };
   const nSec = r.u32();
   for (let i = 0; i < nSec; i++) {
     const start = r.o;
@@ -222,16 +232,26 @@ export function decodeNamadaTx(rawTx: Uint8Array): DecodedTx {
   return out;
 }
 
-/** Decode the data of a `tx_unbond.wasm` inner tx. Throws if the bytes are not exactly an Unbond. */
-export function decodeUnbond(data: Uint8Array): UnbondData {
+/** `{ validator: Address, amount: Uint (4 × u64 LE), source: Option<Address> }`, the data of a bond and of an unbond. */
+function decodeStakeData(data: Uint8Array, what: 'Bond' | 'Unbond'): UnbondData {
   const r = new Reader(data);
   const validator = readAddress(r);
   let amount = 0n;
   for (let i = 0; i < 4; i++) amount |= r.u64() << BigInt(64 * i);
   const source = r.option(() => readAddress(r));
-  if (r.left !== 0) throw new Error(`${r.left} trailing bytes after Unbond`);
+  if (r.left !== 0) throw new Error(`${r.left} trailing bytes after ${what}`);
   return { validator, amount, source };
 }
+
+/** Decode the data of a `tx_unbond.wasm` inner tx. Throws if the bytes are not exactly an Unbond. */
+export const decodeUnbond = (data: Uint8Array): UnbondData => decodeStakeData(data, 'Unbond');
+
+/**
+ * Decode the data of a `tx_bond.wasm` inner tx: `Bond { validator, amount, source }` has the Unbond layout (source
+ * null = the validator bonds its own tokens). Throws if the bytes are not exactly a Bond. Checked on block 8,351,607:
+ * 13,000 NAM to the validator its changed keys name, as indexer.namada.net reports it.
+ */
+export const decodeBond = (data: Uint8Array): BondData => decodeStakeData(data, 'Bond');
 
 export const txBytesFromBase64 = (b64: string): Uint8Array => base64.decode(b64);
 

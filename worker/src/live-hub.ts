@@ -5,6 +5,8 @@ import { OSMOSIS, NAM, NAMADA } from './config';
 import { normFromWs, normFromTxSearch, osmoAssets, parseOsmosisTx, type OsmoCtx, type OsmoParsed } from './parse/osmosis';
 import { parseNamadaBlock } from './parse/namada';
 import { blockHasUnbond, parseNamadaUnbonds } from './parse/namada-unbond';
+import { blockHasBond, parseNamadaBonds } from './parse/namada-bond';
+import type { PosParse } from './parse/namada-pos';
 import { feePayersOf } from './parse/namada-tx';
 import { blockMetas, blockResults, blockTxs, chainHead, headBound, headSince, namadaStatusAll, HEAD_AGREE_BLOCKS, HEAD_BOUND_BLOCK_MS, HEAD_VOTE_MAX_AGE_MS, RpcBreaker, LIVE_READ, type HeadVote, type ReadOpts, type Rpc } from './sources/namada';
 import type { NamadaBlock } from './parse/namada';
@@ -15,8 +17,19 @@ import { HubQuote, storedQuoteReader } from './live-quote';
 import { configureAlerts, isNamWhale, offeredForAlerts, sendDiscordWhaleAlert, sendsAlerts } from './sources/discord';
 import { fetchJson, FETCH_TEXT_MAX_BYTES, ReadBudgetError, ResponseTooLargeError, type ReadBudget } from './util';
 
-/** Moves found late by the catch-up search alert only when they happened within this window. */
+/** Moves found late (by the catch-up search, or by a Namada scan that was behind) alert only when they happened within this window. */
 export const LATE_ALERT_MAX_AGE_MS = 24 * 3600_000;
+/**
+ * How long after a Namada block's own time the live scan may read it and still be keeping up. A block read later was
+ * read by a scan that was behind (an outage of the Worker or of the nodes, or blocks read again), not by the scan's
+ * normal lag: the alarm runs every 6 s and the chain makes a block about every 7 s, so a scan keeping up reads each
+ * block seconds after it, and a node whose newest block is older than this (sources/namada.ts HEAD_MAX_AGE_MS, the
+ * same 5 minutes) is not followed at all. It is also about SCAN_MAX_LAG blocks, the furthest behind the scan alerted
+ * when it still jumped. Such a block's moves are marked found late (meta.via 'late scan'), stored so, and alerted
+ * with the time they happened (owner decision 14, sources/discord.ts buildFlowDiscordBody), as the catch-up
+ * search's are.
+ */
+export const LATE_SCAN_MS = 5 * 60_000;
 
 /** The Osmosis subscriptions: the stream listens to these and the catch-up search repeats them. */
 export const OSMOSIS_QUERIES = [
@@ -58,27 +71,51 @@ export interface OsmosisCursor { height: number; at: number; added?: number; err
  */
 export interface OsmosisResume { top: number; low: number; n: number; last?: string }
 
-/** kv `namada.unbonds.live`: outcome of the live unbond decoder, surfaced by the cron health probe. */
+/**
+ * kv `namada.unbonds.live` and `namada.bonds.live`: outcome of the live unbond and bond decoders (the requests decoded,
+ * the last block whose requests were read, and the last failures), surfaced by the cron health probe.
+ */
 export interface LiveUnbondStatus {
   decoded: number;
   lastHeight?: number;
   lastAt?: number;
   failures: { height: number; at: number; note: string }[];
+  /**
+   * The first block the live scan read with this decoder in place, written once when the row is made (scanNamada,
+   * notePosStarts): the scan reads every block from there in order, so every applied request from this block on is
+   * the decoder's to find, and the history backfill's unbond-gap step ends its range here. A row made before this
+   * was recorded (the unbond decoder's, deployed before 2026-10-23) has none, and is never given one later: a later
+   * block would not be where the decoder started.
+   */
+  firstHeight?: number;
 }
+export type LiveBondStatus = LiveUnbondStatus;
 
-/** kv `namada.scan`: blocks the live scan could not read as blocks (a shape it does not understand, or a gap it had to jump), surfaced by the cron health probe. */
+/** A PoS request the live scan decodes from tx bytes: its kind, its decoder and the kv row of its outcome. */
+interface LivePosRequest { kind: 'unbond' | 'bond'; kv: string; parse: (blk: NamadaBlock, txs: string[], priceUsd: number | null) => PosParse }
+const UNBOND_LIVE: LivePosRequest = { kind: 'unbond', kv: 'namada.unbonds.live', parse: parseNamadaUnbonds };
+const BOND_LIVE: LivePosRequest = { kind: 'bond', kv: 'namada.bonds.live', parse: parseNamadaBonds };
+
+/**
+ * kv `namada.scan`: blocks the live scan could not read as blocks (a shape it does not understand), a cursor it found
+ * above the head, and heads it could not follow, surfaced by the cron health probe.
+ */
 export interface LiveScanStatus {
   failures: { height: number; at: number; note: string }[];
 }
-/** How far behind the head the scan may fall before it jumps ahead (the blocks it jumps over are recorded as not scanned). */
+/**
+ * The most blocks one tick reads on one node's word (no two nodes agree on the head) and in a re-read of blocks read so
+ * while the nodes disagreed; and how far below the head the scan restarts from a cursor found above it. On a head two
+ * nodes agree on, a scan behind reads on from its cursor as far as the alarm's deadline lets it, and never jumps.
+ */
 export const SCAN_MAX_LAG = 50;
 /** How often the same kind of head note (no node at the head, nodes that disagree) is recorded in kv `namada.scan`. */
 export const HEAD_NOTE_EVERY_MS = 10 * 60_000;
 /**
- * One deadline for an alarm's reads. The next Namada scan starts only when the alarm ends, and a scan more than
- * SCAN_MAX_LAG blocks behind (about 341 s at 6.8 s a block) jumps the blocks between: no read of the scan or the
- * catch-up search starts or goes on past this, and what they did not reach is left for the next alarm (the scan's
- * cursor) or the next search (the Osmosis cursor is kept). A search after a long outage goes on over several searches.
+ * One deadline for an alarm's reads. The next Namada scan starts only when the alarm ends, and a scan behind the head
+ * reads on from its cursor until this deadline: no read of the scan or the catch-up search starts or goes on past
+ * this, and what they did not reach is left for the next alarm (the scan's cursor) or the next search (the Osmosis
+ * cursor is kept). A scan or a search after a long outage goes on over several alarms.
  */
 export const ALARM_DEADLINE_MS = 150_000;
 /**
@@ -169,6 +206,8 @@ export class LiveHub extends DurableObject<Env> {
   private disputedSince = false;
   /** A re-read of blocks read on one node's word: it goes on to `to`, from these nodes, before the scan may jump again. */
   private reread: { to: number; rpcs: Rpc[] } | null = null;
+  /** Whether this instance has made sure both live decoders' kv rows exist (notePosStarts). */
+  private posStartsNoted = false;
   private lastAgreedSaved = 0;
   private osmoSince: number | null = null;
   private osmoLastMsgAt: number | null = null;
@@ -393,7 +432,7 @@ export class LiveHub extends DurableObject<Env> {
     }
   }
 
-  /** A block the scan could not read as a block, or a gap it jumped: recorded for the health view (kv `namada.scan`). */
+  /** A block the scan could not read as a block, or a head or a cursor it could not follow: recorded for the health view (kv `namada.scan`). */
   private async noteScanFailure(height: number, note: string) {
     const status = (await kvGetJson<LiveScanStatus>(this.env.DB, 'namada.scan').catch(() => null)) ?? { failures: [] };
     status.failures = [...status.failures, { height, at: Date.now(), note: note.slice(0, 300) }].slice(-20);
@@ -403,7 +442,7 @@ export class LiveHub extends DurableObject<Env> {
   /**
    * A head the scan cannot follow, or nodes that disagree on it, recorded as noteScanFailure records a block: the
    * same kind at most every HEAD_NOTE_EVERY_MS, so a node down for an hour leaves a few notes, not one every tick
-   * pushing the notes of skipped blocks out of the list.
+   * pushing the notes of unreadable blocks out of the list.
    */
   private async noteHead(height: number, kind: string, note: string) {
     const now = Date.now();
@@ -525,17 +564,17 @@ export class LiveHub extends DurableObject<Env> {
   }
 
   /**
-   * One pass over the Namada blocks since the cursor. A block whose time, events or unbonds' tx bytes cannot be
+   * One pass over the Namada blocks since the cursor. A block whose time, events or PoS requests' tx bytes cannot be
    * fetched this tick, or whose rows cannot be written, is left for the next tick: the cursor never passes it. A block
    * this parser cannot read as a block (a shape it does not know) is recorded as not scanned (kv `namada.scan`), since
-   * a retry would only stall the scan; so is a gap the scan jumps when it has fallen more than SCAN_MAX_LAG blocks
-   * behind, and a cursor found above the head, which the scan moves back below it. Only a head two nodes agree on
-   * (chainHead `byNodes`) does either: otherwise the scan goes on at most SCAN_MAX_LAG blocks a tick from its cursor,
-   * never past where the chain can have gone since the last agreed head (headBound), and a cursor above the head
-   * waits.
-   * Alerts go out after the cursor is written, so a slow webhook can hold up alerts, never the scan. `signal`: the
-   * alarm's deadline (ALARM_DEADLINE_MS); the blocks after it wait for the next alarm, as a block that cannot be
-   * fetched does.
+   * a retry would only stall the scan. The scan never jumps blocks: behind on a head two nodes agree on (chainHead
+   * `byNodes`), it reads on from its cursor until the alarm's deadline, and on any other head at most SCAN_MAX_LAG
+   * blocks a tick, never past where the chain can have gone since the last agreed head (headBound). A cursor found
+   * above the head is moved back below it, and said so, only on a head two nodes agree on; otherwise it waits.
+   * Alerts go out after the cursor is written, so a slow webhook can hold up alerts, never the scan. A move in a block
+   * read more than LATE_SCAN_MS after its time (a scan reading on after an outage) is marked found late (meta.via
+   * 'late scan') and alerted so; one older than LATE_ALERT_MAX_AGE_MS is stored and not alerted. `signal`: the alarm's
+   * deadline (ALARM_DEADLINE_MS); the blocks after it wait for the next alarm, as a block that cannot be fetched does.
    */
   private async scanNamada(signal?: AbortSignal) {
     // Every node's status side by side: the scan follows only nodes whose answer shows they are at this chain's head
@@ -579,7 +618,7 @@ export class LiveHub extends DurableObject<Env> {
     let lastScanned = cursor || head - 1;
     // A cursor above the head of every node followed was written from blocks this chain does not have (a node that
     // answered for another chain or with a height it had not reached). Left there, it would stop the scan until the
-    // chain passed it: the scan restarts SCAN_MAX_LAG blocks below the head, as after a jump, and says so. The blocks
+    // chain passed it: the scan restarts SCAN_MAX_LAG blocks below the head and says so. The blocks
     // it reads again are written as before (a link is counted only with a flow not stored yet, db.ts stmt.linkOnce).
     // Only a head two nodes agree on moves the cursor back (one node and the indexer can both be behind by as much: a
     // node stuck behind and an indexer lagging as far), and chainHead follows no single node far below it.
@@ -612,31 +651,35 @@ export class LiveHub extends DurableObject<Env> {
       lastScanned = head - SCAN_MAX_LAG;
       await kvSet(this.env.DB, 'namada.cursor', String(lastScanned));
     }
-    // The last block this tick reads: the head, or on a head two nodes do not agree on SCAN_MAX_LAG blocks on from the
-    // cursor, so one node's word (with or without the indexer's) never makes the scan skip blocks. A re-read goes on
-    // SCAN_MAX_LAG a tick from its own nodes and jumps none of them.
+    // The last block this tick reads: on a head two nodes agree on, the head, however far behind the cursor is: every
+    // block is read in order, as many as the alarm's deadline allows, and the next tick goes on from where this one
+    // stopped (a jump would lose every flow of the blocks jumped). On a head two nodes do not agree on, SCAN_MAX_LAG
+    // blocks on from the cursor, so one node's word (with or without the indexer's) never takes the scan far. A re-read
+    // goes on SCAN_MAX_LAG a tick from its own nodes.
     let upTo = head;
     if (this.reread) {
       read.rpcs = this.reread.rpcs;
       upTo = Math.min(head, this.reread.to, lastScanned + SCAN_MAX_LAG);
-    } else if (lastScanned < head - SCAN_MAX_LAG) {
-      if (at.byNodes) {
-        await this.noteScanFailure(lastScanned + 1, `blocks ${lastScanned + 1} to ${head - SCAN_MAX_LAG} not scanned: the scan had fallen more than ${SCAN_MAX_LAG} blocks behind`);
-        lastScanned = head - SCAN_MAX_LAG;
-      } else upTo = lastScanned + SCAN_MAX_LAG;
-    }
+    } else if (!at.byNodes) upTo = Math.min(head, lastScanned + SCAN_MAX_LAG);
     if (upTo <= lastScanned) return;
 
-    // Real block times (max 20 per call). A block whose time cannot be fetched is not processed this tick
-    // (the cursor stays below it and the next alarm retries): rows never carry an import-time timestamp.
-    const times = new Map<number, number>();
-    for (let lo = lastScanned + 1; lo <= upTo; lo += 20) {
-      try { for (const m of await blockMetas(lo, Math.min(upTo, lo + 19), read)) times.set(m.height, m.ts); } catch {}
+    // The first block each live decoder reads, recorded once in its kv row before the scan reads it.
+    if (!this.posStartsNoted) {
+      try { await this.notePosStarts(lastScanned + 1); } catch (e) { console.error('live decoders\' first block not recorded, asked again next tick:', e); }
     }
+    // Real block times (max 20 per call), read as the scan reaches them, so a scan far behind asks only for the
+    // blocks it gets to. A block whose time cannot be fetched is not processed this tick (the cursor stays below it
+    // and the next alarm retries): rows never carry an import-time timestamp.
+    const times = new Map<number, number>();
+    let metasTo = lastScanned; // the last block a window of metas was asked for
     let done = lastScanned;
     const toAlert: Flow[] = [];
     for (let h = lastScanned + 1; h <= upTo; h++) {
       if (signal?.aborted) break;
+      if (!times.has(h) && h > metasTo) {
+        metasTo = Math.min(upTo, h + 19);
+        try { for (const m of await blockMetas(h, metasTo, read)) times.set(m.height, m.ts); } catch {}
+      }
       if (!times.has(h)) {
         try { for (const m of await blockMetas(h, h, read)) times.set(m.height, m.ts); } catch {}
         if (!times.has(h)) {
@@ -665,6 +708,9 @@ export class LiveHub extends DurableObject<Env> {
       let retryBlock = false;
       try {
         if (blk.events && blk.events.length > 0) {
+          // The block's tx bytes, read once for whichever reading below needs them (a read that fails is asked again).
+          let txs: string[] | null = null;
+          const txsOf = async () => (txs ??= await blockTxs(h, read));
           let parsed = parseNamadaBlock(blk, priceUsd);
           // The shielded pool's fee is tied to the account that paid gas only when the wrapper names it (no event
           // does): the block's tx bytes are fetched only for a block whose pool fee the events alone had to read.
@@ -673,17 +719,18 @@ export class LiveHub extends DurableObject<Env> {
           // of it written yet, waits for the next alarm and is read whole then.
           if (parsed.feePayerWanted.length) {
             try {
-              parsed = parseNamadaBlock(blk, priceUsd, feePayersOf(await blockTxs(h, read)));
+              parsed = parseNamadaBlock(blk, priceUsd, feePayersOf(await txsOf()));
             } catch (e) {
               if (signal?.aborted) retryBlock = true;
               else console.error(`Namada block ${h}: tx bytes unavailable, the shielded pool's fee read from the events alone:`, e);
             }
           }
-          // PoS unbond requests move no tokens: decode them from the block's tx bytes (only when a
-          // tx/applied result touched an unbond key, so most blocks cost no extra RPC call).
-          if (!retryBlock && blockHasUnbond(blk)) {
+          // PoS unbond and bond requests move no tokens with an event: decode them from the block's tx bytes (only when
+          // a tx/applied result wrote an unbond or a bond key, so most blocks cost no extra RPC call).
+          for (const req of [blockHasUnbond(blk) && UNBOND_LIVE, blockHasBond(blk) && BOND_LIVE]) {
+            if (!req || retryBlock) continue;
             try {
-              parsed.flows.push(...(await this.liveUnbonds(blk, read, priceUsd)));
+              parsed.flows.push(...(await this.livePosRequests(req, blk, txsOf, read, priceUsd)));
             } catch (e) {
               // Nothing of this block has been written yet: leave the cursor below it and retry next tick.
               console.error(`Namada block ${h}: tx bytes unavailable, retrying next tick:`, e);
@@ -692,6 +739,8 @@ export class LiveHub extends DurableObject<Env> {
           }
           if (!retryBlock && (parsed.flows.length > 0 || parsed.balances.length > 0)) {
             const now = Date.now();
+            // A block read well after its time (the scan was behind): its moves are found late, and say so.
+            if (now - blk.ts > LATE_SCAN_MS) for (const f of parsed.flows) f.meta = { ...(f.meta ?? {}), via: 'late scan' };
             // Each link right before its own flow (db.ts stmt.linkOnce: counted only while that flow is not stored),
             // the pairs first, so runBatch's batches of 80 never part a link from its flow: a block read again (a
             // cursor moved back) or written again after a failed batch counts each link once.
@@ -727,24 +776,33 @@ export class LiveHub extends DurableObject<Env> {
     if (done > lastScanned) await kvSet(this.env.DB, 'namada.cursor', String(done));
     // What the scan read while the head was agreed on (lastAgreed.read): blocks up to it are not read again.
     if (at.agreed && this.lastAgreed) this.lastAgreed.read = done;
-    if (toAlert.length) await this.alertFlows(toAlert, Number(this.env.WHALE_NAMADA_NAM || 10000), 10).catch((e) => console.error('Namada alerts:', e));
+    // As the catch-up search's moves found late (owner decision 14): a move the scan read late carries meta.via 'late
+    // scan', so its alert says it was found late and when it happened; one older than LATE_ALERT_MAX_AGE_MS (blocks
+    // read on after a long outage) is stored and shown, never alerted, so the channels are not flooded with old news.
+    const recent = toAlert.filter((f) => Date.now() - f.ts <= LATE_ALERT_MAX_AGE_MS);
+    if (recent.length) await this.alertFlows(recent, Number(this.env.WHALE_NAMADA_NAM || 10000), 10).catch((e) => console.error('Namada alerts:', e));
   }
 
   /**
-   * Unbond flows for a block whose tx/applied results touched a PoS unbond key. Fetches the block's tx bytes and
-   * decodes them; the outcome (decoded / skipped / undecoded / fetch failure) is kept in kv `namada.unbonds.live`
-   * so the cron health view can show it. A failure throws so the block is logged, never silently half-written.
+   * Unbond or bond flows for a block whose tx/applied results wrote a PoS unbond or bond key. Decodes the block's tx
+   * bytes (`txsOf`, read once a block); the outcome (decoded / undecoded / fetch failure) is kept in the request's kv
+   * row (`namada.unbonds.live`, `namada.bonds.live`) so the cron health view can show it. A failure throws so the
+   * block is logged and held, never silently half-written.
    */
-  private async liveUnbonds(blk: NamadaBlock, read: ReadOpts, priceUsd: number | null) {
-    const status = (await kvGetJson<LiveUnbondStatus>(this.env.DB, 'namada.unbonds.live')) ?? { decoded: 0, failures: [] };
+  private async livePosRequests(req: LivePosRequest, blk: NamadaBlock, txsOf: () => Promise<string[]>, read: ReadOpts, priceUsd: number | null) {
+    const stored = await kvGet(this.env.DB, req.kv);
+    let status: LiveUnbondStatus | null = null;
+    try { status = stored ? (JSON.parse(stored) as LiveUnbondStatus) : null; } catch {}
+    // No row yet (notePosStarts could not write it): this block is the first the decoder reads. A row that cannot be
+    // read was made earlier, so its first block is not known and none is recorded.
+    status ??= { decoded: 0, failures: [], ...(stored == null ? { firstHeight: blk.height } : {}) };
     try {
-      const txs = await blockTxs(blk.height, read);
-      const p = parseNamadaUnbonds(blk, txs, priceUsd);
+      const p = req.parse(blk, await txsOf(), priceUsd);
       status.decoded += p.flows.length;
       status.lastHeight = blk.height;
       status.lastAt = Date.now();
       if (p.undecoded.length) {
-        for (const u of p.undecoded) console.error(`Namada block ${blk.height}: unbond ${u.innerHash} not decoded: ${u.reason}`);
+        for (const u of p.undecoded) console.error(`Namada block ${blk.height}: ${req.kind} ${u.innerHash} not decoded: ${u.reason}`);
         status.failures.push({ height: blk.height, at: Date.now(), note: p.undecoded.map((u) => `${u.innerHash.slice(0, 8)}: ${u.reason}`).join(' | ').slice(0, 300) });
       }
       return p.flows;
@@ -754,8 +812,22 @@ export class LiveHub extends DurableObject<Env> {
       throw e;
     } finally {
       status.failures = status.failures.slice(-20);
-      await kvSet(this.env.DB, 'namada.unbonds.live', status).catch(() => {});
+      await kvSet(this.env.DB, req.kv, status).catch(() => {});
     }
+  }
+
+  /**
+   * Makes each live decoder's kv row (`namada.unbonds.live`, `namada.bonds.live`) that does not exist yet, with
+   * `firstHeight` the block the scan reads next: the first block that decoder reads, since the scan never jumps. A row
+   * that exists is left as it is. Once both rows are known to exist, this instance does not ask again.
+   */
+  private async notePosStarts(height: number) {
+    for (const req of [UNBOND_LIVE, BOND_LIVE]) {
+      if ((await kvGet(this.env.DB, req.kv)) != null) continue;
+      const row: LiveUnbondStatus = { decoded: 0, failures: [], firstHeight: height };
+      await kvSet(this.env.DB, req.kv, row);
+    }
+    this.posStartsNoted = true;
   }
 
   /**

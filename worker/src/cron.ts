@@ -15,7 +15,7 @@ import { NOT_LEGACY_TWIN } from './flows-query';
 import { unbondAddresses, fetchUnbonds, buildUnbondTermStructure, cachedChainParams, UNLOCKS_MIN_NAM, UNBOND_WITHDRAW_STALE_MS, type UnbondWithdrawCache } from './analytics';
 import { chainParams, indexState, NAMADA_CURSOR_MAX_LAG, NAMADA_CURSOR_STALE_MS, OSMOSIS_LIVE_STALE_MS, OSMOSIS_SWEEP_STALE_MS, timedOutSends, ibcRowOf, safeParseJson } from './analytics';
 import { INDEXER_IBC_STATUS, innerTxOfRow, reconcileStuckPackets, stuckTotalNam, type StuckCandidate, type StuckList } from './ibc-stuck';
-import type { LiveUnbondStatus, LiveScanStatus } from './live-hub';
+import type { LiveBondStatus, LiveUnbondStatus, LiveScanStatus } from './live-hub';
 import type { AlertsSkipped } from './sources/discord';
 import {
   INTERNAL_ADDRS, BALANCE_LISTING_SRC, BOND_LISTING_SRC, SPAN_EXTEND_MS, HAS_READING, listingTimes, readHolderFigures, refreshHolderFigures, figuresDue,
@@ -1623,7 +1623,20 @@ export async function runCron(env: Env) {
       });
     }
 
-    // Live scan (LiveHub alarm): blocks it could not read as blocks or jumped over, recorded by noteScanFailure()
+    // Live bond decoder (LiveHub alarm): last outcome recorded in kv by livePosRequests()
+    const bnd = await kvGetJson<LiveBondStatus>(env.DB, 'namada.bonds.live');
+    if (bnd) {
+      const lastFail = bnd.failures[bnd.failures.length - 1];
+      const failedRecently = !!lastFail && now - lastFail.at < 24 * 3600000;
+      health.push({
+        name: 'Namada RPC (live bond decode)', ok: !failedRecently, at: bnd.lastAt ?? lastFail?.at ?? now,
+        note: failedRecently
+          ? `block ${lastFail.height}: ${lastFail.note}`.slice(0, 160)
+          : `${bnd.decoded} bond request(s) decoded${bnd.lastHeight ? `, last block with a bond key read: ${bnd.lastHeight}` : ''}`,
+      });
+    }
+
+    // Live scan (LiveHub alarm): blocks it could not read as blocks, and heads or cursors it could not follow, recorded by noteScanFailure()
     const scan = await kvGetJson<LiveScanStatus>(env.DB, 'namada.scan');
     if (scan?.failures.length) {
       const last = scan.failures[scan.failures.length - 1];
