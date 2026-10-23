@@ -49,7 +49,7 @@ async function tx(hash: string): Promise<any> {
 
 const since = Date.now() - days * 86_400_000;
 const rows = d1<{ id: string; ts: number; kind: string; tx_hash: string; amount_num: number; meta: string | null; settle: string | null }>(
-  `SELECT id, ts, kind, tx_hash, amount_num, meta, json_extract(meta, '$.settle') AS settle FROM flows WHERE chain = 'osmosis' AND kind IN ('buy','sell') AND ts >= ${since} AND json_extract(meta, '$.settle') IS ${recheck ? 'NOT ' : ''}NULL${unknownOnly ? " AND json_extract(meta, '$.settle.unknown') = 1" : ''} ORDER BY ts DESC`,
+  `SELECT id, ts, kind, tx_hash, amount_num, meta, json_extract(meta, '$.settle') AS settle FROM flows WHERE chain = 'osmosis' AND kind IN ('buy','sell') AND ts >= ${since} AND json_extract(meta, '$.settle') IS ${recheck ? 'NOT ' : ''}NULL${unknownOnly ? " AND json_extract(meta, '$.settle.unknown') IS NOT NULL" : ''} ORDER BY ts DESC`,
 );
 const pools = await fetchNamPools();
 const ctx: OsmoCtx = {

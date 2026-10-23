@@ -13,6 +13,15 @@ export const NAM = {
   coingeckoId: 'namada',
 } as const;
 
+/** The Osmosis denoms of the coins besides NAM the parser names and the cron quotes, by symbol. */
+const OSMO_COIN = {
+  OSMO: 'uosmo',
+  ATOM: 'ibc/27394FB092D2ECCD56123C74F36E4C1F926001CEADA9CA97EA622B25F41E5EB2',
+  TIA: 'ibc/D79E7D83AB399BFFF93433E54FAA480C191248FC556924A2A8351AE2638B3877',
+  ETH: 'factory/osmo1k6c8jln7ejuqwtqmay3yvzrg3kueaczl96pk067ldg8u835w0yhsw27twm/alloyed/allETH',
+  KYVE: 'ibc/613BF0BF2F2146AE9941E923725745E931676B2C14E9768CD609FA0849B2AE13',
+} as const;
+
 export const OSMOSIS = {
   chainId: 'osmosis-1',
   /** Keplr infra; the key is appended at runtime from the KEPLR_KEY secret */
@@ -45,22 +54,28 @@ export const OSMOSIS = {
   takerFeeCollector: 'osmo1r9jc2234fljy93z80cevqjt3nmjycec8aj4cc6',
   /**
    * The pools a coin other than NAM may be priced in, against Noble USDC: pool id to that coin's denom. A trade paid in
-   * OSMO is valued at its own transaction's OSMO/USDC swap through one of these (pool 1464, OSMO/USDC). Any other pool
-   * is anyone's and could be given any rate.
+   * one of these coins is valued at its own transaction's swap of that coin against USDC through one of these pools
+   * (worker/src/parse/osmosis.ts settleFor: the trader's own hops first, each counted for its size, a hop under
+   * RATE_MIN_BASE a side left out). The rate is the trader's own hop, whatever the pool's depth: it is what that trader
+   * converted at, and a thin pool's worse rate is the worse price that trade settled at. Any pool not listed here is
+   * anyone's and sets no rate; the pools below were read from the trades' own transactions on 2026-10-23 (each coin's
+   * USDC pool as the router chose it, with its liquidity in the Osmosis data API summary that day).
    */
-  ratePools: { '1464': 'uosmo' } as Readonly<Record<string, string>>,
+  ratePools: {
+    '1464': OSMO_COIN.OSMO, // OSMO/USDC, $13,934: the pool ProtoRev's backruns go through, a hop after the trader's own
+    '1221': OSMO_COIN.OSMO, // OSMO/USDC, $2,101: the router's choice for the OSMO leg of a NAM trade paid in OSMO
+    '1263': OSMO_COIN.OSMO, // OSMO/USDC, $3,164: the router's other choice for that leg
+    '1251': OSMO_COIN.ATOM, // ATOM/USDC, $119,864: 60 of the 64 ATOM-paid trades stored by 2026-10-23 hopped through it
+    '1247': OSMO_COIN.TIA, // TIA/USDC, $13,233
+    '1652': OSMO_COIN.KYVE, // KYVE/USDC, $6,874
+    '1948': OSMO_COIN.ETH, // allETH/USDC, $43,274
+  } as Readonly<Record<string, string>>,
   /**
    * The coins besides NAM the cron stores an Osmosis quote of each minute (shared/settle.ts QUOTE_KEYS), so a trade paid
    * in one of them has a settle price at its minute: OSMO, and the coins NAM trades were most often paid in (ATOM, TIA,
    * ETH, KYVE: about 700,000 NAM of trades between 11 Aug and 21 Oct 2026).
    */
-  quotedCoins: {
-    OSMO: 'uosmo',
-    ATOM: 'ibc/27394FB092D2ECCD56123C74F36E4C1F926001CEADA9CA97EA622B25F41E5EB2',
-    TIA: 'ibc/D79E7D83AB399BFFF93433E54FAA480C191248FC556924A2A8351AE2638B3877',
-    ETH: 'factory/osmo1k6c8jln7ejuqwtqmay3yvzrg3kueaczl96pk067ldg8u835w0yhsw27twm/alloyed/allETH',
-    KYVE: 'ibc/613BF0BF2F2146AE9941E923725745E931676B2C14E9768CD609FA0849B2AE13',
-  } as Readonly<Record<string, string>>,
+  quotedCoins: OSMO_COIN as Readonly<Record<string, string>>,
   /** Osmosis's alloyed USDT, 1:1 with the USDTs it holds */
   allUsdt: 'factory/osmo1em6xs47hd82806f5cxgyufguxrrc7l0aqx7nzzptjuqgswczk8csavdxek/alloyed/allUSDT',
   /** Noble USDC on Osmosis */

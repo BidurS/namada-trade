@@ -344,12 +344,16 @@ export function parseOsmosisTx(tx: NormTx, ctx: OsmoCtx): OsmoParsed {
     const namNet = net.get(NAM.osmoDenom) ?? 0n;
     if (namNet === 0n) return null;
     const s: SettleMeta = { nam: namNet < 0n ? -toNam(-namNet) : toNam(namNet), coins: {} };
+    // A coin the asset map does not know leaves the trade without a settle price; its denom is kept so a repair can
+    // find the trades of that coin in the stored rows once it is named.
+    const unknown: string[] = [];
     for (const [denom, v] of net) {
       if (denom === NAM.osmoDenom || v === 0n) continue;
       const a = assetOf(denom);
-      if (!a) { s.unknown = true; continue; }
+      if (!a) { unknown.push(denom); continue; }
       s.coins[a.symbol] = (s.coins[a.symbol] ?? 0) + Number(v) / 10 ** a.decimals;
     }
+    if (unknown.length) s.unknown = unknown.sort();
     // The trader's other side moved through another account (a router's or an entry point's: Skip's IBC'd-in coin, a
     // bot's funding): nothing of theirs to settle against.
     if (!Object.keys(s.coins).length && !s.unknown) return null;

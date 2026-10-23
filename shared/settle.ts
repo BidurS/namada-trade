@@ -16,8 +16,12 @@ export interface SettleMeta {
    * price (OSMOSIS.ratePools): the rate the trade itself converted at. The trader's own hop first, else any.
    */
   rates?: Record<string, number>;
-  /** A coin the asset map does not know changed too: the trade has no USD settle price. */
-  unknown?: true;
+  /**
+   * A coin the asset map does not know changed too: the trade has no USD settle price. The denoms of those coins, so a
+   * repair can find them without reading the transaction again; true in a record written before 2026-10-23, which
+   * dropped them.
+   */
+  unknown?: true | string[];
 }
 
 /**
