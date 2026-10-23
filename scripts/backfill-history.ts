@@ -8,11 +8,14 @@
  *   node --experimental-strip-types scripts/backfill-history.ts masp        # 4. MASP NAM balance read off the chain (post-balances) + corrective flows
  *
  * Every row written here records where its timestamp and price came from (meta.tsSource / meta.priceSource),
- * so the UI can tell exact values from estimates.
+ * so the UI can tell exact values from estimates. A block time or a block's events count as exact only when two
+ * nodes give the same answer (chain-agree.ts); a MASP row records which nodes they were (meta.blockBy, meta.tsBy).
  */
 import { execFileSync } from 'node:child_process';
 import { existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync, appendFileSync } from 'node:fs';
 import { join } from 'node:path';
+import { AGREE, agreed, agreedBlock, metaTimes, type TokenEvent } from './chain-agree.ts';
+import { NAMADA, OSMOSIS } from '../worker/src/config.ts';
 
 const OUT = join(import.meta.dirname, 'out', 'history');
 mkdirSync(OUT, { recursive: true });
@@ -25,7 +28,7 @@ const OSMO_BACKFILL_TS = 1792036810093;
 const NAM_TOKEN = 'tnam1q9gr66cvu4hrzm0sd5kmlnjje82gs3xlfg3v6nu7';
 const MASP = 'tnam1pcqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqzmefah';
 const INDEXER = 'https://indexer.namada.net';
-const NAMADA_RPCS = ['https://rpc-namada.5elementsnodes.com', 'https://rpc.papadritta.com'];
+const NAMADA_RPCS = NAMADA.rpcs.map((r) => r.url);
 const OSMO_RPCS = ['https://rpc-osmosis.ecostake.com', 'https://osmosis-rpc.polkachu.com', 'https://osmosis-rpc.publicnode.com'];
 
 // ------------------------------------------------------------------ helpers
@@ -73,8 +76,11 @@ function writeChunks(prefix: string, lines: string[], per = 4000) {
   log(`${prefix}: ${lines.length} statements in ${n} file(s)`);
 }
 
-/** Block times for heights via /blockchain (20 metas per call), trying each RPC in turn. */
-async function blockTimes(rpcs: string[], heights: number[], conc = 4): Promise<Map<number, number>> {
+/**
+ * Block times for heights via /blockchain (20 metas per call). A window's times are kept only when two of the RPCs give
+ * the same checked metas of chain `chainId`; `by` records which RPCs they were. A height no two agree on has no time.
+ */
+async function blockTimes(rpcs: string[], heights: number[], chainId: string, conc = 4, by?: Map<number, string[]>): Promise<Map<number, number>> {
   const want = [...new Set(heights)].sort((a, b) => a - b);
   const windows: [number, number][] = [];
   for (let i = 0; i < want.length; ) {
@@ -87,13 +93,8 @@ async function blockTimes(rpcs: string[], heights: number[], conc = 4): Promise<
   const out = new Map<number, number>();
   let done = 0;
   await pool(windows, conc, async ([lo, hi]) => {
-    for (const rpc of rpcs) {
-      try {
-        const r = await getJson(`${rpc}/blockchain?minHeight=${lo}&maxHeight=${hi}`, 3);
-        for (const m of r.result.block_metas) out.set(Number(m.header.height), Date.parse(m.header.time));
-        break;
-      } catch {}
-    }
+    const a = await agreed(rpcs, async (rpc) => metaTimes(await getJson(`${rpc}/blockchain?minHeight=${lo}&maxHeight=${hi}`, 3), lo, hi, chainId));
+    if (a) for (const [h, t] of a.value) { out.set(h, t); by?.set(h, a.by); }
     if (++done % 200 === 0) log(`  block times ${done}/${windows.length}`);
   });
   return out;
@@ -117,14 +118,15 @@ async function osmoTs() {
                                        UNION SELECT DISTINCT height FROM moves WHERE chain='osmosis' AND ts=${OSMO_BACKFILL_TS}`);
   const heights = rows.map((r) => r.height);
   log(`osmo-ts: ${heights.length} heights carry the import timestamp`);
-  const exact = await blockTimes(OSMO_RPCS, heights);
+  const exact = await blockTimes(OSMO_RPCS, heights, OSMOSIS.chainId);
   const missing = heights.filter((h) => !exact.has(h));
-  log(`osmo-ts: ${exact.size} exact block times, ${missing.length} below public-node retention`);
+  log(`osmo-ts: ${exact.size} exact block times, ${missing.length} below public-node retention or without two nodes agreeing`);
 
   // Extrapolate pruned heights from the earliest 200 exact anchors (Osmosis block time is steady over weeks).
   const anchors = [...exact.entries()].sort((a, b) => a[0] - b[0]);
   const fit = anchors.slice(0, 200);
   const n = fit.length;
+  if (missing.length && n < 2) throw new Error(`osmo-ts: ${n} agreed block time(s), too few to extrapolate ${missing.length} heights from; rerun`);
   const mh = fit.reduce((s, [h]) => s + h, 0) / n, mt = fit.reduce((s, [, t]) => s + t, 0) / n;
   const slope = fit.reduce((s, [h, t]) => s + (h - mh) * (t - mt), 0) / fit.reduce((s, [h]) => s + (h - mh) ** 2, 0);
   log(`osmo-ts: fitted block time ${(slope / 1000).toFixed(3)}s from ${n} anchors`);
@@ -286,13 +288,13 @@ async function namada() {
   // Timestamps: anchors every 10k blocks, exact lookups for anything >= 10k NAM.
   const anchorHeights: number[] = [];
   for (let h = 1; h <= cutoff + 10000; h += 10000) anchorHeights.push(h);
-  const anchors = await blockTimes(NAMADA_RPCS, anchorHeights, 6);
+  const anchors = await blockTimes(NAMADA_RPCS, anchorHeights, NAMADA.chainId, 6);
   const interp = interpolator([...anchors.entries()]);
   const big = items.filter((it) => {
     const t = transferOf(it.tx.data);
     return t?.targets.some((g) => g.token === NAM_TOKEN && Number(BigInt(g.amount)) / 1e6 >= 10000);
   });
-  const exact = await blockTimes(NAMADA_RPCS, big.map((b) => b.blockHeight), 6);
+  const exact = await blockTimes(NAMADA_RPCS, big.map((b) => b.blockHeight), NAMADA.chainId, 6);
   log(`namada: ${anchors.size} anchors, ${exact.size} exact times for whale-size txs`);
 
   const lines: string[] = [];
@@ -350,8 +352,8 @@ const IBC_ESCROW = 'tnam1qcqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqvtr7x4';
 /** Public nodes that serve block_results and block metas back to genesis (checked 2026-10-16). */
 const ARCHIVE_RPCS = [...NAMADA_RPCS, 'https://namada-rpc.polkachu.com', 'https://namada-rpc.stakeandrelax.net'];
 const BLOCKS_DIR = P('masp_blocks');
-type TokenEvent = { type: string; attrs: Record<string, string> };
-type MaspBlock = { height: number; rpc: string; nEvents: number; events: TokenEvent[] };
+/** agreedBy: the nodes that gave these events (a block cached before two had to agree has only rpc). */
+type MaspBlock = { height: number; rpc: string; agreedBy?: string[]; nEvents: number; events: TokenEvent[] };
 type Leg = { inner: string; wrapper: string; from: string; to: string; amount: number; descriptor: string };
 type Point = { h: number; post: number | null; in: number; out: number; legs: Leg[] };
 
@@ -390,22 +392,30 @@ async function maspHistory(): Promise<HistItem[]> {
   return [...known.values()];
 }
 
-/** block_results of one height, reduced to its token/masp events; cached. Null when every RPC returns an empty block. */
-async function maspBlock(h: number, rpcs = ARCHIVE_RPCS): Promise<MaspBlock | null> {
+/** A block from which nothing is stored: no MASP NAM transfer, so no balance point and no leg. */
+const noMaspNam = (b: { events: TokenEvent[] }) => { const p = pointOf({ height: 0, rpc: '', nEvents: 0, events: b.events }); return p.post == null && !p.legs.length; };
+/**
+ * A cached block counts as read when two nodes gave its events, or when nothing is stored from it and its height is
+ * not `known` (the indexer or flows say it holds a MASP NAM transfer, so a block without one contradicts them).
+ */
+const settled = (b: MaspBlock, known: boolean) => (b.agreedBy?.length ?? 0) >= AGREE || (!known && noMaspNam(b));
+
+/**
+ * block_results of one height, reduced to its token/masp events; cached. Taken when two RPCs give the same events. One
+ * is enough for a block with no MASP NAM transfer when it is the first answer and the height is not `known`; at a known
+ * height such an answer contradicts the indexer or flows, so two RPCs must give it. A block cached from one RPC's answer
+ * is asked of the others once. Null when every RPC returns an empty block; throws when no two agree.
+ */
+async function maspBlock(h: number, known: boolean, rpcs = ARCHIVE_RPCS): Promise<MaspBlock | null> {
   const f = join(BLOCKS_DIR, `${h}.json`);
-  if (existsSync(f)) return JSON.parse(readFileSync(f, 'utf8'));
-  for (let t = 0; t < 2 * rpcs.length; t++) {
-    const rpc = rpcs[t % rpcs.length];
-    try {
-      const r = (await getJson(`${rpc}/block_results?height=${h}`, 1)).result;
-      const evs: any[] = [...(r.end_block_events ?? []), ...(r.finalize_block_events ?? []), ...((r.txs_results ?? []) as any[]).flatMap((x) => x.events ?? [])];
-      if (!evs.length) { if (t >= rpcs.length) return null; continue; }
-      const blk: MaspBlock = { height: h, rpc, nEvents: evs.length, events: evs.filter((e) => /^(token|masp)\//.test(e.type)).map((e) => ({ type: e.type, attrs: Object.fromEntries(e.attributes.map((a: any) => [a.key, a.value])) })) };
-      writeFileSync(f, JSON.stringify(blk));
-      return blk;
-    } catch { await sleep(400 * (t + 1)); }
-  }
-  throw new Error(`block_results ${h} unavailable`);
+  const old: MaspBlock | null = existsSync(f) ? JSON.parse(readFileSync(f, 'utf8')) : null;
+  if (old && settled(old, known)) return old;
+  const held = old ? { value: { nEvents: old.nEvents, events: old.events }, by: [old.rpc] } : undefined;
+  const a = await agreedBlock(h, rpcs, (url) => getJson(url, 2), held, known ? undefined : noMaspNam);
+  if (!a) return null;
+  const blk: MaspBlock = { height: h, rpc: a.by[0], agreedBy: a.by, ...a.value };
+  writeFileSync(f, JSON.stringify(blk));
+  return blk;
 }
 
 /** MASP NAM legs and post-balance of one block. */
@@ -465,15 +475,19 @@ async function masp() {
   }
   log(`masp: ${heights.size} known heights; fetching block_results`);
   // Every block read so far (known heights and blocks found by earlier scans) is part of the ledger.
+  // A block cached from one RPC's answer that holds a MASP NAM transfer, or that lacks one at a known height, joins only
+  // once another RPC gives the same events.
   const blocks = new Map<number, MaspBlock>();
-  for (const f of readdirSync(BLOCKS_DIR)) if (f.endsWith('.json')) { const b = JSON.parse(readFileSync(join(BLOCKS_DIR, f), 'utf8')) as MaspBlock; blocks.set(b.height, b); }
-  log(`masp: ${blocks.size} blocks cached from earlier runs`);
+  const recheck: number[] = [];
+  for (const f of readdirSync(BLOCKS_DIR)) if (f.endsWith('.json')) { const b = JSON.parse(readFileSync(join(BLOCKS_DIR, f), 'utf8')) as MaspBlock; if (settled(b, heights.has(b.height))) blocks.set(b.height, b); else recheck.push(b.height); }
+  log(`masp: ${blocks.size} blocks cached from earlier runs, ${recheck.length} read from one RPC to be asked of another`);
+  const toRead = [...new Set([...heights, ...recheck])].sort((a, b) => a - b);
   let n = 0, missing = 0;
-  await pool([...heights].sort((a, b) => a - b), 8, async (h) => {
-    try { const b = await maspBlock(h); if (b) blocks.set(h, b); else missing++; } catch (e) { missing++; log(`  ${String(e).slice(0, 80)}`); }
-    if (++n % 2000 === 0) log(`  blocks ${n}/${heights.size}`);
+  await pool(toRead, 8, async (h) => {
+    try { const b = await maspBlock(h, heights.has(h)); if (b) blocks.set(h, b); else missing++; } catch (e) { missing++; log(`  ${String(e).slice(0, 80)}`); }
+    if (++n % 2000 === 0) log(`  blocks ${n}/${toRead.length}`);
   });
-  if (missing) log(`masp: ${missing} known heights could not be read from any RPC`);
+  if (missing) log(`masp: ${missing} known heights could not be read from two agreeing RPCs`);
 
   // 2. Ledger + negative residuals -> scan the blocks in between for the outflows we have not seen.
   const scanFile = P('masp_scan.json');
@@ -501,6 +515,7 @@ async function masp() {
     return out;
   };
   let pts = ledger();
+  if (!pts.length) throw new Error(`masp: no block with a MASP NAM balance was read (${missing} known heights not read from two agreeing RPCs); rerun`);
   const all = gaps(pts);
   // Negative residuals are missing outflows: scan until the found legs add up to the residual. Positive residuals are
   // mostly rewards minted at MASP-epoch boundaries (no event), but may hide small outflows too: scan the whole span.
@@ -516,7 +531,7 @@ async function masp() {
       const busy = await busyHeights(lo - 1, hi + 1);
       for (let i = 0; i < busy.length && !explained; i += 8) {
         const chunk = busy.slice(i, i + 8);
-        await pool(chunk, 8, async (h) => { const b = await maspBlock(h); if (b) { const p = pointOf(b); if (p.legs.length) { blocks.set(h, b); found += p.in - p.out; } } });
+        await pool(chunk, 8, async (h) => { const b = await maspBlock(h, heights.has(h)); if (b) { const p = pointOf(b); if (p.legs.length) { blocks.set(h, b); found += p.in - p.out; } } });
         scannedBlocks += chunk.length; looked += chunk.length;
         explained = g.r < 0 && Math.abs(found - g.r) < 0.000001;
         addCovered(lo, explained ? chunk[chunk.length - 1] : hi);
@@ -535,10 +550,17 @@ async function masp() {
   log(`masp: minted into the pool between points ${minted.toFixed(2)} NAM; unexplained outflow ${unexplained.toFixed(2)} NAM in ${remaining.length} gaps (scanned ${scannedBlocks} blocks this run)`);
 
   // 3. Block times for every point (exact), then flows the chain shows and `flows` lacks.
-  const timesFile = P('masp_times.json');
-  const times = new Map<number, number>(existsSync(timesFile) ? JSON.parse(readFileSync(timesFile, 'utf8')) : []);
+  // Times read from one RPC (masp_times.json, before two had to agree) are not reused: [height, time, RPCs] entries.
+  const timesFile = P('masp_times.agreed.json');
+  const timed: [number, number, string[]][] = existsSync(timesFile) ? JSON.parse(readFileSync(timesFile, 'utf8')) : [];
+  const times = new Map<number, number>(timed.map(([h, t]) => [h, t]));
+  const timesBy = new Map<number, string[]>(timed.map(([h, , by]) => [h, by]));
   const need = pts.map((p) => p.h).filter((h) => !times.has(h));
-  if (need.length) { log(`masp: block times for ${need.length} heights`); for (const [h, t] of await blockTimes(ARCHIVE_RPCS, need, 8)) times.set(h, t); writeFileSync(timesFile, JSON.stringify([...times.entries()])); }
+  if (need.length) {
+    log(`masp: block times for ${need.length} heights`);
+    for (const [h, t] of await blockTimes(ARCHIVE_RPCS, need, NAMADA.chainId, 8, timesBy)) times.set(h, t);
+    writeFileSync(timesFile, JSON.stringify([...times.entries()].map(([h, t]) => [h, t, timesBy.get(h) ?? []])));
+  }
   const untimed = pts.filter((p) => !times.has(p.h));
   if (untimed.length) throw new Error(`no block time for ${untimed.length} heights (first ${untimed[0].h}); rerun`);
 
@@ -554,7 +576,7 @@ async function masp() {
       if (have.has(inner)) continue;
       legs.forEach((l, i) => {
         const kind = kindOf(l);
-        const meta = { source: 'namada-rpc-block-results', descriptor: l.descriptor, wrapper: l.wrapper, tsSource: 'block', ...(kind.startsWith('ibc') ? { shielded: true } : {}) };
+        const meta = { source: 'namada-rpc-block-results', descriptor: l.descriptor, wrapper: l.wrapper, tsSource: 'block', blockBy: blocks.get(p.h)!.agreedBy, tsBy: timesBy.get(p.h), ...(kind.startsWith('ibc') ? { shielded: true } : {}) };
         lines.push(`INSERT OR IGNORE INTO flows (id,chain,height,ts,tx_hash,kind,from_addr,to_addr,amount_num,meta) VALUES (${q(`namada:${inner}:c${i}`)},'namada',${p.h},${times.get(p.h)},${q(inner)},${q(kind)},${q(l.from)},${q(l.to)},${l.amount},${q(JSON.stringify(meta))});`);
         added++; if (l.to === MASP) addedIn += l.amount; else addedOut += l.amount;
       });
@@ -578,12 +600,25 @@ async function masp() {
   log(`masp: flows-only reconstruction before the first flow: ${bal.toFixed(0)} NAM as stored, ${balWithChain.toFixed(0)} NAM with the corrective rows (chain says ${pts[0].post!.toFixed(0)} + ${minted.toFixed(0)} minted)`);
 
   // 4. Daily series straight from the chain: the MASP balance after the last MASP transfer of each UTC day.
-  const ok = Math.abs(unexplained) <= cur.value * 0.02;
+  // The ledger must close (unexplained outflow within 2% of the pool) and end where the chain is now (its last balance
+  // within 2% of the live metric): a transfer the ledger lacks, such as one a node left out of a block, leaves no
+  // negative residual when it is an inflow, but it moves the end point.
+  const tol = cur.value * 0.02;
+  const endGap = last.post! - cur.value;
+  const closes = Math.abs(unexplained) <= tol, ends = Math.abs(endGap) <= tol;
+  const ok = closes && ends;
   const report = { method: 'MASP NAM post-balance from token/transfer events in block_results', points: pts.length, firstHeight: pts[0].h, lastHeight: last.h, firstBalance: pts[0].post, lastBalance: last.post, liveBalance: cur.value,
-    minted, unexplained, unexplainedGaps: remaining.length, missingFlows: added, missingIn: addedIn, missingOut: addedOut, twins: twins.length, flowsOnlyReconstruction: balWithChain, written: ok, at: Date.now() };
+    endGap, minted, unexplained, unexplainedGaps: remaining.length, missingFlows: added, missingIn: addedIn, missingOut: addedOut, twins: twins.length, flowsOnlyReconstruction: balWithChain, written: ok, at: Date.now() };
   writeFileSync(P('masp_report.json'), JSON.stringify({ ...report, gaps: remaining.sort((a, b) => a.r - b.r).slice(0, 50) }, null, 1));
+  // The corrective flows come from the same ledger as the series: neither is written when the ledger does not close
+  // or does not end at the live balance.
+  if (!ok) {
+    if (!closes) log(`masp: unexplained outflow ${unexplained.toFixed(0)} NAM exceeds 2% of the pool (${tol.toFixed(0)})`);
+    if (!ends) log(`masp: the last balance read (${last.post!.toFixed(0)} NAM at ${last.h}) is ${endGap.toFixed(0)} NAM off the live metric (${cur.value.toFixed(0)}), more than 2%`);
+    log('masp: daily series and corrective flows NOT written');
+    return;
+  }
   if (added) writeChunks('04_masp_flows', lines);
-  if (!ok) { log(`masp: unexplained outflow ${unexplained.toFixed(0)} NAM exceeds 2% of the pool (${(cur.value * 0.02).toFixed(0)}): daily series NOT written`); return; }
   const daily: string[] = [];
   const firstDay = Math.floor(times.get(pts[0].h)! / 86400000) * 86400000;
   const today = Math.floor(cur.ts / 86400000) * 86400000;
@@ -611,7 +646,7 @@ async function pos() {
     seen.add(it.tx.id); items.push(it);
   }
   const big = items.filter((it) => { try { return Number(BigInt(JSON.parse(it.tx.data).amount || '0')) / 1e6 >= 100000; } catch { return false; } });
-  const exact = await blockTimes(NAMADA_RPCS, big.map((b) => b.blockHeight), 6);
+  const exact = await blockTimes(NAMADA_RPCS, big.map((b) => b.blockHeight), NAMADA.chainId, 6);
   const POS = 'tnam1qgqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqc8j2fp';
   const lines: string[] = [];
   for (const it of items) {
@@ -661,10 +696,10 @@ async function unbondGap() {
 
   const anchorHeights: number[] = [];
   for (let h = from; h <= to + 2000; h += 2000) anchorHeights.push(h);
-  const anchors = await blockTimes(NAMADA_RPCS, anchorHeights, 6);
+  const anchors = await blockTimes(NAMADA_RPCS, anchorHeights, NAMADA.chainId, 6);
   const interp = interpolator([...anchors.entries()]);
   const big = list.filter((it) => { try { return Number(BigInt(JSON.parse(it.tx.data).amount || '0')) / 1e6 >= 100000; } catch { return false; } });
-  const exact = await blockTimes(NAMADA_RPCS, big.map((b) => b.blockHeight), 6);
+  const exact = await blockTimes(NAMADA_RPCS, big.map((b) => b.blockHeight), NAMADA.chainId, 6);
   const POS = 'tnam1qgqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqc8j2fp';
   const lines: string[] = [];
   for (const it of list) {

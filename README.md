@@ -31,7 +31,7 @@ Everything is readable without signing in. Alert rules, the watchlist and the Di
 
 - **Namada Keychain** (desktop extension): ed25519 `signArbitrary`. The Worker checks the key against the address two ways: it derives the implicit address from the key (`sha256(borsh pk)[0..20]` behind a `0x00` discriminant, bech32m `tnam`) and compares with the key the chain has revealed (`indexer.namada.net/api/v1/revealed-public-key`).
 - **Keplr** (osmo1, works inside the Keplr mobile app's browser): ADR-36 `signArbitrary`, secp256k1 over the amino sign doc; address = `bech32("osmo", ripemd160(sha256(pubkey)))`.
-- **Pair a phone**: a signed-in desktop makes a one-time 8-character code (10 min) shown as a QR deep link `/alerts?pair=CODE`; the phone claims it and gets a session for the same address. The phone never holds a key.
+- **Pair a phone**: a signed-in desktop makes a one-time 8-character code (10 min) shown as a QR deep link `/alerts#pair=CODE` (a fragment, which the browser never sends, so the code reaches no request log; an older `?pair=` link still opens the sheet); the phone claims it and gets a session for the same address. The phone never holds a key. The database holds only an HMAC of the code under `SETTINGS_KEY` (`pair:<hmac>`), so a copy of the database names no code; pairing needs `SETTINGS_KEY`, as settings do.
 
 Login is shown by capability (`window.namada` / `window.keplr` present), not by device. Sessions are bearer tokens (30 days) in the `kv` table; nonces are single-use and expire in 5 minutes; the cron sweeps expired rows. Tests: `test/auth.test.ts` (includes a real on-chain key→address vector).
 
@@ -39,7 +39,7 @@ Login is shown by capability (`window.namada` / `window.keplr` present), not by 
 
 Per-user: one switch and threshold per alert rule, watchlist, forum/governance, quiet hours (UTC), Discord channel, signed-in devices (revoke), API keys (year-long bearer tokens, shown once), export, delete-everything.
 
-Everything a user saves is one AES-256-GCM blob under `kv` key `user:<address>`, encrypted with the `SETTINGS_KEY` secret (`wrangler secret put SETTINGS_KEY`, 32 random bytes base64; also in `.dev.vars`). D1 exports contain ciphertext only; the API never returns the webhook URL, only a mask; decryption happens only in the alert dispatcher (`worker/src/sources/discord.ts`) and the `/api/me` handlers. The Privacy page states the limit plainly: whoever can deploy the Worker could change the code. Tests: `test/settings.test.ts`.
+Everything a user saves is one AES-256-GCM blob under `kv` key `user:<address>`, encrypted with the `SETTINGS_KEY` secret: 32 random bytes base64, made straight into the secret (`openssl rand -base64 32 | npx wrangler secret put SETTINGS_KEY`), so the production key is never written to a file. `.dev.vars` holds a development key of its own, never the production one. D1 exports contain ciphertext only, and only while the production key is not beside them: that key opens any copy, including rows a user has since deleted. The API never returns the webhook URL, only a mask; decryption happens only in the alert dispatcher (`worker/src/sources/discord.ts`) and the `/api/me` handlers. The Privacy page states the limit plainly: whoever can deploy the Worker could change the code. Tests: `test/settings.test.ts`.
 
 ## Run
 
@@ -63,9 +63,9 @@ npm run e2e            # Playwright, six viewports: every screen spec plus web/e
 node scripts/shoot.mjs <url> <out.png> <width> <height> [--full] [--light] [--reduced]   # exact-width shot and layout audit
 ```
 
-Local D1 starts empty. To work with real data, export production (`npx wrangler d1 export namada-trade-db --remote --output=backup.sql`) and load its `INSERT` lines into the local sqlite file under `.wrangler/state/v3/d1/`.
+Local D1 starts empty. For real data, the UI against production (above) makes no copy. A local copy takes every table but `kv` (the public tables, so the series, the unbond queue and the balance changes show as in production) and goes into the git-ignored `scripts/out/backup/`: `npx wrangler d1 export namada-trade-db --remote --no-schema --table flows --table moves --table holders --table stakes --table labels --table label_tokens --table address_links --table balance_spans --table metrics --table checks --table listings --table events --table activity_daily --table flow_edges_daily --table cohort_daily --table holder_cohorts_daily --table cohort_taint --table validator_daily --table pool_hourly --table unbond_queue --output=scripts/out/backup/public-$(date +%F).sql`. Load its `INSERT` lines into the local sqlite file under `.wrangler/state/v3/d1/` (a `label_tokens` row that the `labels` triggers already wrote fails as a duplicate of itself, which loses nothing).
 
-Secrets: `.dev.vars` locally (`KEPLR_KEY`, `DISCORD_WEBHOOK_URL`), `wrangler secret put` in production.
+Secrets: `.dev.vars` locally (`KEPLR_KEY`, `DISCORD_WEBHOOK_URL`, a development `SETTINGS_KEY`), `wrangler secret put` in production. Only a Worker whose `SEND_ALERTS` secret is `yes` posts alerts, and only production has it (`wrangler secret put SEND_ALERTS`; `scripts/deploy-check.sh` does not deploy without it). A local run posts none and never reads the users' settings, even on a copy of the production database, which lacks the claims production took after the copy and holds every user's settings as they were then; it logs each post it would have made. Never put `SEND_ALERTS` in `.dev.vars`.
 
 ## Data
 
@@ -79,7 +79,7 @@ Secrets: `.dev.vars` locally (`KEPLR_KEY`, `DISCORD_WEBHOOK_URL`), `wrangler sec
 | `address_links` | osmo1 ⇄ tnam1 pairs that completed a bridge crossing, written from the receiving chain's record only, never from a send |
 | `metrics` | time series: `price.usd` (SQS, 1-min), `price.swap_1h` (executed, hourly median), `supply.*`, `dex.*`, `epoch` |
 | `checks` | cross-source integrity checks |
-| `kv` | cursors, caches, `source.health`, `chain.params`, webhook configs |
+| `kv` | cursors, caches, `source.health`, `chain.params`, users' sealed settings (`user:<address>`), session hashes, pair codes, alert claims |
 
 Sources and their limits (as of 2026-10-16): Osmosis SQS (price, pools, router); Keplr Osmosis RPC/REST (holders, supply, live swaps); Namada RPC × 2 (events from height 7,682,174 = 2026-08-14 onward; ABCI balances only 3,600 blocks back); `indexer.namada.net` (full transfer history, chain parameters, governance); Namada forum. NAM has no CoinGecko/GeckoTerminal listing, so historical price is reconstructed from executed single-pool NAM/USDC swaps.
 
@@ -89,10 +89,12 @@ Sources and their limits (as of 2026-10-16): Osmosis SQS (price, pools, router);
 npm run backfill:history -- osmo-ts   # real block times for imported Osmosis rows (were stamped with import time)
 npm run backfill:history -- price     # hourly executed price; re-values flows priced at import-day spot
 npm run backfill:history -- namada    # pre-2026-08-14 Namada history from indexer.namada.net
-npm run backfill:history -- masp      # daily shielded-pool balance read off chain post-balances; emits corrective MASP flows; series written only if the chain ledger closes within 2%
+npm run backfill:history -- masp      # daily shielded-pool balance read off chain post-balances, and corrective MASP flows; both written only if the chain ledger closes within 2% and its last balance is within 2% of the live one
 npm run backfill:history -- pos       # bond / unbond requests since genesis from the pulled history
 npm run db:apply scripts/out/history/<file>.sql
 ```
+
+A block time or a block's events count as exact only when two nodes give the same answer (`scripts/chain-agree.ts`); the MASP step's rows name those nodes (`meta.blockBy`, `meta.tsBy`), and a block cached from one node's answer is asked of another node once. A block with no MASP NAM transfer, from which nothing is stored, may come from one node, but only as the first answer for its height and only at a height that neither the indexer nor `flows` says holds such a transfer.
 
 ## Proof
 

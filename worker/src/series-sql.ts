@@ -109,12 +109,15 @@ export const COHORT_CATEGORIES = ['backer', 'foundation', 'genesis'] as const;
 
 /**
  * The genesis cohorts: every address labelled from the genesis files, by category, with what it holds now. 162 to
- * 181 ms and 17,184 rows read on production (VC lens); once a day, 3 rows (6 written).
+ * 181 ms and 17,184 rows read on production (VC lens); once a day, 3 rows (6 written). Protocol accounts are left
+ * out, as the size cohorts leave them out: series.noneCohort subtracts these sums from those, so a genesis label on
+ * a protocol account would otherwise move its balance out of 'none' (security review, 2026-10-22).
  */
 export const COHORT_LABELLED_SQL = `SELECT l.category, COUNT(*) addrs, SUM(CASE WHEN sp + st > 0 THEN 1 ELSE 0 END) addrs_with_nam, SUM(sp) spendable, SUM(st) staked FROM (
     SELECT l.category, COALESCE(h.balance_num, 0) sp, ${stakeNum('s.')} st FROM labels l
     LEFT JOIN holders h ON h.chain = 'namada' AND h.address = l.address LEFT JOIN stakes s ON s.address = l.address
-    WHERE l.source = 'genesis' AND l.category IN (${COHORT_CATEGORIES.map((c) => `'${c}'`).join(',')})) l
+    WHERE l.source = 'genesis' AND l.category IN (${COHORT_CATEGORIES.map((c) => `'${c}'`).join(',')})
+      AND l.address NOT IN (${INTERNAL_ADDRS.map((a) => `'${a}'`).join(',')})) l
   GROUP BY l.category`;
 
 /** 'none' (every other Namada holder) is the Namada size lines' totals minus the labelled cohorts' holders (series.noneCohort): no second pass. */

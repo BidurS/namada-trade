@@ -10,3 +10,17 @@ scripts/out/
 
 # Personal data that never goes public (the owner's own trades and their reports)
 private/
+
+# Copies of the production database never go public: any SQL but the numbered migrations and the tracked repair files
+# (a local export goes to scripts/out/backup/), and any SQLite file with its journals. A new SQL file in scripts/ that
+# belongs in the repo gets its own line here.
+*.sql
+!/migrations/[0-9][0-9][0-9][0-9]_*.sql
+!/scripts/rebuild-address-links.sql
+!/scripts/repair-pos-balance.sql
+*.sqlite
+*.sqlite-*
+*.sqlite3
+*.sqlite3-*
+*.db
+*.db-*

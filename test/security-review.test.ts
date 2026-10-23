@@ -9,7 +9,7 @@ import { app, PAGE_MAX, TAGS_PER_AUTHOR, TAGS_PER_DAY, QUOTE_MAX_NAM, MAX_BODY_B
 import { cachedApi, rateLimited, isHeavy, isReplay, cacheKeyUrl, CACHEABLE_API, rewoundAt } from '../worker/src/http';
 import { testD1, insert } from './d1-sqlite';
 import {
-  createSession, issueNonce, login, loginMessage, verifyNamada, namadaImplicitAddress, createPairCode, claimPairCode, sweepAuth, ALERT_CLAIM_KEEP_MS, type Session,
+  createSession, issueNonce, login, loginMessage, verifyNamada, namadaImplicitAddress, createPairCode, claimPairCode, pairKey, sweepAuth, ALERT_CLAIM_KEEP_MS, type Session,
 } from '../worker/src/auth';
 import { assertLoginMessage } from '../shared/login';
 import { chainOf, isRealAddress, HttpError, fetchText } from '../worker/src/util';
@@ -195,7 +195,7 @@ describe('A1/A6: bodies are bounded and malformed ones get the route\'s own answ
     for (const body of ['null', '[]', '{', '']) {
       expect((await app.request('/api/auth/nonce', json(body), env(db))).status, body).toBe(400);
       expect((await app.request('/api/auth/login', json(body), env(db))).status, body).toBe(401);
-      expect((await app.request('/api/auth/pair/claim', json(body), env(db))).status, body).toBe(400);
+      expect((await app.request('/api/auth/pair/claim', json(body), env(db, { SETTINGS_KEY: key }))).status, body).toBe(400);
       expect((await app.request('/api/labels', json(body, auth), env(db))).status, body).toBe(400);
       expect((await app.request('/api/me/settings', { ...json(body, auth), method: 'PUT' }, env(db, { SETTINGS_KEY: key }))).status, body).toBe(200);
     }
@@ -295,16 +295,17 @@ describe('A3/A4/A13: sign-in', () => {
 
 // ------------------------------------------------------------------ A5: pair codes
 describe('A5: pair codes', () => {
+  const PK = base64.encode(new Uint8Array(32).fill(7));
   it('a device shows one live code: a new one retires the old; a code pairs once even when two claims race', async () => {
     const db = testD1();
     const s = (await createSession(db as any, A, 'namada', 'namada')) as Session;
-    const first = await createPairCode(db as any, s);
-    const second = await createPairCode(db as any, s);
+    const first = await createPairCode(db as any, s, PK);
+    const second = await createPairCode(db as any, s, PK);
     expect('code' in first && 'code' in second).toBe(true);
     expect(db.raw.prepare("SELECT COUNT(*) n FROM kv WHERE key LIKE 'pair:%'").get().n).toBe(1);
-    expect((await claimPairCode(db as any, (first as any).code)).error).toMatch(/expired or already used/);
+    expect((await claimPairCode(db as any, (first as any).code, PK)).error).toMatch(/expired or already used/);
     const code = (second as any).code as string;
-    const [x, y] = await Promise.all([claimPairCode(db as any, code), claimPairCode(db as any, code)]);
+    const [x, y] = await Promise.all([claimPairCode(db as any, code, PK), claimPairCode(db as any, code, PK)]);
     expect([x.session, y.session].filter(Boolean)).toHaveLength(1);
   });
   it('a colliding draw never overwrites another device\'s live code', async () => {
@@ -313,12 +314,12 @@ describe('A5: pair codes', () => {
     const sB = (await createSession(db as any, 'osmo1' + 'b'.repeat(38), 'osmosis', 'keplr')) as Session;
     const spy = vi.spyOn(crypto, 'getRandomValues').mockImplementation(((arr: Uint8Array) => { arr.fill(0xab); return arr; }) as any);
     try {
-      const a = await createPairCode(db as any, sA);
+      const a = await createPairCode(db as any, sA, PK);
       expect(a).toEqual({ code: 'ABABABAB', expiresAt: expect.any(Number) });
-      const b = await createPairCode(db as any, sB);
+      const b = await createPairCode(db as any, sB, PK);
       expect('error' in b).toBe(true);
-      expect(JSON.parse(db.raw.prepare("SELECT value FROM kv WHERE key = 'pair:ABABABAB'").get().value).address).toBe(A);
-      const res = await app.request('/api/auth/pair', { method: 'POST', headers: { Authorization: `Bearer ${sB.token}` } }, env(db));
+      expect(JSON.parse(db.raw.prepare('SELECT value FROM kv WHERE key = ?').get(pairKey(PK, 'ABABABAB')).value).address).toBe(A);
+      const res = await app.request('/api/auth/pair', { method: 'POST', headers: { Authorization: `Bearer ${sB.token}` } }, env(db, { SETTINGS_KEY: PK }));
       expect(res.status).toBe(503);
     } finally { spy.mockRestore(); }
   });

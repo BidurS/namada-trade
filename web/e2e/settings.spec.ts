@@ -141,6 +141,19 @@ test.describe('settings, once', () => {
     expect(calls.some((c) => c.method === 'DELETE')).toBe(false);
   });
 
+  // Security review (2026-10-22), alerts off on the server: a Worker without SEND_ALERTS answered the test with
+  // { success: false }, and the page said Discord had refused it, blaming the user's working link. The server now
+  // answers 503 "Alerts are off on this server", and the page says that instead.
+  test('signed in: on a server that sends no alerts, the test message says so and does not blame the link', async ({ page }) => {
+    await signIn(page);
+    await page.route('**/api/me/settings/test', (route) => route.fulfill({ status: 503, json: { error: 'Alerts are off on this server' } }));
+    await gotoRoute(page, '/settings#delivery');
+    await page.locator('#delivery').getByRole('button', { name: 'Send a test message' }).click();
+    await expect(page.locator('#delivery')).toContainText('Alerts are off on this server, so no test message was sent. Your saved link was not tried and is not at fault.');
+    await expect(page.locator('#delivery')).not.toContainText('Discord refused');
+    expect(await page.locator('#delivery').innerText()).not.toMatch(BANNED);
+  });
+
   test('signed in: pairing a phone loads the QR code only when a code is made', async ({ page }) => {
     await signIn(page);
     await page.route('**/api/auth/pair', (route) => route.fulfill({ json: { code: 'a1b2c3d4', expiresAt: Date.now() + 6e5 } }));
@@ -154,6 +167,8 @@ test.describe('settings, once', () => {
     await page.locator('#devices').getByRole('button', { name: 'Make a code' }).click();
     await expect(page.locator('.sh-pairdev__c')).toHaveText('A1B2C3D4');
     await expect(page.locator('.sh-pairdev__qr img')).toBeVisible();
-    await expect(page.locator('.sh-pairdev__link')).toContainText('/alerts?pair=a1b2c3d4');
+    // the code rides in the fragment, which a browser never sends (Security review, 2026-10-22)
+    await expect(page.locator('.sh-pairdev__link')).toContainText('/alerts#pair=a1b2c3d4');
+    await expect(page.locator('.sh-pairdev__link')).not.toContainText('?pair=');
   });
 });

@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
 # Deploy with the checks the security review asks for, in the right order:
+#   0. the SEND_ALERTS secret is set (only a Worker that has it posts alerts),
 #   1. pending D1 migrations first (the worker's SELECTs may need new columns),
 #   2. build and deploy,
 #   3. smoke checks on the live site (docs/security-review.md "Before deploying").
@@ -7,6 +8,19 @@
 set -euo pipefail
 cd "$(dirname "$0")/.."
 H=https://namada.trade
+
+echo "== 0. alerts secret"
+# Only a Worker whose SEND_ALERTS secret is yes posts alerts (worker/src/sources/discord.ts sendsAlerts), so a local
+# run, even on a copy of the production database, posts none. Production must have it, or it would post none either;
+# this is checked before anything remote changes. Names are listed, never values.
+for i in 1 2 3 4 5; do out=$(npx wrangler secret list --format json 2>&1) && ! echo "$out" | grep -q 7403 && break; echo "retrying (Cloudflare 7403)"; sleep 6; done
+echo "$out" | python3 -c "
+import sys,json,re
+t=sys.stdin.read(); m=re.search(r'^\[', t, re.M)
+try: names={s['name'] for s in json.loads(t[m.start():])} if m else None
+except Exception: names=None
+if names is None: print('the secret list could not be read'); sys.exit(1)
+print('SEND_ALERTS secret:', 'set' if 'SEND_ALERTS' in names else 'missing'); sys.exit(0 if 'SEND_ALERTS' in names else 1)" || { echo "FAIL SEND_ALERTS is not known to be set (npx wrangler secret put SEND_ALERTS, value yes): not deploying"; exit 1; }
 
 echo "== 1. migrations"
 for i in 1 2 3 4 5; do out=$(npx wrangler d1 migrations list namada-trade-db --remote 2>&1) && ! echo "$out" | grep -q 7403 && { echo "$out" | tail -4; break; }; echo "retrying (Cloudflare 7403)"; sleep 6; done

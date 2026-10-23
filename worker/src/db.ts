@@ -99,6 +99,18 @@ export const stmt = {
     params: [address, chain, label, category, source, note, at],
   }),
   /**
+   * A label from the genesis file (scripts/genesis-labels.ts). It lands on an address without a label or replaces an
+   * earlier genesis label; it never replaces a protocol, pool, validator or user label, so the comment text of a
+   * third-party file cannot rename an account another source named (security review, 2026-10-22).
+   */
+  genesisLabel: (address: string, label: string, category: string, note: string | null, at: number): Stmt => ({
+    sql: `INSERT INTO labels (address,chain,label,category,source,note,updated_at) VALUES (?,'namada',?,?,'genesis',?,?)
+          ON CONFLICT(address) DO UPDATE SET label=excluded.label, category=excluded.category,
+            note=excluded.note, updated_at=excluded.updated_at
+          WHERE labels.source = 'genesis'`,
+    params: [address, label, category, note, at],
+  }),
+  /**
    * A tag a signed-in wallet writes. It lands on an address without a label, or replaces a tag the same wallet
    * wrote; it never replaces a curated label or another wallet's tag (the route answers 409 when nothing changed).
    * A new tag is admitted in the same statement only while the wallet holds fewer than TAGS_PER_AUTHOR tags and the
@@ -214,7 +226,7 @@ function lit(v: unknown): string {
   if (typeof v === 'boolean') return v ? '1' : '0';
   const s = String(v).replace(/'/g, "''");
   if (!/[\r\n]/.test(s)) return `'${s}'`;
-  // A line break inside a literal would split the generated .sql file (scripts/d1-apply.ts splits on ";\n"), so the
-  // value is written as a concatenation SQLite evaluates to the same bytes: nothing stored is changed.
+  // A line break is written as a concatenation SQLite evaluates to the same bytes, so each generated statement stays on
+  // one line for a reader of the file (scripts/d1-apply.ts reads quoted strings whole, line breaks and all).
   return `(${s.split(/(\r|\n)/).filter(Boolean).map((p) => (p === '\n' ? 'char(10)' : p === '\r' ? 'char(13)' : `'${p}'`)).join(' || ')})`;
 }

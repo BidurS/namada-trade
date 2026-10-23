@@ -7,6 +7,8 @@ export interface Env {
   ASSETS: Fetcher;
   KEPLR_KEY: string;
   DISCORD_WEBHOOK_URL?: string;
+  /** 'yes' in production only (a secret): any other run posts no alert (sources/discord.ts sendsAlerts) */
+  SEND_ALERTS?: string;
   ACCESS_AUD?: string;
   /** 32 bytes base64; encrypts per-user settings at rest */
   SETTINGS_KEY?: string;

@@ -4,8 +4,10 @@
 // (contract in CONTRACT.md); this host returns focus to the control that opened it.
 //
 // URL state: ?addr=<address> opens the Address sheet (and is written while it is open, so
-// the link can be shared); ?pair=<code> opens Sign in on the pair-code step (N5). Both use
-// replaceState, never a history entry.
+// the link can be shared); #pair=<code> opens Sign in on the pair-code step (N5). Both use
+// replaceState, never a history entry. The pairing link carries its code in the fragment, which
+// a browser never sends, so the code stays out of the Worker's request logs; a link printed
+// before that (?pair=<code>) still opens the sheet.
 //
 // `?` opens the Keys sheet (nav-search-plan 3.3) with the same guards as every single key in app/keys.ts: not while
 // typing in a field, not while a dialog or a popover is open, not with Meta, Ctrl or Alt. An address opened here is
@@ -14,7 +16,7 @@ import React, { createContext, lazy, Suspense, useCallback, useContext, useEffec
 import { isTextEntry } from './keys';
 import { PartBoundary } from './LoadFailed';
 import { noteRecent } from './recent';
-import { dropParams, navCount, putParam, useLocation } from './router';
+import { dropParams, navCount, navigate, putParam, useLocation } from './router';
 import type { AddressOrigin } from '../screens/activity/sheetOrigin';
 
 export type SheetRequest =
@@ -94,6 +96,22 @@ const overlayOpen = (): boolean => {
   }
 };
 
+/** The pairing code of a #pair=<code> fragment, or null. */
+function pairFromFragment(hash: string): string | null {
+  if (!hash.startsWith('#')) return null;
+  try {
+    return new URLSearchParams(hash.slice(1)).get('pair') || null;
+  } catch {
+    return null;
+  }
+}
+
+/** Drop a #pair=<code> fragment without a history entry, as dropParams drops ?pair=. */
+function dropPairFragment() {
+  if (!pairFromFragment(location.hash)) return;
+  navigate(`${location.pathname}${location.search}`, { replace: true, scroll: false });
+}
+
 export function OverlaysProvider({ children }: { children: React.ReactNode }) {
   const loc = useLocation();
   const [sheet, setSheet] = useState<SheetRequest | null>(null);
@@ -136,7 +154,10 @@ export function OverlaysProvider({ children }: { children: React.ReactNode }) {
     const cur = sheetRef.current;
     setSheet(null);
     if (cur?.kind === 'address') dropParams('addr');
-    if (cur?.kind === 'signin') dropParams('pair');
+    if (cur?.kind === 'signin') {
+      dropParams('pair');
+      dropPairFragment();
+    }
     restore();
   }, []);
   const paletteRef = useRef<PaletteRequest | null>(null);
@@ -167,18 +188,18 @@ export function OverlaysProvider({ children }: { children: React.ReactNode }) {
     return () => window.removeEventListener('keydown', onKey);
   }, [openSheet]);
 
-  // ?addr= and ?pair= open their sheets (on load, and when Back brings such a URL)
+  // ?addr= and #pair= (or an old ?pair=) open their sheets (on load, and when Back brings such a URL)
   useEffect(() => {
     const q = new URLSearchParams(loc.search);
     const addr = q.get('addr');
-    const pair = q.get('pair');
+    const pair = pairFromFragment(loc.hash) ?? q.get('pair');
     setSheet((cur) => {
       if (addr && !(cur?.kind === 'address' && cur.address === addr)) return { kind: 'address', address: addr };
       if (!addr && cur?.kind === 'address') return null;
       if (pair && cur?.kind !== 'signin') return { kind: 'signin', code: pair };
       return cur;
     });
-  }, [loc.search]);
+  }, [loc.search, loc.hash]);
 
   const value = useMemo<OverlaysValue>(
     () => ({

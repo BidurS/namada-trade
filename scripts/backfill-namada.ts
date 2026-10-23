@@ -2,7 +2,8 @@
  * Full-history Namada backfill (runs locally, resumable).
  *
  *   npx tsx scripts/backfill-namada.ts scan      # 1. scan every block with token/transfer events (genesis -> head)
- *   npx tsx scripts/backfill-namada.ts genesis   # 2. load genesis allocations (+ names/categories as labels)
+ *   npx tsx scripts/backfill-namada.ts genesis   # 2. load genesis allocations (+ names/categories as labels), held to
+ *                                                #    the reviewed copy pinned in scripts/genesis-labels.ts
  *   npx tsx scripts/backfill-namada.ts verify    # 3. live ABCI balance for EVERY known address (double-check)
  *   npx tsx scripts/backfill-namada.ts sql       # 4. emit .sql chunks for D1
  *   npx tsx scripts/backfill-namada.ts all       # 1-4
@@ -16,6 +17,7 @@ import { blockResults, namBalance, namadaStatus, transferHeights } from '../work
 import { inlineSql, stmt } from '../worker/src/db';
 import { INTERNAL_LABELS, NAMADA } from '../worker/src/config';
 import { toNam } from '../worker/src/util';
+import { checkGenesis, fetchGenesis, genesisLabelStmts, type GenesisAllocations } from './genesis-labels';
 
 const OUT = join(import.meta.dirname, 'out', 'namada');
 const SQL = join(import.meta.dirname, 'out', 'sql');
@@ -95,26 +97,8 @@ async function scan() {
 
 // ------------------------------------------------------------------ 2. genesis
 async function genesis() {
-  const url = 'https://raw.githubusercontent.com/namada-net/namada-mainnet-genesis/main/genesis/balances.toml';
-  const txt = await (await fetch(url, { headers: { 'User-Agent': 'NamadaTrade/1.0' } })).text();
-  const out: Record<string, { amount: number; categories: string[]; name: string | null }> = {};
-  let inNam = false;
-  for (const line of txt.split('\n')) {
-    const sec = line.match(/^\s*\[(.+)\]\s*$/);
-    if (sec) { inNam = sec[1].trim() === 'token.NAM'; continue; }
-    if (!inNam) continue;
-    const m = line.match(/^\s*(tnam1[0-9a-z]+)\s*=\s*"([\d.]+)"\s*(#.*)?$/);
-    if (!m) continue;
-    const comment = m[3] ?? '';
-    const cats = [...(comment.match(/categories:\s*\[([^\]]*)\]/)?.[1] ?? '').matchAll(/'([^']+)'/g)].map((x) => x[1]);
-    const name = comment.match(/\(name:\s*([^)]+)\)/)?.[1]?.trim() ?? null;
-    const prev = out[m[1]];
-    out[m[1]] = {
-      amount: (prev?.amount ?? 0) + Number(m[2]),
-      categories: [...new Set([...(prev?.categories ?? []), ...cats])],
-      name: name ?? prev?.name ?? null,
-    };
-  }
+  // Refused unless the file answers 200 and parses to the reviewed copy; a refusal keeps the cache as it was.
+  const out = await fetchGenesis();
   writeJson('genesis.json', out);
   const total = Object.values(out).reduce((s, x) => s + x.amount, 0);
   log(`genesis: ${Object.keys(out).length} NAM allocations, ${total.toLocaleString()} NAM`);
@@ -166,13 +150,15 @@ function* ndjson<T>(f: string): Generator<T> {
 }
 
 function sql() {
+  const now = Date.now();
+  // The cached allocations are checked before any file is replaced, so a cache from an unchecked run writes nothing.
+  const gen: GenesisAllocations = readJson('genesis.json', {});
+  const genesisLabels = Object.keys(gen).length ? genesisLabelStmts(checkGenesis(gen), now) : [];
   if (existsSync(SQL)) for (const f of readdirSync(SQL)) if (f.startsWith('namada_')) rmSync(join(SQL, f));
   mkdirSync(SQL, { recursive: true });
   const progress = readJson('progress.json', { head: 0 } as any);
   const verified: Record<string, { balance: string; height: number; provider: string }> = readJson('verified.json', {});
   const balances: Record<string, { balance: string; height: number }> = readJson('balances.json', {});
-  const gen: Record<string, { amount: number; categories: string[]; name: string | null }> = readJson('genesis.json', {});
-  const now = Date.now();
 
   let file = 0, n = 0, buf: string[] = [];
   const flush = () => {
@@ -201,13 +187,7 @@ function sql() {
   for (const [addr, l] of Object.entries(INTERNAL_LABELS)) {
     push(inlineSql(stmt.label(addr, addr.startsWith('osmo') ? 'osmosis' : 'namada', l.label, l.category, 'auto', null, now)));
   }
-  for (const [addr, g] of Object.entries(gen)) {
-    const cat = g.categories.some((c) => /backer/i.test(c)) ? 'backer'
-      : g.name && /foundation|heliax|anoma/i.test(g.name) ? 'foundation'
-      : g.categories.length ? 'genesis' : 'genesis';
-    const label = g.name ?? `Genesis: ${g.categories.join(', ') || 'allocation'}`;
-    push(inlineSql(stmt.label(addr, 'namada', label, cat, 'genesis', `Genesis ${g.amount.toLocaleString()} NAM · ${g.categories.join(', ')}`, now)));
-  }
+  for (const s of genesisLabels) push(inlineSql(s));
   let flows = 0, moves = 0, links = 0;
   for (const f of ndjson<any>('flows.ndjson')) { push(inlineSql(stmt.flow(f))); flows++; }
   for (const m of ndjson<any>('moves.ndjson')) { push(inlineSql(stmt.move(m))); moves++; }

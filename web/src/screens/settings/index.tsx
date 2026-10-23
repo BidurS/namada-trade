@@ -341,6 +341,9 @@ function RulesPanel({ s, save, rules, rulesStamp }: { s: UserSettings; save: Sav
 }
 
 // ---------------------------------------------------------------- where alerts go
+/** What the test button says when the server sends no alerts at all: the saved link is not at fault and was not tried. */
+const TEST_ALERTS_OFF = 'Alerts are off on this server, so no test message was sent. Your saved link was not tried and is not at fault.';
+
 /** "Where to find it": the glossary's channel-link entry (the expert word lives in lib/glossary.ts). */
 function ChannelLinkHelp() {
   return <Term id="channel-link" className="st-help">Where to find it</Term>;
@@ -397,7 +400,11 @@ function DeliveryPanel({ s, save }: { s: UserSettings; save: Save }) {
             busy={test.busy}
             onClick={() =>
               void test.run(async () => {
-                const r = await testDiscord();
+                const r = await testDiscord().catch((e: unknown) => {
+                  // The server sends no alerts at all (it answers 503 with this sentence): the saved link was not tried.
+                  if (e instanceof Error && /alerts are off on this server/i.test(e.message)) throw new Error(TEST_ALERTS_OFF);
+                  throw e;
+                });
                 if (!r.success) throw new Error('Discord refused the test message. Check that the link still exists in the channel.');
               }, 'A test message was posted to the channel.')
             }

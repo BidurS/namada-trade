@@ -96,8 +96,25 @@ async function bodyRefused(res: Response): Promise<boolean> {
   }
 }
 
+/** Adds `n` posts not sent for `what` to kv `alerts.skipped` (the cron's health view shows the last). */
+async function recordSkipped(db: D1Database | undefined, n: number, what: string) {
+  if (!db) return;
+  const cur = (await kvGetJson<AlertsSkipped>(db, 'alerts.skipped').catch(() => null)) ?? { total: 0, last: { what, n: 0, at: 0 } };
+  await kvSet(db, 'alerts.skipped', { total: cur.total + n, last: { what, n, at: Date.now() } }).catch(() => {});
+}
+
 /** One body to each webhook, a few at a time, within the deadline; what could not start is recorded, never dropped unseen. */
 async function postAll(targets: { url: string; body: Record<string, unknown> }[], db: D1Database | undefined, what: string): Promise<{ posted: number; skipped: number }> {
+  if (!sending) {
+    // A run that does not send alerts (sendsAlerts) posts nothing; what it would have posted is logged and recorded
+    // as not sent, so a production Worker left without SEND_ALERTS shows in the health view instead of going quiet.
+    if (targets.length) {
+      const label = `${what} (SEND_ALERTS is not yes)`;
+      console.log(`alerts: ${targets.length} posts for ${label} not sent`);
+      await recordSkipped(db, targets.length, label);
+    }
+    return { posted: 0, skipped: targets.length };
+  }
   const started = Date.now();
   const queue = [...targets];
   let posted = 0, skipped = 0, refused = 0;
@@ -122,17 +139,34 @@ async function postAll(targets: { url: string; body: Record<string, unknown> }[]
     const n = skipped + refused;
     const label = refused ? `${what} (${refused} refused by Discord)` : what;
     console.error(`alerts: ${n} of ${targets.length} posts for ${label} not sent (deadline passed, webhook backed off or body refused)`);
-    if (db) {
-      const cur = (await kvGetJson<AlertsSkipped>(db, 'alerts.skipped').catch(() => null)) ?? { total: 0, last: { what: label, n: 0, at: 0 } };
-      await kvSet(db, 'alerts.skipped', { total: cur.total + n, last: { what: label, n, at: Date.now() } }).catch(() => {});
-    }
+    await recordSkipped(db, n, label);
   }
   return { posted, skipped };
 }
 
+/**
+ * Whether a run of the Worker posts alerts: only when its SEND_ALERTS secret is 'yes', which only production has
+ * (`wrangler secret put SEND_ALERTS`, value yes; scripts/deploy-check.sh does not deploy without it). Any other run,
+ * such as `wrangler dev` on a copy of the production database, posts nothing and never reads the users' settings: a
+ * copy holds none of the claims production took after it and every user's settings as they were then, so it would
+ * post again what production posted, to channels their owners have since changed or deleted.
+ */
+export const sendsAlerts = (env: { SEND_ALERTS?: string }): boolean => env.SEND_ALERTS === 'yes';
+
 let settingsKey: string | undefined;
-/** The dispatcher needs the settings key; the Worker sets it once at startup (index.ts). */
-export function configureAlerts(key: string | undefined) { settingsKey = key; }
+/**
+ * Whether this run posts. Each entry of the Worker (index.ts fetch and scheduled, the LiveHub constructor) sets it
+ * from sendsAlerts(env) before anything else runs; it is true before that only for code that calls the dispatcher
+ * directly (the tests).
+ */
+let sending = true;
+/** The dispatcher needs the settings key and whether this run posts; the Worker sets both at each entry (index.ts, live-hub.ts). */
+export function configureAlerts(key: string | undefined, send = true) { settingsKey = key; sending = send; }
+/**
+ * Whether this run posts alerts, as its entry set it (configureAlerts). The Settings test route asks it first, so a
+ * Worker without SEND_ALERTS says that alerts are off instead of a refusal the page would put on the user's link.
+ */
+export const alertsOn = (): boolean => sending;
 
 const NAMADA_AVATAR =
   'https://raw.githubusercontent.com/anoma/namada-chain-registry/main/namada/images/namada.svg';
@@ -236,7 +270,8 @@ const channelKey = (url: string) => bytesToHex(sha256(new TextEncoder().encode(u
 export const USERS_CACHE_MS = 15_000;
 const usersCache = new WeakMap<D1Database, { at: number; users: StoredSettings[] }>();
 async function getUsers(db?: D1Database): Promise<StoredSettings[]> {
-  if (!db) return [];
+  // A run that does not send alerts never decrypts the users' settings (a database copy holds them as they were).
+  if (!db || !sending) return [];
   const c = usersCache.get(db);
   if (c && Date.now() - c.at < USERS_CACHE_MS) return c.users;
   try {
@@ -573,6 +608,10 @@ export async function sendDiscordGovAlert(
  * Send a test Discord webhook message to verify user's webhook configuration
  */
 export async function sendDiscordTestAlert(webhookUrl: string, u: StoredSettings): Promise<boolean> {
+  if (!sending) {
+    console.log('alerts: test post not sent (this run does not send alerts: SEND_ALERTS is not yes)');
+    return false;
+  }
   const p = u.notifications;
   const on = Object.entries(p.rules).filter(([, r]) => r.on).map(([id, r]) => `${id} ≥ ${r.thresholdNam.toLocaleString()} NAM`);
   const body = {

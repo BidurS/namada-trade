@@ -2,7 +2,7 @@ import { app } from './api';
 import { LiveHub } from './live-hub';
 import { runCron } from './cron';
 import type { Env } from './util';
-import { configureAlerts } from './sources/discord';
+import { configureAlerts, sendsAlerts } from './sources/discord';
 import { seoHtml, robotsTxt, sitemapXml, classifyPath } from './seo';
 import { redirectLocation } from '../../shared/routes';
 import { cachedApi as cachedApiWith, inlineScriptHashes, pagePolicies, ENFORCE_SCRIPT_POLICY, wsLimited } from './http';
@@ -21,7 +21,7 @@ export { LiveHub };
 
 export default {
   async fetch(request: Request, env: Env, ctx: ExecutionContext): Promise<Response> {
-    configureAlerts(env.SETTINGS_KEY);
+    configureAlerts(env.SETTINGS_KEY, sendsAlerts(env));
     const url = new URL(request.url);
 
     // Canonical origin: https://namada.trade. Plain http and www are redirected (301) so links and
@@ -82,7 +82,7 @@ export default {
   },
 
   async scheduled(event: ScheduledEvent, env: Env, ctx: ExecutionContext): Promise<void> {
-    configureAlerts(env.SETTINGS_KEY);
+    configureAlerts(env.SETTINGS_KEY, sendsAlerts(env));
     ctx.waitUntil(runCron(env));
   },
 };

@@ -36,7 +36,7 @@
 
    Sheets (screens/sheets): each export is mounted only while open, receives onClose, and
    must open itself on mount (e.g. <Sheet open onClose={onClose} …>, ui/Sheet.tsx). The host
-   returns focus to the opener. ?addr= opens AddressSheet, ?pair= opens SignInSheet.
+   returns focus to the opener. ?addr= opens AddressSheet, #pair= (or an older ?pair= link) opens SignInSheet.
 
    CSS: screens own styles/screens/<name>.css inside @layer components, using tokens.css and
    the --c-* ground tokens. Shell classes (.wrap .band .eyebrow .h1 .h2 .sub .lead .cap .mono

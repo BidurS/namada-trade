@@ -5,7 +5,7 @@ import { fetchNamPools, fetchNamPrice } from './sources/sqs';
 import { QUOTE_KEYS } from '../../shared/settle';
 import { namBalance, namTotalSupply, namTotalStake, namadaEpoch, namadaStatusAll, delegationsAt, answeringRpcs, listingHeads, QUICK, RpcBreaker, allNamBalances, allBonds, ListingTooLargeError, LISTING_MAX_VALUE_BYTES, type BalanceListing, type BondListing, type ReadOpts, type Rpc } from './sources/namada';
 import { fetchIntelChecked } from './sources/intel';
-import { sendDiscordForumAlert, sendDiscordGovAlert } from './sources/discord';
+import { sendDiscordForumAlert, sendDiscordGovAlert, sendsAlerts } from './sources/discord';
 import { NAM, NAMADA, OSMOSIS } from './config';
 import { fetchJson, toNam, isRealAddress, FETCH_TEXT_MAX_BYTES } from './util';
 import type { IntelResponse, SourceHealth } from '../../shared/types';
@@ -32,6 +32,19 @@ export const STUCK_CANDIDATE_AGE_MS = 24 * 3600000;
 
 /** The Sources sheet's row for the forum's latest posts (forum.namada.net posts.json). */
 export const FORUM_POSTS_HEALTH = 'Namada forum (latest posts)';
+/** The Sources sheet's row for the Discord alert posts: whether this Worker sends them, and the posts not sent. */
+export const ALERT_DELIVERY_HEALTH = 'Discord alert delivery';
+
+/**
+ * The alert delivery row of a Worker that does not send alerts (sources/discord.ts sendsAlerts: its SEND_ALERTS
+ * secret is not yes), or null when it sends. Pushed first on every tick, a tick the lock skips included, so a deploy
+ * made before the secret was put shows in the health view and in deploy-check.sh's health list from its first tick,
+ * not only once a post that would have reached the operator's channel is dropped.
+ */
+export function alertDeliveryOff(env: { SEND_ALERTS?: string }, now: number): SourceHealth | null {
+  if (sendsAlerts(env)) return null;
+  return { name: ALERT_DELIVERY_HEALTH, ok: false, at: now, note: 'Off on this Worker, SEND_ALERTS is not yes: no alert is posted to any channel.' };
+}
 
 async function syncIntelAndAlerts(env: Env, health: SourceHealth[]) {
   try {
@@ -1391,11 +1404,13 @@ export async function bondedCoverageCheck(db: D1Database, now: number, stakeNam:
 export async function runCron(env: Env) {
   const now = Date.now();
   const health: SourceHealth[] = [];
+  const alertsOff = alertDeliveryOff(env, now);
+  if (alertsOff) health.push(alertsOff);
   const lockId = `${now}-${Math.random().toString(36).slice(2, 8)}`;
   console.log('cron tick', new Date(now).toISOString());
   if (!(await takeTickLock(env.DB, lockId, now))) {
     // Another tick is still running (a slow node): this one does nothing rather than repeat the same reads.
-    await mergeHealth(env, [{ name: 'cron', ok: true, at: now, note: 'Skipped: the previous run was still going.' }]);
+    await mergeHealth(env, [...health, { name: 'cron', ok: true, at: now, note: 'Skipped: the previous run was still going.' }]);
     return;
   }
   const deadline = new AbortController();
@@ -1615,11 +1630,16 @@ export async function runCron(env: Env) {
       const recent = now - last.at < 24 * 3600000;
       health.push({ name: 'Namada RPC (live block scan)', ok: !recent, at: last.at, note: (recent ? last.note : `last unreadable block ${last.height}, more than a day ago`).slice(0, 160) });
     }
-    // Alert posts that could not be sent (sources/discord.ts postAll: deadline passed or a webhook backed off)
-    const skipped = await kvGetJson<AlertsSkipped>(env.DB, 'alerts.skipped');
-    if (skipped?.last.at) {
-      const recent = now - skipped.last.at < 24 * 3600000;
-      health.push({ name: 'Discord alert delivery', ok: !recent, at: skipped.last.at, note: `${skipped.last.n} post(s) for ${skipped.last.what} not sent; ${skipped.total} in all`.slice(0, 160) });
+    // Alert posts that could not be sent (sources/discord.ts postAll: deadline passed or a webhook backed off). A
+    // Worker that does not send alerts keeps the row pushed first (alertDeliveryOff), which this one never replaces.
+    // One that sends says so when no post not sent is on record, so the row a tick without the secret wrote does not
+    // outlast the secret being put.
+    if (!alertsOff) {
+      const skipped = await kvGetJson<AlertsSkipped>(env.DB, 'alerts.skipped');
+      if (skipped?.last.at) {
+        const recent = now - skipped.last.at < 24 * 3600000;
+        health.push({ name: ALERT_DELIVERY_HEALTH, ok: !recent, at: skipped.last.at, note: `${skipped.last.n} post(s) for ${skipped.last.what} not sent; ${skipped.total} in all`.slice(0, 160) });
+      } else health.push({ name: ALERT_DELIVERY_HEALTH, ok: true, at: now, note: 'On: this Worker posts alerts, and no post not sent is on record.' });
     }
 
     if (idxBlock && headHeight) {

@@ -65,5 +65,9 @@
   // Secrets (set with `wrangler secret put <NAME>`, locally in .dev.vars):
   //   KEPLR_KEY            -> keplr_xxx path key for api.keplr.app
   //   DISCORD_WEBHOOK_URL  -> whale alerts
+  //   SEND_ALERTS          -> yes: this Worker posts alerts. Production only (scripts/deploy-check.sh checks it); never in
+  //                           .dev.vars, so a local run, even on a copy of the production database, posts none
+  //   SETTINGS_KEY         -> AES-256-GCM key for users' settings (worker/src/settings.ts); production's is piped straight
+  //                           into the secret and kept in no file, and .dev.vars holds a development key of its own
   //   ACCESS_AUD           -> optional: Cloudflare Access application AUD tag (checks the header is present only; Access itself is enforced at the edge)
 }

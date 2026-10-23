@@ -1,8 +1,9 @@
 // The sheets (S7): Sources, Address, Sign in, Account. build-plan 8 "Sheets" and N5, N8: each opens
 // within 100dvh and scrolls inside, focus returns to the invoker, Escape closes, developer detail
 // sits only under "How it is computed", the Sources sheet has one row per check.key, and
-// /alerts?pair=CODE opens Sign in on the code step. Sign-in and account calls are mocked
-// (page.route): no code or test session ever reaches the proxied server.
+// /alerts#pair=CODE (and a link printed before it, /alerts?pair=CODE) opens Sign in on the code
+// step. Sign-in and account calls are mocked (page.route): no code or test session ever reaches
+// the proxied server.
 import type { Page } from '@playwright/test';
 import type { Overview } from '../../shared/types';
 import { REWIND_AT, expect, gotoRoute, layoutAudit, onlyIn, test } from './helpers';
@@ -58,7 +59,7 @@ test.describe('sheets, every viewport', () => {
     await sheetFits(page);
   });
 
-  test('Sign in from ?pair=: fits, the code step is open with the code, and nothing is claimed until Pair is pressed', async ({ page }) => {
+  test('Sign in from an old ?pair= link: fits, the code step is open with the code, and nothing is claimed until Pair is pressed', async ({ page }) => {
     await noAuthCalls(page);
     let claims = 0;
     await page.route('**/api/auth/pair/claim', (route) => { claims++; return route.fallback(); });
@@ -114,6 +115,26 @@ function addressFixture() {
 
 test.describe('sheets, once', () => {
   test.beforeEach(({}, info) => test.skip(onlyIn(info.project.name), 'viewport-independent: runs in 375x812'));
+
+  // Security review (2026-10-22), the pairing link: its code rode in the query (/alerts?pair=CODE), so the phone's
+  // page request carried it to the Worker and into its request logs, where a reader of the logs could claim it before
+  // the phone pressed Pair. The link now carries it in the fragment, which a browser never sends.
+  test('Sign in from #pair=: the code step is open with the code, no request carries the code, and closing drops it from the address bar', async ({ page }) => {
+    await noAuthCalls(page);
+    const sent: string[] = [];
+    page.on('request', (r) => sent.push(r.url()));
+    let claims = 0;
+    await page.route('**/api/auth/pair/claim', (route) => { claims++; return route.fallback(); });
+    await gotoRoute(page, '/alerts#pair=a1b2c3d4');
+    const d = page.locator('dialog.sh-si');
+    await expect(d.getByRole('textbox', { name: 'Pairing code' })).toHaveValue('A1B2C3D4');
+    expect(claims).toBe(0);
+    expect(sent.filter((u) => /a1b2c3d4/i.test(u))).toEqual([]);
+    await page.keyboard.press('Escape');
+    await expect(d).toHaveCount(0);
+    // closing replaced the entry, so no history entry keeps the code
+    expect(await page.evaluate(() => location.pathname + location.search + location.hash)).toBe('/alerts');
+  });
 
   test('Address: each crossing once, another coin in its own unit, and the counts agree with the moves listed', async ({ page }) => {
     await page.route(`**/api/address/${ME}`, (route) => route.fulfill({ json: addressFixture() }));

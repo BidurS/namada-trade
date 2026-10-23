@@ -8,6 +8,7 @@
 import { ed25519 } from '@noble/curves/ed25519.js';
 import { secp256k1 } from '@noble/curves/secp256k1.js';
 import { sha256 } from '@noble/hashes/sha2.js';
+import { hmac } from '@noble/hashes/hmac.js';
 import { ripemd160 } from '@noble/hashes/legacy.js';
 import { bech32, bech32m, base64, hex } from '@scure/base';
 import { kvGetJson, kvSet } from './db';
@@ -325,7 +326,9 @@ export async function sessionFromRequest(db: D1Database, req: Request): Promise<
   // Only hashed rows are sessions: a row from before hashing (`session:<token>`) is refused and deleted, since a
   // copy of the database from before could hold its token (see above).
   if (!stored || stored.token) {
-    await db.prepare('DELETE FROM kv WHERE key = ?').bind(`session:${token}`).run().catch(() => {});
+    // Deleted only when the row holds this very token. A hashed row has the same key shape (`session:` and 64 hex),
+    // so a token hash read from a copy of the database, sent as a bearer, must not delete the live row it names.
+    await db.prepare(`DELETE FROM kv WHERE key = ? AND json_extract(value, '$.token') = ?`).bind(`session:${token}`, token).run().catch(() => {});
     return null;
   }
   if (stored.expiresAt < Date.now()) return null;
@@ -346,13 +349,26 @@ export async function touchSession(db: D1Database, key: string, at: number) {
 }
 
 export async function logout(db: D1Database, token: string) {
-  await db.prepare('DELETE FROM kv WHERE key = ? OR key = ?').bind(sessionKey(token), `session:${token}`).run().catch(() => {});
+  // The row from before hashing goes only when it holds this token (see sessionFromRequest).
+  await db.prepare(`DELETE FROM kv WHERE key = ? OR (key = ? AND json_extract(value, '$.token') = ?)`).bind(sessionKey(token), `session:${token}`, token).run().catch(() => {});
   await db.prepare(`DELETE FROM kv WHERE ${keyPrefix('pair')} AND json_extract(value, '$.by') = ?`).bind(tokenHash(token)).run().catch(() => {});
 }
 
 // ---------------------------------------------------------------- pairing
+//
+// A pair code is 8 hex characters (32 bits), so its row is `pair:<HMAC-SHA256 of the code>` under the SETTINGS_KEY
+// secret, never the code: a plain hash in a copy of the database (an export, Time Travel, a console read) would be
+// reversed by trying every code, and the code itself would be claimable by whoever reads the row in its 10 minutes.
+// The secret is not in the database, so the row names no code. Without the secret no code is made or claimed.
 
-export async function createPairCode(db: D1Database, s: Session): Promise<{ code: string; expiresAt: number } | { error: string }> {
+/** The kv key of a pair code (uppercase, as made and as claimed). */
+export function pairKey(secret: string, code: string): string {
+  if (!secret) throw new Error('SETTINGS_KEY is not configured; run `wrangler secret put SETTINGS_KEY`');
+  const enc = new TextEncoder();
+  return `pair:${hex.encode(hmac(sha256, enc.encode(secret), enc.encode(`pair-code:${code}`)))}`;
+}
+
+export async function createPairCode(db: D1Database, s: Session, secret: string): Promise<{ code: string; expiresAt: number } | { error: string }> {
   // `by`: the hash of the pairing device's token (never the token), so the cap cannot end that device.
   const by = tokenHash(s.token);
   // A device shows one live code at a time: making a new one retires the ones it made before.
@@ -361,19 +377,20 @@ export async function createPairCode(db: D1Database, s: Session): Promise<{ code
   for (let attempt = 0; attempt < 3; attempt++) {
     const code = rand(4).toUpperCase(); // 8 hex chars, 10-minute life, single use
     // A plain insert, never a replace: a code another device is showing is not overwritten (a colliding draw is drawn again).
-    const r = await db.prepare('INSERT OR IGNORE INTO kv (key,value,updated_at) VALUES (?,?,?)').bind(`pair:${code}`, JSON.stringify({ address: s.address, chain: s.chain, expiresAt, by }), Date.now()).run().catch(() => null);
+    const r = await db.prepare('INSERT OR IGNORE INTO kv (key,value,updated_at) VALUES (?,?,?)').bind(pairKey(secret, code), JSON.stringify({ address: s.address, chain: s.chain, expiresAt, by }), Date.now()).run().catch(() => null);
     if (Number(r?.meta?.changes ?? 0) === 1) return { code, expiresAt };
   }
   return { error: 'A code could not be made right now; try again.' };
 }
 
-export async function claimPairCode(db: D1Database, codeIn: string): Promise<{ session?: Session; error?: string }> {
+export async function claimPairCode(db: D1Database, codeIn: string, secret: string): Promise<{ session?: Session; error?: string }> {
   const code = codeIn.trim().toUpperCase();
   if (!/^[0-9A-F]{8}$/.test(code)) return { error: 'code is 8 characters' };
-  const row = await kvGetJson<{ address: string; chain: Chain; expiresAt: number; by?: string }>(db, `pair:${code}`);
+  const key = pairKey(secret, code);
+  const row = await kvGetJson<{ address: string; chain: Chain; expiresAt: number; by?: string }>(db, key);
   if (!row) return { error: 'code expired or already used' };
   // One use: only the claim whose delete removed the row goes on (two claims of one code cannot both pair).
-  const r = await db.prepare('DELETE FROM kv WHERE key = ?').bind(`pair:${code}`).run().catch(() => null);
+  const r = await db.prepare('DELETE FROM kv WHERE key = ?').bind(key).run().catch(() => null);
   if (Number(r?.meta?.changes ?? 0) !== 1 || row.expiresAt < Date.now()) return { error: 'code expired or already used' };
   // A code lives only as long as the device that made it: once that device is signed out, revoked or the account
   // deleted, its codes pair nothing (they are deleted then too; this also catches a code made during the revoke).

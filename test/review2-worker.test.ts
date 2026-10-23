@@ -541,8 +541,9 @@ describe('sessions', () => {
     expect(rows[0].key).toBe(`session:${tokenHash(s.token)}`);
     expect(rows[0].value).not.toContain(s.token);
     expect((await sessionFromRequest(db as any, req(s.token)))?.address).toBe(A);
-    // the key column is not a working token
+    // the key column is not a working token, and sending it does not end the session it names
     expect(await sessionFromRequest(db as any, req(rows[0].key.slice(8)))).toBeNull();
+    expect((await sessionFromRequest(db as any, req(s.token)))?.address).toBe(A);
   });
   it('a session stored before hashing is refused and deleted (a copy of the database from before could hold its token)', async () => {
     const db = testD1();

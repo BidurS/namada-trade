@@ -4,7 +4,7 @@ import { describe, it, expect } from 'vitest';
 import { app, FULL_SESSION_ONLY } from '../worker/src/api';
 import { testD1, insert } from './d1-sqlite';
 import {
-  createSession, createPairCode, claimPairCode, sessionFromRequest, listSessions, logout, revokeSession, revokeAllSessions,
+  createSession, createPairCode, claimPairCode, pairKey, sessionFromRequest, listSessions, logout, revokeSession, revokeAllSessions,
   touchSession, sweepAuth, tokenHash, PARENT_ENDED, type Session,
 } from '../worker/src/auth';
 import { loadSettings, saveSettings, defaultPrefs } from '../worker/src/settings';
@@ -18,46 +18,48 @@ const device = async (via: 'namada' | 'keplr' | 'pair' = 'namada') => (await cre
 const key = async () => (await createSession(testDb as any, A, 'namada', 'api')) as Session;
 const row = (k: string) => testDb.raw.prepare('SELECT value FROM kv WHERE key = ?').get(k) as { value: string } | undefined;
 const idOf = (s: Session) => tokenHash(s.token).slice(0, 8);
+/** The SETTINGS_KEY that pair code rows are keyed under (auth.ts pairKey). */
+const PK = Buffer.alloc(32, 7).toString('base64');
 
 describe('A1: a pair code lives only as long as the device that made it', () => {
   it('logout of the making device deletes its codes, and a code it made cannot pair afterwards', async () => {
     testDb = testD1();
     const s = await device();
-    const { code } = (await createPairCode(testDb as any, s)) as { code: string };
+    const { code } = (await createPairCode(testDb as any, s, PK)) as { code: string };
     await logout(testDb as any, s.token);
-    expect(row(`pair:${code}`)).toBeUndefined();
-    expect((await claimPairCode(testDb as any, code)).session).toBeUndefined();
+    expect(row(pairKey(PK, code))).toBeUndefined();
+    expect((await claimPairCode(testDb as any, code, PK)).session).toBeUndefined();
   });
   it('Revoke of the making device and Delete everything both end its codes', async () => {
     testDb = testD1();
     const s = await device();
     const other = await device('keplr');
-    const { code } = (await createPairCode(testDb as any, s)) as { code: string };
+    const { code } = (await createPairCode(testDb as any, s, PK)) as { code: string };
     expect(await revokeSession(testDb as any, A, idOf(s))).toBe(true);
-    expect(row(`pair:${code}`)).toBeUndefined();
-    const { code: code2 } = (await createPairCode(testDb as any, other)) as { code: string };
+    expect(row(pairKey(PK, code))).toBeUndefined();
+    const { code: code2 } = (await createPairCode(testDb as any, other, PK)) as { code: string };
     await revokeAllSessions(testDb as any, A);
-    expect(row(`pair:${code2}`)).toBeUndefined();
-    expect((await claimPairCode(testDb as any, code2)).session).toBeUndefined();
+    expect(row(pairKey(PK, code2))).toBeUndefined();
+    expect((await claimPairCode(testDb as any, code2, PK)).session).toBeUndefined();
   });
   it('a code whose maker was ended while the code row stayed (a revoke racing createPairCode) pairs nothing', async () => {
     testDb = testD1();
     const s = await device();
-    const { code } = (await createPairCode(testDb as any, s)) as { code: string };
+    const { code } = (await createPairCode(testDb as any, s, PK)) as { code: string };
     // the maker's row goes, the code row is left behind
     testDb.raw.prepare('DELETE FROM kv WHERE key = ?').run(`session:${tokenHash(s.token)}`);
-    const r = await claimPairCode(testDb as any, code);
+    const r = await claimPairCode(testDb as any, code, PK);
     expect(r).toEqual({ error: PARENT_ENDED });
-    expect(row(`pair:${code}`)).toBeUndefined();
+    expect(row(pairKey(PK, code))).toBeUndefined();
     expect((await listSessions(testDb as any, A, s.token)).length).toBe(0);
   });
   it('a live maker still pairs, once', async () => {
     testDb = testD1();
     const s = await device();
-    const { code } = (await createPairCode(testDb as any, s)) as { code: string };
-    const r = await claimPairCode(testDb as any, code);
+    const { code } = (await createPairCode(testDb as any, s, PK)) as { code: string };
+    const r = await claimPairCode(testDb as any, code, PK);
     expect(r.session?.via).toBe('pair');
-    expect((await claimPairCode(testDb as any, code)).session).toBeUndefined();
+    expect((await claimPairCode(testDb as any, code, PK)).session).toBeUndefined();
   });
 });
 

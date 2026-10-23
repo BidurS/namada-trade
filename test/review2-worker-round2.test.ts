@@ -7,7 +7,7 @@ import { app, csvCell, holderFiguresProv, FULL_SESSION_ONLY } from '../worker/sr
 import { testD1, insert } from './d1-sqlite';
 import { pressure } from '../worker/src/analytics';
 import { CACHE_PARAMS, CACHEABLE_API } from '../worker/src/http';
-import { createSession, createPairCode, claimPairCode, sessionFromRequest, listSessions, sweepAuth, MAX_SESSIONS, MAX_API_KEYS, type Session } from '../worker/src/auth';
+import { createSession, createPairCode, claimPairCode, pairKey, sessionFromRequest, listSessions, sweepAuth, MAX_SESSIONS, MAX_API_KEYS, type Session } from '../worker/src/auth';
 import { sendDiscordTestAlert, WEBHOOK_TIMEOUT_MS } from '../worker/src/sources/discord';
 import { onePerCrossing, counterpartiesOf } from '../shared/flow-rules';
 import { tagByline, labelAuthorShort } from '../shared/labels';
@@ -156,21 +156,22 @@ describe('sessions and keys', () => {
   const A = 'tnam1qsessionxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx';
   const req = (token: string, path = '/api/auth/me', init: RequestInit = {}) => new Request(`https://namada.trade${path}`, { ...init, headers: { Authorization: `Bearer ${token}` } });
   const tok = (r: Session | { error: string }) => ('token' in r ? r.token : '');
+  const PK = Buffer.alloc(32, 7).toString('base64');
   it('pairing many devices never ends the device that pairs them, nor an API key', async () => {
     const db = testD1();
     const first = (await createSession(db as any, A, 'namada', 'namada')) as Session;
     const key = tok(await createSession(db as any, A, 'namada', 'api'));
     for (let i = 0; i < MAX_SESSIONS + 5; i++) {
-      const { code } = await createPairCode(db as any, first);
-      expect((await claimPairCode(db as any, code)).session).toBeTruthy();
+      const { code } = (await createPairCode(db as any, first, PK)) as { code: string };
+      expect((await claimPairCode(db as any, code, PK)).session).toBeTruthy();
     }
     expect(await sessionFromRequest(db as any, req(first.token))).not.toBeNull();
     expect(await sessionFromRequest(db as any, req(key))).not.toBeNull();
     const listed = await listSessions(db as any, A, first.token);
     expect(listed.filter((x) => x.via !== 'api')).toHaveLength(MAX_SESSIONS);
     // the pair row holds a hash of the pairing device's token, never the token
-    const { code } = await createPairCode(db as any, first);
-    expect(db.raw.prepare('SELECT value FROM kv WHERE key = ?').get(`pair:${code}`).value).not.toContain(first.token);
+    const { code } = (await createPairCode(db as any, first, PK)) as { code: string };
+    expect(db.raw.prepare('SELECT value FROM kv WHERE key = ?').get(pairKey(PK, code)).value).not.toContain(first.token);
   });
   it('one key too many is refused (409), never made by ending another key', async () => {
     const db = testD1();

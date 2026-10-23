@@ -3,9 +3,10 @@
 // Signing in proves an address by signing one short message: no transaction, no fee, nothing
 // moves. Three ways, each saying what will happen before you press it: Namada Keychain (a desktop
 // browser extension), Keplr (desktop extension or the Keplr app's own browser) and a pairing code
-// from a device that is already signed in. /alerts?pair=CODE opens this sheet on the code step with the code
-// filled in; the code is claimed only when the person presses Pair (a link alone never signs a browser in, so a
-// link someone else sends cannot swap this browser onto their account). lib/auth.ts is used unchanged.
+// from a device that is already signed in. /alerts#pair=CODE (or an older /alerts?pair=CODE link) opens this sheet
+// on the code step with the code filled in; the code is claimed only when the person presses Pair (a link alone
+// never signs a browser in, so a link someone else sends cannot swap this browser onto their account). lib/auth.ts
+// is used unchanged.
 import { useEffect, useId, useRef, useState } from 'react';
 import { claimPairCode, hasKeplr, hasNamada, loginWithKeplr, loginWithNamada, type Session } from '../../lib/auth';
 import { useSession } from '../../app/index';

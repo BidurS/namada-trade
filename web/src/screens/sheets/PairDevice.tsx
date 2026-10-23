@@ -1,11 +1,17 @@
-// Pair a phone (S7): a signed-in device makes a one-time code, and a QR of the /alerts?pair=CODE
+// Pair a phone (S7): a signed-in device makes a one-time code, and a QR of the /alerts#pair=CODE
 // link, that gives a phone the same address and settings. The phone never holds a key. Kept from
 // the old PairDevice; the QR library loads with import() only when a code is made (seo Must 6).
+// The code rides in the fragment, which a browser never sends: a query (?pair=CODE) reached the
+// Worker with the page request and so its request logs, where a reader of the logs could claim the
+// code before the phone pressed Pair. The app still opens an old ?pair= link (app/overlays.tsx).
 import { useEffect, useState } from 'react';
 import { createPairCode } from '../../lib/auth';
 import { Button, Notice } from '../../ui/index';
 import { fmtUtcClock } from '../../lib/format';
 import { plainError, useCopy } from './util';
+
+/** The pairing link: the code in the fragment, so it never leaves the phone's browser in a request. */
+const pairLink = (code: string) => `${location.origin}/alerts#pair=${encodeURIComponent(code)}`;
 
 type ToDataURL = (text: string, opts: Record<string, unknown>) => Promise<string>;
 
@@ -42,7 +48,7 @@ export function PairDevice() {
       setPair(p);
       setNow(Date.now());
       setQr(null);
-      setQr(await qrFor(`${location.origin}/alerts?pair=${p.code}`));
+      setQr(await qrFor(pairLink(p.code)));
     } catch (e) {
       setErr(plainError(e, 'A code could not be made right now.'));
     } finally {
@@ -52,7 +58,7 @@ export function PairDevice() {
 
   const left = pair ? Math.max(0, Math.round((pair.expiresAt - now) / 1000)) : 0;
   const live = !!pair && left > 0;
-  const link = pair ? `${location.origin}/alerts?pair=${pair.code}` : '';
+  const link = pair ? pairLink(pair.code) : '';
 
   return (
     <div className="sh-pairdev">

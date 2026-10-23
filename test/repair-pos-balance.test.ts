@@ -6,12 +6,13 @@ import { describe, it, expect } from 'vitest';
 import { existsSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { testD1, insert } from './d1-sqlite';
+import { sqlStatements } from '../scripts/sql-statements';
 
 // The tracked copy (scripts/out/ is not in git); the file the orchestrator applies must be the same bytes.
 const SQL = readFileSync(join(__dirname, '..', 'scripts', 'repair-pos-balance.sql'), 'utf8');
 const OUT = join(__dirname, '..', 'scripts', 'out', 'repair', 'pos_balance_2026-10-20.sql');
-/** As scripts/d1-apply.ts splits a file: statements end with ";\n", comment lines are dropped. */
-const statements = SQL.split(/;\s*\n/).map((s) => s.replace(/^\s*--.*$/gm, '').trim()).filter(Boolean);
+/** As scripts/d1-apply.ts reads a file: its statements as SQLite reads them, comments outside strings dropped. */
+const statements = sqlStatements(SQL);
 
 const POS = 'tnam1qgqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqc8j2fp';
 const A = 'tnam1qry99h4faqtkleuuyecxzrswq7vgkj2hu5kg6dqp';

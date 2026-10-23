@@ -12,7 +12,7 @@ import { runBatch, stmt, kvGet, kvGetJson, kvSet } from './db';
 import { admitSocket } from './ws-admit';
 import { fetchNamPools, fetchNamPrice } from './sources/sqs';
 import { HubQuote, storedQuoteReader } from './live-quote';
-import { configureAlerts, isNamWhale, offeredForAlerts, sendDiscordWhaleAlert } from './sources/discord';
+import { configureAlerts, isNamWhale, offeredForAlerts, sendDiscordWhaleAlert, sendsAlerts } from './sources/discord';
 import { fetchJson, FETCH_TEXT_MAX_BYTES, ReadBudgetError, ResponseTooLargeError, type ReadBudget } from './util';
 
 /** Moves found late by the catch-up search alert only when they happened within this window. */
@@ -186,7 +186,7 @@ export class LiveHub extends DurableObject<Env> {
 
   constructor(ctx: DurableObjectState, env: Env) {
     super(ctx, env);
-    configureAlerts(env.SETTINGS_KEY);
+    configureAlerts(env.SETTINGS_KEY, sendsAlerts(env));
     this.quote = new HubQuote(async () => (await fetchNamPrice()).usd, storedQuoteReader(env.DB));
     this.ctx.blockConcurrencyWhile(async () => {
       // Initialize pool mappings & price

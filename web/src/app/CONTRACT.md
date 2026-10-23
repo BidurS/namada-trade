@@ -65,11 +65,11 @@ export function SourcesSheet({ onClose }: { onClose: () => void }) {
   return <Sheet open onClose={onClose} title="Where every number comes from" size="lg">…</Sheet>;
 }
 export function AddressSheet({ address, onClose }: { address: string; onClose: () => void }) { … }
-export function SignInSheet({ code, onClose }: { code: string | null; onClose: () => void }) { … }   // code from ?pair=
+export function SignInSheet({ code, onClose }: { code: string | null; onClose: () => void }) { … }   // code from #pair= (or an older ?pair= link)
 export function AccountSheet({ onClose }: { onClose: () => void }) { … }
 ```
 
-The host (`app/overlays.tsx`) mounts one of these only while it is open and unmounts it on close: open yourself on mount (`<Sheet open …>` from `ui/Sheet.tsx`) and call `onClose` for Escape, the close button and a tap outside. The host returns focus to the control that opened the sheet and keeps `?addr=` and `?pair=` in step with the URL (replaceState).
+The host (`app/overlays.tsx`) mounts one of these only while it is open and unmounts it on close: open yourself on mount (`<Sheet open …>` from `ui/Sheet.tsx`) and call `onClose` for Escape, the close button and a tap outside. The host returns focus to the control that opened the sheet and keeps `?addr=` and `#pair=` (`?pair=` from older links) in step with the URL (replaceState).
 
 ## 6. Keys and focus
 

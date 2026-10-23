@@ -6,17 +6,33 @@
  */
 import { execFileSync } from 'node:child_process';
 import { readFileSync } from 'node:fs';
+import { sqlStatements } from './sql-statements.ts';
 
 const MAX_BYTES = 90_000;
 
-for (const file of process.argv.slice(2)) {
-  // Comment-only lines are dropped before a statement is sent: `wrangler ... --command "-- …"` would read a leading
-  // `--` as an option, and generated .sql files put every statement on one line, so no value ever starts a line with it.
-  const stmts = readFileSync(file, 'utf8').split(/;\s*\n/).map((s) => s.replace(/^\s*--.*$/gm, '').trim()).filter(Boolean);
+// Statements are read as SQLite reads them, so a value holding a line break, a `;` or a comment marker stays in its
+// string. Comments outside strings are dropped: `wrangler ... --command "-- …"` would read a leading `--` as an option.
+// Every file is read before any is sent, so a file that is refused (a quote that never closes, a trigger, a NUL) stops
+// the run with nothing sent.
+const files = process.argv.slice(2).map((file) => {
+  try {
+    return { file, stmts: sqlStatements(readFileSync(file, 'utf8')) };
+  } catch (e) {
+    throw new Error(`${file}: ${e instanceof Error ? e.message : String(e)}; nothing was sent`);
+  }
+});
+
+for (const { file, stmts } of files) {
   let batch: string[] = [], size = 0, done = 0;
   const flush = () => {
     if (!batch.length) return;
-    execFileSync('npx', ['wrangler', 'd1', 'execute', 'namada-trade-db', '--remote', '--yes', '--command', batch.join(';\n') + ';'], {
+    const command = batch.join(';\n') + ';';
+    // A batch is sent only when it reads back as exactly the statements it was made of.
+    const back = sqlStatements(command);
+    if (back.length !== batch.length || back.some((s, i) => s !== batch[i])) {
+      throw new Error(`${file}: statements ${done + 1}-${done + batch.length} do not read back as written; nothing of them was sent`);
+    }
+    execFileSync('npx', ['wrangler', 'd1', 'execute', 'namada-trade-db', '--remote', '--yes', '--command', command], {
       stdio: ['ignore', 'ignore', 'inherit'],
       maxBuffer: 64 * 1024 * 1024,
     });

@@ -10,7 +10,7 @@ import type {
 import { fetchNamPools, fetchNamPrice, quoteNamTrade, quoteSlippageCurve } from './sources/sqs';
 import { namBalance, namadaEpoch, delegationsAt, QUICK, type ReadOpts } from './sources/namada';
 import { fetchIntel } from './sources/intel';
-import { sendDiscordTestAlert } from './sources/discord';
+import { alertsOn, sendDiscordTestAlert } from './sources/discord';
 import { stmt, TAGS_PER_AUTHOR, TAGS_PER_DAY, kvGet, kvSet, kvGetJson } from './db';
 import { toNam, chainOf } from './util';
 import { OSMOSIS, INTERNAL_LABELS } from './config';
@@ -1245,16 +1245,21 @@ async function requireFullSession(c: any, action: keyof typeof FULL_SESSION_ONLY
   return s;
 }
 
+// A pair code's row is keyed by an HMAC under SETTINGS_KEY (auth.ts pairKey): without the secret, no code.
 app.post('/api/auth/pair', async (c) => {
   const s = await requireFullSession(c, 'pair');
   if (s instanceof Response) return s;
-  const r = await createPairCode(c.env.DB, s!);
+  let key: string;
+  try { key = requireKey(c.env); } catch (e) { return c.json({ error: String((e as Error).message) }, 503); }
+  const r = await createPairCode(c.env.DB, s!, key);
   return 'error' in r ? c.json({ error: r.error }, 503) : c.json(r);
 });
 
 app.post('/api/auth/pair/claim', async (c) => {
   const body = await jsonObject(c);
-  const r = await claimPairCode(c.env.DB, String(body.code || ''));
+  let key: string;
+  try { key = requireKey(c.env); } catch (e) { return c.json({ error: String((e as Error).message) }, 503); }
+  const r = await claimPairCode(c.env.DB, String(body.code || ''), key);
   return r.session ? c.json({ session: r.session }) : c.json({ error: r.error }, 400);
 });
 
@@ -1291,6 +1296,9 @@ export const WEBHOOK_TEST_COOLDOWN_MS = 30_000;
 
 app.post('/api/me/settings/test', async (c) => {
   const r = await me(c); if (r instanceof Response) return r;
+  // A Worker that does not send alerts (its SEND_ALERTS secret is not yes) says so plainly: nothing is posted, the
+  // user's settings are not read, the cooldown is not started, and the user's link is not blamed.
+  if (!alertsOn()) return c.json({ error: 'Alerts are off on this server' }, 503);
   const cur = await settingsOrDefault(c.env.DB, r.key, r.s!.address);
   const url = cur.channels.discord.webhookUrl;
   if (!url) return c.json({ error: 'no Discord webhook saved' }, 400);
