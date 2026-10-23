@@ -222,8 +222,16 @@ test.describe('holder figures and chips (API answers modified in the test)', () 
     await expect(cats.locator('legend')).toHaveText('What');
     await expect(cats.locator('.chipsel__o', { hasText: 'Backer' })).toContainText('248');
     await expect(cats.locator('.chipsel__o', { hasText: 'All' })).toContainText('2,212');
-    // an older server: counted among the rows loaded, and the legend says so
+    // an older server (before the stored totals: no categories, asOf, countsAt or next; the production server sends
+    // all four): counted among the rows loaded, and the legend says so
     await page.unroute(LIST);
+    await page.route(LIST, async (route) => {
+      const res = await route.fetch().catch(() => null);
+      const j = res ? await res.json().catch(() => null) : null;
+      if (!j) return route.abort().catch(() => undefined);
+      for (const k of ['categories', 'asOf', 'countsAt', 'next']) delete j[k];
+      await route.fulfill({ json: j }).catch(() => undefined);
+    });
     await page.reload();
     await expect(page.locator('main .hrow').first()).toBeVisible({ timeout: 30_000 });
     await openSheet(page, sheet);
@@ -415,14 +423,16 @@ test.describe('once', () => {
     await expect(head.getByRole('link', { name: 'Last page' })).toHaveAttribute('aria-disabled', 'true');
   });
 
-  test('numbered pages on Transactions: › replaces the rows and focuses the first, the count line, Back', async ({ page }) => {
+  test('numbered pages on Transactions: › replaces the rows and focuses the first, its URL carries the server position, the count line, Back', async ({ page }) => {
     await gotoRoute(page, ACT.path);
     const rows = page.locator('main .txl .tx');
     await expect(rows.first()).toBeVisible({ timeout: 30_000 });
     await expect(page.locator('.act-count')).toContainText(/A total of [\d,]+ moves found/);
     const foot = page.locator('.act-pager--foot');
     await foot.getByRole('link', { name: 'Next page' }).click();
-    await expect(page).toHaveURL(/\/activity\?page=2$/);
+    // a page read by › carries the server's position (FlowsResponse.next) next to ?page= (urlState.ts), so the server
+    // seeks to it instead of walking an offset and counting again
+    await expect(page).toHaveURL(/\/activity\?page=2&cursor=[\w-]+$/);
     await expect(page.locator('main .act-scope')).not.toHaveAttribute('aria-busy', 'true', { timeout: 30_000 });
     await expect(rows.first()).toBeFocused();
     expect(await rows.count()).toBeLessThanOrEqual(50);
@@ -749,10 +759,11 @@ test.describe('list controls', () => {
 });
 
 // ---------------------------------------------------------------------------------------------
-// The lists on the stored-totals and cursor server (nav-search-plan 2.1, 2.2, 2.4, 2.5, 3.5, 4.3). That server is not
-// in production yet, so its answers are route mocks shaped exactly like shared/types.ts (HoldersResponse with asOf,
-// countsAt and categories; FlowsResponse with next, asOf, firstTs and last, total null behind a cursor). The stream is
-// mocked silent, so no live move lands on top of the mocked rows.
+// The lists on the stored-totals and cursor server (nav-search-plan 2.1, 2.2, 2.4, 2.5, 3.5, 4.3). The production
+// server answers in that shape, but its counts and rows change, so these tests mock the answers, shaped exactly like
+// shared/types.ts (HoldersResponse with asOf, countsAt and categories; FlowsResponse with next, asOf, firstTs and last,
+// total null behind a cursor), and assert fixed figures. The stream is mocked silent, so no live move lands on top of
+// the mocked rows.
 // ---------------------------------------------------------------------------------------------
 const B32 = 'qpzry9x8gf2tvdw0s3jn54khce6mua7l';
 /** A bech32-shaped address for row i: tnam1 + 40 data characters, osmo1 + 38. */
