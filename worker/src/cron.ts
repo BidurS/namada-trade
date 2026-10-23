@@ -1,18 +1,18 @@
 import type { Env } from './util';
 import { runBatch, stmt, kvGet, kvSet, kvGetJson } from './db';
-import { fetchOsmosisHolderList, fetchOsmosisSupplyBase, OSMOSIS_HOLDER_PAGES } from './sources/osmosis';
+import { fetchOsmosisHolderList, fetchOsmosisSupplyBase, fetchOsmosisBalanceBase, OSMOSIS_HOLDER_PAGES, OSMOSIS_NEXT_KEY_MAX, KEPLR_REST_SRC, type HolderListRead, type KeplrOpts, type OsmosisBalanceRead } from './sources/osmosis';
 import { fetchNamPools, fetchNamPrice } from './sources/sqs';
 import { QUOTE_KEYS } from '../../shared/settle';
-import { namBalance, namTotalSupply, namTotalStake, namadaEpoch, namadaStatusAll, delegationsAt, answeringRpcs, listingHeads, QUICK, RpcBreaker, allNamBalances, allBonds, type BalanceListing, type BondListing, type ReadOpts, type Rpc } from './sources/namada';
+import { namBalance, namTotalSupply, namTotalStake, namadaEpoch, namadaStatusAll, delegationsAt, answeringRpcs, listingHeads, QUICK, RpcBreaker, allNamBalances, allBonds, ListingTooLargeError, LISTING_MAX_VALUE_BYTES, type BalanceListing, type BondListing, type ReadOpts, type Rpc } from './sources/namada';
 import { fetchIntelChecked } from './sources/intel';
 import { sendDiscordForumAlert, sendDiscordGovAlert } from './sources/discord';
 import { NAM, NAMADA, OSMOSIS } from './config';
-import { fetchJson, toNam } from './util';
+import { fetchJson, toNam, isRealAddress, FETCH_TEXT_MAX_BYTES } from './util';
 import type { IntelResponse, SourceHealth } from '../../shared/types';
 import type { Stmt } from './db';
 import { sweepAuth } from './auth';
 import { NOT_LEGACY_TWIN } from './flows-query';
-import { unbondAddresses, fetchUnbonds, buildUnbondTermStructure, cachedChainParams, type UnbondWithdrawCache } from './analytics';
+import { unbondAddresses, fetchUnbonds, buildUnbondTermStructure, cachedChainParams, UNLOCKS_MIN_NAM, UNBOND_WITHDRAW_STALE_MS, type UnbondWithdrawCache } from './analytics';
 import { chainParams, indexState, NAMADA_CURSOR_MAX_LAG, NAMADA_CURSOR_STALE_MS, OSMOSIS_LIVE_STALE_MS, OSMOSIS_SWEEP_STALE_MS, timedOutSends, ibcRowOf, safeParseJson } from './analytics';
 import { INDEXER_IBC_STATUS, innerTxOfRow, reconcileStuckPackets, stuckTotalNam, type StuckCandidate, type StuckList } from './ibc-stuck';
 import type { LiveUnbondStatus, LiveScanStatus } from './live-hub';
@@ -20,6 +20,7 @@ import type { AlertsSkipped } from './sources/discord';
 import {
   INTERNAL_ADDRS, BALANCE_LISTING_SRC, BOND_LISTING_SRC, SPAN_EXTEND_MS, HAS_READING, listingTimes, readHolderFigures, refreshHolderFigures, figuresDue,
   osmosisDroppedStmt, spanStmts, listingBalanceStmts, listingZeroStmts, listingUnpinStmts, listingSpanStmts, pruneSpansStmt, type ListedBalance,
+  OSMOSIS_PASS_KV, OSMOSIS_READ_AT_SQL, OSMOSIS_DROPPED_SQL, OSMOSIS_RECHECK_TOP_SQL, OSMOSIS_ROWS_SUM_SQL,
 } from './holders';
 import * as series from './series';
 
@@ -283,37 +284,419 @@ export function batchHealthOk(due: number, written: number, attempted: number, f
  * supply of NAM there (within 0.5%, as transfers can land between page reads), may zero holders missing from it.
  */
 export function osmosisListCheck(holders: { balance: string }[], complete: boolean, supplyBase: bigint | null, capped = false): { trust: boolean; note: string } {
-  const sum = holders.reduce((a, h) => a + BigInt(h.balance || '0'), 0n);
+  return osmosisSumCheck(holders.length, holders.reduce((a, h) => a + BigInt(h.balance || '0'), 0n), complete, supplyBase, capped);
+}
+
+/** osmosisListCheck on a count and a sum: a pass read over several ticks (OsmoHolderPass) keeps only these. */
+export function osmosisSumCheck(count: number, sum: bigint, complete: boolean, supplyBase: bigint | null, capped = false): { trust: boolean; note: string } {
   if (!complete) return { trust: false, note: capped
-    ? `${holders.length} holders read and the page cap was reached, so rows past it are not refreshed and missing holders are not zeroed`
-    : `${holders.length} holders read, but a page came back without the bank's page information, so missing holders are not zeroed` };
-  if (supplyBase == null || supplyBase <= 0n) return { trust: false, note: `${holders.length} holders read; the supply could not be read to check the list, so missing holders are not zeroed` };
-  const diff = sum > supplyBase ? sum - supplyBase : supplyBase - sum;
-  const pct = Number((diff * 1_000_000n) / supplyBase) / 10_000;
-  return pct <= 0.5
-    ? { trust: true, note: `${holders.length} holders, adding up to the supply within ${pct.toFixed(3)}%` }
-    : { trust: false, note: `${holders.length} holders add up to ${pct.toFixed(2)}% away from the supply, so missing holders are not zeroed` };
+    ? `${count} holders read and the page cap was reached, so rows past it are not refreshed and missing holders are not zeroed`
+    : `${count} holders read, but a page came back without the bank's page information, so missing holders are not zeroed` };
+  if (supplyBase == null || supplyBase <= 0n) return { trust: false, note: `${count} holders read; the supply could not be read to check the list, so missing holders are not zeroed` };
+  const pct = supplyGapPct(sum, supplyBase);
+  return pct <= OSMO_SUPPLY_TOLERANCE_PCT
+    ? { trust: true, note: `${count} holders, adding up to the supply within ${pct.toFixed(3)}%` }
+    : { trust: false, note: `${count} holders add up to ${pct.toFixed(2)}% away from the supply, so missing holders are not zeroed` };
+}
+/** How far a sum of Osmosis balances may be from the bank's supply and still add up to it, in percent. */
+const OSMO_SUPPLY_TOLERANCE_PCT = 0.5;
+/** How far `sum` is from a positive `supplyBase`, in percent, rounded down to 0.0001%. */
+const supplyGapPct = (sum: bigint, supplyBase: bigint) => Number(((sum > supplyBase ? sum - supplyBase : supplyBase - sum) * 1_000_000n) / supplyBase) / 10_000;
+
+/**
+ * Whether the Osmosis rows, read after the tick that completes a pass has written its reads by address
+ * (recheckOsmosisRows), still add up to the supply: `rowsSum` is OSMOSIS_ROWS_SUM_SQL's answer, null when it could
+ * not be read. The list's own sum can add up while its rows do not: two moves between the slices of one pass, one
+ * from an address read early to one read late and one from a late address to an early one read before it received,
+ * cancel in the list's sum, and the re-read of the early sender then takes its NAM out of the rows while the early
+ * receiver is in none. So a pass is trusted (its start becomes the figures' stamp) only when this holds too. The
+ * note is null when it holds, so the row reads as it did.
+ */
+export function osmosisRowsCheck(rowsSum: bigint | null, supplyBase: bigint | null): { trust: boolean; note: string | null } {
+  if (rowsSum == null) return { trust: false, note: 'the rows could not be added up after the reads by address, so the pass is not taken as current' };
+  if (supplyBase == null || supplyBase <= 0n) return { trust: false, note: 'the supply could not be read to check the rows, so the pass is not taken as current' };
+  const pct = supplyGapPct(rowsSum, supplyBase);
+  return pct <= OSMO_SUPPLY_TOLERANCE_PCT
+    ? { trust: true, note: null }
+    : { trust: false, note: `after the reads by address the rows add up to ${pct.toFixed(2)}% away from the supply, so the pass is not taken as current` };
+}
+
+/** kv key of the Osmosis holder pass (OsmoHolderPass). */
+export const OSMO_PASS_KV = OSMOSIS_PASS_KV;
+/**
+ * One read of the whole Osmosis holder list, which may go on over several ticks: a tick reads what fits in its time
+ * (OSMO_SLICE_RESERVE_MS) and at most OSMOSIS_HOLDER_PAGES pages from the bank's next key (`key`), writes those rows,
+ * and the next tick goes on from there. Only the tick that reads the last page may zero the holders the pass did not
+ * name (every row it named carries a read time at or after `startedAt`), and only when the pass adds up to the supply
+ * and the bank, asked by address, says the holder has none (recheckOsmosisRows). So a list longer than one tick can
+ * read is still read whole, and no fixed number of holders stops the zeroing.
+ * `key` null: no pass under way (a 10-minute sync from nextOsmoPassAt on starts one). `fails`: slices in a row that failed; at
+ * OSMO_PASS_FAILS_MAX the pass is dropped and the next sync starts again from the first page. `spansHour`: the hour
+ * (ms / 1 h) whose balance spans a pass recorded; the first pass to start in an hour records them on all its slices.
+ * `trustedStartedAt`: the start of the last pass that added up to the supply, both its list and the rows it left
+ * after the reads by address (osmosisRowsCheck; on the first record, the oldest reading the count then included): the
+ * Osmosis figures and series are stamped no later than it (holders.ts osmosisTrustedStart), so a pass that does not
+ * add up never makes them read current. `lastPassMs`: how long the last complete pass took (osmoPassOverdueMs).
+ *
+ * How far this goes, at the pace measured on 2026-10-23 (810 ms a page, about 37 pages of 100 owners a tick) and with
+ * passes an hour or more apart (each records balance spans, so the next waits holders × 2 / 1,000 minutes): the
+ * count's stamp is the last trusted pass's start until the next pass completes, so just before that it is as old as
+ * the gap between two pass starts and one pass's length together. That passes 6 hours, and the figures read old for
+ * part of every cycle, from about 155,000 owners (1,339 on 2026-10-23; fewer if fewer pages fit a tick). Every pass
+ * still completes and zeroes; the figures only say they are old.
+ */
+export interface OsmoHolderPass {
+  startedAt: number; key: string | null; pages: number; holders: number; sumBase: string; ticks: number; fails: number;
+  spans: boolean; spansHour: number | null; completeAt: number | null; trustedAt: number | null;
+  trustedStartedAt: number | null; lastPassMs: number | null;
+}
+/**
+ * A pass not complete after this long, or after twice the last complete pass's length when that is longer (at most
+ * OSMO_PASS_OVERDUE_MAX_MS), is reported not ok on every tick it goes on (osmoPassOverdueMs). At about 37 pages a
+ * tick, a pass of more than about 111,000 owners takes longer than 30 minutes: scaled with the last pass, a list that
+ * grows as owners are added is never reported for its length alone, while one that never ends still is.
+ */
+export const OSMO_PASS_OVERDUE_MS = 30 * 60_000;
+/** The longest a pass may go on before it is reported not ok, however long the last one took. */
+export const OSMO_PASS_OVERDUE_MAX_MS = 6 * 3600_000;
+/** How old a pass may be before it is reported not ok, after `prev` (OSMO_PASS_OVERDUE_MS). */
+export function osmoPassOverdueMs(prev: Pick<OsmoHolderPass, 'lastPassMs'> | null): number {
+  const last = prev?.lastPassMs != null && Number.isFinite(prev.lastPassMs) ? prev.lastPassMs : 0;
+  return Math.min(OSMO_PASS_OVERDUE_MAX_MS, Math.max(OSMO_PASS_OVERDUE_MS, 2 * last));
+}
+/** Failed slices in a row after which a pass is dropped (a next key the bank no longer answers). */
+export const OSMO_PASS_FAILS_MAX = 3;
+/** A slice stops reading pages this long before the tick's deadline, so its writes and the figures after it get their turn. */
+export const OSMO_SLICE_RESERVE_MS = 15_000;
+/**
+ * Rows a minute the passes write on average: a new pass starts at a 10-minute sync only once the last one's rows (each
+ * holder's, twice when it recorded balance spans) / this many minutes have gone by since it started. Every pass
+ * rewrites each holder's row, so without it an outsider who adds owners would set how many rows D1 writes; 1,000 a
+ * minute (43 million a month) is what 10,000 holders every 10 minutes, the old page cap, allowed. 1,339 holders: a
+ * pass every 10 minutes, as before; 100,000: one every 100 to 200 minutes.
+ */
+export const OSMO_PASS_ROWS_PER_MIN = 1000;
+
+/** When the next pass may start after `prev` (OSMO_PASS_ROWS_PER_MIN); 0 without one. */
+export function nextOsmoPassAt(prev: OsmoHolderPass | null): number {
+  return prev ? prev.startedAt + Math.ceil(((prev.holders * (prev.spans ? 2 : 1)) / OSMO_PASS_ROWS_PER_MIN) * 60_000) : 0;
+}
+
+/** The stored pass, or null (none, or unreadable). */
+export async function readOsmoPass(db: D1Database): Promise<OsmoHolderPass | null> {
+  const p = await kvGetJson<OsmoHolderPass>(db, OSMO_PASS_KV).catch(() => null);
+  const time = (t: unknown) => t === null || Number.isFinite(t);
+  return p && Number.isFinite(p.startedAt) && Number.isFinite(p.pages) && Number.isFinite(p.holders) && typeof p.sumBase === 'string' && /^\d{1,60}$/.test(p.sumBase)
+    && (p.key === null || (typeof p.key === 'string' && p.key.length <= OSMOSIS_NEXT_KEY_MAX))
+    && time(p.trustedStartedAt) && (p.lastPassMs === undefined || time(p.lastPassMs)) ? { ...p, lastPassMs: p.lastPassMs ?? null } : null;
+}
+
+/**
+ * The pass after one slice (`read`, null when the read failed) at `now`, and what the tick should do with it:
+ * `zeroBefore` (the pass is complete and its list adds up: the Osmosis holders read before it may be zeroed, each
+ * once the bank says by address it has none), `recheckBefore` (the pass completed over several ticks: the largest
+ * holders read before it are read again by address), `spans` (record this slice's readings as balance spans), and the
+ * health row's ok and note. `withheld`, with `zeroBefore`: the record to store instead of `pass` (complete, its trust
+ * not advanced) when the rows no longer add up after the reads by address (osmosisRowsCheck). `seed`: with no stored
+ * pass, the oldest reading the Osmosis count includes (holders.ts OSMOSIS_READ_AT_SQL), which stands as the last
+ * trusted pass's start until a pass adds up.
+ */
+export function nextOsmoPass(prev: OsmoHolderPass | null, read: HolderListRead | null, supplyBase: bigint | null, now: number, seed: number | null = null): {
+  pass: OsmoHolderPass; zeroBefore: number | null; recheckBefore: number | null; spans: boolean; ok: boolean; note: string | null; withheld?: OsmoHolderPass;
+} {
+  const going = prev?.key ? prev : null;
+  const hour = Math.floor(now / 3600_000);
+  if (!read) {
+    // A failed slice: the pass keeps its key for the next tick, until it has failed OSMO_PASS_FAILS_MAX times in a row.
+    if (!going) return { pass: prev ?? emptyPass(now, seed), zeroBefore: null, recheckBefore: null, spans: false, ok: false, note: null };
+    const fails = (going.fails ?? 0) + 1;
+    const drop = fails >= OSMO_PASS_FAILS_MAX;
+    return { pass: { ...going, fails, key: drop ? null : going.key }, zeroBefore: null, recheckBefore: null, spans: false, ok: false,
+      note: drop ? `the read failed ${fails} times in a row at page ${going.pages + 1}, so the pass is dropped and the next sync starts again from the first page` : null };
+  }
+  const base = going ?? {
+    ...emptyPass(now, prev ? prev.trustedStartedAt : seed), spans: hour !== prev?.spansHour, spansHour: hour !== prev?.spansHour ? hour : prev?.spansHour ?? null,
+    completeAt: prev?.completeAt ?? null, trustedAt: prev?.trustedAt ?? null, lastPassMs: prev?.lastPassMs ?? null,
+  };
+  const sum = BigInt(base.sumBase) + read.holders.reduce((a, h) => a + BigInt(h.balance), 0n);
+  const pass: OsmoHolderPass = { ...base, key: read.complete ? null : read.nextKey ?? null, pages: base.pages + read.pages, holders: base.holders + read.holders.length, sumBase: sum.toString(), ticks: base.ticks + 1, fails: 0 };
+  if (read.complete) {
+    const chk = osmosisSumCheck(pass.holders, sum, true, supplyBase);
+    const over = pass.ticks > 1 ? ` (one pass of ${pass.pages} pages over ${pass.ticks} ticks since ${new Date(pass.startedAt).toISOString().slice(11, 16)} UTC)` : '';
+    const done: OsmoHolderPass = { ...pass, completeAt: now, lastPassMs: now - pass.startedAt };
+    return {
+      pass: chk.trust ? { ...done, trustedAt: now, trustedStartedAt: pass.startedAt } : done,
+      zeroBefore: chk.trust ? pass.startedAt : null, recheckBefore: pass.ticks > 1 ? now : null, spans: pass.spans, ok: chk.trust, note: `${chk.note}${over}`,
+      ...(chk.trust ? { withheld: done } : {}),
+    };
+  }
+  if (pass.key) {
+    const age = now - pass.startedAt;
+    const overdue = osmoPassOverdueMs(pass);
+    return { pass, zeroBefore: null, recheckBefore: null, spans: pass.spans, ok: age < overdue,
+      note: `${pass.holders} holders read in ${pass.pages} pages since ${new Date(pass.startedAt).toISOString().slice(11, 16)} UTC; the next tick goes on from the bank's next key, and holders missing from the list are zeroed when it is complete${age >= overdue ? ` (not complete after ${Math.round(age / 60_000)} minutes)` : ''}` };
+  }
+  // Stopped without the bank's page information: the pass ends here, not complete; the next sync starts a new one.
+  return { pass, zeroBefore: null, recheckBefore: null, spans: pass.spans, ok: false, note: osmosisSumCheck(pass.holders, sum, false, supplyBase, false).note };
+}
+const emptyPass = (now: number, trustedStartedAt: number | null): OsmoHolderPass => ({
+  startedAt: now, key: null, pages: 0, holders: 0, sumBase: '0', ticks: 0, fails: 0, spans: false, spansHour: null, completeAt: null, trustedAt: null,
+  trustedStartedAt, lastPassMs: null,
+});
+
+/** Holders a trusted pass did not name that are asked about by address before any is zeroed, largest first, per pass. */
+export const OSMO_DROP_RECHECK_MAX = 20;
+/** The largest holders read in the earlier slices of a pass of several ticks, read again by address when it completes. */
+export const OSMO_TOP_RECHECK = 10;
+/** The re-reads by address stop this long before the tick's deadline, so the figures after them get their turn. */
+export const OSMO_RECHECK_RESERVE_MS = 5_000;
+
+/**
+ * The tick that completes a pass of the Osmosis holder list asks the bank, one address at a time, about the rows the
+ * list alone would decide (sources/osmosis.ts fetchOsmosisBalanceBase):
+ * - With `zeroBefore` (a trusted pass), the rows it did not name, largest first, at most OSMO_DROP_RECHECK_MAX: only
+ *   those the bank says hold none are zeroed (osmosisDroppedStmt), one that holds NAM is written at the bank's
+ *   balance, and the rest (past the cap, or no answer) are kept for the next pass. A pass read over several ticks
+ *   can miss a holder that received NAM from an address it read later, and still add up within 0.5%. A row whose
+ *   address is not an Osmosis address is zeroed without asking: the bank holds nothing there.
+ * - With `recheckBefore` (a pass of several ticks), the OSMO_TOP_RECHECK largest holders read before this tick: NAM
+ *   that moved between two slices was read at both of its addresses, and the top ten would count it twice.
+ * Each address is read from Keplr's REST and, when that fails, from Osmosis's public REST; every answer is written as
+ * read at `now`, with the source that gave it. Returns what was done and a note for the health row (null when
+ * nothing was left out), which says how many neither source answered. Whether the pass is trusted is decided after
+ * this, on the rows it leaves (osmosisRowsCheck).
+ */
+export async function recheckOsmosisRows(db: D1Database, keplrKey: string, now: number, zeroBefore: number | null, recheckBefore: number | null, opts: KeplrOpts): Promise<{
+  zeroed: number; held: number; unanswered: number; more: boolean; reread: number; topUnanswered: number; note: string | null;
+}> {
+  type Row = { address: string; balance_num: number };
+  const [dropped, top] = await Promise.all([
+    zeroBefore != null ? db.prepare(OSMOSIS_DROPPED_SQL).bind(zeroBefore, OSMO_DROP_RECHECK_MAX + 1).all<Row>().then((r) => r.results || []) : Promise.resolve([] as Row[]),
+    recheckBefore != null ? db.prepare(OSMOSIS_RECHECK_TOP_SQL).bind(recheckBefore, OSMO_TOP_RECHECK).all<Row>().then((r) => r.results || []) : Promise.resolve([] as Row[]),
+  ]);
+  const more = dropped.length > OSMO_DROP_RECHECK_MAX;
+  const gone = dropped.slice(0, OSMO_DROP_RECHECK_MAX);
+  const notAddress = gone.filter((r) => isRealAddress(r.address) !== 'osmosis').map((r) => r.address);
+  const ask = [...new Set([...top.map((r) => r.address), ...gone.map((r) => r.address)].filter((a) => isRealAddress(a) === 'osmosis'))];
+  const answers = new Map<string, OsmosisBalanceRead>();
+  for (let i = 0; i < ask.length && !opts.signal?.aborted; i += 4) {
+    await Promise.all(ask.slice(i, i + 4).map((a) => fetchOsmosisBalanceBase(keplrKey, a, opts).then((v) => { answers.set(a, v); }, () => {})));
+  }
+  const goneSet = new Set(gone.map((r) => r.address));
+  const zeroRead = gone.filter((r) => answers.get(r.address)?.base === 0n).map((r) => r.address);
+  const zero = [...notAddress, ...zeroRead];
+  const write = [...answers].filter(([a, v]) => v.base > 0n || !goneSet.has(a));
+  const held = gone.filter((r) => (answers.get(r.address)?.base ?? 0n) > 0n).length;
+  const unanswered = gone.length - zero.length - held;
+  const topUnanswered = top.filter((r) => isRealAddress(r.address) === 'osmosis' && !goneSet.has(r.address) && !answers.has(r.address)).length;
+  // A zeroed row names the source that said it holds none (a row whose address is not an Osmosis one, asked of
+  // nobody, as the list's own rows do): one statement a source.
+  const zeroBy = new Map<string, string[]>([[KEPLR_REST_SRC, [...notAddress]]]);
+  for (const a of zeroRead) { const src = answers.get(a)!.src; zeroBy.set(src, [...(zeroBy.get(src) ?? []), a]); }
+  const stmts: Stmt[] = [
+    ...write.map(([a, v]) => stmt.verifiedBalance('osmosis', a, v.base.toString(), null, now, v.src)),
+    ...(zeroBefore != null ? [...zeroBy].filter(([, z]) => z.length > 0).map(([src, z]) => osmosisDroppedStmt(now, zeroBefore, z, src)) : []),
+  ];
+  if (stmts.length) await runBatch(db, stmts);
+  const notes: string[] = [];
+  if (held) notes.push(`${held} not named by the list ${held === 1 ? 'holds' : 'hold'} NAM by the bank's balance read by address, so ${held === 1 ? 'it was' : 'they were'} written at that balance`);
+  if (unanswered) notes.push(`${unanswered} not named by the list ${unanswered === 1 ? 'was' : 'were'} not zeroed: neither Keplr's REST nor Osmosis's public REST answered the balance read by address in this tick's time, so the next pass asks again`);
+  if (topUnanswered) notes.push(`${topUnanswered} of the largest readings of the earlier slices ${topUnanswered === 1 ? 'was' : 'were'} not read again: neither Keplr's REST nor Osmosis's public REST answered the balance read by address in this tick's time`);
+  if (more) notes.push(`more than ${OSMO_DROP_RECHECK_MAX} were not named by the list, and at most ${OSMO_DROP_RECHECK_MAX} are asked about by address a pass: the rest are kept for the next passes`);
+  return { zeroed: zero.length, held, unanswered, more, reread: write.length - held, topUnanswered, note: notes.length ? notes.join('; ') : null };
+}
+
+/** How far apart in time the two records of one crossing may be. */
+export const PAIR_WINDOW_MS = 15 * 60000;
+/** The most unpaired Namada rows for which the bridge pairing's search for chains of moves (unpairedCrossings) goes past a record another row holds. */
+export const PAIR_AUGMENT_ROWS = 200;
+/** The most records one such search looks at, in the row's own window and in those of the rows it would move. */
+export const PAIR_AUGMENT_LOOKS = 20;
+/**
+ * The most rows one such search would move, one after another. One row that moves pairs an escrow send beside a later
+ * send of the same user and amount, and an escrow receive beside a shielded deposit; chains of up to three were
+ * needed to pair as many as can be paired in 180,000 random honest and adversarial cases of two to seven crossings
+ * (2026-10-23), and one more is allowed to spare.
+ */
+export const PAIR_AUGMENT_DEPTH = 4;
+/**
+ * The most rows each read of the bridge check takes, newest first. The 14 days to 2026-10-22 held 39 crossings a
+ * chain and the busiest fortnight since launch 709 on Namada, but any chain user can add rows (a dust transfer is
+ * one), so a read is bounded and the memory it takes with it: the three reads at this cap are about 12 MB of
+ * answers and as much again once parsed, beside a balance listing that may be in flight.
+ */
+export const BRIDGE_CHECK_ROWS = 10_000;
+
+/**
+ * When a bridge-check read came back full (BRIDGE_CHECK_ROWS rows, newest first), the time after which every record a
+ * crossing can pair with is in the reads: its other record within PAIR_WINDOW_MS, its refund after it. Null when no
+ * read was full and the whole 14 days are judged.
+ */
+export function bridgeJudgedFrom(namada: { ts: number }[], osmosis: { ts: number }[], refunds: { ts: number }[]): number | null {
+  const oldest = (rows: { ts: number }[]) => rows.reduce((a, r) => Math.min(a, r.ts), Infinity);
+  const full = (rows: unknown[]) => rows.length >= BRIDGE_CHECK_ROWS;
+  const from = Math.max(
+    full(namada) ? oldest(namada) + PAIR_WINDOW_MS : -Infinity,
+    full(osmosis) ? oldest(osmosis) + PAIR_WINDOW_MS : -Infinity,
+    full(refunds) ? oldest(refunds) : -Infinity,
+  );
+  return from === -Infinity ? null : from;
 }
 
 /**
  * Bridge crossings recorded on one chain and not on the other: each Namada bridge row (to or from an osmo1 address)
  * should have the Osmosis record of the same transfer (same addresses and amount within 15 minutes), and the other
  * way round. Rows younger than 30 minutes are not judged (relayers can be slow). Refunded sends are left out.
+ *
+ * Chain users decide how many rows there are (a dust transfer is one) and this runs every minute, so the Osmosis
+ * records are indexed by kind, addresses and amount and searched by time: the work grows with the rows, not with
+ * their product. The Namada rows that name both their addresses are taken first, oldest first, each with the earliest
+ * unpaired Osmosis record in its window: with windows of one width that pairs as many records of one key as can be
+ * paired. The rows that name the escrow or the shielded pool, which stand for many addresses, are taken after them
+ * with the records left, so none takes first the record a row of its own addresses needs (a relayer that delivers a
+ * shielded and a transparent crossing of one user and amount in one transaction). A row of its own addresses can
+ * still take the one record an escrow row could pair with, and a shielded-pool row the record of an escrow row, so a
+ * bounded search then gives an unpaired row a record another row holds whenever that row can move to another record
+ * of its own window, directly or through a short chain of such moves (PAIR_AUGMENT_ROWS, PAIR_AUGMENT_LOOKS,
+ * PAIR_AUGMENT_DEPTH). When the moves a row needs fit those bounds, as they did in every case tried, it pairs as many
+ * as can be paired; past them it does not promise to.
  */
 export function unpairedCrossings(namada: any[], osmosis: any[], now: number): { namadaOnly: any[]; osmosisOnly: any[] } {
-  const W = 15 * 60000, SETTLE = 30 * 60000;
-  const used = new Set<any>();
-  const namadaOnly: any[] = [];
+  const W = PAIR_WINDOW_MS, SETTLE = 30 * 60000;
   // Older Namada rows name the bridge escrow instead of the Osmosis address, and a shielded withdrawal leaves the
   // pool on Namada but is sent from a one-time transparent address on the packet: then the other address, the
-  // amount and the time have to do.
-  const same = (a: string | null, b: string | null) => a === b || a === NAMADA.internal.ibc || (a === NAMADA.internal.masp && !!b?.startsWith('tnam1'));
-  for (const n of namada) {
-    const want = n.kind === 'ibc_in' ? 'ibc_out' : 'ibc_in';
-    const m = osmosis.find((o) => !used.has(o) && o.kind === want && same(n.from_addr, o.from_addr) && same(n.to_addr, o.to_addr) && Math.abs(o.amount_num - n.amount_num) < 1e-6 && Math.abs(o.ts - n.ts) <= W);
-    if (m) used.add(m);
-    else if (now - n.ts > SETTLE) namadaOnly.push(n);
+  // amount and the time have to do. So a Namada address stands for itself, for any address (the escrow) or for any
+  // tnam1 address (the shielded pool), and the Osmosis records are indexed once for each mix of these a Namada row asks.
+  // A key is the JSON of [kind, from, to, amount], with 0 for "any address" and 1 for "a tnam1 address", which no
+  // address text can be (an Osmosis receiver is text the sender chose).
+  type Cls = 'own' | 'any' | 'tnam';
+  const clsOf = (a: string | null): Cls => (a === NAMADA.internal.ibc ? 'any' : a === NAMADA.internal.masp ? 'tnam' : 'own');
+  const nKey = (c: Cls, a: string | null) => (c === 'own' ? a ?? null : c === 'any' ? 0 : 1);
+  // undefined: the record cannot pair with a Namada row of this class (the shielded pool's other address is a tnam1 one).
+  const oKey = (c: Cls, b: string | null) => (c === 'own' ? b ?? null : c === 'any' ? 0 : b?.startsWith('tnam1') ? 1 : undefined);
+  const keyOf = (kind: unknown, f: string | number | null, t: string | number | null, amount: number) => JSON.stringify([kind, f, t, amount]);
+  // Amounts in micro units (NAM has six decimals): one bucket holds one amount, and a Namada row also looks one
+  // unit either side, as amounts less than 1e-6 apart have always paired.
+  const micro = (x: number) => Math.round(x * 1e6);
+  // Records of one time (one block) in the order they were written: by height, then id, the shorter first, so that
+  // the packets of one transaction (ids ending :6, :7 … :10) keep their order. The Namada rows are taken in the same
+  // order, so two crossings a relayer delivered together are paired in the order they were sent.
+  const idOrder = (a: unknown, b: unknown) => { const x = String(a ?? ''), y = String(b ?? ''); return x.length - y.length || (x < y ? -1 : x > y ? 1 : 0); };
+  const byTime = (x: any, y: any) => x.ts - y.ts || (Number(x.height) || 0) - (Number(y.height) || 0) || idOrder(x.id, y.id);
+  // A bucket's records sorted by time; next[i] leads past records already paired (i itself while it is free).
+  type Bucket = { rows: any[]; ts: number[]; next: Int32Array };
+  const used = new Set<any>();
+  const indexes = new Map<string, Map<string, Bucket>>();
+  const indexFor = (fc: Cls, tc: Cls) => {
+    let ix = indexes.get(fc + tc);
+    if (ix) return ix;
+    ix = new Map();
+    for (const o of osmosis) {
+      const f = oKey(fc, o.from_addr), t = oKey(tc, o.to_addr);
+      // A record with no time can never be in a window.
+      if (f === undefined || t === undefined || !Number.isFinite(o.ts)) continue;
+      const key = keyOf(o.kind, f, t, micro(o.amount_num));
+      let b = ix.get(key);
+      if (!b) ix.set(key, (b = { rows: [], ts: [], next: new Int32Array(0) }));
+      b.rows.push(o);
+    }
+    for (const b of ix.values()) {
+      b.rows.sort(byTime);
+      b.ts = b.rows.map((r) => r.ts);
+      b.next = Int32Array.from(b.rows, (_, i) => i);
+    }
+    indexes.set(fc + tc, ix);
+    return ix;
+  };
+  // The first free record at or after i (a record paired through another index is passed over the same way).
+  const free = (b: Bucket, i: number) => {
+    let r = i;
+    while (r < b.rows.length && (b.next[r] !== r || used.has(b.rows[r]))) r = b.next[r] !== r ? b.next[r] : (b.next[r] = r + 1);
+    for (let j = i; j < r;) { const nx = b.next[j]; b.next[j] = r; j = nx; }
+    return r;
+  };
+  const firstAtOrAfter = (ts: number[], x: number) => {
+    let lo = 0, hi = ts.length;
+    while (lo < hi) { const mid = (lo + hi) >> 1; if (ts[mid] < x) lo = mid + 1; else hi = mid; }
+    return lo;
+  };
+  // The record each paired Namada row holds, and the row each used record is held by.
+  const pairOf = new Map<any, any>(), holder = new Map<any, any>();
+  const want = (n: any) => (n.kind === 'ibc_in' ? 'ibc_out' : 'ibc_in');
+  /** The buckets a Namada row may pair in: its kind, addresses and amount, one micro unit either side. */
+  const bucketsOf = (n: any): Bucket[] => {
+    const fc = clsOf(n.from_addr), tc = clsOf(n.to_addr);
+    const ix = indexFor(fc, tc);
+    const f = nKey(fc, n.from_addr), t = nKey(tc, n.to_addr);
+    const k = micro(n.amount_num);
+    const out: Bucket[] = [];
+    for (const d of [0, -1, 1]) { const b = ix.get(keyOf(want(n), f, t, k + d)); if (b) out.push(b); }
+    return out;
+  };
+  const fits = (n: any, o: any) => Math.abs(o.amount_num - n.amount_num) < 1e-6;
+  /** The earliest free record in a Namada row's window, or null. */
+  const search = (n: any): { b: Bucket; at: number } | null => {
+    let best: Bucket | null = null, at = -1;
+    for (const b of bucketsOf(n)) {
+      const j = free(b, firstAtOrAfter(b.ts, n.ts - W));
+      if (j < b.rows.length && b.ts[j] <= n.ts + W && fits(n, b.rows[j]) && (best == null || b.ts[j] < best.ts[at])) { best = b; at = j; }
+    }
+    return best ? { b: best, at } : null;
+  };
+  const take = (n: any, hit: { b: Bucket; at: number }) => {
+    const o = hit.b.rows[hit.at];
+    used.add(o); hit.b.next[hit.at] = hit.at + 1;
+    pairOf.set(n, o); holder.set(o, n);
+  };
+  const timed = namada.filter((n) => Number.isFinite(n.ts)).sort(byTime);
+  const own = (n: any) => clsOf(n.from_addr) === 'own' && clsOf(n.to_addr) === 'own';
+  const order = [...timed.filter(own), ...timed.filter((n) => !own(n))];
+  for (const n of order) {
+    const hit = search(n);
+    if (hit) take(n, hit);
   }
+  // Then a bounded search for chains of moves: a row left unpaired takes a record in its window that another row
+  // holds when that row can move to another record of its own window, free or held by a row that can move in turn, at
+  // most PAIR_AUGMENT_DEPTH rows down. The pass above can leave one unpaired where both could pair: a Namada row that
+  // names the escrow (a packet the parser could not bind) or the shielded pool stands for many addresses, and a row of
+  // its own addresses, or another such row, may have taken the earliest record of the one crossing it can pair with.
+  // Each unpaired row looks at no more than PAIR_AUGMENT_LOOKS records in all (its window's and those of the rows it
+  // would move), and at most PAIR_AUGMENT_ROWS of them get to search past a record another row holds, so the work is
+  // bounded for each row and the deeper searches are bounded in all, however many dust rows are unpaired; the most
+  // pairs there can be is not promised past those bounds.
+  /**
+   * A record for `n` (which holds none, or holds the one its caller is taking): a free one in its window, else one
+   * another row holds that can itself move on, at most `depth` rows down. `seen`: the records this search has passed
+   * on to a deeper row; `budget.looks`: how many records it may still look at; `budget.held`: set once it found a
+   * record another row holds (such a search counts toward PAIR_AUGMENT_ROWS).
+   */
+  const augment = (n: any, depth: number, seen: Set<any>, budget: { looks: number; held: boolean }): boolean => {
+    const hit = search(n);
+    if (hit) { take(n, hit); return true; }
+    if (depth <= 0) return false;
+    for (const b of bucketsOf(n)) {
+      for (let j = firstAtOrAfter(b.ts, n.ts - W); j < b.rows.length && b.ts[j] <= n.ts + W; j++) {
+        if (budget.looks <= 0) return false;
+        budget.looks--;
+        const o = b.rows[j], n2 = holder.get(o);
+        if (n2 == null || n2 === n || seen.has(o) || !fits(n, o)) continue;
+        seen.add(o);
+        budget.held = true;
+        if (augment(n2, depth - 1, seen, budget)) { pairOf.set(n, o); holder.set(o, n); return true; }
+      }
+    }
+    return false;
+  };
+  let tried = 0;
+  for (const n of order) {
+    if (tried >= PAIR_AUGMENT_ROWS) break;
+    if (pairOf.has(n)) continue;
+    const budget = { looks: PAIR_AUGMENT_LOOKS, held: false };
+    augment(n, PAIR_AUGMENT_DEPTH, new Set(), budget);
+    if (budget.held) tried++;
+  }
+  const paired = new Set(pairOf.keys());
+  const namadaOnly = namada.filter((n) => !paired.has(n) && now - n.ts > SETTLE);
   const osmosisOnly = osmosis.filter((o) => !used.has(o) && now - o.ts > SETTLE);
   return { namadaOnly, osmosisOnly };
 }
@@ -406,6 +789,29 @@ export function listingDue(rec: { at: number; remaining: number; failedAt?: numb
 }
 
 const mb = (bytes: number) => `${(bytes / 1e6).toFixed(1)} MB`;
+
+/** A listing whose value passes this share of LISTING_MAX_VALUE_BYTES says how close it is in its row, while there is time to change the reader. */
+export const LISTING_HEADROOM_WARN = 0.8;
+/** The clause a listing's row adds once its value (decoded bytes) passes LISTING_HEADROOM_WARN of what one read may hold ('' below it). */
+export function listingHeadroomNote(bytes: number): string {
+  return bytes >= LISTING_HEADROOM_WARN * LISTING_MAX_VALUE_BYTES
+    ? `; the answer is ${Math.floor((bytes / LISTING_MAX_VALUE_BYTES) * 100)}% of the ${mb(FETCH_TEXT_MAX_BYTES)} one read may hold`
+    : '';
+}
+/**
+ * The row note and record error of a listing read that failed. When every node's answer was past what one read may
+ * hold (sources/namada.ts ListingTooLargeError) it says so plainly: asking again will not change it, and the rows stay
+ * as of the last complete listing (shown as stale past 6 h) until the reader changes.
+ */
+export function listingReadFailure(what: 'balance' | 'bond', e: unknown): { note: string; error: string } {
+  if (e instanceof ListingTooLargeError) {
+    return {
+      error: `Too large: past the ${mb(FETCH_TEXT_MAX_BYTES)} one read may hold, from every node`,
+      note: `The ${what} listing is too large to read: every node's answer is past the ${mb(FETCH_TEXT_MAX_BYTES)} one read may hold, so ${what === 'bond' ? 'stakes' : 'balances'} stay as of the last complete listing.`,
+    };
+  }
+  return { error: String(e).slice(0, 160), note: `The ${what} listing could not be read: ${String(e).slice(0, 120)}` };
+}
 
 /** `rpcs` with the node named `provider` first (the one that served the last listing), the rest in their order. */
 export function preferProvider(rpcs: readonly Rpc[], provider: string | null | undefined): readonly Rpc[] {
@@ -622,9 +1028,10 @@ export async function runBalanceListing(env: Env, health: SourceHealth[], now: n
   try {
     listing = await list({ timeoutMs: LISTING_TIMEOUT_MS, retries: 0, ...read });
   } catch (e) {
-    health.push({ name, ok: false, at: now, note: `The balance listing could not be read: ${String(e).slice(0, 120)}` });
+    const why = listingReadFailure('balance', e);
+    health.push({ name, ok: false, at: now, note: why.note });
     // The record remembers the failure (the next try waits LISTING_RETRY_MS); a pass already complete stays complete.
-    const failed: BalanceListingRecord = { ...(prev ?? { at: 0, completeAt: null, height: 0, provider: '', keys: 0, holders: 0, totalNam: 0, bytes: 0, written: 0, zeroed: 0, remaining: 0, ticks: 0, durationMs: 0, spansAt: null, extendedAt: null }), failedAt: now, error: String(e).slice(0, 160), failures: (prev?.failures ?? 0) + 1 };
+    const failed: BalanceListingRecord = { ...(prev ?? { at: 0, completeAt: null, height: 0, provider: '', keys: 0, holders: 0, totalNam: 0, bytes: 0, written: 0, zeroed: 0, remaining: 0, ticks: 0, durationMs: 0, spansAt: null, extendedAt: null }), failedAt: now, error: why.error, failures: (prev?.failures ?? 0) + 1 };
     await kvSet(env.DB, 'balance.listing', failed).catch(() => {});
     return failed;
   }
@@ -700,7 +1107,7 @@ export async function runBalanceListing(env: Env, health: SourceHealth[], now: n
     health.push({ name, ok: true, at: now, latencyMs: rec.durationMs, note:
       `${listing.keys.toLocaleString('en-US')} balance keys at height ${listing.height.toLocaleString('en-US')} (${mb(listing.bytes)} from ${listing.provider}): `
       + `${rec.holders.toLocaleString('en-US')} addresses hold ${Math.round(rec.totalNam).toLocaleString('en-US')} NAM; ${rec.written.toLocaleString('en-US')} rows written`
-      + (rec.zeroed ? `, ${rec.zeroed} zeroed` : '') + (rec.remaining ? `, ${rec.remaining.toLocaleString('en-US')} left for the next tick` : '') + aside });
+      + (rec.zeroed ? `, ${rec.zeroed} zeroed` : '') + (rec.remaining ? `, ${rec.remaining.toLocaleString('en-US')} left for the next tick` : '') + aside + listingHeadroomNote(listing.bytes) });
   } catch (e) {
     // Not applied: the record says so and keeps the pass open, so the next tick reads the listing again.
     rec.remaining = Math.max(1, rec.remaining);
@@ -710,6 +1117,17 @@ export async function runBalanceListing(env: Env, health: SourceHealth[], now: n
   }
   await kvSet(env.DB, 'balance.listing', rec).catch(() => {});
   return rec;
+}
+
+/**
+ * Whether the cron asks the indexer for the unlock list's withdraw times (at a 10-minute mark): when no bond listing
+ * has completed in three intervals, or the stored map is older than the last one that did (its write did not land).
+ * Once the indexer's map is stored it is newer than that listing, so it is asked again only after the next listing
+ * that completes without its write, or when the listings stop.
+ */
+export function withdrawFallbackDue(completeAt: number | null | undefined, storedAt: number | null | undefined, now: number): boolean {
+  if (!completeAt || now - completeAt >= 3 * BOND_LISTING_MS) return true;
+  return !(storedAt != null && Number.isFinite(storedAt) && storedAt >= completeAt);
 }
 
 /**
@@ -730,8 +1148,9 @@ export async function runBondListing(env: Env, health: SourceHealth[], now: numb
   try {
     listing = await list({ timeoutMs: LISTING_TIMEOUT_MS, retries: 0, ...read });
   } catch (e) {
-    health.push({ name, ok: false, at: now, note: `The bond listing could not be read: ${String(e).slice(0, 120)}` });
-    const failed: BondListingRecord = { ...(prev ?? { at: 0, completeAt: null, height: 0, epoch, provider: '', sources: 0, stakers: 0, totalNam: 0, bytes: 0, written: 0, zeroed: 0, remaining: 0, ticks: 0, durationMs: 0 }), failedAt: now, error: String(e).slice(0, 160), failures: (prev?.failures ?? 0) + 1 };
+    const why = listingReadFailure('bond', e);
+    health.push({ name, ok: false, at: now, note: why.note });
+    const failed: BondListingRecord = { ...(prev ?? { at: 0, completeAt: null, height: 0, epoch, provider: '', sources: 0, stakers: 0, totalNam: 0, bytes: 0, written: 0, zeroed: 0, remaining: 0, ticks: 0, durationMs: 0 }), failedAt: now, error: why.error, failures: (prev?.failures ?? 0) + 1 };
     await kvSet(env.DB, 'bond.listing', failed).catch(() => {});
     return failed;
   }
@@ -792,6 +1211,8 @@ export async function runBondListing(env: Env, health: SourceHealth[], now: numb
     if (part.length) rec.written = await runBatch(env.DB, stmt.stakesVerified(part, epoch, listing.height, now, BOND_LISTING_SRC));
     if (zeroPart.length) rec.zeroed = await runBatch(env.DB, zeroRows(zeroPart));
     if (confirmPart.length) rec.confirmed = await runBatch(env.DB, zeroRows(confirmPart));
+    const wname = 'Namada RPC (unbond withdraw times)';
+    let withdrawHealth: SourceHealth | null = null;
     if (rec.remaining === 0) {
       rec.completeAt = now;
       // The stake keys, the unbond queue, validator_daily and the listings row (series.ts).
@@ -802,12 +1223,24 @@ export async function runBondListing(env: Env, health: SourceHealth[], now: numb
         const params = await cachedChainParams(env.DB);
         const epochSec = params ? Math.max(params.minEpochSec, params.epochSec ?? params.minEpochSec) : null;
         const { termStructure, withdrawCache } = buildUnbondTermStructure(listing, listing.height, epoch, now, epochSec, params ? (params.epochSecNote ?? `at least ${params.minEpochSec} s, the chain's minimum`) : null);
-        await Promise.all([
-          kvSet(env.DB, 'unbond.term_structure', termStructure).catch(() => {}),
-          kvSet(env.DB, 'unbond.withdraw', withdrawCache).catch(() => {}),
+        const [term, withdraw] = await Promise.allSettled([
+          kvSet(env.DB, 'unbond.term_structure', termStructure),
+          kvSet(env.DB, 'unbond.withdraw', withdrawCache),
         ]);
+        // The term structure carries its own age (pressure() stamps it). The withdraw times say here whether they were
+        // stored: a write D1 refuses is on the Sources sheet, the stored map keeps its own time (pressure() stops using
+        // it once it is old), and the cron asks the indexer at the next 10-minute mark (withdrawFallbackDue).
+        if (term.status === 'rejected') console.error('unbond term structure', term.reason);
+        if (withdraw.status === 'rejected') {
+          console.error('unbond withdraw times', withdraw.reason);
+          withdrawHealth = { name: wname, ok: false, at: now, note: `Not stored (${String(withdraw.reason).slice(0, 50)}): the unlock list uses the last ones while under ${UNBOND_WITHDRAW_STALE_MS / 60_000} min old, and the indexer is asked meanwhile.`.slice(0, 160) };
+        } else {
+          const n = Object.values(withdrawCache.byAddress).reduce((a, l) => a + l.length, 0), by = Object.keys(withdrawCache.byAddress).length;
+          withdrawHealth = { name: wname, ok: true, at: now, note: `${n0(n)} ${n === 1 ? 'unbond' : 'unbonds'} of ${n0(UNLOCKS_MIN_NAM)} NAM or more (${n0(by)} ${by === 1 ? 'address' : 'addresses'}) at height ${n0(listing.height)}` };
+        }
       } catch (e) {
         console.error('unbond term structure', e);
+        withdrawHealth = { name: wname, ok: false, at: now, note: `Not built from the bond listing: ${String(e).slice(0, 120)}` };
       }
     }
     rec.durationMs = Date.now() - t0;
@@ -816,7 +1249,8 @@ export async function runBondListing(env: Env, health: SourceHealth[], now: numb
       + `${rec.stakers.toLocaleString('en-US')} addresses stake ${Math.round(rec.totalNam).toLocaleString('en-US')} NAM`
       + (rec.slashedNam ? ` (${Math.round(rec.slashedNam).toLocaleString('en-US')} NAM of slashed bonds left out)` : '')
       + `; ${rec.written.toLocaleString('en-US')} rows written`
-      + (rec.zeroed ? `, ${rec.zeroed} set to 0` : '') + (rec.confirmed ? `, ${rec.confirmed.toLocaleString('en-US')} confirmed at 0` : '') + (rec.remaining ? `, ${rec.remaining.toLocaleString('en-US')} left for the next tick` : '') + aside });
+      + (rec.zeroed ? `, ${rec.zeroed} set to 0` : '') + (rec.confirmed ? `, ${rec.confirmed.toLocaleString('en-US')} confirmed at 0` : '') + (rec.remaining ? `, ${rec.remaining.toLocaleString('en-US')} left for the next tick` : '') + aside + listingHeadroomNote(listing.bytes) });
+    if (withdrawHealth) health.push(withdrawHealth);
   } catch (e) {
     rec.remaining = Math.max(1, rec.remaining);
     rec.error = String(e).slice(0, 160);
@@ -1003,12 +1437,21 @@ export async function runCron(env: Env) {
     //    hangs costs its own timeout, never the others' (a hung Keplr used to hold every Namada read past the
     //    deadline). The quick, usually fast requests go first: a Worker opens at most six connections at once.
     const osmoCountRes = await env.DB.prepare("SELECT COUNT(*) as c FROM holders WHERE chain='osmosis'").first<{ c: number }>().catch(() => ({ c: 0 }));
-    const shouldSyncHolders = !osmoCountRes?.c || now % 600000 < 60000;
+    // A pass of the holder list that a tick did not finish goes on every tick until it is complete (OsmoHolderPass).
+    const osmoPass = await readOsmoPass(env.DB);
+    const passOn = !!osmoPass?.key;
+    const shouldSyncHolders = !osmoCountRes?.c || passOn || (now % 600000 < 60000 && now >= nextOsmoPassAt(osmoPass));
     const keplr = { ...KEPLR_TICK, signal };
 
     // The holder list (every 10 min, a page at a time) is written when it arrives, after the Namada phases: nothing
-    // waits for it, so a slow list can never take their time.
-    const holderSync = shouldSyncHolders ? probe(health, 'Keplr Osmosis REST (holders)', () => fetchOsmosisHolderList(env.KEPLR_KEY, OSMOSIS_HOLDER_PAGES, keplr)) : Promise.resolve(null);
+    // waits for it, so a slow list can never take their time. Its pages stop OSMO_SLICE_RESERVE_MS before the
+    // deadline; a list longer than that goes on next tick from the bank's next key.
+    const slice = shouldSyncHolders ? phaseSignal(signal, deadlineAt - OSMO_SLICE_RESERVE_MS) : null;
+    const holderSync = slice
+      ? probe(health, 'Keplr Osmosis REST (holders)', () => fetchOsmosisHolderList(env.KEPLR_KEY, OSMOSIS_HOLDER_PAGES, {
+          ...keplr, signal: slice.signal, resume: true, from: passOn ? osmoPass!.key : null, pagesBefore: passOn ? osmoPass!.pages : 0,
+        })).finally(slice.done)
+      : Promise.resolve(null);
     const [osmoSupplyRes, price, poolRes, idxBlock, idxSupply, totalRes, posRes, stakeRes, ibcRes, maspRes, pgfRes, epoch] = await Promise.all([
       probe(health, 'Keplr Osmosis REST (supply)', () => fetchOsmosisSupplyBase(env.KEPLR_KEY, keplr)),
       fetchNamPrice(),
@@ -1223,28 +1666,40 @@ export async function runCron(env: Env) {
     }
 
     // Every bridge crossing should be on record on both chains (14 days; the last 30 minutes are not judged).
+    // Each read takes the newest BRIDGE_CHECK_ROWS rows and, of meta, only what the pairing and the stuck-packet list
+    // use (never the memo, which the sender writes). When a read comes back full, only the crossings the reads cover
+    // whole are judged, and the check says from when (judgedFrom) instead of passing.
     const from14 = now - 14 * 86400000;
     const [nb, ob, orf] = await Promise.all([
-      env.DB.prepare(`SELECT f.id, f.kind, f.ts, f.height, f.from_addr, f.to_addr, f.amount_num, f.meta FROM flows f WHERE f.chain='namada' AND f.kind IN ('ibc_in','ibc_out') AND f.ts >= ?
-                      AND (f.from_addr LIKE 'osmo1%' OR f.to_addr LIKE 'osmo1%' OR f.from_addr = ? OR f.to_addr = ?) AND (f.meta IS NULL OR f.meta NOT LIKE '%"tokenSymbol":%') AND ${NOT_LEGACY_TWIN}`)
-        .bind(from14, NAMADA.internal.ibc, NAMADA.internal.ibc).all<any>().catch(() => null),
-      env.DB.prepare(`SELECT id, kind, ts, from_addr, to_addr, amount_num, meta FROM flows WHERE chain='osmosis' AND kind IN ('ibc_in','ibc_out') AND ts >= ?`).bind(from14 - 15 * 60000).all<any>().catch(() => null),
-      env.DB.prepare(`SELECT id, ts, from_addr, to_addr, amount_num, meta FROM flows WHERE chain='osmosis' AND kind='other' AND ts >= ? AND meta LIKE '%"ibcTimeoutRefund":true%'`).bind(from14).all<any>().catch(() => null),
+      env.DB.prepare(`SELECT f.id, f.kind, f.ts, f.height, f.from_addr, f.to_addr, f.amount_num,
+                        json_object('innerTxHash', json_extract(f.meta, '$.innerTxHash'), 'wrapper', json_extract(f.meta, '$.wrapper'), 'channel', json_extract(f.meta, '$.channel'), 'packetSequence', json_extract(f.meta, '$.packetSequence')) meta
+                      FROM flows f WHERE f.chain='namada' AND f.kind IN ('ibc_in','ibc_out') AND f.ts >= ?
+                      AND (f.from_addr LIKE 'osmo1%' OR f.to_addr LIKE 'osmo1%' OR f.from_addr = ? OR f.to_addr = ?) AND (f.meta IS NULL OR f.meta NOT LIKE '%"tokenSymbol":%') AND ${NOT_LEGACY_TWIN}
+                      ORDER BY f.ts DESC LIMIT ?`)
+        .bind(from14, NAMADA.internal.ibc, NAMADA.internal.ibc, BRIDGE_CHECK_ROWS).all<any>().catch(() => null),
+      env.DB.prepare(`SELECT id, kind, ts, height, from_addr, to_addr, amount_num, json_object('packetSequence', json_extract(meta, '$.packetSequence')) meta
+                      FROM flows WHERE chain='osmosis' AND kind IN ('ibc_in','ibc_out') AND ts >= ? ORDER BY ts DESC LIMIT ?`).bind(from14 - 15 * 60000, BRIDGE_CHECK_ROWS).all<any>().catch(() => null),
+      env.DB.prepare(`SELECT id, ts, from_addr, to_addr, amount_num, json_object('packetSequence', json_extract(meta, '$.packetSequence'), 'refundReceiver', json_extract(meta, '$.refundReceiver')) meta
+                      FROM flows WHERE chain='osmosis' AND kind='other' AND ts >= ? AND meta LIKE '%"ibcTimeoutRefund":true%' ORDER BY ts DESC LIMIT ?`).bind(from14, BRIDGE_CHECK_ROWS).all<any>().catch(() => null),
     ]);
     // Namada → Osmosis sends on record on Namada only for a day or more: candidates for the stuck-packet list.
     const stuckCandidates: StuckCandidate[] = [];
     if (nb && ob && orf) {
+      const judgedFrom = bridgeJudgedFrom(nb.results || [], ob.results || [], orf.results || []);
       const outs = (ob.results || []).filter((r: any) => r.kind === 'ibc_out');
       const gone = timedOutSends(outs.map(ibcRowOf), (orf.results || []).map(ibcRowOf));
       const osmo = (ob.results || []).filter((r: any) => !gone.has(r.id) && r.ts >= from14);
-      const u = unpairedCrossings(nb.results || [], osmo, now);
+      const all = unpairedCrossings(nb.results || [], osmo, now);
+      const judged = (r: any) => judgedFrom == null || r.ts > judgedFrom;
+      const u = { namadaOnly: all.namadaOnly.filter(judged), osmosisOnly: all.osmosisOnly.filter(judged) };
       const n = u.namadaOnly.length + u.osmosisOnly.length;
       const sample = (rows: any[]) => rows.slice(0, 3).map((r) => ({ id: r.id, ts: r.ts, nam: r.amount_num }));
-      checkStmts.push(stmt.check('bridge_records_paired', n === 0 ? 'ok' : 'warn',
+      checkStmts.push(stmt.check('bridge_records_paired', n === 0 && judgedFrom == null ? 'ok' : 'warn',
         'Every bridge crossing is on record on both chains (14 days)',
         { namadaRows: (nb.results || []).length, osmosisRows: osmo.length, onlyOnNamada: u.namadaOnly.length, onlyOnOsmosis: u.osmosisOnly.length,
           onlyOnNamadaNam: u.namadaOnly.reduce((a, r) => a + r.amount_num, 0), onlyOnOsmosisNam: u.osmosisOnly.reduce((a, r) => a + r.amount_num, 0),
-          examples: { namada: sample(u.namadaOnly), osmosis: sample(u.osmosisOnly) } }, now));
+          examples: { namada: sample(u.namadaOnly), osmosis: sample(u.osmosisOnly) },
+          ...(judgedFrom != null ? { judgedFrom, rowCap: BRIDGE_CHECK_ROWS, note: `More than ${BRIDGE_CHECK_ROWS.toLocaleString('en-US')} bridge records in 14 days: only the newest crossings were paired, and older ones are not judged.` } : {}) }, now));
       for (const r of u.namadaOnly) {
         if (r.kind !== 'ibc_out' || !String(r.to_addr ?? '').startsWith('osmo1') || now - r.ts < STUCK_CANDIDATE_AGE_MS) continue;
         const innerTx = innerTxOfRow(r);
@@ -1340,20 +1795,47 @@ export async function runCron(env: Env) {
     if (!bondRead && !bondWhy) listingOverdue(health, 'Namada RPC (bond listing)', 'bond', bondPrev, BOND_LISTING_MS, now);
     if (!balRead && !balWhy) listingOverdue(health, 'Namada RPC (balance listing)', 'balance', balPrev, BALANCE_LISTING_MS, now);
 
-    // 6. The Osmosis holder list, read beside everything above.
+    // 6. The Osmosis holder list, read beside everything above: this tick's slice of the pass (OsmoHolderPass).
     const holderList = await holderSync;
     const holders = holderList?.holders ?? null;
-    if (holderList && holders && holders.length > 0) {
-      await runBatch(env.DB, holders.filter((h) => h.balanceNum > 0).map((h) => stmt.verifiedBalance('osmosis', h.address, h.balance, null, now, 'keplr_rest')));
-      // A complete list that adds up to the supply also tells who no longer holds NAM there: their old balance is
-      // not kept as if current. Anything less (a page without a next key, the page cap, a sum off the supply) is
-      // not trusted to zero anyone.
-      const chk = osmosisListCheck(holders, holderList.complete, osmoSupplyRes, holderList.capped);
-      if (chk.trust) await runBatch(env.DB, [osmosisDroppedStmt(now)]).catch((e) => console.error('osmosis dropped holders', e));
+    if (shouldSyncHolders) {
+      // With no stored pass, the count's stamp until a pass adds up is what it is now: the oldest reading it includes.
+      const seed = osmoPass ? null : (await env.DB.prepare(OSMOSIS_READ_AT_SQL).first<{ at: number | null }>().catch(() => null))?.at ?? null;
+      const step = nextOsmoPass(osmoPass, holderList, osmoSupplyRes, now, seed);
+      if (holders && holders.length > 0) await runBatch(env.DB, holders.filter((h) => h.balanceNum > 0).map((h) => stmt.verifiedBalance('osmosis', h.address, h.balance, null, now, KEPLR_REST_SRC)));
+      // A complete pass that adds up to the supply also tells who no longer holds NAM there: their old balance is not
+      // kept as if current. Anything less (a page without a next key, a sum off the supply, a pass still going) is not
+      // trusted to zero anyone. The zeroing reaches only rows no slice of this pass read, and only those the bank,
+      // asked by address, says hold none; a pass of several ticks also has its largest earlier readings read again.
+      let recheckNote: string | null = null;
+      if (step.zeroBefore != null || step.recheckBefore != null) {
+        const phase = phaseSignal(signal, deadlineAt - OSMO_RECHECK_RESERVE_MS);
+        try {
+          recheckNote = (await recheckOsmosisRows(env.DB, env.KEPLR_KEY, now, step.zeroBefore, step.recheckBefore, { ...KEPLR_TICK, signal: phase.signal })).note;
+        } catch (e) {
+          console.error('osmosis dropped holders', e);
+          recheckNote = step.zeroBefore != null
+            ? 'the holders not named by the list were not zeroed: their check by address failed, so the next pass asks again'
+            : 'the largest readings of the earlier slices were not read again by address: the read failed';
+        } finally { phase.done(); }
+      }
+      // A pass whose list added up is trusted only if the rows it leaves, after the reads by address, still add up to
+      // the supply (osmosisRowsCheck); otherwise it is stored complete with the last trusted pass's stamps kept.
+      let { pass, ok, note } = step;
+      if (step.withheld) {
+        const rows = await env.DB.prepare(OSMOSIS_ROWS_SUM_SQL).first<{ s: string | null }>()
+          .then((r) => (typeof r?.s === 'string' && /^\d{1,60}$/.test(r.s) ? BigInt(r.s) : null), (e) => { console.error('osmosis holder rows sum', e); return null; });
+        const chk = osmosisRowsCheck(rows, osmoSupplyRes);
+        if (!chk.trust) { pass = step.withheld; ok = false; note = [note, chk.note].filter(Boolean).join('; '); }
+      }
+      // The record after the rows: a tick that fails before it reads the same key again.
+      await kvSet(env.DB, OSMO_PASS_KV, pass).catch((e) => console.error('osmosis holder pass', e));
       const h = health.find((x) => x.name === 'Keplr Osmosis REST (holders)');
-      if (h) { h.note = chk.note; h.ok = chk.trust; }
-      // Hourly, record the readings for the 24 h / 7 d changes (a separate batch: a missing table must not undo the balances).
-      if (now % 3600000 < 60000) await runBatch(env.DB, spanStmts('osmosis', now)).catch((e) => console.error('osmosis balance spans', e));
+      if (h && holderList) { h.note = [note, recheckNote].filter(Boolean).join('; ') || undefined; h.ok = ok; }
+      else if (h && step.note) h.note = `${h.note ?? ''} (${step.note})`.slice(0, 300);
+      // The first pass to start in an hour records its readings for the 24 h / 7 d changes, on each of its slices (a
+      // separate batch: a missing table must not undo the balances).
+      if (holders && holders.length > 0 && step.spans) await runBatch(env.DB, spanStmts('osmosis', now)).catch((e) => console.error('osmosis balance spans', e));
     }
 
     // 6b. The holder figures (holders.ts, kv holders.figures): after a complete chain listing, after the Osmosis
@@ -1362,7 +1844,8 @@ export async function runCron(env: Env) {
     if (!late()) {
       try {
         const prevFig = await readHolderFigures(env.DB);
-        const due = figuresDue(prevFig, await listingTimes(env.DB), now, !!(holderList && holders && holders.length > 0));
+        // A pass still going leaves the Osmosis part to its 15-minute refresh; the slice that completes it refreshes it.
+        const due = figuresDue(prevFig, await listingTimes(env.DB), now, !!(holderList && holders && holders.length > 0 && !holderList.nextKey));
         if (due.namada || due.osmosis) await refreshHolderFigures(env.DB, now, due, prevFig);
       } catch (e) {
         // Not refreshed: the readers use the stored figures while they are under HOLDER_FIGURES_SERVE_MS old, then count for themselves.
@@ -1379,18 +1862,23 @@ export async function runCron(env: Env) {
     // pages never wait on the indexer.
     if (!late()) await chainParams(env.DB, signal).catch(() => {});
 
-    // Unbond withdraw times: when the consensus bond listing is current, `runBondListing` already decoded every
-    // unbond on chain; fall back to the indexer only when the bond listing has not completed recently.
-    const consensusUnbondsFresh = !!bondRec?.completeAt && now - bondRec.completeAt < 3 * BOND_LISTING_MS;
-    if (!consensusUnbondsFresh && now % 600000 < 60000 && !late()) {
-      const addrs = await unbondAddresses(env.DB, now);
-      const byAddress: UnbondWithdrawCache['byAddress'] = {};
-      let failedUnbonds = 0;
-      for (let i = 0; i < addrs.length && !late(); i += 4) {
-        await Promise.all(addrs.slice(i, i + 4).map((a) => fetchUnbonds(a, signal).then((u) => { byAddress[a] = u; }).catch(() => { failedUnbonds++; })));
+    // Unbond withdraw times: when the consensus bond listing is current, `runBondListing` already wrote the unbonds
+    // the unlock list can show; fall back to the indexer when the bond listing has not completed recently, or its
+    // write of them did not land (the stored map is older than the listing).
+    if (now % 600000 < 60000 && !late()) {
+      const storedAt = (await kvGetJson<UnbondWithdrawCache>(env.DB, 'unbond.withdraw').catch(() => null))?.at ?? null;
+      if (withdrawFallbackDue(bondRec?.completeAt, storedAt, now)) {
+        const addrs = await unbondAddresses(env.DB, now);
+        const byAddress: UnbondWithdrawCache['byAddress'] = {};
+        let failedUnbonds = 0;
+        for (let i = 0; i < addrs.length && !late(); i += 4) {
+          await Promise.all(addrs.slice(i, i + 4).map((a) => fetchUnbonds(a, signal).then((u) => { byAddress[a] = u; }).catch(() => { failedUnbonds++; })));
+        }
+        const notStored = Object.keys(byAddress).length || !addrs.length
+          ? await kvSet(env.DB, 'unbond.withdraw', { at: now, source: 'indexer', byAddress } satisfies UnbondWithdrawCache).then(() => null, (e) => { console.error('unbond withdraw times (indexer)', e); return String(e).slice(0, 60); })
+          : null;
+        health.push({ name: 'Namada indexer (unbond withdraw times)', ok: !notStored && failedUnbonds < Math.max(1, addrs.length / 2), at: now, note: `${Object.keys(byAddress).length} of ${addrs.length} addresses read${failedUnbonds ? `, ${failedUnbonds} failed` : ''}${notStored ? `; not stored: ${notStored}` : ''}` });
       }
-      if (Object.keys(byAddress).length || !addrs.length) await kvSet(env.DB, 'unbond.withdraw', { at: now, byAddress } satisfies UnbondWithdrawCache).catch(() => {});
-      health.push({ name: 'Namada indexer (unbond withdraw times)', ok: failedUnbonds < Math.max(1, addrs.length / 2), at: now, note: `${Object.keys(byAddress).length} of ${addrs.length} addresses read${failedUnbonds ? `, ${failedUnbonds} failed` : ''}` });
     }
 
     // A node that answered its status but then failed reads is not "ok": the status alone cannot see a node that

@@ -342,17 +342,57 @@ export async function cachedChainParams(db: D1Database): Promise<ChainParams | n
 
 /** The term structure is rewritten when a bond listing completes (every BOND_LISTING_MS, cron.ts); older than three intervals it is stale. */
 export const UNBOND_TERM_STALE_MS = 3 * 40 * 60_000;
+/**
+ * The withdraw times are rewritten when a bond listing completes, or from the indexer at the next 10-minute mark
+ * when no listing has completed in three intervals or the listing's write of them did not land (cron.ts). Older than
+ * that they are not used: the unlock list shows its labelled estimates instead.
+ */
+export const UNBOND_WITHDRAW_STALE_MS = UNBOND_TERM_STALE_MS + 10 * 60_000;
 /** A burner's upstream origin counts only from transfers in this window before its NAM first arrived on Osmosis ... */
 export const HOP_ORIGIN_WINDOW_MS = 48 * 3600_000;
 /** ... that add up to at least this many NAM and this share of what crossed. */
 export const HOP_ORIGIN_MIN_NAM = 1_000;
 export const HOP_ORIGIN_SHARE = 0.1;
 
-/** kv `unbond.withdraw`: pending unbonds of addresses in the unlock list (consensus bond listing or indexer fallback). */
+/**
+ * kv `unbond.withdraw`: the unbonds the unlock list can look up, by address (consensus bond listing or indexer
+ * fallback). From the bond listing that is every unbond of at least UNLOCKS_MIN_NAM on the chain, pending or
+ * withdrawable: the list shows only requests of that size and matches them by amount, so a smaller unbond is never
+ * read. The map is one kv row, and D1 keeps at most 2,000,000 bytes a row: with every unbond in it, it held 6,043
+ * entries in 1.04 MB on 2026-10-22, and unbonds of a base unit, which cost only their fees, could fill it. Kept to the
+ * list's floor it has at most one entry per 100,000 NAM unbonding (37 million NAM that day: 75 entries, 12 KB).
+ */
 export interface UnbondWithdrawCache {
   at: number;
+  /**
+   * who wrote the map: 'consensus' (runBondListing, from the chain's bond listing) or 'indexer' (the cron's fallback,
+   * fetchUnbonds); absent on maps written before 2026-10-23, whose entries say it (unbondWithdrawWriter)
+   */
+  source?: 'consensus' | 'indexer';
   byAddress: Record<string, { validator: string; amountNam: number; withdrawEpoch: number; withdrawTime: number | null; source?: 'consensus' | 'indexer' }[]>;
 }
+
+/**
+ * Who wrote a stored withdraw map: its `source`, or on a map without one what its entries say (every entry from the
+ * bond listing carries 'consensus'; the indexer's carry none); null when that cannot be told (an empty map, or both).
+ */
+export function unbondWithdrawWriter(m: UnbondWithdrawCache | null | undefined): 'consensus' | 'indexer' | null {
+  if (!m) return null;
+  if (m.source === 'consensus' || m.source === 'indexer') return m.source;
+  const entries = Object.values(m.byAddress ?? {}).flat();
+  if (!entries.length) return null;
+  if (entries.every((e) => e?.source === 'consensus')) return 'consensus';
+  return entries.every((e) => e?.source == null || e.source === 'indexer') ? 'indexer' : null;
+}
+/**
+ * The source named on the withdraw times' stamp (unbondWithdrawProv), by who wrote the map: the names of the Sources
+ * rows that say whether each wrote it (cron.ts runBondListing and the indexer fallback).
+ */
+export const UNBOND_WITHDRAW_SOURCE = {
+  consensus: 'Namada RPC (unbond withdraw times)',
+  indexer: 'Namada indexer (unbond withdraw times)',
+  unknown: 'Namada RPC (bond listing), or the Namada indexer while no listing completes',
+} as const;
 
 /**
  * Build the consensus-verified forward unlock term structure and per-address withdraw cache directly from the
@@ -374,6 +414,8 @@ export function buildUnbondTermStructure(
   let inFlightBase = 0n;
   const bucketMap = new Map<number, { amountBase: bigint; count: number }>();
   const byAddress: UnbondWithdrawCache['byAddress'] = {};
+  // The smallest unbond an unlock row can match (pressure(): the row's amount within 1e-6 NAM), one base unit under the floor.
+  const cacheMinBase = BigInt(UNLOCKS_MIN_NAM) * 1_000_000n - 1n;
 
   for (const [address, src] of listing.sources) {
     if (!src.unbonds || src.unbonds.length === 0) continue;
@@ -389,6 +431,8 @@ export function buildUnbondTermStructure(
       b.count++;
       bucketMap.set(u.withdrawEpoch, b);
 
+      // The term structure above counts every unbond; the withdraw cache keeps only those the unlock list can show.
+      if (u.amountBase < cacheMinBase) continue;
       const epochsRemaining = Math.max(0, u.withdrawEpoch - currentEpoch);
       const withdrawTime = epochsRemaining === 0 ? at : sec ? at + epochsRemaining * sec * 1000 : null;
       addrList.push({
@@ -430,7 +474,7 @@ export function buildUnbondTermStructure(
       totalUnbondingNam: withdrawableNowNam + inFlightNam,
       buckets,
     },
-    withdrawCache: { at, byAddress },
+    withdrawCache: { at, source: 'consensus', byAddress },
   };
 }
 
@@ -483,9 +527,12 @@ export function timedOutSends(outs: IbcRow[], refunds: IbcRow[]): Set<string> {
     if (o && !done.has(o.id)) { done.add(o.id); used.add(r.id); }
   }
   const sorted = [...outs].sort((a, b) => b.ts - a.ts);
+  // A refund that carries a sequence and matched none can only be an older send's that has none, so it looks
+  // through those alone: every send stored now carries one, and the rows are as many as chain users make.
+  const unsequenced = sorted.filter((x) => !x.seq);
   for (const r of [...refunds].sort((a, b) => a.ts - b.ts)) {
     if (used.has(r.id)) continue;
-    const o = sorted.find((x) => !done.has(x.id) && !(x.seq && r.seq) && Math.abs(x.amount - r.amount) < 1e-6 && x.ts <= r.ts && r.ts - x.ts <= 3 * D && (!r.receiverKnown || r.to === x.from));
+    const o = (r.seq ? unsequenced : sorted).find((x) => !done.has(x.id) && Math.abs(x.amount - r.amount) < 1e-6 && x.ts <= r.ts && r.ts - x.ts <= 3 * D && (!r.receiverKnown || r.to === x.from));
     if (o) { done.add(o.id); used.add(r.id); }
   }
   return done;
@@ -596,6 +643,15 @@ export async function pressure(db: D1Database, asOf: number, replay: boolean, wi
   const unbondTermStructure = termStored && termStored.at <= asOf ? termStored : null;
   const unbondTermStructureProv = provAt('Namada RPC (bond listing: every unbond on the chain)', unbondTermStructure?.at ?? null, asOf, UNBOND_TERM_STALE_MS,
     unbondTermStructure ? { height: unbondTermStructure.height } : { note: termStored ? 'The bond listing had not been read at this moment.' : 'The bond listing has not been read yet.' });
+  // The withdraw times are used only while current. A map that was not rewritten (no listing completed, or its write
+  // failed) keeps unbonds since withdrawn, whose ends of the wait would be shown for a later request of the same
+  // address, validator and amount, and lacks the new ones; past UNBOND_WITHDRAW_STALE_MS, or written after `asOf`,
+  // every unbond row takes the labelled estimate, and the stamp says how old the map is.
+  const withdrawAt = withdrawTimes && Number.isFinite(withdrawTimes.at) && withdrawTimes.at <= asOf ? withdrawTimes.at : null;
+  // The stamp names who wrote the map: the chain's bond listing, or the indexer while no listing completes.
+  const unbondWithdrawProv = provAt(UNBOND_WITHDRAW_SOURCE[(withdrawAt == null ? null : unbondWithdrawWriter(withdrawTimes)) ?? 'unknown'], withdrawAt, asOf, UNBOND_WITHDRAW_STALE_MS,
+    withdrawAt == null ? { note: withdrawTimes ? 'The withdraw times had not been read at this moment.' : 'The withdraw times have not been read yet.' } : {});
+  const withdrawLive = unbondWithdrawProv.status === 'live' ? withdrawTimes : null;
 
   // D2: inventory on deck
   const sellsByAddr = new Map<string, { ts: number; nam: number }[]>();
@@ -757,7 +813,7 @@ export async function pressure(db: D1Database, asOf: number, replay: boolean, wi
     const src = f.kind === 'bond' ? f.fromLabelSource : f.toLabelSource;
     const author = f.kind === 'bond' ? f.fromLabelAuthor : f.toLabelAuthor;
     // Consensus bond listing or indexer withdraw time for this unbond (address, validator, amount) when listed; else ts + the wait.
-    const listed = f.kind === 'unbond' && user ? withdrawTimes?.byAddress?.[user]?.find((u) => Math.abs(u.amountNam - f.amount) < 1e-6 && (!f.meta?.validator || u.validator === f.meta.validator)) : undefined;
+    const listed = f.kind === 'unbond' && user ? withdrawLive?.byAddress?.[user]?.find((u) => Math.abs(u.amountNam - f.amount) < 1e-6 && (!f.meta?.validator || u.validator === f.meta.validator)) : undefined;
     // A listed unbond whose time could not be computed (the chain's epoch length was not read when the listing was
     // applied) stays without a time: the epoch is known, the clock time is not, and nothing stands in for it.
     const liquidAt = f.kind !== 'unbond' ? null : listed ? listed.withdrawTime : wait ? f.ts + wait.epochs * wait.epochSec * 1000 : null;
@@ -964,7 +1020,7 @@ export async function pressure(db: D1Database, asOf: number, replay: boolean, wi
     unlocks, unlocksWindowDays: Math.max(UNLOCKS_WINDOW_DAYS, windowDays), unlocksMinNam: UNLOCKS_MIN_NAM, unbondingAll,
     unbondingDays: wait ? wait.days : null, unbondingEpochs: wait?.epochs ?? null, epochHours: wait ? wait.epochSec / 3600 : null,
     unbondingProv, chainParams: params,
-    ...(unbondTermStructure ? { unbondTermStructure } : {}), unbondTermStructureProv,
+    ...(unbondTermStructure ? { unbondTermStructure } : {}), unbondTermStructureProv, unbondWithdrawProv,
     pipelineSummary,
     bondedTrend: bondedTrend.map((p) => ({ ts: p.ts, value: p.value })), movers, proposals, proposalsProv,
     coverage: cov.both,

@@ -1,0 +1,13 @@
+-- 2026-10-22. Alert claims by the time they were taken (security review, 2026-10-22).
+--
+-- An alert claim is kv `alert:<what>` (sources/discord.ts claimDiscordAlert and claimEach), kept ALERT_CLAIM_KEEP_MS
+-- (30 days). The cron's sweep deletes the claims older than that every minute, and with only kv's primary key it
+-- read every retained claim to find them: 2,778 rows a run on 2026-10-22, 1,163 runs a day, to delete none. Every
+-- claim a chain user's move adds was read again on every tick for 30 days. This index is partial over the alert key
+-- range only, and its WHERE terms are the exact text of auth.ts keyPrefix('alert'), which the sweep repeats (SQLite
+-- matches a partial index's WHERE by expression, not by algebra). The sweep names it (INDEXED BY), so it reads the
+-- expired claims only, and a query that stops matching fails in the tests instead of reading the range again.
+--
+-- Nothing stored changes. Apply before deploying the Worker that names this index: until then the sweep's alert
+-- delete fails ("no such index"), is logged, and claims are kept until the index is there (nothing else reads them).
+CREATE INDEX IF NOT EXISTS kv_alert_claim_time ON kv (updated_at) WHERE key >= 'alert:' AND key < 'alert;';

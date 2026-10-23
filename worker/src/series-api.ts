@@ -159,7 +159,7 @@ export const SERIES_KEYS: Record<string, SeriesKeyDef> = {
     'No complete balance listing finished in these hours.'),
   'holders.osmosis': hourlyClock('count', 'NamadaTrade holder index',
     (s) => `Addresses holding NAM on Osmosis (protocol and pool accounts left out), counted every hour since ${s}.`,
-    'The Osmosis holder list was not read in these hours.'),
+    'The Osmosis holder list was not read in these hours, or no read of it added up to the supply.'),
 };
 
 const STEPS: SeriesStep[] = ['1m', '1h', '6h', '1d'];

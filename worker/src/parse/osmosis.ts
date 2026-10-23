@@ -1,5 +1,5 @@
 import { NAM, OSMOSIS } from '../config';
-import { namFromCoins, parseCoins, isRealAddress, toNam } from '../util';
+import { namFromCoins, parseCoins, isRealAddress, toNam, boundFlowText } from '../util';
 import type { Flow, Move } from '../../../shared/types';
 import type { SettleMeta } from '../../../shared/settle';
 
@@ -547,6 +547,8 @@ export function parseOsmosisTx(tx: NormTx, ctx: OsmoCtx): OsmoParsed {
   if (lpAdd > 0) out.flows.push({ ...flow(tx, 'lp_add', 'lp_add', signer, null, lpAdd, ctx.priceUsd, null), poolId: [...lpPools].join(',') });
   if (lpRemove > 0) out.flows.push({ ...flow(tx, 'lp_remove', 'lp_remove', null, signer, lpRemove, ctx.priceUsd, null), poolId: [...lpPools].join(',') });
 
+  // The packets' memos, receivers and senders are the sender's own text: every flow is kept with them bounded.
+  out.flows = out.flows.map(boundFlowText);
   return out;
 }
 

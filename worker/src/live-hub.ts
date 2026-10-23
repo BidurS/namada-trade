@@ -28,7 +28,10 @@ export const OSMOSIS_QUERIES = [
 /** How often the stream state is written to kv (osmosis.live) and the catch-up search runs. */
 export const OSMOSIS_LIVE_EVERY_MS = 60_000;
 export const OSMOSIS_SWEEP_EVERY_MS = 5 * 60_000;
-/** Pages of 50 per query and sweep, newest first (the search cannot take a height range on the public node). */
+/**
+ * Pages of 50 per query and sweep, newest first (the search cannot take a height range on the public node). A query
+ * with more than these above the cursor is read on by the next search from where this one stopped (OsmosisResume).
+ */
 export const OSMOSIS_SWEEP_PAGES = 4;
 /**
  * The most bytes of transaction pages one catch-up search holds at once (util.ts fetchJson's `budget`): every page
@@ -41,9 +44,19 @@ export const OSMOSIS_SWEEP_MAX_BYTES = 24 * 1024 * 1024;
 
 /**
  * kv `osmosis.cursor`: every Osmosis transaction matching the queries up to `height` has been looked at. `skipped`:
- * the transactions a search could not read (each one alone past the cap on every node), newest last.
+ * the transactions a search could not read (each one alone past the cap on every node), newest last. `resume`: for a
+ * search that did not finish, how far it read each query above `height`, so the next one goes on from there.
  */
-export interface OsmosisCursor { height: number; at: number; added?: number; error?: string; skipped?: { at: number; note: string }[] }
+export interface OsmosisCursor { height: number; at: number; added?: number; error?: string; skipped?: { at: number; note: string }[]; resume?: Record<string, OsmosisResume> }
+/**
+ * Where a catch-up search that did not finish left one query. The search can only page from the newest transaction,
+ * so a query with more than OSMOSIS_SWEEP_PAGES pages above the cursor (they came faster than the searches, or the
+ * searches failed for a while) was read again from the newest by every search and stopped at the same depth, and the
+ * cursor never moved again. Every transaction of the query at most `top` high, from the newest down to transaction
+ * `last` (at height `low`, the `n`th of them), has been looked at; with no `last`, every one down to the cursor (`low`).
+ * The next search reads down to `top`, counts what came since, and goes on from the page `last` is on.
+ */
+export interface OsmosisResume { top: number; low: number; n: number; last?: string }
 
 /** kv `namada.unbonds.live`: outcome of the live unbond decoder, surfaced by the cron health probe. */
 export interface LiveUnbondStatus {
@@ -751,7 +764,9 @@ export class LiveHub extends DurableObject<Env> {
    * height already covered; transactions not yet in `flows` are parsed and written with their block time, and those
    * whose write threw (osmoRetryTx) are alerted even when that write stored them. The cursor moves to the head read
    * at the start only when every query answered, and to just below a stream transaction still being written or
-   * retried. `signal`: the alarm's deadline (ALARM_DEADLINE_MS); a search it
+   * retried. A query with more than OSMOSIS_SWEEP_PAGES pages above the cursor is read on by the next search from
+   * where this one stopped (the cursor's `resume`), so a backlog of any size is read through over several searches.
+   * `signal`: the alarm's deadline (ALARM_DEADLINE_MS); a search it
    * ends is not complete, and the transactions it did not reach are read by the next one.
    * The pages it keeps transactions of share OSMOSIS_SWEEP_MAX_BYTES: a search that reaches it is not complete. A page
    * past the cap on every node is the same chain data on both: it is read again in pages of 10, and one of those past
@@ -822,11 +837,13 @@ export class LiveHub extends DurableObject<Env> {
       }
       budget.left += Math.max(0, bytes - keptBytes);
     };
+    type Row = { h: number; pos: number };
     /**
      * `per` transactions of query `q` from position (page - 1) * per, newest first: how many there were (`n`, a
-     * skipped one counted) and the lowest height read. `after`: the height of the last transaction this query read.
+     * skipped one counted), the lowest and highest heights read, and each transaction read put in `rows` (by hash: its
+     * height and position). `after`: the height of the last transaction this query read.
      */
-    const search = async (q: string, page: number, per: number, after: { height: number | null }): Promise<{ n: number; low: number }> => {
+    const search = async (q: string, page: number, per: number, after: { height: number | null }, rows: Map<string, Row>): Promise<{ n: number; low: number; high: number }> => {
       const before = budget.left;
       let r: any;
       try {
@@ -835,49 +852,115 @@ export class LiveHub extends DurableObject<Env> {
         if (!(e instanceof ResponseTooLargeError)) throw e;
         if (per === 1) {
           // One transaction past the cap on every node. One below the floor was looked at before and is not named.
-          // Its height is at most the one read before it, which is what the paging below needs.
+          // Its height is at most the one read before it, which is what the paging below needs; it never shows that
+          // a page starts above a height (`high`).
           if (after.height == null || after.height > floor) skipped.push(`query "${q}": ${after.height == null ? 'the newest transaction' : `the transaction after block ${after.height}`} was past the cap on every node and is not read`);
-          return { n: 1, low: after.height ?? Infinity };
+          return { n: 1, low: after.height ?? Infinity, high: -Infinity };
         }
         const sub = per === 50 ? 10 : 1;
-        let n = 0, low = Infinity;
+        let n = 0, low = Infinity, high = -Infinity;
         for (let i = 1; i <= per / sub; i++) {
-          const part = await search(q, (page - 1) * (per / sub) + i, sub, after);
+          const part = await search(q, (page - 1) * (per / sub) + i, sub, after, rows);
           n += part.n;
           low = Math.min(low, part.low);
+          high = Math.max(high, part.high);
           if (part.n < sub || part.low <= floor) break;
         }
-        return { n, low };
+        return { n, low, high };
       }
       const txs: any[] = r?.result?.txs ?? [];
       await keep(txs, before - budget.left);
+      txs.forEach((t, i) => rows.set(String(t.hash).toUpperCase(), { h: Number(t.height), pos: (page - 1) * per + i }));
       if (txs.length) after.height = Number(txs[txs.length - 1].height);
-      return { n: txs.length, low: txs.length ? Math.min(...txs.map((t) => Number(t.height))) : Infinity };
+      const hs = txs.map((t) => Number(t.height));
+      return { n: txs.length, low: txs.length ? Math.min(...hs) : Infinity, high: txs.length ? Math.max(...hs) : -Infinity };
+    };
+    /**
+     * One query, newest first, at most OSMOSIS_SWEEP_PAGES pages: down to the floor or, with the place the last search
+     * left (`old`), down to its top and then on from the page its last transaction should be on, counted from the
+     * newest with what came since. That page is taken only when it holds that transaction or its newest transaction is
+     * above that one's height, so nothing after the place is passed over (a node a little behind answers the pages a
+     * little lower); else the page before it is read. `rows`: the transactions read from the newest down and from the
+     * page taken on. `done`: the query was read down to the floor. `old`: the place gone on from, whose transactions
+     * lie between those read from the newest and those read from the page taken (null when it was not gone on from).
+     * `stand`: the answers did not reach the place, which stands as it was.
+     */
+    const walk = async (q: string, old: OsmosisResume | null, rows: Map<string, Row>): Promise<{ done: boolean; old: OsmosisResume | null; stand?: boolean }> => {
+      const after = { height: null as number | null };
+      let pages = 0, page = 0;
+      const read = (p: number, into = rows) => { pages++; return search(q, p, 50, after, into); };
+      // Without a previous cursor one page is enough to start from.
+      if (!floor) { await read(1); return { done: true, old: null }; }
+      const stop = old ? old.top : floor;
+      for (;;) {
+        if (pages >= OSMOSIS_SWEEP_PAGES) return { done: false, old: null };
+        const r = await read(++page);
+        if (r.low <= floor) return { done: true, old: null };
+        if (r.low <= stop) break;
+        // The end of the query: it is read down to the floor, or a node that does not have the place's transactions
+        // answered (the place stands for the next search).
+        if (r.n < 50) return old && old.n > 0 ? { done: false, old, stand: true } : { done: true, old: null };
+      }
+      if (!old || !old.last || old.low <= floor) return { done: true, old };
+      const fromTop = page;
+      let above = Infinity;
+      for (const r of rows.values()) if (r.h <= old.top) above = Math.min(above, r.pos);
+      page = rows.has(old.last) ? fromTop + 1 : Math.max(fromTop + 1, Math.floor((above + old.n - 1) / 50) + 1);
+      let taken = page === fromTop + 1;
+      // The end of the query counts only once the answers reach past the place: before that, a node that does not have
+      // the place's transactions answered.
+      let past = [...rows].some(([hash, x]) => hash === old.last || x.h < old.low);
+      while (pages < OSMOSIS_SWEEP_PAGES) {
+        const into = new Map<string, Row>();
+        const r = await read(page, into);
+        if (!taken) {
+          if (!(into.has(old.last) || r.high > old.low)) { if (--page === fromTop + 1) taken = true; continue; }
+          taken = true;
+        }
+        for (const [hash, x] of into) { rows.set(hash, x); if (hash === old.last || x.h < old.low) past = true; }
+        if (r.low <= floor) return { done: true, old };
+        if (r.n < 50) return past ? { done: true, old } : { done: false, old, stand: true };
+        page++;
+      }
+      // No page taken: the place does not fit what the nodes answer now, and only the pages from the newest count.
+      return { done: false, old: taken ? old : null };
+    };
+    // A place is gone on from only while its top is above the floor, and it holds no stream transaction whose write
+    // threw (the search reads that one again). Its top may be above this search's head: the head can be a few blocks
+    // below the last search's (the other node answered /status, or a second search runs seconds after the first when
+    // the stream reconnects), and dropping the place would start the catch-up again from the newest. The transactions
+    // above the head are not looked at (keep), and a place left from this search's own reads has this head as top.
+    const placeOf = (q: string): OsmosisResume | null => {
+      const o = prev?.resume?.[q];
+      if (!o || !(Number.isFinite(o.top) && Number.isFinite(o.low) && Number.isInteger(o.n) && o.n >= 0)) return null;
+      if (o.top <= floor || o.low > o.top || (o.low > floor && typeof o.last !== 'string')) return null;
+      const from = o.low > floor ? o.low : floor + 1;
+      return [...this.osmoRetryTx.values()].some((h) => h >= from && h <= o.top) ? null : o;
     };
     let complete = true;
+    const walks = new Map<string, { done: boolean; old: OsmosisResume | null; stand?: boolean; rows: Map<string, Row> } | null>();
     for (const q of OSMOSIS_QUERIES) {
+      const rows = new Map<string, Row>();
       try {
-        const after = { height: null as number | null };
-        for (let page = 1; page <= OSMOSIS_SWEEP_PAGES; page++) {
-          const { n, low } = await search(q, page, 50, after);
-          if (n < 50 || low <= floor) break;
-          // Without a previous cursor one page is enough to start from; a gap longer than the pages is reported.
-          if (!floor) break;
-          if (page === OSMOSIS_SWEEP_PAGES) complete = false;
-        }
+        const w = await walk(q, placeOf(q), rows);
+        walks.set(q, { ...w, rows });
+        if (!w.done) complete = false;
       } catch (e) {
+        walks.set(q, null);
         complete = false;
         console.error(`Osmosis catch-up search "${q}":`, e);
       }
     }
     let added = 0;
     const times = new Map<number, number>();
+    // The transactions kept and not yet written or let go: a place never passes one (the next search reads it again).
+    const unwritten = new Set(found.keys());
     for (const [hash, t] of found) {
       if (signal?.aborted) { complete = false; break; }
-      if (this.seenOsmoTx.has(hash)) continue;
+      if (this.seenOsmoTx.has(hash)) { unwritten.delete(hash); continue; }
       // A transaction whose write threw (osmoRetryTx) is read again though rows of it are stored: that write stored
       // all of its rows (one batch), so they are not written again, but nothing alerted them.
-      if (have.has(hash) && !this.osmoRetryTx.has(hash)) continue;
+      if (have.has(hash) && !this.osmoRetryTx.has(hash)) { unwritten.delete(hash); continue; }
       const h = Number(t.height);
       if (!times.has(h)) {
         const b = await get(`/block?height=${h}`).catch(() => null);
@@ -895,6 +978,8 @@ export class LiveHub extends DurableObject<Env> {
         continue;
       }
       const parsed = parseOsmosisTx(normFromTxSearch(t, times.get(h)!), { ...this.osmoCtx, priceUsd });
+      // Written below, or the search ends here (a write that throws ends it before the cursor is written).
+      unwritten.delete(hash);
       if (!parsed.flows.length && !parsed.moves.length) continue;
       for (const f of parsed.flows) f.meta = { ...(f.meta ?? {}), tsSource: 'block', via: 'catch-up search' };
       if (!have.has(hash)) {
@@ -937,9 +1022,60 @@ export class LiveHub extends DurableObject<Env> {
     for (const note of skipped) console.error(`Osmosis catch-up search: ${note}`);
     const skips = [...(prev?.skipped ?? []), ...[...new Set(skipped)].filter((note) => !prev?.skipped?.some((s) => s.note === note)).map((note) => ({ at: now, note }))].slice(-20);
     const kept = skips.length ? { skipped: skips } : {};
+    // Where each query is left when the cursor stays: down to the last transaction read before one not written yet (no
+    // block time, no quote, the deadline), and never past one. The rows are taken in the order read, which is the
+    // query's order (positions from two nodes' answers need not agree). A query that failed, or read nothing to go on
+    // from, keeps its place.
+    // Nor is a place left past a stream transaction not yet known written, the ones `pending` keeps the cursor below:
+    // this search let it go as seen while its write ran, and only the hub's memory says to read it again, which a
+    // restart empties. The place ends above its hash and above its block (the node's index may not give it yet), so
+    // the next search, or the first one after a restart, reads it again.
+    for (const hash of this.osmoRetryTx.keys()) unwritten.add(hash);
+    for (const [hash, w] of this.osmoWriting) if (now - w.since < OSMOSIS_SWEEP_EVERY_MS) unwritten.add(hash);
+    const held = pending.length ? Math.max(...pending) : -Infinity;
+    const resume: Record<string, OsmosisResume> = {};
+    if (!complete) {
+      for (const [q, w] of walks) {
+        const carried = prev?.resume?.[q];
+        if (!w) { if (carried) resume[q] = carried; continue; }
+        const old = w.old;
+        if (w.stand && old) { resume[q] = old; continue; }
+        const list = [...w.rows].map(([hash, x], i) => ({ hash, ...x, i }));
+        const inRange = (x: { h: number }) => x.h > floor && x.h <= head;
+        const oldAt = old?.last ? list.findIndex((x) => x.hash === old.last) : -1;
+        const ofOld = (x: { h: number; i: number }) => !!old && x.h <= old.top && (oldAt >= 0 ? x.i <= oldAt : x.h > old.low);
+        // The place gone on from holds while none of its own transactions read again is still to be written: one this
+        // search kept and did not write, or a stream transaction not yet known written. Such a one shows the place was
+        // wrong about it (the node's index did not give it to the search that took its block as top, say), or only
+        // the hub's memory says to read it again. The place is then cut at it like any other, not written back.
+        const holds = !!old && !list.some((x) => ofOld(x) && inRange(x) && unwritten.has(x.hash));
+        // A transaction at or below a held block ends the place too, except the place's own read again while it
+        // holds: the search that read them first looked at them.
+        const cut = list.find((x) => inRange(x) && (unwritten.has(x.hash) || (x.h <= held && !(holds && ofOld(x)))));
+        // The place gone on from is written back when the cut is above its top, and also when a held block lies above
+        // its top (`pending` holds blocks up to this head only) though no row above the top was cut at: the node's
+        // index may not give that block's transaction yet, and a place from this search's reads would take this head
+        // as top over it. Its top stays below the block, so the next search reads the block from the newest.
+        if (holds && old && ((cut && cut.h > old.top) || held > old.top)) { resume[q] = old; continue; }
+        // Read down to the floor: the next search reads it down to this head only (none read: it reads one page).
+        if (w.done && !cut) { if (list.some(inRange)) resume[q] = { top: head, low: floor, n: 0 }; continue; }
+        const aboveHead = list.filter((x) => x.h > head).length;
+        const last = list.filter((x) => inRange(x) && (!cut || x.i < cut.i)).at(-1);
+        // Nothing read before the cut: a place the walk went on from is kept only while it holds, since one that does
+        // not covers the cut, and one it did not go on from is kept as it was.
+        const o = old ? (holds ? old : null) : carried;
+        if (last) resume[q] = { top: head, low: last.h, n: last.pos + 1 - aboveHead, last: last.hash };
+        else if (o) resume[q] = o;
+      }
+    }
+    const behind = Object.keys(resume).length > 0;
     const next: OsmosisCursor = complete
       ? { height: upTo, at: Date.now(), added, ...kept }
-      : { height: prev?.height ?? 0, at: prev?.at ?? 0, added, error: 'The last catch-up search did not finish; it is retried.', ...kept };
+      : {
+          height: prev?.height ?? 0, at: prev?.at ?? 0, added, ...kept,
+          error: behind ? 'The last catch-up search did not finish; the next one goes on from where it stopped.' : 'The last catch-up search did not finish; it is retried.',
+          ...(behind ? { resume } : {}),
+        };
     if (complete || prev) await kvSet(this.env.DB, 'osmosis.cursor', next);
     if (!complete) this.needSweep = false; // retried on the regular schedule, not every alarm
   }

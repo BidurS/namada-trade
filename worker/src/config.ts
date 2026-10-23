@@ -22,6 +22,11 @@ export const OSMOSIS = {
   sqs: 'https://sqs.osmosis.zone',
   /** Public Osmosis RPC for the catch-up search (tx_search by event, newest first; no height ranges there) */
   publicRpc: 'https://osmosis-rpc.publicnode.com',
+  /**
+   * Public Osmosis REST, asked for one address's bank balance (balances/{address}/by_denom) when the Keplr REST read
+   * fails; it serves that route with the same answer shape as Keplr's (checked on 2026-10-23)
+   */
+  publicRest: 'https://osmosis-rest.publicnode.com',
   /** ICS-20 transfer module account (mints/burns NAM vouchers) */
   transferModule: 'osmo1yl6hdjhmkf37639730gffanpzndzdpmhxy9ep3',
   /** Main NAM pool used as the price reference (NAM/USDC concentrated-liquidity pool) */

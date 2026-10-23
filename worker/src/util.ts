@@ -352,6 +352,51 @@ export function isRealAddress(address: string | null | undefined): 'osmosis' | '
 }
 
 /**
+ * The most of a flow's address a row keeps, in UTF-16 units. An IBC packet's receiver and sender are text the sending
+ * chain's user chose: ibc-go takes a receiver of 2,048 bytes, and Namada bounds neither below its transaction size.
+ * The longest address stored on 2026-10-22 was 63 characters (a 32-byte Osmosis account), and chainOf takes at most
+ * 85, so text cut here names no account.
+ */
+export const FLOW_ADDRESS_MAX = 128;
+/**
+ * The most of an IBC memo a row keeps, in UTF-16 units (ibc-go takes 32 KiB). JSON writes a control character as six,
+ * so a stored memo is at most 1,536 bytes. Namadillo's shielding memos (about 2,400 characters of a MASP transaction)
+ * are cut too: no page or check of this site reads a memo, and the transaction itself is on the chain.
+ */
+export const FLOW_MEMO_MAX = 256;
+
+/** `s` cut to `max` UTF-16 units, the last of them '…', never inside a surrogate pair; shorter text as it is. */
+export function cutText(s: string, max: number): string {
+  if (s.length <= max) return s;
+  let end = max - 1;
+  const c = s.charCodeAt(end - 1);
+  if (c >= 0xd800 && c <= 0xdbff) end--;
+  return `${s.slice(0, end)}…`;
+}
+
+/**
+ * A flow with its senders' text bounded, as the parsers give every flow: `from` and `to` cut to FLOW_ADDRESS_MAX and
+ * meta.memo to FLOW_MEMO_MAX, and meta.textCut naming the whole length of each one cut, so a cut row says it was cut.
+ * Kept whole, one dust IBC send with a 32 KiB memo of control characters is about 197 KB stored, and the moves export,
+ * a moves page and the cron's bridge read load every such row whole. The same text is cut the same way on both chains,
+ * so the two records of a crossing still pair; a flow with nothing to cut is returned as it is.
+ */
+export function boundFlowText<F extends { from: string | null; to: string | null; meta?: Record<string, unknown> | null }>(f: F): F {
+  const cut: Record<string, number> = {};
+  const bound = (v: string | null, k: string, max: number) => {
+    if (typeof v !== 'string' || v.length <= max) return v;
+    cut[k] = v.length;
+    return cutText(v, max);
+  };
+  const memo = f.meta?.memo;
+  const memoCut = typeof memo === 'string' ? bound(memo, 'memo', FLOW_MEMO_MAX) : memo;
+  const from = bound(f.from, 'from', FLOW_ADDRESS_MAX);
+  const to = bound(f.to, 'to', FLOW_ADDRESS_MAX);
+  if (!Object.keys(cut).length) return f;
+  return { ...f, from, to, meta: { ...(f.meta ?? {}), ...(typeof memo === 'string' ? { memo: memoCut } : {}), textCut: cut } };
+}
+
+/**
  * An address an Osmosis pool can have: a checksummed osmo1 address of 32 bytes. Balancer, stableswap and concentrated
  * pools hold their coins in an account derived from the pool id, and a CosmWasm pool in its contract, all 32 bytes;
  * a wallet's key address is 20 bytes, as are the module accounts, and a Namada address is never osmo1. The pool list

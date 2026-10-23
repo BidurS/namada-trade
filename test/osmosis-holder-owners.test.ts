@@ -101,7 +101,7 @@ describe('the Osmosis holder list keeps only the bank\'s owners', () => {
 
   it('as before: a page with no owners and no next key is the end; a page without pagination stops the list, not complete', async () => {
     vi.stubGlobal('fetch', vi.fn(async () => json({ pagination: { next_key: null, total: '0' } })));
-    expect(await read()).toEqual({ holders: [], complete: true, capped: false });
+    expect(await read()).toEqual({ holders: [], complete: true, capped: false, pages: 1 });
     vi.stubGlobal('fetch', vi.fn(async () => json({ denom_owners: [owner(osmo(1))] })));
     expect(await read()).toMatchObject({ holders: [{ address: osmo(1) }], complete: false, capped: false });
   });

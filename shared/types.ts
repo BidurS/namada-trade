@@ -30,7 +30,8 @@ export interface Flow {
   priceUsd?: number | null;
   valueUsd?: number | null;
   /** May carry `tsSource` ('block' | 'extrapolated' | 'interpolated'), `priceSource`
-   *  ('execution' | 'swap_1h' | 'spot' | 'unknown'), `arb`, `trader`, `source`. */
+   *  ('execution' | 'swap_1h' | 'spot' | 'unknown'), `arb`, `trader`, `source`, and `textCut`: the whole length of
+   *  each sender's text the row keeps only the start of (`memo`, `from`, `to`; worker/src/util.ts boundFlowText). */
   meta?: Record<string, unknown> | null;
   fromLabel?: string | null;
   toLabel?: string | null;
@@ -596,6 +597,12 @@ export interface Pressure {
   unbondTermStructure?: UnbondTermStructure | null;
   /** when the term structure was read and whether it is current (stale past three bond-listing intervals, missing when there is none) */
   unbondTermStructureProv?: Provenance;
+  /**
+   * when the withdraw times behind the unlock list's 'consensus' and 'indexer' ends of the wait were read, and who
+   * wrote them (`source`: the bond listing's Namada node, or the Namada indexer while no listing completes); when it
+   * is not live they were not used, and every unbond row carries the estimate (absent on servers before 2026-10-22)
+   */
+  unbondWithdrawProv?: Provenance;
   /** Cohort breakdown of supply crossing to Osmosis and remaining on deck. */
   pipelineSummary?: SupplyCohortBreakdown;
   /** NAM staked (the chain's total stake), last reading of each 6-hour period over 14 days */

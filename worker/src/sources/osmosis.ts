@@ -11,8 +11,14 @@ export async function fetchOsmosisHolders(keplrKey: string): Promise<HolderItem[
   return (await fetchOsmosisHolderList(keplrKey)).holders;
 }
 
-/** Pages of 100 holders read at most per sync (10,000 holders; 1,332 on 2026-10-17). */
+/**
+ * Pages of 100 holders read at most in one call (10,000 holders, about 1.5 MB held at once; 1,339 holders in 14 pages
+ * on 2026-10-23). The cron reads the list a slice at a time from the bank's next key (cron.ts OsmoHolderPass), so
+ * this bounds one tick's read, not the list.
+ */
 export const OSMOSIS_HOLDER_PAGES = 100;
+/** The longest next key kept (base64 of the bank's key, a length byte and a 20 or 32 byte address: 28 or 44 characters). */
+export const OSMOSIS_NEXT_KEY_MAX = 200;
 /** Owners asked for in one page (pagination.limit); the bank never names more. */
 export const OSMOSIS_HOLDER_PAGE_SIZE = 100;
 /** An owner's amount as the bank writes it: a whole number of base units (at most 13 digits on 2026-10-22). */
@@ -45,43 +51,75 @@ function pageOwners(owners: unknown, page: number): HolderItem[] {
  * so a Keplr that accepts requests and never answers costs seconds, not the tick; scripts keep the long defaults.
  */
 export interface KeplrOpts { signal?: AbortSignal; timeoutMs?: number; retries?: number }
+/**
+ * Where a read of the holder list starts and how it may end. `from`: a next key the bank gave (the first page when
+ * absent). `resume`: a read that `signal` ends after at least one page returns the pages read and the key to go on
+ * from (`nextKey`) instead of failing. `pagesBefore`: pages of the same pass read before, for the error's page number.
+ */
+export interface HolderListOpts extends KeplrOpts { from?: string | null; resume?: boolean; pagesBefore?: number }
+/** One read of the holder list: `nextKey` is the bank's key for the page after the last one read (absent when complete or stopped). */
+export interface HolderListRead { holders: HolderItem[]; complete: boolean; capped: boolean; pages: number; nextKey?: string }
 
 /**
- * Every NAM holder on Osmosis. `complete` is true only when a page carried a pagination object whose next_key is
- * empty: the bank saying there are no more pages, which is what allows an address missing from the list to be
- * read as holding nothing (the cron also checks the list adds up to the supply). A 200 answer without pagination,
- * or hitting the page cap, leaves `complete` false (`capped` says which). A page whose owners are not the bank's
- * (pageOwners) fails the whole read: a producer that names one made-up owner is not taken at its word for the pages
- * before it either, and the error is the cron's health note (had the list only stopped there, a refused first page
- * would leave that row ok with nothing read).
+ * Every NAM holder on Osmosis, or one slice of them. `complete` is true only when a page carried a pagination object
+ * whose next_key is empty: the bank saying there are no more pages, which is what allows an address missing from the
+ * list to be read as holding nothing (the cron also checks the list adds up to the supply). A 200 answer without
+ * pagination, or hitting the page cap, leaves `complete` false (`capped` says which). A page whose owners are not the
+ * bank's (pageOwners), or whose next key is not one (not a string, too long, or the key the page was asked with),
+ * fails the whole read: a producer that names one made-up owner is not taken at its word for the pages before it
+ * either, and the error is the cron's health note (had the list only stopped there, a refused first page would leave
+ * that row ok with nothing read). With `resume`, the page cap and a deadline after the first page end the read with
+ * `nextKey`, the key the next read starts from.
  */
-export async function fetchOsmosisHolderList(keplrKey: string, pages = OSMOSIS_HOLDER_PAGES, opts: KeplrOpts = {}): Promise<{ holders: HolderItem[]; complete: boolean; capped: boolean }> {
+export async function fetchOsmosisHolderList(keplrKey: string, pages = OSMOSIS_HOLDER_PAGES, opts: HolderListOpts = {}): Promise<HolderListRead> {
   const rest = OSMOSIS.keplrRest(keplrKey);
   const denom = encodeURIComponent(NAM.osmoDenom);
-  let nextKey: string | null = null;
+  let nextKey: string | null = opts.from ?? null;
   let complete = false;
   let capped = true;
+  let read = 0;
   const holders: HolderItem[] = [];
+  const before = opts.pagesBefore ?? 0;
+  // The pages read so far and the key of the one not read: what a later read goes on from.
+  const paused = (): HolderListRead => ({ holders: sorted(holders), complete: false, capped: false, pages: read, nextKey: nextKey ?? undefined });
 
   for (let page = 0; page < pages; page++) {
-    // A list cut by the deadline is not a list: the caller gets an error, never part of it as if it were all.
-    if (opts.signal?.aborted) throw new Error(`deadline passed after ${page} pages of the Osmosis holder list`);
+    // A list cut by the deadline is not a list: the caller gets an error, or with `resume` the pages read and where to
+    // go on, never part of it as if it were all.
+    if (opts.signal?.aborted) {
+      if (opts.resume && read > 0) return paused();
+      throw new Error(`deadline passed after ${before + page} pages of the Osmosis holder list`);
+    }
     const pageUrl: string = `${rest}/cosmos/bank/v1beta1/denom_owners_by_query?denom=${denom}&pagination.limit=${OSMOSIS_HOLDER_PAGE_SIZE}${
       nextKey ? `&pagination.key=${encodeURIComponent(nextKey)}` : ''
     }`;
-    const pageRes: any = await fetchJson(pageUrl, { timeoutMs: opts.timeoutMs ?? 25000, retries: opts.retries ?? 2, signal: opts.signal });
-    const owners = pageOwners(pageRes.denom_owners, page);
-    holders.push(...owners);
+    let pageRes: any;
+    try {
+      pageRes = await fetchJson(pageUrl, { timeoutMs: opts.timeoutMs ?? 25000, retries: opts.retries ?? 2, signal: opts.signal });
+    } catch (e) {
+      if (opts.resume && read > 0 && opts.signal?.aborted) return paused();
+      throw e;
+    }
+    const owners = pageOwners(pageRes.denom_owners, before + page);
     const pg = pageRes?.pagination;
-    if (!pg || typeof pg !== 'object') { capped = false; break; } // not the bank's answer: stop, not complete
-    nextKey = pg.next_key || null;
+    const key: unknown = pg && typeof pg === 'object' ? pg.next_key || null : null;
+    if (key != null && (typeof key !== 'string' || key.length > OSMOSIS_NEXT_KEY_MAX || key === nextKey)) {
+      throw new Error(`page ${before + page + 1} of the Osmosis holder list is not the bank's answer: its next key is not one`);
+    }
+    holders.push(...owners);
+    read++;
+    if (!pg || typeof pg !== 'object') { capped = false; nextKey = null; break; } // not the bank's answer: stop, not complete
+    nextKey = key as string | null;
     if (!nextKey) { complete = true; capped = false; break; }
-    if (owners.length === 0) { capped = false; break; } // a next key with an empty page: stop, not complete
+    if (owners.length === 0) { capped = false; nextKey = null; break; } // a next key with an empty page: stop, not complete
   }
 
-  // Sort descending by balance
-  holders.sort((a, b) => b.balanceNum - a.balanceNum);
-  return { holders, complete, capped: complete ? false : capped };
+  return { holders: sorted(holders), complete, capped: complete ? false : capped, pages: read, ...(capped && !complete && nextKey ? { nextKey } : {}) };
+}
+
+/** Largest balance first. */
+function sorted(holders: HolderItem[]): HolderItem[] {
+  return holders.sort((a, b) => b.balanceNum - a.balanceNum);
 }
 
 /** The bank's supply of NAM on Osmosis, in base units (exact, for the holder-list check). */
@@ -96,6 +134,45 @@ export async function fetchOsmosisSupplyBase(keplrKey: string, opts: KeplrOpts =
   const amt = res?.amount?.amount;
   if (typeof amt !== 'string' || !/^\d+$/.test(amt)) throw new Error('supply answer without an amount');
   return BigInt(amt);
+}
+
+/** verified_src of an Osmosis row read from Keplr's REST (the holder list, and a balance by address). */
+export const KEPLR_REST_SRC = 'keplr_rest';
+/** verified_src of an Osmosis row whose balance by address Osmosis's public REST gave, after Keplr's read failed. */
+export const OSMOSIS_PUBLIC_REST_SRC = 'osmosis_public_rest';
+/** One balance read by address: the base units and the source that gave them. */
+export interface OsmosisBalanceRead { base: bigint; src: typeof KEPLR_REST_SRC | typeof OSMOSIS_PUBLIC_REST_SRC }
+
+/**
+ * One address's NAM on Osmosis as the bank holds it now, in base units (bank balances by_denom). The cron asks it
+ * for the few holders a pass's list stopped naming before it zeroes one, and for the largest holders read in a pass's
+ * earlier slices. Keplr's REST is asked first; when that read fails (no answer, a refusal of the route, or an answer
+ * that is not the bank's), Osmosis's public REST is asked the same thing, so a Keplr that does not serve the route
+ * does not stop every holder from being zeroed. A deadline (`signal`) ends both. An answer that does not name the
+ * denom asked for, or whose amount is not a whole number of at most 40 digits, is not the bank's answer; when neither
+ * gives one, this throws.
+ */
+export async function fetchOsmosisBalanceBase(keplrKey: string, address: string, opts: KeplrOpts = {}): Promise<OsmosisBalanceRead> {
+  const path = `/cosmos/bank/v1beta1/balances/${encodeURIComponent(address)}/by_denom?denom=${encodeURIComponent(NAM.osmoDenom)}`;
+  try {
+    return { base: await balanceAnswer(`${OSMOSIS.keplrRest(keplrKey)}${path}`, opts), src: KEPLR_REST_SRC };
+  } catch (e) {
+    if (opts.signal?.aborted) throw e;
+  }
+  try {
+    return { base: await balanceAnswer(`${OSMOSIS.publicRest}${path}`, opts), src: OSMOSIS_PUBLIC_REST_SRC };
+  } catch {
+    throw new Error("neither Keplr's REST nor Osmosis's public REST gave the bank's balance by address");
+  }
+}
+/** The amount of one bank balances by_denom answer at `url`, in base units; throws on an answer that is not the bank's. */
+async function balanceAnswer(url: string, opts: KeplrOpts): Promise<bigint> {
+  const res = await fetchJson(url, { timeoutMs: opts.timeoutMs ?? 15000, retries: opts.retries ?? 2, signal: opts.signal });
+  const b = res?.balance;
+  if (!b || typeof b !== 'object' || b.denom !== NAM.osmoDenom || typeof b.amount !== 'string' || !OWNER_AMOUNT.test(b.amount)) {
+    throw new Error('balance answer without the denom asked for and a whole-number amount');
+  }
+  return BigInt(b.amount);
 }
 
 export async function fetchOsmosisSupply(keplrKey: string): Promise<number> {

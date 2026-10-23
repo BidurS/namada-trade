@@ -1,5 +1,5 @@
 import { NAM, NAMADA } from '../config';
-import { toNam, isRealAddress } from '../util';
+import { toNam, isRealAddress, boundFlowText } from '../util';
 import type { Flow, Move } from '../../../shared/types';
 import type { RawEvent } from './osmosis';
 
@@ -509,6 +509,8 @@ export function parseNamadaBlock(block: NamadaBlock, priceUsd: number | null, fe
   const last = new Map<string, BalanceUpdate>();
   for (const b of out.balances) last.set(b.address, b);
   out.balances = [...last.values()];
+  // A packet's receiver and sender are the sender's own text: every flow is kept with them bounded.
+  out.flows = out.flows.map(boundFlowText);
   return out;
 }
 

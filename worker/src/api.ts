@@ -264,8 +264,11 @@ app.get('/api/overview', async (c) => {
 /**
  * The stamp of one chain's holder figures (overview.concentration.namadaProv / osmosisProv): the older of the oldest
  * reading among the ten biggest holders (NAMADA_TOP10_SQL / OSMOSIS_TOP10_SQL `at`) and what the count is as of (for
- * Namada the last complete balance listing, kv balance.listing; else HOLDER_COUNTS_SQL `namada_at` / `osmosis_at`,
- * the newest write of the chain's holder rows). Old past 6 hours, as a holder row is (owner decision 7). Holder
+ * Namada the last complete balance listing, kv balance.listing, else the newest write of its holder rows; for Osmosis
+ * the oldest reading among the holders it counts, holders.ts OSMOSIS_READ_AT_SQL, so a holder the bank's list has not
+ * re-read for 6 hours makes the count old). The Osmosis times are also held no later than the start of the last pass
+ * of the bank's list that added up to its supply (holders.ts osmosisStamp), and are null while none has, so a pass
+ * that does not add up never makes them current. Old past 6 hours, as a holder row is (owner decision 7). Holder
  * balances are current readings: under Rewind too, the stamp is their age.
  */
 export function holderFiguresProv(top10At: number | null | undefined, countAt: number | null | undefined, now: number): Provenance {
@@ -803,7 +806,7 @@ app.get('/api/address/:addr', async (c) => {
         : { value: holder?.balance_num ?? null, prov: provAt('D1 index (RPC failed)', holder?.updated_at ?? null, now, 30 * 60000, { height: holder?.updated_height, note: 'The live read from the chain failed, so this is the last indexed balance.' }) };
     }
   } else {
-    balance = { value: holder?.balance_num ?? null, prov: provAt(holder?.verified_src ? `Keplr Osmosis REST (${holder.verified_src})` : 'D1 index', holder?.verified_at ?? holder?.updated_at ?? null, now, 15 * 60000, { height: holder?.updated_height }) };
+    balance = { value: holder?.balance_num ?? null, prov: provAt(holder?.verified_src ? (holder.verified_src === 'osmosis_public_rest' ? 'Osmosis public REST (osmosis_public_rest)' : `Keplr Osmosis REST (${holder.verified_src})`) : 'D1 index', holder?.verified_at ?? holder?.updated_at ?? null, now, 15 * 60000, { height: holder?.updated_height }) };
   }
 
   const liveBal = balance.value ?? 0;

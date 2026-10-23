@@ -1,6 +1,6 @@
 import type { Flow, Move } from '../../shared/types';
 import type { BalanceUpdate } from './parse/namada';
-import { toNam } from './util';
+import { toNam, boundFlowText } from './util';
 
 export interface Stmt { sql: string; params: unknown[] }
 
@@ -20,15 +20,19 @@ export const stmt = {
     sql: 'INSERT OR IGNORE INTO moves (chain,address,height,ts,tx_hash,idx,delta_num) VALUES (?,?,?,?,?,?,?)',
     params: [m.chain, m.address, m.height, m.ts, m.txHash, m.idx, m.delta],
   }),
-  flow: (f: Flow): Stmt => ({
-    sql: `INSERT OR REPLACE INTO flows (id,chain,height,ts,tx_hash,kind,from_addr,to_addr,amount_num,counter_denom,counter_amount,pool_id,price_usd,value_usd,meta)
+  /** A flow row, with its senders' text bounded whichever writer gives it (util.ts boundFlowText; the parsers bound it too). */
+  flow: (given: Flow): Stmt => {
+    const f = boundFlowText(given);
+    return {
+      sql: `INSERT OR REPLACE INTO flows (id,chain,height,ts,tx_hash,kind,from_addr,to_addr,amount_num,counter_denom,counter_amount,pool_id,price_usd,value_usd,meta)
           VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
-    params: [
-      f.id, f.chain, f.height, f.ts, f.txHash, f.kind, f.from, f.to, f.amount,
-      f.counterDenom ?? null, f.counterAmount ?? null, f.poolId ?? null,
-      f.priceUsd ?? null, f.valueUsd ?? null, f.meta ? JSON.stringify(f.meta) : null,
-    ],
-  }),
+      params: [
+        f.id, f.chain, f.height, f.ts, f.txHash, f.kind, f.from, f.to, f.amount,
+        f.counterDenom ?? null, f.counterAmount ?? null, f.poolId ?? null,
+        f.priceUsd ?? null, f.valueUsd ?? null, f.meta ? JSON.stringify(f.meta) : null,
+      ],
+    };
+  },
   /** Namada post-balance: only overwrite if the update is newer than what we have. A new row holding NAM gets first_seen (migration 0007); an existing row keeps its own. */
   namadaBalance: (b: BalanceUpdate, at: number): Stmt => ({
     sql: `INSERT INTO holders (chain,address,balance,balance_num,updated_height,updated_at,first_seen)

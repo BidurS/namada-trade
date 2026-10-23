@@ -24,6 +24,23 @@ const NOW = Date.UTC(2026, 9, 18, 12, 0);
 const MASP = INTERNAL_ADDRESSES.masp;
 const POS = INTERNAL_ADDRESSES.pos;
 
+/**
+ * The listing with one more source, holding only a 150,000 NAM unbond withdrawable since epoch 2680. The fixture's
+ * unbonds are all under the unlock list's floor (UNLOCKS_MIN_NAM), and the withdraw cache keeps only unbonds the list
+ * can look up, so without it the cache is empty.
+ */
+const BIG_UNBONDER = 'tnam1qfixturebigunbonder';
+function withBigUnbond(l: ReturnType<typeof parseBondListing>): ReturnType<typeof parseBondListing> {
+  const base = 150_000_000_000n;
+  const validator = [...l.sources.values()].find((s) => s.unbonds.length)!.unbonds[0].validator;
+  const sources = new Map(l.sources);
+  sources.set(BIG_UNBONDER, {
+    bondedBase: 0n, grossBase: 0n, slashedBase: 0n, unbondingBase: base, unbondGrossBase: base, unbondSlashedBase: 0n, delegations: [],
+    unbonds: [{ validator, startEpoch: 2620, withdrawEpoch: 2680, amountBase: base, grossBase: base, slashedBase: 0n, amountNam: 150_000 }],
+  });
+  return { ...l, sources, entries: l.entries + 1, unbondingBase: l.unbondingBase + base, unbondGrossBase: l.unbondGrossBase + base, entriesWithUnbonds: l.entriesWithUnbonds + 1 };
+}
+
 describe('1. Consensus unbonds & slashes decoded from /vp/pos/bonds_and_unbonds/to', () => {
   const l = parseBondListing(BONDS.value);
   const e = BONDS.expected;
@@ -54,19 +71,24 @@ describe('1. Consensus unbonds & slashes decoded from /vp/pos/bonds_and_unbonds/
     expect(termStructure.buckets.map((b) => b.withdrawEpoch)).toEqual(
       [...termStructure.buckets.map((b) => b.withdrawEpoch)].sort((a, b) => a - b),
     );
-    expect(Object.keys(withdrawCache.byAddress).length).toBeGreaterThan(0);
+    // every fixture unbond is under the unlock list's floor: the withdraw cache keeps none of them
+    expect(withdrawCache.byAddress).toEqual({});
+    const big = withBigUnbond(l);
+    const bigCache = buildUnbondTermStructure(big, 8343327, 2690, NOW, 21600).withdrawCache;
+    expect(Object.keys(bigCache.byAddress)).toEqual([BIG_UNBONDER]);
 
     // Running runBondListing persists unbond.term_structure and unbond.withdraw so pressure() serves consensus liquidAt
     const db = testD1();
     const health: SourceHealth[] = [];
     await runBondListing({ DB: db } as any, health, NOW, 2690, {}, async () => ({
-      ...l,
+      ...big,
       height: 8343327,
       provider: 'TestNode',
     }));
+    expect(health.find((h) => h.name === 'Namada RPC (unbond withdraw times)')).toMatchObject({ ok: true, note: '1 unbond of 100,000 NAM or more (1 address) at height 8,343,327' });
 
-    const sampleAddr = Object.keys(withdrawCache.byAddress)[0];
-    const sampleUnbond = withdrawCache.byAddress[sampleAddr][0];
+    const sampleAddr = BIG_UNBONDER;
+    const sampleUnbond = bigCache.byAddress[sampleAddr][0];
     insert(db, 'flows', [
       {
         id: 'namada:U1:pos',
@@ -84,12 +106,11 @@ describe('1. Consensus unbonds & slashes decoded from /vp/pos/bonds_and_unbonds/
 
     const p = await pressure(db as any, NOW, false);
     expect(p.unbondTermStructure).toBeDefined();
-    expect(p.unbondTermStructure?.totalUnbondingNam).toBeCloseTo(termStructure.totalUnbondingNam, 5);
+    expect(p.unbondTermStructure?.totalUnbondingNam).toBeCloseTo(termStructure.totalUnbondingNam + 150_000, 5);
     const hit = p.unlocks.find((u) => u.txHash === 'U1');
-    if (sampleUnbond.amountNam >= 100_000) {
-      expect(hit?.liquidAtSource).toBe('consensus');
-      expect(hit?.liquidAt).toBe(sampleUnbond.withdrawTime);
-    }
+    expect(hit?.liquidAtSource).toBe('consensus');
+    expect(hit?.liquidAt).toBe(sampleUnbond.withdrawTime);
+    expect(p.unbondWithdrawProv).toMatchObject({ status: 'live', at: NOW });
   });
 });
 
@@ -255,7 +276,8 @@ describe('Review fixes (docs/review-deep-protocol-intelligence.md)', () => {
   const l = parseBondListing(BONDS.value);
   it('1. no epoch length, no clock time: an unbond keeps its withdraw epoch and liquidAt is null with the reason, never a 21,600 s stand-in', async () => {
     // at epoch 1 every fixture unbond is still in flight
-    const none = buildUnbondTermStructure(l, 8343327, 1, NOW, null);
+    const none = buildUnbondTermStructure(withBigUnbond(l), 8343327, 1, NOW, null);
+    expect(Object.keys(none.withdrawCache.byAddress)).toEqual([BIG_UNBONDER]);
     expect(none.termStructure).toMatchObject({ epochSec: null, epochSecSource: null, withdrawableNowNam: 0 });
     expect(none.termStructure.inFlightNam).toBeCloseTo(none.termStructure.totalUnbondingNam, 6);
     for (const b of none.termStructure.buckets) expect(b.estimatedAt).toBeNull();
@@ -269,7 +291,7 @@ describe('Review fixes (docs/review-deep-protocol-intelligence.md)', () => {
 
     // the cron writes the cache without a time when the chain parameters are not stored
     const db = testD1();
-    await runBondListing({ DB: db } as any, [], NOW, 1, {}, async () => ({ ...l, height: 8343327, provider: 'TestNode' }));
+    await runBondListing({ DB: db } as any, [], NOW, 1, {}, async () => ({ ...withBigUnbond(l), height: 8343327, provider: 'TestNode' }));
     const cache = JSON.parse(db.raw.prepare("SELECT value FROM kv WHERE key='unbond.withdraw'").get().value);
     const entries = Object.values(cache.byAddress as Record<string, { withdrawTime: number | null; source: string }[]>).flat();
     expect(entries.length).toBeGreaterThan(0);

@@ -70,6 +70,7 @@ export const PLAIN_SOURCE: Record<string, string> = {
   'namada-rpc': 'Namada node',
   'Namada chain parameters': 'Chain parameter',
   'Namada governance (indexer)': 'Namada indexer',
+  'Namada indexer (unbond withdraw times)': 'Namada indexer',
   'indexer.namada.net': 'Namada indexer',
   'NamadaTrade holder index': 'Holder index',
   'bond/unbond history (estimate)': 'Flow estimate',
@@ -83,6 +84,7 @@ const PREFIXES: [string, string][] = [
   ['Osmosis SQS pools', 'Osmosis pools'],
   ['Osmosis SQS', 'Osmosis quote'],
   ['Keplr Osmosis', 'Osmosis supply'],
+  ['Osmosis public REST', 'Osmosis supply'],
   ['D1 ', 'Flow index'],
   ['indexer', 'Namada indexer'],
 ];
@@ -248,7 +250,10 @@ export function checkDetail(c: Check): string | null {
     case 'bridge_records_paired': {
       const a = detailNum(d.onlyOnNamada);
       const b = detailNum(d.onlyOnOsmosis);
-      return a == null || b == null ? null : `${plural(a + b, 'crossing', 'crossings')} on one chain only`;
+      if (a == null || b == null) return null;
+      // More records than one read takes: only the crossings after judgedFrom were paired, and the line says so.
+      const from = detailNum(d.judgedFrom);
+      return `${plural(a + b, 'crossing', 'crossings')} on one chain only${from != null ? `, judging only crossings since ${fmtUtcLong(from)}: there were too many records to pair 14 days` : ''}`;
     }
     case 'stake_within_staking_account': {
       const x = detailNum(d.notStakedNam);

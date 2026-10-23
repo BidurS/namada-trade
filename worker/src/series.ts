@@ -12,7 +12,7 @@ import type { Env } from './util';
 import { fetchJson } from './util';
 import { runBatch, stmt, type Stmt } from './db';
 import { INTERNAL_LABELS, NAMADA, OSMOSIS } from './config';
-import { INTERNAL_ADDRS } from './holders';
+import { INTERNAL_ADDRS, osmosisStamp, osmosisTrustedStart } from './holders';
 import { fetchPairChart, fetchPairSummary, OSMOSIS_DATA_SOURCE, type PairChartPoint, type PairSummary } from './sources/osmosis-data';
 import { safeParseJson, timedOutSends, ibcRowOf } from './analytics';
 import type { BondListing } from './sources/namada';
@@ -257,10 +257,23 @@ export function summaryHealth(sum: PairSummary, now: number): { ok: boolean; not
 }
 
 /**
+ * The Osmosis holder count and the time it is as of, stamped as the holder figures stamp it (holders.ts
+ * osmosisStamp): the oldest reading among the holders it counts, and no later than the start of the last pass of the
+ * bank's list that added up to the supply (null while none has). A pass that did not add up still writes its
+ * readings with fresh times; the hourly count and the daily size snapshot take this stamp, so such passes leave them
+ * a gap once the last trusted pass is too old, as the figures read old.
+ */
+export async function osmosisHolders(db: D1Database): Promise<{ n: number; at: number | null } | null> {
+  const r = await db.prepare(OSMOSIS_HOLDERS_SQL).first<{ n: number; at: number | null; pass: string | null }>();
+  return r ? { n: Number(r.n), at: osmosisStamp(r.at ?? null, osmosisTrustedStart(r.pass)) } : null;
+}
+
+/**
  * Once an hour, in the first JOB_WINDOW_MS, on a tick that reads no chain listing (unless the window is closing), in
  * two parts that never wait on each other:
  * - the database part (kv jobs.hourly: the hour it last finished): the rollups and the full trade-hour keys of the
- *   closed hour(s), holders.osmosis; recomputable from stored rows, so it catches up on missed hours;
+ *   closed hour(s), holders.osmosis (at its stamp, osmosisHolders, when that is under an hour old); recomputable from
+ *   stored rows, so it catches up on missed hours;
  * - the Osmosis part (kv jobs.hourly_osmosis, OsmosisHourJob): the Osmosis data API's pair summary and the reference
  *   pool's pair chart (5.4: +2 requests an hour, side by side, never started once the tick is late), then pool_hourly
  *   for this hour and every closed pool-price hour since the last stored one. A read that fails is asked again on
@@ -300,7 +313,7 @@ export async function hourly(env: Env, now: number, ctx: HourlyCtx): Promise<Hou
         const swaps = (await env.DB.prepare(SWAP_HOUR_SQL).bind(h, h + H).all<SwapRow>()).results || [];
         stmts.push(...swapHourStmts(swaps, h));
       }
-      const oh = await env.DB.prepare(OSMOSIS_HOLDERS_SQL).first<{ n: number; at: number | null }>();
+      const oh = await osmosisHolders(env.DB);
       if (oh?.at != null && now - oh.at < H) stmts.push(stmt.metric(oh.at, 'holders.osmosis', oh.n));
       // The marker goes in the last batch: a failure before it leaves the hour to the next tick (every write is idempotent).
       stmts.push(kvStmt('jobs.hourly', hour, now));
@@ -546,9 +559,10 @@ export const VALIDATOR_LIST_TIMEOUT_MS = 10_000;
  * the others their rows, and a part that is done is never run again that day (the snapshot is 0.9 s and about half
  * a million rows read).
  * - the snapshots of the UTC day (holder_cohorts_daily, cohort_daily), when both chain listings completed within
- *   SNAPSHOT_MAX_AGE_MS (Namada) or the Osmosis holder list is that fresh (Osmosis); `as_of` is the older listing;
- *   a day whose listings never become fresh stays a gap (and the holder-size snapshot of a day can never be rebuilt,
- *   which is why it is written alone and first);
+ *   SNAPSHOT_MAX_AGE_MS (Namada) or the Osmosis holder count's stamp is that fresh (Osmosis: osmosisHolders, so a
+ *   holder list no pass of which added up to the supply in that time does not count); `as_of` is the older listing,
+ *   or that stamp; a day whose listings never become fresh stays a gap (and the holder-size snapshot of a day can
+ *   never be rebuilt, which is why it is written alone and first);
  * - from DAY_FLOWS_FROM_HOUR, the flow index of the two days before (flow_edges_daily, activity_daily, the daily
  *   keys; the day before yesterday again for rows that arrived late) and supply.masp_shielded.daily of yesterday;
  * - the validator list (names, commission, state) into kv validators.names for validator_daily: the request starts
@@ -600,8 +614,8 @@ export async function daily(env: Env, now: number, ctx: DailyCtx): Promise<Daily
     return [...holderCohortStmts(day, 'namada', cohorts.results || [], asOf), ...cohortStmts(day, [...lab, noneCohort(cohorts.results || [], lab)], asOf)];
   });
   await part('snapshot osmosis', 'snapOsmosis', async () => {
-    const oh = await env.DB.prepare(OSMOSIS_HOLDERS_SQL).first<{ n: number; at: number | null }>();
-    if (!(oh?.at != null && now - oh.at < SNAPSHOT_MAX_AGE_MS)) { res.waiting.push('snapshot osmosis: the holder list is older than 6 h'); return null; }
+    const oh = await osmosisHolders(env.DB);
+    if (!(oh?.at != null && now - oh.at < SNAPSHOT_MAX_AGE_MS)) { res.waiting.push('snapshot osmosis: the holder list is older than 6 h, or no pass of it has added up to the supply since then'); return null; }
     const rows = (await env.DB.prepare(HOLDER_COHORTS_OSMOSIS_SQL).all<CohortRow>()).results || [];
     return holderCohortStmts(day, 'osmosis', rows, oh.at);
   });

@@ -384,7 +384,8 @@ export async function claimPairCode(db: D1Database, codeIn: string): Promise<{ s
 
 /**
  * Cron: drop expired nonces, sessions and pair codes, the per-address session index rows no longer used, and any
- * session row from before tokens were hashed (migration 0005 deletes them at deploy; this catches any left).
+ * session row from before tokens were hashed (migration 0005 deletes them at deploy; this catches any left), and the
+ * alert claims older than ALERT_CLAIM_KEEP_MS.
  */
 /** Alert claim rows (sources/discord.ts) are kept this long; nothing alerts for a move older than a day (LATE_ALERT_MAX_AGE_MS). */
 export const ALERT_CLAIM_KEEP_MS = 30 * 86400000;
@@ -399,5 +400,9 @@ export async function sweepAuth(db: D1Database) {
   // Plaintext alert settings from before sign-in existed (`webhook:user:<address>`): never read since 2026-10-21;
   // a row brought back by a restore of an old copy is deleted here.
   await db.prepare(`DELETE FROM kv WHERE ${keyPrefix('webhook:user')}`).run().catch(() => {});
-  await db.prepare(`DELETE FROM kv WHERE ${keyPrefix('alert')} AND updated_at < ?`).bind(Date.now() - ALERT_CLAIM_KEEP_MS).run().catch(() => {});
+  // Alert claims on migration 0011's claim-time index: the expired claims only. On the key range alone the delete read
+  // every claim kept for 30 days on every tick (2,778 rows a run to delete none, 2026-10-22). A failure is logged, and
+  // the claims it would have deleted are kept until the next tick deletes them (nothing else reads them).
+  await db.prepare(`DELETE FROM kv INDEXED BY kv_alert_claim_time WHERE ${keyPrefix('alert')} AND updated_at < ?`).bind(now - ALERT_CLAIM_KEEP_MS).run()
+    .catch((e) => console.error('sweep: old alert claims not deleted', e));
 }

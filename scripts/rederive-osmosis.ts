@@ -42,7 +42,7 @@ const args = process.argv.slice(2);
 const cacheDir = (() => { const i = args.indexOf('--cache'); return i >= 0 ? args[i + 1] : null; })();
 const RPCS = [OSMOSIS.publicRpc, 'https://osmosis-rpc.polkachu.com'];
 /** The keys the parser writes into a row's meta; any other stored key (tsSource, via, settle, priceSource...) is kept. */
-const PARSER_KEYS = ['trader', 'arb', 'namSold', 'namBought', 'postHandler', 'memo', 'channel', 'packetSequence', 'ibcTimeoutRefund', 'refundReason', 'ackError', 'refundReceiver', 'relayer'];
+const PARSER_KEYS = ['trader', 'arb', 'namSold', 'namBought', 'postHandler', 'memo', 'channel', 'packetSequence', 'ibcTimeoutRefund', 'refundReason', 'ackError', 'refundReceiver', 'relayer', 'textCut'];
 /** A price no quote ever has: the parser sets it where it prices at the quote, so a row's own price tells itself apart. */
 const QUOTE_MARK = 7777;
 

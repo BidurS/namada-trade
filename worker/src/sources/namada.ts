@@ -381,17 +381,31 @@ async function abci(path: string, opts: ReadOpts = {}, accept?: (resp: AbciRespo
 export interface ListingAnswer { value: string | null; height: number; provider: string; bytes: number; readMs: number }
 
 /**
+ * The most a listing's value can decode to under the read's cap (util.ts FETCH_TEXT_MAX_BYTES): base64 carries 3 bytes
+ * in 4 characters, so 12 MiB, about 127,100 balance keys of 99 bytes. On 2026-10-22 the balance listing decoded to
+ * 8,989,296 bytes (90,802 keys, 71%) and the bond listing to 4,027,905. The cap is not raised: the read holds the
+ * answer several times over, and the apply holds every key and every stored row (about 450 bytes of heap a key).
+ */
+export const LISTING_MAX_VALUE_BYTES = (FETCH_TEXT_MAX_BYTES / 4) * 3;
+
+/** Every node asked answered past the read's cap: the chain's listing has outgrown the reader, and asking again will not change that. */
+export class ListingTooLargeError extends Error {}
+
+/**
  * One multi-megabyte ABCI answer, read by streaming (util.ts fetchText) so a read cut short says how much arrived:
  * one attempt per node, each with the whole `timeoutMs` for its stream, the nodes that failed a read this tick
  * asked last (the breaker's order). A node that streams slowly and is cut (ReadCutError) answers; it is not "no
  * answer" and is not marked failed; an HTTP error, a malformed answer or a dropped connection is. When every node
  * fails, the error names each node's outcome ("5ElementsNodes: timeout: 4.2 MB of 12.0 MB arrived in 180 s
- * (first byte after 5.8 s); Papadritta: …").
+ * (first byte after 5.8 s); Papadritta: …"). An answer past the read's cap is the chain's size, not the node's
+ * failure: the node is not marked failed, and the next node is still asked (one node could pad its answer); when
+ * every node asked answered past it, the error is a ListingTooLargeError.
  */
 async function abciListing(path: string, opts: ReadOpts = {}): Promise<ListingAnswer> {
   const base = opts.rpcs?.length ? opts.rpcs : RPCS;
   const list = opts.breaker ? opts.breaker.order(base) : base;
   const notes: string[] = [];
+  let tooLarge = 0;
   for (const r of list) {
     if (opts.signal?.aborted) { notes.push(`${r.provider}: not asked, the deadline had passed`); break; }
     const t0 = Date.now();
@@ -403,11 +417,15 @@ async function abciListing(path: string, opts: ReadOpts = {}): Promise<ListingAn
       return { value: (resp.value as string | null) ?? null, height: Number(resp.height || 0), provider: r.provider, bytes, readMs: Date.now() - t0 };
     } catch (e) {
       const cut = e instanceof ReadCutError && (e.message.startsWith('timeout') || e.message.startsWith('deadline'));
-      if (!cut && !opts.signal?.aborted) opts.breaker?.failed(r.provider);
+      const big = e instanceof ReadCutError && e.message.startsWith('response too large');
+      if (big) tooLarge++;
+      if (!cut && !big && !opts.signal?.aborted) opts.breaker?.failed(r.provider);
       notes.push(`${r.provider}: ${e instanceof ReadCutError ? e.message : String(e instanceof Error ? e.message : e).slice(0, 120)}`);
     }
   }
-  throw new Error(notes.join('; ') || `abci ${path}: no node to ask`);
+  const message = notes.join('; ') || `abci ${path}: no node to ask`;
+  if (tooLarge > 0 && tooLarge === notes.length) throw new ListingTooLargeError(message);
+  throw new Error(message);
 }
 
 /** Live NAM balance (base units) of a Namada address */

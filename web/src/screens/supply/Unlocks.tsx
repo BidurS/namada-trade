@@ -17,7 +17,7 @@ import type { Overview, Pressure, UnlockEntry } from '../../../../shared/types';
 import { SELLS_MOST_CUT, SELLS_MOST_PCT } from '../../../../shared/supply-thresholds';
 import { DAY_MS, HISTORY_ALL_DAYS, historyCapReached } from '../../../../shared/history';
 import { fetchMetricHistory } from '../../api';
-import { unbondingStamp, type Stamp } from '../../lib/prov';
+import { plainSource, unbondingStamp, type Stamp } from '../../lib/prov';
 import { AddrName, Button, Notice, Num, ProvScope, RecordLink, Segmented, SkeletonBlock, SourceLine, Tag, Term, YouTag, derive, namTick, niceTicks, useShowAll, useSize, useUiNow, type ScopeItem, type SeriesRange } from '../../ui';
 import { lin } from '../../ui/chartMath';
 import { NBSP, fmtAddr, fmtAge, fmtCount, fmtDayClock, fmtDayMonth, fmtNamRule, fmtNamSigned, fmtPctRule, fmtUtcLong } from '../../lib/format';
@@ -187,6 +187,18 @@ function wallOf(data: Pressure, states: Map<UnlockEntry, UnbondState>): Wall {
   return { days, horizon, later, noDay, total: days.reduce((a, b) => a + b.total, 0), fromChain: !!term, nowNam: term ? term.withdrawableNowNam : null };
 }
 
+/**
+ * The scope row for the ends of the wait the chain's bond listing (or the indexer, while no listing completes) gave,
+ * with their age: when they are not current the server does not use them, and every row says it is an estimate. The
+ * stamp is the server's as it is: its source names who wrote the times (analytics.ts UNBOND_WITHDRAW_SOURCE), and the
+ * label says whose list it is.
+ */
+export function withdrawEndScope(p: Stamp | null | undefined): { label: string; p: Stamp } | null {
+  if (!p) return null;
+  const fromIndexer = plainSource(p) === 'Namada indexer';
+  return { label: fromIndexer ? 'End of each wait: the Namada indexer’s list of unstaking requests' : 'End of each wait: the chain’s own list of unstaking requests', p };
+}
+
 export function Unlocks({
   data,
   overview: o,
@@ -284,9 +296,11 @@ export function Unlocks({
   const hasWall = wall.total > 0 || (wall.nowNam ?? 0) > 0;
   const hasTrend = data.bondedTrend.length > 0;
 
+  const endScope = withdrawEndScope(data.unbondWithdrawProv);
   const scope = [
     { label: 'Staking, unstaking and unlocking moves', p: cov },
     { label: 'Unstaking wait', p: waitStamp },
+    ...(endScope ? [endScope] : []),
   ];
 
   return (

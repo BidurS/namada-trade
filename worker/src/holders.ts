@@ -84,12 +84,50 @@ export const OSMOSIS_TOP10_SQL = `SELECT SUM(balance_num) s, MIN(COALESCE(verifi
   WHERE chain='osmosis' AND ${notInternal('address')} AND ${notPool('holders.address')} ORDER BY balance_num DESC LIMIT 10)`;
 
 /**
- * Holder counts per chain, with the same definition as the list, and when each chain's holder rows were last
- * written (`namada_at`, `osmosis_at`: the newest updated_at). For Namada the count is as of the last complete
- * balance listing when there is one (kv balance.listing, `listingTimes`), which the API prefers to namada_at.
+ * The oldest reading behind the Osmosis holder count: the earliest read time among the Osmosis rows the count
+ * includes. A complete pass of the bank's list re-reads every holder or zeroes it (cron.ts OsmoHolderPass), so after
+ * one this is the pass's time; a holder no pass has re-read (a pass cut short, a list that did not add up) keeps it
+ * old, and the count's stamp with it, where the newest write would call the count current. The figures also hold
+ * it no later than the start of the last pass that added up to the supply (osmosisTrustedStart).
+ */
+export const OSMOSIS_READ_AT_SQL = `SELECT MIN(COALESCE(h.verified_at, h.updated_at)) at FROM holders h WHERE h.chain = 'osmosis' AND h.balance_num > 0
+  AND ${notInternal('h.address')} AND ${notPool('h.address')}`;
+
+/** kv key of the Osmosis holder pass (cron.ts OsmoHolderPass). */
+export const OSMOSIS_PASS_KV = 'osmosis.holders.pass';
+
+/**
+ * The start of the last pass of the Osmosis holder list that added up to the supply (OsmoHolderPass
+ * `trustedStartedAt`), from the stored pass record's JSON: undefined without a record (the rows' own read times
+ * stand, as before the passes), null while no pass has been trusted, else the time. A pass that does not add up still
+ * writes the readings it took, and NAM that moved between two of its slices is read at both addresses with fresh
+ * times; so the Osmosis count and top ten, and the series of them (series.ts osmosisHolders), are stamped no later
+ * than this (osmosisStamp), and read old 6 hours after the last pass that was checked, whatever an untrusted pass
+ * wrote since.
+ */
+export function osmosisTrustedStart(value: string | null | undefined): number | null | undefined {
+  if (!value) return undefined;
+  let p: any;
+  try { p = JSON.parse(value); } catch { return undefined; }
+  if (!p || typeof p !== 'object' || !Number.isFinite(p.startedAt)) return undefined;
+  if (p.trustedStartedAt === null) return null;
+  return Number.isFinite(p.trustedStartedAt) ? Number(p.trustedStartedAt) : undefined;
+}
+/** An Osmosis figure's read time held no later than the last trusted pass's start (osmosisTrustedStart); null while no pass was trusted. */
+export function osmosisStamp(at: number | null, trusted: number | null | undefined): number | null {
+  if (trusted === undefined) return at;
+  return at == null || trusted == null ? null : Math.min(at, trusted);
+}
+
+/**
+ * Holder counts per chain, with the same definition as the list, and what each count is as of (`namada_at`: the
+ * newest updated_at of the Namada rows; `osmosis_at`: the oldest reading behind the Osmosis count, OSMOSIS_READ_AT_SQL,
+ * which the figures hold no later than the last trusted pass, chainFigures).
+ * For Namada the count is as of the last complete balance listing when there is one (kv balance.listing,
+ * `listingTimes`), which the API prefers to namada_at.
  */
 export const HOLDER_COUNTS_SQL = `SELECT SUM(CASE WHEN chain='namada' THEN 1 ELSE 0 END) namada, SUM(CASE WHEN chain='osmosis' THEN 1 ELSE 0 END) osmosis,
-  (SELECT MAX(updated_at) FROM holders WHERE chain='namada') namada_at, (SELECT MAX(updated_at) FROM holders WHERE chain='osmosis') osmosis_at
+  (SELECT MAX(updated_at) FROM holders WHERE chain='namada') namada_at, (${OSMOSIS_READ_AT_SQL}) osmosis_at
   FROM (${HOLDERS_UNION})`;
 
 /**
@@ -491,9 +529,12 @@ export interface ChainFigures {
   byCategory: Record<string, number>;
   /** holders without a label */
   none: number;
-  /** the newest write of the chain's holder rows (Osmosis always; Namada only while no balance listing has completed) */
+  /**
+   * what the count is as of: Osmosis, the oldest reading behind it (OSMOSIS_READ_AT_SQL) and no later than the last
+   * trusted pass's start (osmosisStamp); Namada, the newest write of its rows, only while no balance listing has completed
+   */
   rowsAt: number | null;
-  /** NAMADA_TOP10_INDEX_SQL / OSMOSIS_TOP10_SQL */
+  /** NAMADA_TOP10_INDEX_SQL / OSMOSIS_TOP10_SQL (the Osmosis `at` held as rowsAt is) */
   top10: { s: number | null; at: number | null } | null;
 }
 export interface HolderFigures {
@@ -530,22 +571,26 @@ export const NAMADA_TOP10_INDEX_SQL = `SELECT SUM(t) s, MIN(rd) at FROM (SELECT 
 
 async function chainFigures(db: D1Database, chain: 'namada' | 'osmosis', now: number, listed: ListingTimes): Promise<ChainFigures> {
   const [lo, hi] = CHAIN_PREFIX[chain];
-  const [count, cats, top10, rowsAt] = await Promise.all([
+  const [count, cats, top10, rowsAt, pass] = await Promise.all([
     db.prepare(CHAIN_COUNT_SQL).bind(chain).first<{ n: number; u: number | null }>(),
     db.prepare(CHAIN_CATEGORY_SQL).bind(chain, lo, hi).all<{ c: string; n: number }>(),
     chain === 'namada'
       ? db.prepare(NAMADA_TOP10_INDEX_SQL).bind(listed.balance ?? 0, listed.bond ?? 0).first<{ s: number | null; at: number | null }>()
       : db.prepare(OSMOSIS_TOP10_SQL).first<{ s: number | null; at: number | null }>(),
-    // Namada's figures are as of the last complete listing when there is one: the newest row write is read only without it.
-    chain === 'osmosis' || listed.balance == null ? db.prepare(ROWS_AT_SQL).bind(chain).first<{ at: number | null }>() : Promise.resolve(null),
+    // Namada's figures are as of the last complete listing when there is one: the newest row write is read only without
+    // it. Osmosis's are as of the oldest reading the count includes, and no later than the last trusted pass's start.
+    chain === 'osmosis' ? db.prepare(OSMOSIS_READ_AT_SQL).first<{ at: number | null }>()
+      : listed.balance == null ? db.prepare(ROWS_AT_SQL).bind(chain).first<{ at: number | null }>() : Promise.resolve(null),
+    chain === 'osmosis' ? db.prepare('SELECT value FROM kv WHERE key = ?').bind(OSMOSIS_PASS_KV).first<{ value: string }>() : Promise.resolve(null),
   ]);
   const byCategory: Record<string, number> = {};
   for (const r of cats.results || []) if (r.c) byCategory[r.c] = (byCategory[r.c] ?? 0) + Number(r.n);
   const holders = Number(count?.n ?? 0);
   const labelled = Object.values(byCategory).reduce((a, n) => a + n, 0);
+  const trusted = chain === 'osmosis' ? osmosisTrustedStart(pass?.value) : undefined;
   return {
-    at: now, holders, under1: Number(count?.u ?? 0), byCategory, none: Math.max(0, holders - labelled), rowsAt: rowsAt?.at ?? null,
-    top10: top10 ? { s: top10.s ?? null, at: top10.at ?? null } : null,
+    at: now, holders, under1: Number(count?.u ?? 0), byCategory, none: Math.max(0, holders - labelled), rowsAt: osmosisStamp(rowsAt?.at ?? null, trusted),
+    top10: top10 ? { s: top10.s ?? null, at: osmosisStamp(top10.at ?? null, trusted) } : null,
   };
 }
 
@@ -738,14 +783,41 @@ export function listingUnpinStmts(addresses: string[], height: number, ceiling: 
   }));
 }
 
-/** Rows written by the Osmosis full list get verified_src 'keplr_rest' (see cron); kept here for the dropped-holder rule. */
-export function osmosisDroppedStmt(at: number): Stmt {
+/**
+ * Rows written by the Osmosis full list get verified_src 'keplr_rest' (see cron); kept here for the dropped-holder rule.
+ * Zeroes, as read at `at`, every Osmosis holder last read before `before` (a pass's start: every row the pass named
+ * was read at or after it), or with `addresses` only those of them (the ones the bank, asked by address, said hold
+ * none: cron.ts recheckOsmosisRows). `src`: the source that said so (Osmosis's public REST when Keplr's failed).
+ */
+export function osmosisDroppedStmt(at: number, before = at, addresses?: string[], src = 'keplr_rest'): Stmt {
   return {
-    sql: `UPDATE holders SET balance='0', balance_num=0, updated_at=?, verified_at=?, verified_src='keplr_rest'
-          WHERE chain='osmosis' AND balance_num > 0 AND COALESCE(verified_at, 0) < ?`,
-    params: [at, at, at],
+    sql: `UPDATE holders SET balance='0', balance_num=0, updated_at=?, verified_at=?, verified_src=?
+          WHERE chain='osmosis' AND balance_num > 0 AND COALESCE(verified_at, 0) < ?${addresses ? ` AND address IN (${addresses.map(() => '?').join(',')})` : ''}`,
+    params: [at, at, src, before, ...(addresses ?? [])],
   };
 }
+
+/**
+ * The Osmosis holders osmosisDroppedStmt(at, ?1) would zero, largest first, at most ?2: the rows a complete pass did
+ * not name, which the cron asks the bank about one address at a time before zeroing any (cron.ts recheckOsmosisRows).
+ */
+export const OSMOSIS_DROPPED_SQL = `SELECT address, balance_num FROM holders WHERE chain='osmosis' AND balance_num > 0 AND COALESCE(verified_at, 0) < ?1
+  ORDER BY balance_num DESC LIMIT ?2`;
+/**
+ * The largest Osmosis holders the count includes whose reading is older than ?1 (the tick that completes a pass of
+ * several ticks: rows read in its earlier slices, or not named by it), at most ?2: what the cron re-reads by address
+ * before the figures are refreshed, so NAM that moved between two slices is not counted at both of its addresses.
+ */
+export const OSMOSIS_RECHECK_TOP_SQL = `SELECT address, balance_num FROM holders h WHERE h.chain='osmosis' AND h.balance_num > 0 AND COALESCE(h.verified_at, 0) < ?1
+  AND ${notInternal('h.address')} AND ${notPool('h.address')} ORDER BY h.balance_num DESC LIMIT ?2`;
+/**
+ * What every Osmosis row holds together, pools and protocol accounts included, in base units, as text so that no
+ * step rounds it (SQLite sums whole numbers exactly and fails rather than overflow). The tick that completes a pass
+ * compares it with the bank's supply after its reads by address, so the pass is trusted on the rows it leaves, not
+ * on the list's own sum alone (cron.ts osmosisRowsCheck). It reads the chain's range of the primary key: about
+ * 1,342 rows on 2026-10-23, once a complete pass.
+ */
+export const OSMOSIS_ROWS_SUM_SQL = `SELECT CAST(COALESCE(SUM(CAST(balance AS INTEGER)), 0) AS TEXT) s FROM holders WHERE chain = 'osmosis' AND balance_num > 0`;
 
 // ---------------------------------------------------------------- balance spans
 

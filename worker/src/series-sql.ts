@@ -7,7 +7,7 @@
 // the primary key or an index and never a temporary B-tree (test/series.test.ts checks every one). The daily
 // snapshot aggregates (HOLDER_COHORTS_*, COHORT_*) are whole-table passes by nature and run once a day in the cron,
 // never on a request.
-import { HOLDERS_UNION, INTERNAL_ADDRS, notPool, stakeNum } from './holders';
+import { HOLDERS_UNION, INTERNAL_ADDRS, OSMOSIS_PASS_KV, OSMOSIS_READ_AT_SQL, notPool, stakeNum } from './holders';
 import { NOT_LEGACY_TWIN } from './flows-query';
 
 const H = 3600000;
@@ -35,8 +35,13 @@ export const ROLLUP_HOUR_SQL = `SELECT g.key, g.lo, g.hi, g.n, (SELECT x.value F
 export const SWAP_HOUR_SQL = `SELECT id, ts, kind, amount_num, counter_denom, counter_amount, pool_id, value_usd, from_addr, to_addr, meta
   FROM flows WHERE kind IN ('buy', 'sell') AND chain = 'osmosis' AND ts >= ? AND ts < ?`;
 
-/** Osmosis holders now (as the holder list, protocol and pool accounts left out) and when the list was last read. */
-export const OSMOSIS_HOLDERS_SQL = `SELECT COUNT(*) n, (SELECT MAX(verified_at) FROM holders WHERE chain = 'osmosis' AND verified_src = 'keplr_rest') at
+/**
+ * Osmosis holders now (as the holder list, protocol and pool accounts left out), the oldest reading among them
+ * (holders.ts OSMOSIS_READ_AT_SQL) and the stored pass record (kv osmosis.holders.pass): series.ts stamps the count
+ * as the holder figures are stamped (holders.ts osmosisStamp), no later than the start of the last pass of the bank's
+ * list that added up to the supply, so a pass that did not add up never makes the series current either.
+ */
+export const OSMOSIS_HOLDERS_SQL = `SELECT COUNT(*) n, (${OSMOSIS_READ_AT_SQL}) at, (SELECT value FROM kv WHERE key = '${OSMOSIS_PASS_KV}') pass
   FROM holders WHERE chain = 'osmosis' AND balance_num > 0 AND address NOT IN (${INTERNAL_ADDRS.map((a) => `'${a}'`).join(',')}) AND ${notPool('holders.address')}`;
 
 /** pool_hourly: one row per pool per hour (12 parameters; 2 rows written each, about 28 pools: 1,344 a day). */

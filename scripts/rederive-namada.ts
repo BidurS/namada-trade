@@ -32,7 +32,7 @@ const H = 3_600_000;
 const OUT = join(import.meta.dirname, 'out', 'rederive');
 mkdirSync(OUT, { recursive: true });
 /** The keys the Namada parsers write into a row's meta; any other stored key is kept. */
-const PARSER_KEYS = ['innerTxHash', 'descriptor', 'escrow', 'maspFeeNam', 'feeNam', 'otherNam', 'tokenSymbol', 'tokenAddress', 'packetSequence', 'channel', 'wrapper', 'validator', 'txKind', 'code', 'pairing', 'shielded', 'memo'];
+const PARSER_KEYS = ['innerTxHash', 'descriptor', 'escrow', 'maspFeeNam', 'feeNam', 'otherNam', 'tokenSymbol', 'tokenAddress', 'packetSequence', 'channel', 'wrapper', 'validator', 'txKind', 'code', 'pairing', 'shielded', 'memo', 'textCut'];
 const MARK = 7777;
 const q = (v: unknown): string => (v === null || v === undefined ? 'NULL' : typeof v === 'number' ? (Number.isFinite(v) ? String(v) : 'NULL') : `'${String(v).replace(/'/g, "''")}'`);
 const near = (a: number | null, b: number | null) => (a == null || b == null ? a == b : Math.abs(a - b) <= 1e-9 * Math.max(1, Math.abs(a), Math.abs(b)));
