@@ -126,7 +126,7 @@ describe('namada parser', () => {
     const f = p.flows.find((x) => x.kind === 'ibc_in')!;
     expect(f.from).toBe(osmo);
     expect(f.to).toBe(to);
-    expect(p.links).toEqual([{ osmo, namada: to, amount: f.amount, ts: 1 }]);
+    expect(p.links).toEqual([{ osmo, namada: to, amount: f.amount, ts: 1, flowId: f.id }]);
     expect(recv('tnam1' + 'q'.repeat(40)).links).toHaveLength(0);
   });
 

@@ -235,7 +235,7 @@ describe('an Osmosis stream transaction whose write fails is read again by the c
     }));
     const hub: any = Object.assign(Object.create(LiveHub.prototype), {
       env: { DB: db, DISCORD_WEBHOOK_URL: OP },
-      seenOsmoTx: new Set<string>(), osmoRetryTx: new Map<string, number>(), osmoRetryFrom: null, osmoRetryGen: 0, osmoHeight: 0, sessions: new Set(), lastPriceUsd: null,
+      seenOsmoTx: new Set<string>(), osmoRetryTx: new Map<string, number>(), osmoWriting: new Map(), osmoRetryFrom: null, osmoRetryGen: 0, osmoHeight: 0, sessions: new Set(), lastPriceUsd: null,
       osmoCtx: { poolAddrs: new Map(), priceUsd: null, assets: new Map() },
       quote: new HubQuote(async () => null, async () => null),
     });
@@ -258,23 +258,25 @@ describe('an Osmosis stream transaction whose write fails is read again by the c
     expect(hub.osmoRetryFrom).toBeNull();
   });
 
-  it('a search that ran while the write was in flight skipped it and moved the cursor past it: the next one still reads it', async () => {
+  it('a search that ran while the write was in flight skipped it and kept the cursor below it: the next one still reads it', async () => {
     let release!: () => void;
     const gate = new Promise<void>((r) => { release = r; });
     const { real, hub, msg, posts, rows, cursor } = setup('v98bbb', gate);
     await real.prepare("INSERT INTO kv (key, value, updated_at) VALUES ('osmosis.cursor', ?, 0)").bind(JSON.stringify({ height: 50, at: 0 })).run();
     const streamed = hub.handleOsmosisMessage(msg).catch((e: unknown) => e);
-    // the write is in flight: the search sees the hash as seen, skips it, finishes and moves the cursor to 200
+    // the write is in flight: the search sees the hash as seen, skips it, finishes and moves the cursor to just below
+    // it (99), not to the head (200)
     await hub.sweepOsmosis();
-    expect(cursor()).toBe(200);
+    expect(cursor()).toBe(99);
     expect(rows()).toBe(0);
     release();
     expect(String(await streamed)).toMatch(/D1_ERROR/);
-    // the next search reads from below the failed transaction's height, though the cursor is past it
+    // the next search reads it from below its height, writes it and moves the cursor to the head
     await hub.sweepOsmosis();
     expect(rows()).toBe(1);
     expect(posts).toHaveLength(1);
     expect(hub.osmoRetryFrom).toBeNull();
+    expect(cursor()).toBe(200);
   });
 });
 

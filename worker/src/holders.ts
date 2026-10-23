@@ -725,6 +725,19 @@ export function listingZeroStmts(addresses: string[], height: number, at: number
   }));
 }
 
+/**
+ * Namada rows stamped from a height above `ceiling` (cron.ts heightCeiling: past the head this tick's answers agree
+ * on, never set without one) are re-stamped at the listing's `height`. Such a height came from one node's answer and would
+ * refuse every later write to the row (the guards above and stmt.namadaBalance); the listing then writes or
+ * confirms the row as any other.
+ */
+export function listingUnpinStmts(addresses: string[], height: number, ceiling: number): Stmt[] {
+  return chunks(addresses, 2).map((part) => ({
+    sql: `UPDATE holders SET updated_height = ?1 WHERE chain = 'namada' AND updated_height > ?2 AND address IN (${part.map(() => '?').join(',')})`,
+    params: [height, ceiling, ...part],
+  }));
+}
+
 /** Rows written by the Osmosis full list get verified_src 'keplr_rest' (see cron); kept here for the dropped-holder rule. */
 export function osmosisDroppedStmt(at: number): Stmt {
   return {

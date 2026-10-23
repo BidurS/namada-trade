@@ -5,7 +5,7 @@ import type {
   IntelResponse,
   ValidatorSummary,
 } from '../../../shared/types';
-import { fetchJson } from '../util';
+import { fetchJson, FETCH_TEXT_MAX_BYTES } from '../util';
 import { safeHttpUrl } from '../../../shared/flow-rules';
 
 const FORUM_BASE = 'https://forum.namada.net';
@@ -37,19 +37,24 @@ function cleanExcerpt(rawOrCooked: string | undefined | null, maxLen = 240): str
 }
 
 /**
- * Fetch active PoS bonded and unbonding delegations for a Namada address
- */
-/**
- * Fetch latest topics and posts from Namada Discourse Forum (https://forum.namada.net)
+ * Fetch latest topics and posts from Namada Discourse Forum (https://forum.namada.net). Both reads may be as large as
+ * a streamed answer (FETCH_TEXT_MAX_BYTES), not fetchJson's 2 MiB default: any forum account can post 32,000
+ * characters with no limit on emoji (the forum's site settings on 2026-10-22), and two posts of 8,000 emoji among
+ * the latest 50 make posts.json about 2.5 MB. `postsError` says why the posts could not be read (null when they
+ * were), so the cron keeps the posts it has rather than an empty list.
  */
 export async function fetchForumData(): Promise<{
   topics: ForumTopic[];
   latestPosts: ForumPost[];
+  postsError: string | null;
 }> {
-  const [latestRes, postsRes] = await Promise.all([
-    fetchJson<any>(`${FORUM_BASE}/latest.json`, { timeoutMs: 7000 }).catch(() => null),
-    fetchJson<any>(`${FORUM_BASE}/posts.json`, { timeoutMs: 7000 }).catch(() => null),
+  const [latestRes, posts] = await Promise.all([
+    fetchJson<any>(`${FORUM_BASE}/latest.json`, { timeoutMs: 7000, maxBytes: FETCH_TEXT_MAX_BYTES }).catch(() => null),
+    fetchJson<any>(`${FORUM_BASE}/posts.json`, { timeoutMs: 7000, maxBytes: FETCH_TEXT_MAX_BYTES }).then((v) => ({ v, e: null }), (e: unknown) => ({ v: null, e })),
   ]);
+  const postsRes = posts.v;
+  const postsError = posts.e != null ? String(posts.e instanceof Error ? posts.e.message : posts.e).slice(0, 120)
+    : !Array.isArray(postsRes?.latest_posts) ? 'the answer has no latest_posts list' : null;
 
   const rawTopics: any[] = latestRes?.topic_list?.topics || [];
   const topics: ForumTopic[] = rawTopics
@@ -98,7 +103,7 @@ export async function fetchForumData(): Promise<{
     };
   });
 
-  return { topics, latestPosts };
+  return { topics, latestPosts, postsError };
 }
 
 /**
@@ -172,18 +177,26 @@ export async function fetchGovernanceAndValidators(): Promise<{
   };
 }
 
-export async function fetchIntel(): Promise<IntelResponse> {
+/** fetchIntel, with why the forum's posts could not be read (fetchForumData `postsError`; null when they were). */
+export async function fetchIntelChecked(): Promise<{ intel: IntelResponse; postsError: string | null }> {
   const [forum, onchain] = await Promise.all([
     fetchForumData(),
     fetchGovernanceAndValidators(),
   ]);
 
   return {
-    topics: forum.topics,
-    latestPosts: forum.latestPosts,
-    proposals: onchain.proposals,
-    validators: onchain.validators,
-    indexerEpoch: onchain.indexerEpoch,
-    fetchedAt: Date.now(),
+    intel: {
+      topics: forum.topics,
+      latestPosts: forum.latestPosts,
+      proposals: onchain.proposals,
+      validators: onchain.validators,
+      indexerEpoch: onchain.indexerEpoch,
+      fetchedAt: Date.now(),
+    },
+    postsError: forum.postsError,
   };
+}
+
+export async function fetchIntel(): Promise<IntelResponse> {
+  return (await fetchIntelChecked()).intel;
 }

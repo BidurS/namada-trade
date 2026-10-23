@@ -41,7 +41,7 @@ describe('a Namada receive is paired with the packet of its own inner transactio
     const f = p.flows.find((x) => x.kind === 'ibc_in')!;
     expect(f.from).toBe(SENDER);
     expect(f.to).toBe(X);
-    expect(p.links).toEqual([{ osmo: SENDER, namada: X, amount: 4.682433, ts: 1 }]);
+    expect(p.links).toEqual([{ osmo: SENDER, namada: X, amount: 4.682433, ts: 1, flowId: f.id }]);
   });
 
   it('the same with an unrelated NAM packet of the same amount from another inner transaction', () => {

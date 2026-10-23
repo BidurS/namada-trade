@@ -1,5 +1,5 @@
 import { OSMOSIS, NAM } from '../config';
-import { fetchJson, toNam } from '../util';
+import { fetchJson, toNam, isRealAddress, FETCH_TEXT_MAX_BYTES } from '../util';
 
 export interface HolderItem {
   address: string;
@@ -13,6 +13,32 @@ export async function fetchOsmosisHolders(keplrKey: string): Promise<HolderItem[
 
 /** Pages of 100 holders read at most per sync (10,000 holders; 1,332 on 2026-10-17). */
 export const OSMOSIS_HOLDER_PAGES = 100;
+/** Owners asked for in one page (pagination.limit); the bank never names more. */
+export const OSMOSIS_HOLDER_PAGE_SIZE = 100;
+/** An owner's amount as the bank writes it: a whole number of base units (at most 13 digits on 2026-10-22). */
+const OWNER_AMOUNT = /^\d{1,40}$/;
+
+/**
+ * One page's owners as holders. A page that is not the bank's answer throws: more owners than the page asked for, or
+ * an owner that is not a checksummed osmo1 address (at most 85 characters, util.ts chainOf) with a whole-number
+ * amount. Each page is under fetchJson's cap, but the list keeps every page's owners until the last page is read, so
+ * these bounds are what hold it to at most 10,000 short owners (about 1.5 MB) whatever the pages carry. The error
+ * says which rule the page broke, never what it named (the cron's health row is public).
+ */
+function pageOwners(owners: unknown, page: number): HolderItem[] {
+  const refuse = (why: string) => new Error(`page ${page + 1} of the Osmosis holder list is not the bank's answer: ${why}`);
+  if (owners == null) return [];
+  if (!Array.isArray(owners)) throw refuse('its owners are not a list');
+  if (owners.length > OSMOSIS_HOLDER_PAGE_SIZE) throw refuse(`${owners.length} owners, of ${OSMOSIS_HOLDER_PAGE_SIZE} asked for`);
+  const out: HolderItem[] = [];
+  for (const o of owners) {
+    const address: unknown = o?.address, amount: unknown = o?.balance?.amount;
+    if (typeof address !== 'string' || isRealAddress(address) !== 'osmosis') throw refuse('an owner that is not an Osmosis address');
+    if (typeof amount !== 'string' || !OWNER_AMOUNT.test(amount)) throw refuse('an owner whose amount is not a whole number of at most 40 digits');
+    out.push({ address, balance: amount, balanceNum: toNam(amount) });
+  }
+  return out;
+}
 
 /**
  * Options for a Keplr REST read. The cron passes its tick deadline (`signal`) and a short timeout with one retry,
@@ -24,7 +50,10 @@ export interface KeplrOpts { signal?: AbortSignal; timeoutMs?: number; retries?:
  * Every NAM holder on Osmosis. `complete` is true only when a page carried a pagination object whose next_key is
  * empty: the bank saying there are no more pages, which is what allows an address missing from the list to be
  * read as holding nothing (the cron also checks the list adds up to the supply). A 200 answer without pagination,
- * or hitting the page cap, leaves `complete` false (`capped` says which).
+ * or hitting the page cap, leaves `complete` false (`capped` says which). A page whose owners are not the bank's
+ * (pageOwners) fails the whole read: a producer that names one made-up owner is not taken at its word for the pages
+ * before it either, and the error is the cron's health note (had the list only stopped there, a refused first page
+ * would leave that row ok with nothing read).
  */
 export async function fetchOsmosisHolderList(keplrKey: string, pages = OSMOSIS_HOLDER_PAGES, opts: KeplrOpts = {}): Promise<{ holders: HolderItem[]; complete: boolean; capped: boolean }> {
   const rest = OSMOSIS.keplrRest(keplrKey);
@@ -37,19 +66,12 @@ export async function fetchOsmosisHolderList(keplrKey: string, pages = OSMOSIS_H
   for (let page = 0; page < pages; page++) {
     // A list cut by the deadline is not a list: the caller gets an error, never part of it as if it were all.
     if (opts.signal?.aborted) throw new Error(`deadline passed after ${page} pages of the Osmosis holder list`);
-    const pageUrl: string = `${rest}/cosmos/bank/v1beta1/denom_owners_by_query?denom=${denom}&pagination.limit=100${
+    const pageUrl: string = `${rest}/cosmos/bank/v1beta1/denom_owners_by_query?denom=${denom}&pagination.limit=${OSMOSIS_HOLDER_PAGE_SIZE}${
       nextKey ? `&pagination.key=${encodeURIComponent(nextKey)}` : ''
     }`;
     const pageRes: any = await fetchJson(pageUrl, { timeoutMs: opts.timeoutMs ?? 25000, retries: opts.retries ?? 2, signal: opts.signal });
-    const owners = pageRes.denom_owners || [];
-    for (const o of owners) {
-      const balStr = o.balance?.amount || '0';
-      holders.push({
-        address: o.address,
-        balance: balStr,
-        balanceNum: toNam(balStr),
-      });
-    }
+    const owners = pageOwners(pageRes.denom_owners, page);
+    holders.push(...owners);
     const pg = pageRes?.pagination;
     if (!pg || typeof pg !== 'object') { capped = false; break; } // not the bank's answer: stop, not complete
     nextKey = pg.next_key || null;
@@ -101,7 +123,8 @@ export async function searchOsmosisTxs(
   const rpc = OSMOSIS.keplrRpc(keplrKey);
   const q = encodeURIComponent(`"${query}"`);
   const url = `${rpc}/tx_search?query=${q}&page=${page}&per_page=${perPage}&order_by="${orderBy}"`;
-  const res = await fetchJson(url, { timeoutMs: 30000, retries: 2 });
+  // A page of 50 was 1.7 MB on 2026-10-22, close to fetchJson's default cap: it may be as large as a listing.
+  const res = await fetchJson(url, { timeoutMs: 30000, retries: 2, maxBytes: FETCH_TEXT_MAX_BYTES });
   return {
     total: Number(res.result?.total_count || 0),
     txs: res.result?.txs || [],

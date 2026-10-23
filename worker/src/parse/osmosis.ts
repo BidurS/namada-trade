@@ -154,7 +154,8 @@ function namBase(coins: string | undefined): bigint {
 export interface OsmoParsed {
   moves: Move[];
   flows: Flow[];
-  links: { osmo: string; namada: string; amount: number; ts: number }[];
+  /** `flowId`: the flow the link was read from (one flow per link), so a transaction written again never counts it twice (db.ts stmt.linkOnce). */
+  links: { osmo: string; namada: string; amount: number; ts: number; flowId: string }[];
 }
 
 export function parseOsmosisTx(tx: NormTx, ctx: OsmoCtx): OsmoParsed {
@@ -465,9 +466,10 @@ export function parseOsmosisTx(tx: NormTx, ctx: OsmoCtx): OsmoParsed {
       if (!ok) return;
       const amount = Number(pd.amount) / 10 ** NAM.decimals;
       // The packet's sequence is the one Namada's record of the same send carries (the crossing's identity).
-      out.flows.push(flow(tx, `ibc_in:${i}`, 'ibc_in', pd.sender, pd.receiver, amount, ctx.priceUsd, { memo: pd.memo, channel: a.packet_dst_channel, ...(a.packet_sequence ? { packetSequence: a.packet_sequence } : {}) }));
+      const f = flow(tx, `ibc_in:${i}`, 'ibc_in', pd.sender, pd.receiver, amount, ctx.priceUsd, { memo: pd.memo, channel: a.packet_dst_channel, ...(a.packet_sequence ? { packetSequence: a.packet_sequence } : {}) });
+      out.flows.push(f);
       // A link joins two real accounts only (the packet's sender and receiver are text the sender chose).
-      if (isRealAddress(pd.receiver) === 'osmosis' && isRealAddress(pd.sender) === 'namada') out.links.push({ osmo: pd.receiver, namada: pd.sender, amount, ts: tx.ts });
+      if (isRealAddress(pd.receiver) === 'osmosis' && isRealAddress(pd.sender) === 'namada') out.links.push({ osmo: pd.receiver, namada: pd.sender, amount, ts: tx.ts, flowId: f.id });
     } else if (e.type === 'ibc_transfer') {
       const a = ev[i];
       if (a.denom !== NAM.osmoDenom) return;

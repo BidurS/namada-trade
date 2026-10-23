@@ -162,8 +162,9 @@ describe('the live scan reads the fee payer from the block for such a block', ()
     vi.stubGlobal('fetch', vi.fn(async (u: string) => {
       const url = String(u);
       urls.push(url);
-      if (url.endsWith('/status')) return Response.json({ result: { sync_info: { latest_block_height: String(H), latest_block_time: TIME, catching_up: false, earliest_block_height: '1' } } });
-      if (url.includes('/blockchain?')) return Response.json({ result: { block_metas: [{ header: { height: String(H), time: TIME }, num_txs: '1' }] } });
+      // the node's status as a node at the head gives it (sources/namada.ts chainHead): its chain, and a newest block from now
+      if (url.endsWith('/status')) return Response.json({ result: { node_info: { network: NAMADA.chainId }, sync_info: { latest_block_height: String(H), latest_block_time: new Date().toISOString(), catching_up: false, earliest_block_height: '1' } } });
+      if (url.includes('/blockchain?')) return Response.json({ result: { block_metas: [{ header: { chain_id: NAMADA.chainId, height: String(H), time: TIME }, num_txs: '1' }] } });
       if (url.includes('/block_results?')) return Response.json({ result: { end_block_events: events } });
       if (url.includes('/block?height=')) return block();
       throw new Error(`unexpected ${url}`);

@@ -46,7 +46,7 @@ function network(net: Net | ((url: string) => boolean)) {
         res = json({ result: { response: { code: 0, value, height: '8343400' } } });
       }
     } else if (url.includes('denom_owners')) {
-      res = json({ denom_owners: [{ address: 'osmo1aaa', balance: { amount: '3000000' } }, { address: 'osmo1bbb', balance: { amount: '7000000' } }], pagination: { next_key: null, total: '0' } });
+      res = json({ denom_owners: [{ address: 'osmo14242424242424242424242424242424249gydw', balance: { amount: '3000000' } }, { address: 'osmo1hwamhwamhwamhwamhwamhwamhwamhwam8mlecu', balance: { amount: '7000000' } }], pagination: { next_key: null, total: '0' } });
     } else if (url.includes('supply/by_denom')) {
       res = json({ amount: { denom: 'x', amount: '10000000' } });
     } else res = new Response('not here', { status: 404 });
@@ -132,7 +132,9 @@ describe('a tick with both listings due', () => {
 describe('a hung Namada node', () => {
   it('is left out after its status read: the tick finishes, lists the bonds and samples stakes on the other node', async () => {
     const db = seeded(PLAIN);
-    const calls = network((url) => url.includes('5elementsnodes'));
+    // The indexer answers its latest block: with one node silent, it is the answer the other node's head is agreed
+    // with (sources/namada.ts listingHeads), as one node's word alone reads no listing.
+    const calls = network({ hung: (url) => url.includes('5elementsnodes'), answer: (url) => (url.includes('/chain/block/latest') ? json({ block: '8343398' }) : undefined) });
     const took = await virtualTick({ DB: db, KEPLR_KEY: '' }, PLAIN);
     expect(took).toBeLessThan(20000); // one 6 s status timeout, not minutes
     expect(calls.filter((u) => u.includes('5elementsnodes') && u.includes('abci_query'))).toHaveLength(0);
@@ -183,13 +185,15 @@ describe('a hung Namada node', () => {
     expect(ms).toBeLessThanOrEqual(TICK_DEADLINE_MS + 1000);
     const h = healthOf(db);
     expect(h['Namada RPC (minted supply)'].ok).toBe(false);
-    // the bond listing (due first) was read for nothing: without the epoch its rows cannot be stamped
+    // the bond listing (due first) is not read without the epoch, as its rows could not be stamped; the balance
+    // listing takes the turn, and its read, cut at the deadline, is recorded as failed (the retry wait applies)
     expect(h['Namada RPC (bond listing)']).toMatchObject({ ok: false, note: expect.stringMatching(/epoch could not be read/) });
     expect(h['Namada RPC (stake sample)']).toMatchObject({ ok: false, note: expect.stringMatching(/epoch could not be read/) });
-    expect(h['Namada RPC (balance listing)']).toBeUndefined();
+    expect(h['Namada RPC (balance listing)']).toMatchObject({ ok: false, note: expect.stringMatching(/^The balance listing could not be read/) });
     expect(listedStakes(db)).toBe(0);
     expect(listedHolders(db)).toBe(0);
-    expect(record(db, 'balance.listing')).toBeNull();
+    expect(record(db, 'bond.listing')).toBeNull();
+    expect(record<BalanceListingRecord>(db, 'balance.listing')).toMatchObject({ failedAt: PLAIN, failures: 1 });
     // what does not depend on the nodes still landed
     expect(metricKeys(db)).toContain('supply.osmosis');
     expect(locked(db)).toBe(0);
@@ -257,7 +261,7 @@ describe('a hung Keplr', () => {
     network({
       hung: () => false,
       slowMs: (u) => (u.includes('denom_owners') ? 9000 : 0),
-      answer: (u) => (u.includes('denom_owners') ? json({ denom_owners: [{ address: 'osmo1aaa', balance: { amount: '1' } }], pagination: { next_key: 'more' } }) : undefined),
+      answer: (u) => (u.includes('denom_owners') ? json({ denom_owners: [{ address: 'osmo14242424242424242424242424242424249gydw', balance: { amount: '1' } }], pagination: { next_key: 'more' } }) : undefined),
     });
     const ms = await virtualTick({ DB: db, KEPLR_KEY: 'k' }, SYNC);
     expect(ms).toBeLessThanOrEqual(TICK_DEADLINE_MS + 1000);

@@ -34,6 +34,21 @@ export const JOB_WINDOW_MS = 15 * 60_000;
 export const JOB_CLOSING_MS = 2 * 60_000;
 /** The Osmosis data API summary is not ok when its own update time is older than this (its health row says so). */
 export const OSMOSIS_SUMMARY_STALE_MS = 2 * H;
+/**
+ * The summary's own update time is used only from OSMOSIS_SUMMARY_MAX_AGE_MS before the tick to OSMOSIS_SUMMARY_AHEAD_MS
+ * after it. The answer gives unix seconds, 2 s to 7 min before the read in every hour stored up to 22 Oct 2026; a time
+ * outside the range is another unit or a broken answer. Stored as given it would sit in the future (shown as live), in
+ * 1970 (the series' start), or past the Date range, where formatting it threw before the hour's pool_hourly rows.
+ */
+export const OSMOSIS_SUMMARY_AHEAD_MS = H;
+export const OSMOSIS_SUMMARY_MAX_AGE_MS = 7 * D;
+/** Why the summary's update time is not used, or null when it is inside the range above. Never throws. */
+export function summaryTimeProblem(at: number, now: number): string | null {
+  const shown = Number.isFinite(at) && Math.abs(at) <= 8.64e15 ? new Date(at).toISOString() : String(at);
+  if (!Number.isFinite(at) || at > now + OSMOSIS_SUMMARY_AHEAD_MS) return `the answer's update time ${shown} is ahead of this tick`;
+  if (at < now - OSMOSIS_SUMMARY_MAX_AGE_MS) return `the answer's update time ${shown} is over 7 days old`;
+  return null;
+}
 const closingAt = (now: number) => now % H >= JOB_WINDOW_MS - JOB_CLOSING_MS;
 /** Closed hours the hourly job catches up on after missed windows (rollups and swap hours are recomputable from rows). */
 export const HOURLY_CATCH_UP = 6;
@@ -195,33 +210,49 @@ export function poolHourlyStmts(hour: number, pools: PoolInfo[], poolsAt: number
   return [...byId.entries()].sort((a, b) => Number(a[0]) - Number(b[0])).map(([id, { p, s }]) => ({
     sql: POOL_HOURLY_SQL,
     params: [hour, id, p ? poolsAt : null, fin(p?.liquidityUsd), fin(p?.namReserve), fin(p?.counterReserve), fin(p?.spreadFactor),
-      s ? s.volume24hUsd : null, s ? s.volume7dUsd : null, s ? s.liquidityUsd : null, s ? summary!.at : null],
+      s ? fin(s.volume24hUsd) : null, s ? fin(s.volume7dUsd) : null, s ? fin(s.liquidityUsd) : null, s ? fin(summary!.at) : null],
   }));
 }
+
+/**
+ * A figure D1 can store: it sends bound parameters as JSON, where a number that is not finite arrives as NULL, and
+ * one NULL in a NOT NULL column fails the hour's whole Osmosis batch (pool_hourly and the marker with it).
+ */
+const finite = (v: number | null): v is number => v != null && Number.isFinite(v);
 
 /**
  * The pool price of every closed hour in the chart answer after `after`, the newest stored one (screener-plan 5.3:
  * price.pool_1h, .open, .high, .low, .flat). The current hour is never written: its point is partial (an hour that
  * has just begun reads open = high = low = close and would be stored as a flat hour). After a missed window the
- * 7-day answer fills every closed hour since the last stored one, with the API's own values.
+ * 7-day answer fills every closed hour since the last stored one, with the API's own values. A point with a value
+ * that is not finite is not written (a gap, never an estimate; parsePairChart leaves such points out already).
  */
 export function poolPriceStmts(points: PairChartPoint[], hour: number, after: number | null = null): Stmt[] {
   const out: Stmt[] = [];
   for (const p of points) {
     if (p.t >= hour || (after != null && p.t <= after)) continue;
+    if (![p.t, p.usd.close, p.usd.open, p.usd.high, p.usd.low].every(Number.isFinite)) continue;
     out.push(stmt.metric(p.t, 'price.pool_1h', p.usd.close), stmt.metric(p.t, 'price.pool_1h.open', p.usd.open), stmt.metric(p.t, 'price.pool_1h.high', p.usd.high),
       stmt.metric(p.t, 'price.pool_1h.low', p.usd.low), stmt.metric(p.t, 'price.pool_1h.flat', p.flat ? 1 : 0));
   }
   return out;
 }
 
-/** The Osmosis summary's health: not ok when it lists no NAM pair or its own update time is over OSMOSIS_SUMMARY_STALE_MS old. */
+/**
+ * The Osmosis summary's health: not ok when it lists no NAM pair, its own update time is over OSMOSIS_SUMMARY_STALE_MS
+ * old, or a volume total is not finite (each pair's figure is, but their sum can pass the largest number), which
+ * hourly() then does not write.
+ */
 export function summaryHealth(sum: PairSummary, now: number): { ok: boolean; note: string } {
   const at = sum.at != null ? `updated ${new Date(sum.at).toISOString().slice(11, 16)} UTC` : 'no update time';
   if (!sum.pairs.length) return { ok: false, note: `The summary lists no NAM pair (${at}); no volumes were written.` };
   if (sum.at == null) return { ok: false, note: `${sum.pairs.length} NAM pairs, but the answer has no update time; no volumes were written.` };
+  const lost = ([['24 h', sum.volume24hUsd], ['7-day', sum.volume7dUsd]] as const).filter(([, v]) => v != null && !finite(v)).map(([w]) => w);
+  const lostNote = lost.length === 0 ? ''
+    : ` The pairs' ${lost.join(' and ')} volumes add up to more than a number can hold, so ${lost.length === 1 ? 'that total was' : 'those totals were'} not written.`;
   const age = now - sum.at;
-  if (age > OSMOSIS_SUMMARY_STALE_MS) return { ok: false, note: `${sum.pairs.length} NAM pairs, ${at}: ${(age / H).toFixed(1)} h old, so the volumes are stored with that time.` };
+  if (age > OSMOSIS_SUMMARY_STALE_MS) return { ok: false, note: `${sum.pairs.length} NAM pairs, ${at}: ${(age / H).toFixed(1)} h old, so the volumes are stored with that time.${lostNote}` };
+  if (lostNote) return { ok: false, note: `${sum.pairs.length} NAM pairs, ${at}.${lostNote}` };
   return { ok: true, note: `${sum.pairs.length} NAM pairs, ${at}` };
 }
 
@@ -287,15 +318,18 @@ export async function hourly(env: Env, now: number, ctx: HourlyCtx): Promise<Hou
     const stmts: Stmt[] = [];
     let sum: PairSummary | null = null;
     if (summary) {
-      if ('v' in summary && summary.v.at != null) {
+      // An update time outside the range is handled as an answer without one: asked again, let go at the close.
+      const badTime = 'v' in summary && summary.v.at != null ? summaryTimeProblem(summary.v.at, now) : null;
+      if ('v' in summary && summary.v.at != null && !badTime) {
         sum = summary.v;
-        if (sum.volume24hUsd != null) stmts.push(stmt.metric(sum.at!, 'dex.volume_24h_usd_osmosis', sum.volume24hUsd));
-        if (sum.volume7dUsd != null) stmts.push(stmt.metric(sum.at!, 'dex.volume_7d_usd_osmosis', sum.volume7dUsd));
+        // Only a finite total is written (summaryHealth says when one is not): one that is not would fail the batch.
+        if (finite(sum.volume24hUsd)) stmts.push(stmt.metric(sum.at!, 'dex.volume_24h_usd_osmosis', sum.volume24hUsd));
+        if (finite(sum.volume7dUsd)) stmts.push(stmt.metric(sum.at!, 'dex.volume_7d_usd_osmosis', sum.volume7dUsd));
         ctx.health.push({ name: `${OSMOSIS_DATA_SOURCE} (summary)`, at: now, ...summaryHealth(sum, now) });
         oj.summary = true;
         res.summaryAt = sum.at;
       } else {
-        const why = 'e' in summary ? String(summary.e).slice(0, 120) : 'the answer had no update time';
+        const why = 'e' in summary ? String(summary.e).slice(0, 120) : badTime ?? 'the answer had no update time';
         ctx.health.push({ name: `${OSMOSIS_DATA_SOURCE} (summary)`, ok: false, at: now, note: closing
           ? `Not read this hour (${why}); the window closed, so this hour has no Osmosis volumes. The last stored volumes stand, with their own time.`
           : `Not read (${why}); asked again on the next tick of the window. The last stored volumes stand, with their own time.` });

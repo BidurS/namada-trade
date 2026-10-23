@@ -38,15 +38,108 @@ export function redact(s: string): string {
   return s.replace(/keplr_[A-Za-z0-9_-]+/g, 'keplr_***');
 }
 
+/**
+ * The most a fetchJson answer may be unless its caller allows more (`maxBytes`): about ten times the largest answer a
+ * read with this default gets (the forum's posts.json, 215 KB on 2026-10-22; the indexer's validator list, 108 KB; a
+ * Namada /status, 1 KB), and small enough that six at once (the connections a Worker opens at a time) stay well
+ * inside the 128 MB isolate. The block and transaction-search reads, which can be megabytes, pass
+ * FETCH_TEXT_MAX_BYTES.
+ */
+export const FETCH_JSON_MAX_BYTES = 2 * 1024 * 1024;
+/** An error answer is kept for its first 200 characters (HttpError), so no more than this much of it is read. */
+const ERROR_BODY_MAX_BYTES = 4096;
+
+/** An answer past its read's byte cap: refused before it is all read, and not asked for again (the same URL would send it again). */
+export class ResponseTooLargeError extends Error {}
+
+/**
+ * Bytes several reads share (fetchJson's `budget`): each answer is read only while it fits in what is `left`, and
+ * what it took is subtracted once it is read whole. A caller that lets an answer go may give its bytes back.
+ */
+export interface ReadBudget { left: number }
+/** An answer past what is left of the budget its reads share: refused as one past the cap is, and not retried. */
+export class ReadBudgetError extends Error {}
+
+/**
+ * The whole body, counted as it arrives: an answer announced or streamed past `maxBytes` is cancelled there and
+ * refused, so one producer's answer can never fill the isolate (the runtime would end it before any catch or
+ * finally ran, and the next node would never be asked). With a `budget`, the answer must also fit in what is left of
+ * it, and its bytes are taken from it.
+ */
+async function cappedBytes(res: Response, maxBytes: number, url: string, budget?: ReadBudget): Promise<Uint8Array> {
+  const limit = budget ? Math.max(0, Math.min(maxBytes, budget.left)) : maxBytes;
+  const spent = (what: string) => new ReadBudgetError(`response ${what}: past the ${mbOf(limit)} left of its reads' budget, for ${redact(url)}`);
+  const cl = Number(res.headers.get('content-length'));
+  if (Number.isFinite(cl) && cl > limit) {
+    await res.body?.cancel().catch(() => {});
+    throw cl > maxBytes
+      ? new ResponseTooLargeError(`response too large (${mbOf(cl)} announced, ${mbOf(maxBytes)} allowed) for ${redact(url)}`)
+      : spent(`of ${mbOf(cl)} announced`);
+  }
+  if (!res.body) return new Uint8Array(0);
+  const reader = res.body.getReader();
+  const parts: Uint8Array[] = [];
+  let bytes = 0;
+  for (;;) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    bytes += value.length;
+    if (bytes > limit) {
+      await reader.cancel().catch(() => {});
+      throw limit < maxBytes ? spent(`over ${mbOf(limit)}`) : new ResponseTooLargeError(`response too large (over ${mbOf(maxBytes)}) for ${redact(url)}`);
+    }
+    parts.push(value);
+  }
+  if (budget) budget.left -= bytes;
+  if (parts.length === 1) return parts[0];
+  const all = new Uint8Array(bytes);
+  let o = 0;
+  for (const p of parts) { all.set(p, o); o += p.length; }
+  parts.length = 0;
+  return all;
+}
+
+/** The first ERROR_BODY_MAX_BYTES of an error answer as text; the rest is cancelled, never read. */
+async function errorBody(res: Response): Promise<string> {
+  if (!res.body) return '';
+  const reader = res.body.getReader();
+  const parts: Uint8Array[] = [];
+  let bytes = 0;
+  try {
+    while (bytes < ERROR_BODY_MAX_BYTES) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      parts.push(value);
+      bytes += value.length;
+    }
+  } finally {
+    await reader.cancel().catch(() => {});
+  }
+  const all = new Uint8Array(Math.min(bytes, ERROR_BODY_MAX_BYTES));
+  let o = 0;
+  for (const p of parts) {
+    if (o >= all.length) break;
+    const part = p.subarray(0, all.length - o);
+    all.set(part, o);
+    o += part.length;
+  }
+  return new TextDecoder().decode(all);
+}
+
+/**
+ * GET `url` as JSON. `maxBytes`: the most the answer may be (cappedBytes). `budget`: bytes this read shares with
+ * others (one catch-up search's pages, live-hub.ts sweepOsmosis): the answer must also fit in what is left of it.
+ */
 export async function fetchJson<T = any>(
   url: string,
-  opts: { timeoutMs?: number; retries?: number; init?: RequestInit; signal?: AbortSignal } = {},
+  opts: { timeoutMs?: number; retries?: number; init?: RequestInit; signal?: AbortSignal; maxBytes?: number; budget?: ReadBudget } = {},
 ): Promise<T> {
-  const { timeoutMs = 15000, retries = 2, init, signal } = opts;
+  const { timeoutMs = 15000, retries = 2, init, signal, maxBytes = FETCH_JSON_MAX_BYTES, budget } = opts;
   let lastErr: unknown;
   for (let attempt = 0; attempt <= retries; attempt++) {
     // A caller's deadline (`signal`) ends the request and every retry, as the per-attempt timeout ends one attempt.
     if (signal?.aborted) throw new Error(`deadline passed before ${redact(url)}`);
+    if (budget && budget.left <= 0) throw new ReadBudgetError(`no bytes left of its reads' budget for ${redact(url)}`);
     const ctrl = new AbortController();
     const timer = setTimeout(() => ctrl.abort('timeout'), timeoutMs);
     const onAbort = () => ctrl.abort('deadline');
@@ -58,14 +151,16 @@ export async function fetchJson<T = any>(
         headers: { 'User-Agent': UA, Accept: 'application/json', ...(init?.headers || {}) },
       });
       if (!res.ok) {
-        const body = await res.text();
+        const body = await errorBody(res);
         // 4xx (except 429) are not retryable
         if (res.status < 500 && res.status !== 429) throw new HttpError(res.status, url, body);
         lastErr = new HttpError(res.status, url, body);
       } else {
-        return (await res.json()) as T;
+        // Counted as it arrives (cappedBytes), then decoded and parsed as res.json() would.
+        return JSON.parse(new TextDecoder().decode(await cappedBytes(res, maxBytes, url, budget))) as T;
       }
     } catch (e) {
+      if (e instanceof ResponseTooLargeError || e instanceof ReadBudgetError) throw e;
       lastErr = e;
       if (e instanceof HttpError && e.status < 500 && e.status !== 429) throw e;
     } finally {
@@ -123,7 +218,7 @@ export async function fetchText(
   const parts: Uint8Array[] = [];
   try {
     const res = await fetch(url, { ...init, signal: ctrl.signal, headers: { 'User-Agent': UA, Accept: 'application/json', ...(init?.headers || {}) } });
-    if (!res.ok) throw new HttpError(res.status, url, await res.text());
+    if (!res.ok) throw new HttpError(res.status, url, await errorBody(res));
     const cl = Number(res.headers.get('content-length'));
     total = Number.isFinite(cl) && cl > 0 ? cl : null;
     firstByteMs = Date.now() - t0;
@@ -253,6 +348,22 @@ export function isRealAddress(address: string | null | undefined): 'osmosis' | '
     return chain;
   } catch {
     return null;
+  }
+}
+
+/**
+ * An address an Osmosis pool can have: a checksummed osmo1 address of 32 bytes. Balancer, stableswap and concentrated
+ * pools hold their coins in an account derived from the pool id, and a CosmWasm pool in its contract, all 32 bytes;
+ * a wallet's key address is 20 bytes, as are the module accounts, and a Namada address is never osmo1. The pool list
+ * is a third party's answer, and an address it names leaves every holder list as a pool (holders.ts notPool, LISTED),
+ * so a name of any other shape is not taken as a pool.
+ */
+export function isPoolAccount(address: unknown): boolean {
+  if (typeof address !== 'string' || isRealAddress(address) !== 'osmosis') return false;
+  try {
+    return bech32.fromWords(bech32.decode(address as `${string}1${string}`, 90).words).length === 32;
+  } catch {
+    return false;
   }
 }
 

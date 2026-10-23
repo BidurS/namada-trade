@@ -228,7 +228,7 @@ describe('a receive counts only when its own message says it succeeded', () => {
   it('control: when the second receive succeeds in its own message, both are recorded', () => {
     const p = batch('true');
     expect(p.flows.filter((f) => f.kind === 'ibc_in').map((f) => f.amount)).toEqual([1, 5000]);
-    expect(p.links).toContainEqual({ osmo: FAILED.receiver, namada: FAILED.sender, amount: 5000, ts: 1 });
+    expect(p.links).toContainEqual({ osmo: FAILED.receiver, namada: FAILED.sender, amount: 5000, ts: 1, flowId: p.flows.find((f) => f.kind === 'ibc_in' && f.amount === 5000)!.id });
   });
 });
 

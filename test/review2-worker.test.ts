@@ -409,7 +409,7 @@ describe('no public cron trigger, and an older run cannot zero holders', () => {
 // ------------------------------------------------------------------ worker/osmosis-complete-detection
 describe('an Osmosis holder list is trusted only when complete and adding up to the supply', () => {
   it('a 200 page without pagination is not the last page', async () => {
-    vi.stubGlobal('fetch', vi.fn(async () => new Response(JSON.stringify({ denom_owners: [{ address: 'osmo1a', balance: { amount: '5' } }] }), { status: 200 })));
+    vi.stubGlobal('fetch', vi.fn(async () => new Response(JSON.stringify({ denom_owners: [{ address: 'osmo14242424242424242424242424242424249gydw', balance: { amount: '5' } }] }), { status: 200 })));
     const r = await fetchOsmosisHolderList('k');
     expect(r.complete).toBe(false);
   });

@@ -98,7 +98,9 @@ export interface PairChartPoint {
 
 /**
  * A /pairs/v1/historical/<pool>/chart answer as hourly points, oldest first. `null` for `[]`: the API has no series for
- * that pool, which is "no series", not an empty chart. A point with a missing or non-positive price is left out.
+ * that pool, which is "no series", not an empty chart. A point with a missing or non-positive price is left out, and
+ * so is one whose dollar price is not finite (a price under about 5.6e-309 NAM per USDC: 1 / it is Infinity, which the
+ * database cannot store).
  */
 export function parsePairChart(json: unknown): PairChartPoint[] | null {
   if (!Array.isArray(json)) throw new Error('Osmosis pair chart: the answer is not a list');
@@ -107,7 +109,9 @@ export function parsePairChart(json: unknown): PairChartPoint[] | null {
   for (const p of json as any[]) {
     const t = num(p?.time), o = num(p?.open), h = num(p?.high), l = num(p?.low), c = num(p?.close);
     if (t == null || !o || !h || !l || !c) continue;
-    out.push({ t: t * 1000, raw: { open: o, high: h, low: l, close: c }, usd: { open: 1 / o, high: 1 / l, low: 1 / h, close: 1 / c }, flat: o === h && h === l && l === c });
+    const usd = { open: 1 / o, high: 1 / l, low: 1 / h, close: 1 / c };
+    if (!Number.isFinite(usd.open) || !Number.isFinite(usd.high) || !Number.isFinite(usd.low) || !Number.isFinite(usd.close)) continue;
+    out.push({ t: t * 1000, raw: { open: o, high: h, low: l, close: c }, usd, flat: o === h && h === l && l === c });
   }
   return out.sort((a, b) => a.t - b.t);
 }

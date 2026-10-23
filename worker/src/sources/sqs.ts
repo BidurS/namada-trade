@@ -1,5 +1,5 @@
 import { OSMOSIS, NAM } from '../config';
-import { fetchJson, toNam, HttpError, sleep } from '../util';
+import { fetchJson, toNam, HttpError, sleep, isPoolAccount } from '../util';
 import type { PoolInfo, PriceQuote, Provenance, QuoteCurveResponse, SafeClipInfo, SlippageCurvePoint } from '../../../shared/types';
 import { SIZE_SLICE_JUMP_FROM_ZERO_PCT, SIZE_SLICE_JUMP_MIN_PCT, SIZE_SLICE_JUMP_RATIO } from '../../../shared/size-table';
 
@@ -74,7 +74,12 @@ export async function fetchNamPrice(tries = 3): Promise<{ usd: number | null; os
   }
 }
 
-export async function fetchNamPools(): Promise<{ pools: PoolInfo[]; at: number; error?: string }> {
+/**
+ * The NAM pools the quote service lists. `refused` counts the pools whose address was left out because it is not
+ * shaped like an Osmosis pool account (util.ts isPoolAccount): such a pool keeps its figures with no address, so it
+ * is never labelled a pool (cron.ts) nor taken by the live parser as one (live-hub.ts).
+ */
+export async function fetchNamPools(): Promise<{ pools: PoolInfo[]; at: number; error?: string; refused?: number }> {
   const at = Date.now();
   try {
     const denom = encodeURIComponent(NAM.osmoDenom);
@@ -82,12 +87,18 @@ export async function fetchNamPools(): Promise<{ pools: PoolInfo[]; at: number; 
     const res = await sqsGet(url, 15000);
     const list: any[] = Array.isArray(res) ? res : res.data || [];
     const pools: PoolInfo[] = [];
+    let refused = 0;
 
     for (const p of list) {
       const cm = p.chain_model || {};
       // CosmWasm pools name these fields pool_id and contract_address (pool 3008, the NAM transmuter).
       const id = String(cm.id || cm.pool_id || p.id || '');
-      const addr = cm.address || cm.contract_address || '';
+      // The address becomes a pool label that leaves it out of every holder list, and a pool the live parser books
+      // liquidity against, so the answer's word is taken only for an address shaped like a pool account: a Namada
+      // address, an Osmosis wallet or a string with a bad checksum is left out and counted.
+      const named = cm.address || cm.contract_address || '';
+      const addr = named && isPoolAccount(named) ? (named as string) : '';
+      if (named && !addr) refused++;
       const balances = p.balances || [];
       const namBal = balances.find((b: any) => b.denom === NAM.osmoDenom);
       const counterBal = balances.find((b: any) => b.denom !== NAM.osmoDenom);
@@ -118,7 +129,7 @@ export async function fetchNamPools(): Promise<{ pools: PoolInfo[]; at: number; 
     }
 
     pools.sort((a, b) => b.liquidityUsd - a.liquidityUsd);
-    return { pools, at };
+    return refused ? { pools, at, refused } : { pools, at };
   } catch (e) {
     return { pools: [], at, error: quoteErrorText(classify(e)) };
   }

@@ -89,7 +89,7 @@ describe('the live hub prices new trades again', () => {
   const split = JSON.parse(readFileSync(join(__dirname, 'fixtures', 'osmo_split_route_osmo.json'), 'utf8'));
   const msgOf = (tx: any) => ({ result: { data: { value: { TxResult: { height: String(tx.height), result: { code: 0, events: tx.tx_result.events } } } }, events: { 'tx.hash': [tx.hash] } } });
   const hubOf = (db: TestD1, ask: () => Promise<number | null>) => Object.assign(Object.create(LiveHub.prototype), {
-    env: { DB: db }, seenOsmoTx: new Set<string>(), osmoRetryTx: new Map<string, number>(), osmoRetryFrom: null, osmoRetryGen: 0, osmoHeight: 0,
+    env: { DB: db }, seenOsmoTx: new Set<string>(), osmoRetryTx: new Map<string, number>(), osmoWriting: new Map(), osmoRetryFrom: null, osmoRetryGen: 0, osmoHeight: 0,
     sessions: new Set(), lastPriceUsd: null, osmoCtx: { poolAddrs: new Map(), priceUsd: null, assets: osmoAssets() },
     quote: new HubQuote(ask, storedQuoteReader(db as any)),
   });
@@ -166,7 +166,7 @@ describe('the live hub prices new trades again', () => {
     const db = testD1();
     for (let m = -1; m <= 10; m++) db.raw.prepare('INSERT INTO metrics (ts, key, value) VALUES (?, ?, ?)').run(T0 + m * 60_000 + 2000, 'price.usd', 0.0008 + m * 1e-6);
     const hub: any = hubOf(db, async () => null);
-    Object.assign(hub, { ctx: { storage: { setAlarm: async () => {} } }, isPollingNamada: false, lastLiveReport: 0, lastSweep: Infinity, needSweep: false,
+    Object.assign(hub, { ctx: { storage: { setAlarm: async () => {} } }, alarmRun: null, lastLiveReport: 0, lastSweep: Infinity, needSweep: false,
       scanNamada: async () => {}, sweepOsmosis: async () => {}, ensureOsmosisWs: () => {} });
     for (let t = T0; t <= T0 + 10 * 60_000; t += 6000) {
       vi.setSystemTime(t);

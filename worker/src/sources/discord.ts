@@ -49,11 +49,58 @@ function noteResult(url: string, ok: boolean) {
 /** kv `alerts.skipped`: posts that were not sent, in all and the last case. */
 export interface AlertsSkipped { total: number; last: { what: string; n: number; at: number } }
 
+/** Discord's error code for a body it will not take (Invalid Form Body: a field over its limit, a malformed url). */
+export const DISCORD_INVALID_FORM_BODY = 50035;
+/** A 400 answer is read for its first this-many bytes (Discord's JSON error for these bodies is a few hundred bytes); the rest is cancelled. */
+const REFUSAL_READ_MAX_BYTES = 4096;
+
+/**
+ * Whether a 400 answer is Discord refusing the body itself: its JSON error code is DISCORD_INVALID_FORM_BODY, and the
+ * same body is then lost on every channel. Any other 400 is the hook's own (a webhook made in a forum channel answers
+ * 220001 to every post that names no thread, whatever the body). An answer cut at REFUSAL_READ_MAX_BYTES is still
+ * read for the code Discord writes before its list of errors. Never throws: an answer that cannot be read is the hook's.
+ */
+async function bodyRefused(res: Response): Promise<boolean> {
+  try {
+    if (!res.body) return false;
+    const reader = res.body.getReader();
+    const parts: Uint8Array[] = [];
+    let bytes = 0;
+    try {
+      while (bytes < REFUSAL_READ_MAX_BYTES) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        parts.push(value);
+        bytes += value.length;
+      }
+    } finally {
+      await reader.cancel().catch(() => {});
+    }
+    const all = new Uint8Array(Math.min(bytes, REFUSAL_READ_MAX_BYTES));
+    let o = 0;
+    for (const p of parts) {
+      if (o >= all.length) break;
+      const part = p.subarray(0, all.length - o);
+      all.set(part, o);
+      o += part.length;
+    }
+    const text = new TextDecoder().decode(all);
+    try {
+      return (JSON.parse(text) as { code?: unknown } | null)?.code === DISCORD_INVALID_FORM_BODY;
+    } catch {
+      // The top-level code, before any nested object (each error inside names its own code as a word).
+      return new RegExp(`^\\s*\\{[^{]*"code"\\s*:\\s*${DISCORD_INVALID_FORM_BODY}\\s*[,}]`).test(text);
+    }
+  } catch {
+    return false;
+  }
+}
+
 /** One body to each webhook, a few at a time, within the deadline; what could not start is recorded, never dropped unseen. */
 async function postAll(targets: { url: string; body: Record<string, unknown> }[], db: D1Database | undefined, what: string): Promise<{ posted: number; skipped: number }> {
   const started = Date.now();
   const queue = [...targets];
-  let posted = 0, skipped = 0;
+  let posted = 0, skipped = 0, refused = 0;
   const run = async () => {
     for (let t = queue.shift(); t; t = queue.shift()) {
       const f = failing.get(t.url);
@@ -64,15 +111,20 @@ async function postAll(targets: { url: string; body: Record<string, unknown> }[]
         // 429 is Discord asking for a pause, not a dead hook; 401/404 (deleted) and 5xx count against the hook.
         noteResult(t.url, res.ok || res.status === 429);
         if (res.ok) posted++;
+        // A 400 with Discord's Invalid Form Body code is the body refused (a field over its limit): that post is lost,
+        // and is recorded with the ones not sent. Any other 400 is the hook's own, counted against it above only.
+        else if (res.status === 400 && (await bodyRefused(res))) refused++;
       } catch { noteResult(t.url, false); }
     }
   };
   await Promise.all(Array.from({ length: Math.min(POST_CONCURRENCY, queue.length) }, run));
-  if (skipped) {
-    console.error(`alerts: ${skipped} of ${targets.length} posts for ${what} not sent (deadline passed or webhook backed off)`);
+  if (skipped || refused) {
+    const n = skipped + refused;
+    const label = refused ? `${what} (${refused} refused by Discord)` : what;
+    console.error(`alerts: ${n} of ${targets.length} posts for ${label} not sent (deadline passed, webhook backed off or body refused)`);
     if (db) {
-      const cur = (await kvGetJson<AlertsSkipped>(db, 'alerts.skipped').catch(() => null)) ?? { total: 0, last: { what, n: 0, at: 0 } };
-      await kvSet(db, 'alerts.skipped', { total: cur.total + skipped, last: { what, n: skipped, at: Date.now() } }).catch(() => {});
+      const cur = (await kvGetJson<AlertsSkipped>(db, 'alerts.skipped').catch(() => null)) ?? { total: 0, last: { what: label, n: 0, at: 0 } };
+      await kvSet(db, 'alerts.skipped', { total: cur.total + n, last: { what: label, n, at: Date.now() } }).catch(() => {});
     }
   }
   return { posted, skipped };
@@ -425,6 +477,15 @@ export async function sendDiscordForumAlert(
 }
 
 /**
+ * The longest discussions-to link a governance alert carries. The link is the proposal author's own text, and the
+ * chain bounds only the whole proposal (max_proposal_content_size, 10,000 bytes on mainnet), while Discord refuses a
+ * whole message whose embed url is over 2048 characters or whose description is over 4096: one refused body reaches
+ * no channel, and the alert's claim is already taken. A longer link is left out, the proposal's page is linked in its
+ * place, and the alert says so. The links of the 43 mainnet proposals to 2026-10-22 are at most 116 characters.
+ */
+export const GOV_LINK_MAX = 512;
+
+/**
  * Send a deduplicated Discord notification for Namada On-Chain Governance Proposals
  */
 export async function sendDiscordGovAlert(
@@ -452,8 +513,10 @@ export async function sendDiscordGovAlert(
       ? 0xf43f5e
       : 0xa855f7;
 
-  const propUrl =
-    safeHttpUrl(prop.discussionsUrl) || `https://namada.valopers.com/proposals/${prop.id}`;
+  const own = safeHttpUrl(prop.discussionsUrl);
+  const tooLong = own != null && own.length > GOV_LINK_MAX;
+  const propUrl = own && !tooLong ? own : `https://namada.valopers.com/proposals/${prop.id}`;
+  const linkNote = tooLong ? `\n\nThe proposal's own discussion link is ${own.length} characters long, too long to post here.` : '';
 
   const body = {
     username: 'Namada Forum & Governance Radar',
@@ -463,9 +526,9 @@ export async function sendDiscordGovAlert(
         title: title.slice(0, 250),
         url: propUrl,
         color,
-        description: prop.abstract
+        description: (prop.abstract
           ? `${plainMd(prop.abstract)}\n\n[View Discussion / Proposal ↗](${propUrl})`
-          : `[View Proposal #${prop.id} ↗](${propUrl})`,
+          : `[View Proposal #${prop.id} ↗](${propUrl})`) + linkNote,
         fields: [
           { name: 'Status', value: `\`${prop.status}\``, inline: true },
           { name: 'Type', value: `\`${prop.type}\``, inline: true },

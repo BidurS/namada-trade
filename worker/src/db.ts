@@ -65,6 +65,23 @@ export const stmt = {
     params: [l.osmo, l.namada, l.ts, l.ts, l.amount],
   }),
   /**
+   * stmt.link for the live writes (live-hub.ts), which may write a block or a transaction again (a scan cursor moved
+   * back, a catch-up search that finds a stream transaction): the link is counted only while the flow it came from
+   * (`flowId`, one flow per link) is not stored yet. It goes before that flow's own statement in the same batch, so a
+   * write that stores the flow counts its link once, and a write of it again never does. Plain ? placeholders, as
+   * scripts inline statements with inlineSql.
+   */
+  linkOnce: (l: { osmo: string; namada: string; amount: number; ts: number; flowId: string }): Stmt => ({
+    sql: `INSERT INTO address_links (osmo_addr,namada_addr,first_seen,last_seen,transfers,volume_num)
+          SELECT ?,?,?,?,1,? WHERE NOT EXISTS (SELECT 1 FROM flows WHERE id = ?)
+          ON CONFLICT(osmo_addr,namada_addr) DO UPDATE SET
+            last_seen=MAX(address_links.last_seen, excluded.last_seen),
+            first_seen=MIN(address_links.first_seen, excluded.first_seen),
+            transfers=address_links.transfers+1,
+            volume_num=address_links.volume_num+excluded.volume_num`,
+    params: [l.osmo, l.namada, l.ts, l.ts, l.amount, l.flowId],
+  }),
+  /**
    * A curated label (auto, genesis, valopers). It never replaces a user tag, except a pool label: the quote service
    * listing the address as a NAM pool is the proof, the holder list leaves pools out by this row's category alone
    * (holders.ts notPool, LISTED), and a pool's address can be tagged before its first label is written, so a tag
@@ -122,6 +139,22 @@ export const stmt = {
             verified_at=excluded.verified_at, verified_epoch=excluded.verified_epoch, verified_height=excluded.verified_height, verified_src=excluded.verified_src, updated_at=excluded.updated_at
           WHERE excluded.verified_height >= COALESCE(stakes.verified_height, 0)`,
         params: part.flatMap((r) => [r.address, r.bondedNam, JSON.stringify(r.delegations), at, epoch, height, src, at]),
+      });
+    }
+    return out;
+  },
+  /**
+   * Stakes rows stamped from a height above `ceiling` (cron.ts heightCeiling: past the head this tick's answers agree
+   * on, never set without one) are re-stamped at the bond listing's `height`, so the guard above takes the listing's
+   * rows again (as holders.ts listingUnpinStmts for the balances). 98 addresses a statement.
+   */
+  stakesUnpin: (addresses: string[], height: number, ceiling: number): Stmt[] => {
+    const out: Stmt[] = [];
+    for (let i = 0; i < addresses.length; i += 98) {
+      const part = addresses.slice(i, i + 98);
+      out.push({
+        sql: `UPDATE stakes SET verified_height = ?1 WHERE verified_height > ?2 AND address IN (${part.map(() => '?').join(',')})`,
+        params: [height, ceiling, ...part],
       });
     }
     return out;

@@ -19,7 +19,8 @@ export interface NamadaParsed {
   moves: Move[];
   flows: Flow[];
   balances: BalanceUpdate[];
-  links: { osmo: string; namada: string; amount: number; ts: number }[];
+  /** `flowId`: the flow the link was read from (one flow per link), so a block written again never counts it twice (db.ts stmt.linkOnce). */
+  links: { osmo: string; namada: string; amount: number; ts: number; flowId: string }[];
   /**
    * Wrapper hashes of the transfers whose shielded-pool fee was read from the events alone (no fee payer was given
    * for the wrapper): the wrapper's header names its fee payer (namada-tx.ts feePayersOf), and parsing the block
@@ -328,6 +329,7 @@ export function parseNamadaBlock(block: NamadaBlock, priceUsd: number | null, fe
     }
     const { legs: pairs, assumed } = pairLegs(s, d);
     pairs.forEach((l, k) => {
+      const id = k === 0 ? idBase : `${idBase}:${k}`;
       const amount = toNam(l.units);
       const kind = classify(descriptor, l.from, l.to);
       let flowFrom = l.from;
@@ -356,13 +358,13 @@ export function parseNamadaBlock(block: NamadaBlock, priceUsd: number | null, fe
           // The NAM arrived here: this is the one record that links the osmo1 sender to the tnam1 receiver. Two real
           // accounts only (the checksum), never the shielded pool.
           if (isRealAddress(p.sender) === 'osmosis' && isRealAddress(p.receiver) === 'namada' && p.receiver !== I.masp) {
-            out.links.push({ osmo: p.sender, namada: p.receiver, amount, ts: block.ts });
+            out.links.push({ osmo: p.sender, namada: p.receiver, amount, ts: block.ts, flowId: id });
           }
         }
       }
 
       out.flows.push({
-        id: k === 0 ? idBase : `${idBase}:${k}`,
+        id,
         chain: 'namada',
         height: block.height,
         ts: block.ts,

@@ -77,7 +77,7 @@ describe('an Osmosis stream transaction whose failed write left rows stored is w
     }));
     const hub: any = Object.assign(Object.create(LiveHub.prototype), {
       env: { DB: db, DISCORD_WEBHOOK_URL: OP },
-      seenOsmoTx: new Set<string>(), osmoRetryTx: new Map<string, number>(), osmoRetryFrom: null, osmoRetryGen: 0, osmoHeight: 0, sessions: new Set(), lastPriceUsd: null,
+      seenOsmoTx: new Set<string>(), osmoRetryTx: new Map<string, number>(), osmoWriting: new Map(), osmoRetryFrom: null, osmoRetryGen: 0, osmoHeight: 0, sessions: new Set(), lastPriceUsd: null,
       osmoCtx: { poolAddrs: new Map(), priceUsd: null, assets: new Map() },
       quote: new HubQuote(async () => null, async () => null),
     });
