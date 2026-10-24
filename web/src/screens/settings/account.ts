@@ -3,7 +3,7 @@
 // updates (worker/src/settings.ts applyUpdate), so each control saves only what it changed.
 import { useCallback, useEffect, useState } from 'react';
 import type { UserSettings } from '../../../../shared/types';
-import { fetchSettings, updateSettings } from '../../api';
+import { fetchSettings, updateSettings, settingsOfRefusal } from '../../api';
 import type { Session } from '../../lib/auth';
 import { plainError } from '../sheets/util';
 
@@ -45,9 +45,17 @@ export function useUserSettings(session: Session | null): UserSettingsState {
   }, [token, n]);
 
   const save = useCallback(async (patch: unknown) => {
-    const s = await updateSettings(patch);
-    setSettings(s);
-    return s;
+    try {
+      const s = await updateSettings(patch);
+      setSettings(s);
+      return s;
+    } catch (e) {
+      // A save the channel cap refused (409 CHANNELS_FULL) still kept the row with sending off: the page shows the
+      // saved settings the refusal carries, so the owner sees the saved link and a switch to turn on later.
+      const kept = settingsOfRefusal(e);
+      if (kept) setSettings(kept);
+      throw e;
+    }
   }, []);
   const reload = useCallback(() => setN((x) => x + 1), []);
 

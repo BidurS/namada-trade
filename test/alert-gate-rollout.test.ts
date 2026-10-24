@@ -131,4 +131,20 @@ describe('a Worker deployed before SEND_ALERTS is put', () => {
     await tick({ ...env, SEND_ALERTS: 'yes' }, PLAIN + 120_000);
     expect(deliveryRow(db)).toEqual({ name: 'Discord alert delivery', ok: false, at: PLAIN + 90_000, note: '2 post(s) for whale alert not sent; 3 in all' });
   });
+
+  it('the row shows the live hub\'s pending list when alerts wait in it (live-hub.ts notePending), with or without posts not sent', async () => {
+    network();
+    const db = testD1();
+    const env = { DB: db, DISCORD_WEBHOOK_URL: OP, SETTINGS_KEY: KEY, SEND_ALERTS: 'yes' };
+    insert(db, 'kv', [{ key: 'alerts.pending', value: JSON.stringify({ parts: 3, posts: 7, at: PLAIN }), updated_at: PLAIN }]);
+    await tick(env, PLAIN + 60_000);
+    expect(deliveryRow(db)).toEqual({ name: 'Discord alert delivery', ok: true, at: PLAIN + 60_000, note: "On: this Worker posts alerts, and no post not sent is on record. 3 alert part(s), 7 post(s), wait in the live hub's pending list." });
+    insert(db, 'kv', [{ key: 'alerts.skipped', value: JSON.stringify({ total: 3, last: { what: 'whale alert', n: 2, at: PLAIN + 90_000 } }), updated_at: PLAIN + 90_000 }]);
+    await tick(env, PLAIN + 120_000);
+    expect(deliveryRow(db).note).toBe("2 post(s) for whale alert not sent; 3 in all. 3 alert part(s), 7 post(s), wait in the live hub's pending list.");
+    // An empty list adds nothing.
+    db.raw.prepare("UPDATE kv SET value = ? WHERE key = 'alerts.pending'").run(JSON.stringify({ parts: 0, posts: 0, at: PLAIN + 150_000 }));
+    await tick(env, PLAIN + 180_000);
+    expect(deliveryRow(db).note).toBe('2 post(s) for whale alert not sent; 3 in all');
+  });
 });

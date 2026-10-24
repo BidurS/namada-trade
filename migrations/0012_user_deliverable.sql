@@ -1,0 +1,15 @@
+-- 2026-10-23. The users' settings rows with a Discord channel on (security review, 2026-10-22).
+--
+-- A user's settings are kv `user:<address>` (worker/src/settings.ts). The dispatcher read the 500 rows saved most
+-- recently and only then dropped the ones with Discord off, so newer rows (a sign-in is free, a save rewrites
+-- updated_at) left older subscribers out of every alert, with no trace. A row now carries `on` in plain text beside
+-- its sealed blob; the cap on channels is counted by the save itself and the dispatcher reads only the rows with
+-- Discord on, first saved first. This index is partial over those rows only, and its WHERE terms are the exact text
+-- of settings.ts DELIVERABLE_ROWS, which the count and the read repeat (SQLite matches a partial index's WHERE by
+-- expression, not by algebra): json_extract is never evaluated on other kv rows (some of which are not JSON).
+--
+-- Nothing stored changes, and no query names the index: before it is applied the same queries read the whole user:
+-- range, as the read did until now. A row written before this change has no `on` and is counted as on. The save's
+-- other count, of every address (settings.ts USER_ROWS_MAX), reads the primary key's index entries only. Apply before
+-- deploying: scripts/deploy-check.sh does not deploy until the index is there.
+CREATE INDEX IF NOT EXISTS kv_user_deliverable ON kv (key) WHERE key >= 'user:' AND key < 'user;' AND json_extract(value, '$.on') IS NOT 0;

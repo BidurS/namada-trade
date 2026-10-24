@@ -48,6 +48,12 @@ for i in 1 2 3 4 5; do out=$(npx wrangler d1 execute namada-trade-db --remote --
 echo "$out" | python3 -c "
 import sys,json; n=json.load(sys.stdin)[0]['results'][0]['n']; print('0011 index:', n)
 sys.exit(0 if n == 1 else 1)" || { echo "FAIL migration 0011 is not in place: not deploying"; exit 1; }
+# 0012 (the settings rows with a Discord channel on): the channel cap's count and the dispatcher's read find those
+# rows on it (settings.ts DELIVERABLE_ROWS); without it each save and each 15 s read goes through the whole user: range
+for i in 1 2 3 4 5; do out=$(npx wrangler d1 execute namada-trade-db --remote --json --command "SELECT COUNT(*) n FROM sqlite_master WHERE type='index' AND name = 'kv_user_deliverable'" 2>&1) && ! echo "$out" | grep -q 7403 && break; echo "retrying (Cloudflare 7403)"; sleep 6; done
+echo "$out" | python3 -c "
+import sys,json; n=json.load(sys.stdin)[0]['results'][0]['n']; print('0012 index:', n)
+sys.exit(0 if n == 1 else 1)" || { echo "FAIL migration 0012 is not in place: not deploying"; exit 1; }
 
 echo "== 2. deploy"
 npm run deploy 2>&1 | grep -E "Current Version ID|Deployed|rror"
@@ -79,8 +85,12 @@ check "holders page 2 answers"         200 "$(curl -s -o /dev/null -w '%{http_co
 echo "== checks and health"
 curl -s "$H/api/integrity" | python3 -c "
 import sys,json; d=json.load(sys.stdin)
-bad=[c['key'] for c in d['checks'] if c['status']!='ok']
+# each check that is not ok with its status: 'idle' (nothing to compare, e.g. no trade in the window) is not a failure,
+# but a 'warn' or 'fail' is read before calling the deploy done
+bad=[c['key'] + ' (' + c['status'] + ')' for c in d['checks'] if c['status']!='ok']
 print('cross-checks:', sum(1 for c in d['checks'] if c['status']=='ok'), 'of', len(d['checks']), 'pass; not ok:', bad)
+for c in d['checks']:
+    if c['status'] not in ('ok', 'idle'): print('   CHECK', c['key'], c['status'], '-', json.dumps(c.get('detail'))[:200])
 for s in d['sources']:
     if 'listing' in s['name'] or not s.get('ok', True): print('  ', s['name'], 'ok' if s.get('ok') else 'NOT OK', '-', (s.get('note') or '')[:140])
 "

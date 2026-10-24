@@ -11,7 +11,7 @@ import { fetchNamPools, fetchNamPrice, quoteNamTrade, quoteSlippageCurve, priceS
 import { PRICE_HOW_KEY, livePriceProv, priceHowAt, storedPriceNote, storedPriceSource, type PriceHowLog } from './price-how';
 import { namBalance, namadaEpoch, delegationsAt, QUICK, type ReadOpts } from './sources/namada';
 import { fetchIntel } from './sources/intel';
-import { alertsOn, sendDiscordTestAlert } from './sources/discord';
+import { alertsOn, sendDiscordTestPost, testPostHeld, INVALID_WINDOW_MS, type TestPostAnswer } from './sources/discord';
 import { stmt, TAGS_PER_AUTHOR, TAGS_PER_DAY, kvGet, kvSet, kvGetJson } from './db';
 import { toNam, chainOf } from './util';
 import { OSMOSIS, INTERNAL_LABELS } from './config';
@@ -35,7 +35,7 @@ import { NAM_AMOUNT, NOT_LEGACY_TWIN as NOT_TWIN } from './flows-query';
 import { INTERNAL_ADDRESSES } from '../../shared/alerts';
 import { alertRules, DEFAULT_THRESHOLDS, type AlertThresholds } from '../../shared/alerts';
 import { issueNonce, login, logout, sessionFromRequest, createPairCode, claimPairCode, listSessions, revokeSession, revokeAllSessions, createSession, tokenHash } from './auth';
-import { loadSettings, saveSettings, deleteSettings, defaultPrefs, publicView, applyUpdate, requireKey, type StoredSettings } from './settings';
+import { loadSettings, saveSettings, deleteSettings, defaultPrefs, publicView, applyUpdate, requireKey, refusalOf, noteSettingsRefused, hookOkStmt, linkProven, channelsFull, stopChannelStmt, SETTINGS_FULL, CHANNELS_FULL, type StoredSettings } from './settings';
 import { clampLimit, prefixRange, decodeHolderCursor, encodeHolderCursor, encodeFlowCursor, parseBeforeParam, type HolderCursor, type BeforeParam, type FlowCursor } from '../../shared/paging';
 import { parse, isWholeAddress, INPUT_MAX, type Parsed } from '../../shared/search-grammar';
 import { EXPLORERS, NAMADA as NAMADA_SHARED } from '../../shared/config';
@@ -1288,38 +1288,235 @@ async function settingsOrDefault(db: D1Database, key: string, address: string): 
   return (await loadSettings(db, key, address)) ?? { address, notifications: defaultPrefs(), channels: { discord: { enabled: false, webhookUrl: null } }, createdAt: Date.now(), updatedAt: Date.now() };
 }
 
+/**
+ * The row's public view. The note of a connection notice that did not reach the channel (`notice`, set by PUT
+ * /api/me/settings) is shown only while no post to the link has succeeded (the row's okAt, settings.ts linkProven):
+ * the first alert or test post Discord takes proves the link, and the note goes. Rows without the note read nothing.
+ */
+async function viewOf(db: D1Database, key: string, s: StoredSettings) {
+  const url = s.channels.discord.webhookUrl;
+  const proven = !!(s.channels.discord.notice && url) && (await linkProven(db, key, s.address, url!));
+  return publicView(s, proven);
+}
+
 app.get('/api/me/settings', async (c) => {
   const r = await me(c); if (r instanceof Response) return r;
-  return c.json({ settings: publicView(await settingsOrDefault(c.env.DB, r.key, r.s!.address)) });
+  return c.json({ settings: await viewOf(c.env.DB, r.key, await settingsOrDefault(c.env.DB, r.key, r.s!.address)) });
 });
+
+/** One test post or connection notice per wallet every 30 s: each is an outbound Discord call the caller chooses the target of. */
+export const WEBHOOK_TEST_COOLDOWN_MS = 30_000;
+/** A settings row saved within this long is a fresh one: its test post goes once a window even when the shared test budget is spent (sources/discord.ts testPostHeld). */
+export const FRESH_ROW_MS = 24 * 3_600_000;
+/** What a wallet is told when its link is paused here (it failed, asked to wait or is gone). */
+export const TEST_LINK_PAUSED = 'Test posts to this link are paused for a few minutes. Try again later.';
+/** What a wallet is told when test posts are held site-wide (the window's ceiling or the test posts' budget is spent): its link is not blamed. */
+export const TEST_SITE_BUSY = 'Test posts are paused site-wide for a few minutes: too many links were answered invalid in this window. Your link is not at fault; try again later.';
+/** What a wallet is told while it waits for the next window after an invalid answer (`min`: how long). */
+export const testWalletWaits = (min: number) => `Discord answered that the link tested last from this wallet is invalid, so test posts from this wallet wait for the next 10-minute window (about ${min} min). Check the link in Discord first.`;
+/** What a wallet is told when the save that would turn a link on cannot post the connection notice because this Worker sends no alerts. */
+export const SAVE_ALERTS_OFF = 'Alerts are off on this server, so a Discord channel cannot be turned on: nothing was posted to the link, and nothing was saved.';
+/** What a wallet is told when the link it saves is paused here (it failed lately, or Discord said it is gone or its token is wrong): nothing is saved. */
+export const SAVE_LINK_PAUSED = 'Posts to this link are paused here: it failed lately, or Discord said it is gone or its token is wrong. Nothing was saved; paste a new link from Discord, or try again later.';
+/** What a wallet is told when the link is in Discord's short Retry-After pause here (its bucket is full for a few seconds): nothing is saved. */
+export const SAVE_LINK_SHORT_PAUSE = 'Discord asked for a short pause on this link; try again in a few seconds. Nothing was saved.';
+export const TEST_LINK_SHORT_PAUSE = 'Discord asked for a short pause on this link; try again in a few seconds.';
+/** What a wallet is told when the link is held for the window as kept rate-limited (sources/discord.ts RATE_LIMITED_HOLD_AFTER): nothing is saved. */
+export const SAVE_LINK_RATE_LIMITED = 'Discord has answered posts to this link rate-limited several times in a few minutes, its limit filled by posts from elsewhere, so posts to it wait for the next 10-minute window; nothing was saved. If another service posts to the same webhook, make one for this site alone.';
+export const TEST_LINK_RATE_LIMITED = 'Discord has answered posts to this link rate-limited several times in a few minutes, its limit filled by posts from elsewhere, so posts to it wait for the next 10-minute window. If another service posts to the same webhook, make one for this site alone.';
+/** What a wallet is told while it waits for the next window because its last post went out past the spent test budget on a fresh row's allowance (`min`: how long): its link is not blamed. */
+export const testWalletOver = (min: number) => `The site's budget for test posts is spent for this window, and this wallet's last post went out past it on a new row's allowance, so posts from this wallet wait for the next 10-minute window (about ${min} min). The link is not at fault.`;
+/** The words for a link whose post is held (sources/discord.ts testPostHeld), by what holds it, for the save and for the test button. */
+const heldWords = (held: 'link' | 'limited' | 'pause' | 'site', what: 'test' | 'save') =>
+  held === 'site' ? TEST_SITE_BUSY
+    : held === 'pause' ? (what === 'save' ? SAVE_LINK_SHORT_PAUSE : TEST_LINK_SHORT_PAUSE)
+    : held === 'limited' ? (what === 'save' ? SAVE_LINK_RATE_LIMITED : TEST_LINK_RATE_LIMITED)
+    : what === 'save' ? SAVE_LINK_PAUSED : TEST_LINK_PAUSED;
+/** Why a wallet waits for the next window (waitForWindow): its last post was answered invalid, or went out past the spent test budget. */
+type WaitWhy = 'invalid' | 'over';
+/** What a wallet is told when its post waits for its cooldown (`wait`: how long is left), or for the window (`why`). */
+const cooldownWords = (wait: number, what: 'test' | 'save', why: WaitWhy | null) => {
+  if (wait > WEBHOOK_TEST_COOLDOWN_MS) {
+    const min = Math.max(1, Math.ceil(wait / 60_000));
+    return why === 'over' ? testWalletOver(min) : testWalletWaits(min);
+  }
+  return what === 'test' ? 'Wait 30 seconds before sending another test alert.' : 'A message was posted to a channel from this wallet less than 30 seconds ago. Wait 30 seconds, then save again; nothing was saved.';
+};
+
+/**
+ * Takes the wallet's post cooldown at `now` by one statement, which writes only over a cooldown that has run out, so
+ * posts the same wallet sends at once pass it once: how long is left (`wait`, 0 when taken) and, for a wait until the
+ * next window, why (waitForWindow keeps the reason after the time, as "<time>:<why>"; the statement reads the time as
+ * the value's integer prefix).
+ */
+async function takeCooldown(db: D1Database, address: string, now: number): Promise<{ wait: number; why: WaitWhy | null }> {
+  const coolKey = `webhook_test:${address}`;
+  const took = await db.prepare(
+    `INSERT INTO kv (key, value, updated_at) VALUES (?1, ?2, ?3)
+     ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at WHERE CAST(kv.value AS INTEGER) <= ?4`,
+  ).bind(coolKey, String(now), now, now - WEBHOOK_TEST_COOLDOWN_MS).run();
+  if (Number(took.meta?.changes ?? 0)) return { wait: 0, why: null };
+  const row = await db.prepare('SELECT value FROM kv WHERE key = ?').bind(coolKey).first<{ value: string }>().catch(() => null);
+  const [from, why] = String(row?.value ?? '').split(':');
+  const v = Number(from);
+  return {
+    wait: Math.max(1, from !== '' && Number.isFinite(v) ? v + WEBHOOK_TEST_COOLDOWN_MS - now : WEBHOOK_TEST_COOLDOWN_MS),
+    why: why === 'invalid' || why === 'over' ? why : null,
+  };
+}
+/** Gives back the cooldown taken at `now`: nothing was posted. */
+const giveBackCooldown = (db: D1Database, address: string, now: number) =>
+  db.prepare('DELETE FROM kv WHERE key = ? AND value = ?').bind(`webhook_test:${address}`, String(now)).run().catch(() => {});
+/**
+ * After an invalid answer (the link is gone, its token wrong, or Discord refused the address), or a post that went
+ * past the spent test budget on a fresh row's allowance: this wallet's next post waits until the next window, so a
+ * few wallets cannot spend the shared budget by posting to made-up links every 30 s. The row's value is the time the
+ * cooldown counts from, set so it runs out when the window turns, with the reason after it (`why`), so the wallet is
+ * told the right thing when it comes back (cooldownWords).
+ */
+const waitForWindow = (db: D1Database, address: string, now: number, why: WaitWhy) => {
+  const windowEnd = (Math.floor(now / INVALID_WINDOW_MS) + 1) * INVALID_WINDOW_MS;
+  return db.prepare('UPDATE kv SET value = ? WHERE key = ? AND value = ?').bind(`${windowEnd - WEBHOOK_TEST_COOLDOWN_MS}:${why}`, `webhook_test:${address}`, String(now)).run().catch(() => {});
+};
+/** The answer of a post that did not happen (no answer). */
+const NO_POST: TestPostAnswer = { ok: false, status: 0, invalid: false, blames: false, dead: false, over: false };
+/**
+ * An answer to the connection notice that says nothing of the link itself: no answer (0), a 5xx, or a 429 that is not
+ * the link's own (of shared or global scope, with none of Discord's headers, or of user scope that the site's own
+ * posts caused: sources/discord.ts blamesLink). A 400, 401, 403, 404 or a 429 of user scope that posts from elsewhere
+ * caused is the link's own.
+ */
+const noticeTransient = (a: TestPostAnswer) => !a.ok && !a.blames && (a.status === 0 || a.status >= 500 || a.status === 429);
+/**
+ * Whether an answer keeps the wallet waiting for the next window (waitForWindow): an invalid answer, unless it is a
+ * 429 that blames nothing of the link (a limit on the site's address, or the site's own posts filling the bucket),
+ * which no made-up link can draw.
+ */
+const chargesWallet = (a: TestPostAnswer) => a.invalid && (a.status !== 429 || a.blames);
+/** The connection notice is posted once more this long after an answer that says nothing of the link, inside the request. */
+export const NOTICE_RETRY_MS = 1000;
 
 app.put('/api/me/settings', async (c) => {
   const r = await me(c); if (r instanceof Response) return r;
   const body = await jsonObject(c);
-  const cur = await settingsOrDefault(c.env.DB, r.key, r.s!.address);
+  const address = r.s!.address;
+  const cur = await settingsOrDefault(c.env.DB, r.key, address);
   const next = applyUpdate(cur, body);
   if (typeof next === 'string') return c.json({ error: next }, 400);
-  await saveSettings(c.env.DB, r.key, next);
-  return c.json({ settings: publicView(next) });
+  // A save that turns a link on (a new link, or the row's link off and now on) proves it first, unless the row already
+  // records a successful post to that link (settings.ts linkProven: an earlier save, a test post or an alert): the
+  // connection notice (the test post's body, sources/discord.ts sendDiscordTestPost) is posted to the link inside this
+  // request, under the test posts' budget (a fresh row's post goes once a window even when it is spent) and the
+  // wallet's cooldown. Discord taking it turns the channel on, with the success recorded (hookOkStmt, after the save,
+  // which keeps `okAt` only for the same link). An answer that blames the link (it is gone, its token is wrong, a 400,
+  // a 429 of user scope that posts from elsewhere caused) leaves the row saved with the channel off and says why
+  // (`stopped`: Discord's answer that the link is dead, or `reason` 'notice' with its status), so the Settings page
+  // shows the reason beside the switch. An answer that says nothing of the link (none, a 5xx, a 429 of shared or
+  // global scope or with none of Discord's headers) has the notice posted once more after a short wait, and when that
+  // fails too the channel is saved on with a note (`notice`) the page shows until a post succeeds: a Discord blip at
+  // the save costs the subscriber nothing. Such a row is on trial: the row being fresh (no okAt) the dispatcher holds
+  // its link once the invalid-answer budget is spent, its first post (or a test post) Discord takes proves it, the
+  // first answer that blames the link turns it off (sources/discord.ts stopTrialHooks), and one no post reaches within
+  // a day has the notice posted again by the cron's tick, once a day, whose answer proves or stops it the same way,
+  // the channel being turned off after three days of answers that say nothing either (sources/discord.ts
+  // sweepNoticeChannels). So a row with Discord on is a link that took a post, or one that answered nothing against
+  // itself every time and is on its trial. A site with every channel taken
+  // posts nothing: the save below is refused by the cap and the row saved off.
+  const url = next.channels.discord.webhookUrl;
+  const turnsOn = !!url && next.channels.discord.enabled && !(cur.channels.discord.enabled && cur.channels.discord.webhookUrl === url);
+  const now = Date.now();
+  let sent: TestPostAnswer = NO_POST;
+  if (turnsOn && !(await linkProven(c.env.DB, r.key, address, url)) && !(await channelsFull(c.env.DB, r.key, address, url))) {
+    if (!alertsOn()) return c.json({ error: SAVE_ALERTS_OFF }, 503);
+    if ((await refusalOf(c.env.DB, next)) === 'rows') { await noteSettingsRefused(c.env.DB, now, 'rows'); return c.json({ error: SETTINGS_FULL }, 503); }
+    const held = await testPostHeld(url, c.env.DB, false, true);
+    if (held) return c.json({ error: heldWords(held, 'save') }, 429);
+    const { wait, why } = await takeCooldown(c.env.DB, address, now);
+    if (wait) return c.json({ error: cooldownWords(wait, 'save', why) }, 429);
+    const post = async (): Promise<TestPostAnswer | 'held'> => {
+      try { return await sendDiscordTestPost(url, next, c.env.DB, false, true); } catch (e) { console.error('settings: the connection notice could not be posted', e); return NO_POST; }
+    };
+    let answer = await post();
+    if (answer === 'held') { await giveBackCooldown(c.env.DB, address, now); return c.json({ error: TEST_SITE_BUSY }, 429); }
+    let over = answer.over;
+    if (noticeTransient(answer)) {
+      // Once more, after a short wait. A retry the link's own Retry-After pause holds back is not made, and the first
+      // answer stands.
+      await new Promise((resolve) => setTimeout(resolve, NOTICE_RETRY_MS));
+      const again = await post();
+      if (again !== 'held') { answer = again; over = over || again.over; }
+    }
+    sent = answer;
+    if (chargesWallet(sent) || over) await waitForWindow(c.env.DB, address, now, chargesWallet(sent) ? 'invalid' : 'over');
+    if (!sent.ok) {
+      if (noticeTransient(sent)) next.channels.discord.notice = { status: sent.status, at: now };
+      else {
+        next.channels.discord.enabled = false;
+        next.channels.discord.stopped = sent.dead ? { status: sent.status, at: now } : { status: sent.status, at: now, reason: 'notice' };
+      }
+    }
+  }
+  // Refused when the save would give a new address a row past USER_ROWS_MAX (503: nothing of the wallet is stored),
+  // or turn Discord on while the site already has DELIVERABLE_MAX channels on (409: the row is saved with the channel
+  // off, so the link and the other changes are kept, and the owner is told, instead of a channel that would never be
+  // read). Either is recorded for the health row.
+  let full = false;
+  if (!(await saveSettings(c.env.DB, r.key, next))) {
+    const cap = await refusalOf(c.env.DB, next);
+    await noteSettingsRefused(c.env.DB, now, cap);
+    if (cap === 'rows') return c.json({ error: SETTINGS_FULL }, 503);
+    full = true;
+    next.channels.discord.enabled = false;
+    if (!(await saveSettings(c.env.DB, r.key, next))) return c.json({ error: SETTINGS_FULL }, 503);
+  }
+  // A notice Discord took is a successful post to the saved link, on or off: the row records it, so the link needs no
+  // post of its own when the channel is next turned on.
+  if (sent.ok) await hookOkStmt(c.env.DB, r.key, address, url!, now).run().catch((e) => console.error('settings: the connection notice was not recorded', e));
+  const view = await viewOf(c.env.DB, r.key, next);
+  return full ? c.json({ error: CHANNELS_FULL, settings: view }, 409) : c.json({ settings: view });
 });
-
-/** One test post per wallet every 30 s: a test is an outbound Discord call the caller chooses the target of. */
-export const WEBHOOK_TEST_COOLDOWN_MS = 30_000;
 
 app.post('/api/me/settings/test', async (c) => {
   const r = await me(c); if (r instanceof Response) return r;
   // A Worker that does not send alerts (its SEND_ALERTS secret is not yes) says so plainly: nothing is posted, the
   // user's settings are not read, the cooldown is not started, and the user's link is not blamed.
   if (!alertsOn()) return c.json({ error: 'Alerts are off on this server' }, 503);
-  const cur = await settingsOrDefault(c.env.DB, r.key, r.s!.address);
+  const address = r.s!.address;
+  const cur = await settingsOrDefault(c.env.DB, r.key, address);
   const url = cur.channels.discord.webhookUrl;
   if (!url) return c.json({ error: 'no Discord webhook saved' }, 400);
   const now = Date.now();
-  const coolKey = `webhook_test:${r.s!.address}`;
-  const last = Number((await kvGet(c.env.DB, coolKey)) || 0);
-  if (last > 0 && now - last < WEBHOOK_TEST_COOLDOWN_MS) return c.json({ error: 'Wait 30 seconds before sending another test alert.' }, 429);
-  await kvSet(c.env.DB, coolKey, String(now));
-  return c.json({ success: await sendDiscordTestAlert(url, cur) });
+  // A link with a recorded success (settings.ts linkProven) tests without a unit of the shared test budget; a row
+  // saved today tests once a window even when that budget is spent (its wallet then waits for the next window).
+  const proven = await linkProven(c.env.DB, r.key, address, url);
+  const fresh = cur.updatedAt > now - FRESH_ROW_MS;
+  // A link that is paused here (it failed, is in a short Retry-After pause, is held as kept rate-limited, or is gone),
+  // and any link not proven once the window's ceiling of invalid Discord answers is spent or the test posts' own
+  // budget is (sources/discord.ts testPostHeld): nothing is posted and the cooldown is not started. Each hold says what
+  // it is; one that is the site's says so, not the link.
+  const paused = (why: 'link' | 'limited' | 'pause' | 'site') => c.json({ error: heldWords(why, 'test') }, 429);
+  const held = await testPostHeld(url, c.env.DB, proven, fresh);
+  if (held) return paused(held);
+  const { wait, why } = await takeCooldown(c.env.DB, address, now);
+  if (wait) return c.json({ error: cooldownWords(wait, 'test', why) }, 429);
+  const sent = await sendDiscordTestPost(url, cur, c.env.DB, proven, fresh);
+  if (sent === 'held') {
+    // Another test post took the budget's last unit meanwhile: nothing was posted, so the cooldown is given back.
+    await giveBackCooldown(c.env.DB, address, now);
+    return paused('site');
+  }
+  if (chargesWallet(sent) || sent.over) await waitForWindow(c.env.DB, address, now, chargesWallet(sent) ? 'invalid' : 'over');
+  // A test post Discord took is a successful post to the saved link: the row records it (hookOkStmt), so turning
+  // the channel on needs no post of its own. The test is a plain re-check: it changes nothing else, but for a channel
+  // on trial (saved on with the connection notice's note, no success recorded) whose link the answer blames: that
+  // channel is turned off as the dispatcher's first post would turn it off (sources/discord.ts stopTrialHooks), with
+  // Discord's answer, written only while the row is as it was read and still records no success.
+  if (sent.ok) await hookOkStmt(c.env.DB, r.key, address, url, now).run().catch((e) => console.error('settings: a test post was not recorded', e));
+  else if (sent.blames && cur.channels.discord.enabled && cur.channels.discord.notice && !proven) {
+    const stop = await stopChannelStmt(c.env.DB, r.key, cur, sent.status, now, sent.dead ? undefined : 'notice');
+    await stop.run().catch((e) => console.error('settings: a channel on trial was not turned off', e));
+  }
+  return c.json({ success: sent.ok });
 });
 
 app.get('/api/me/sessions', async (c) => {
@@ -1350,7 +1547,7 @@ app.get('/api/me/export', async (c) => {
   const r = await me(c); if (r instanceof Response) return r;
   const cur = await settingsOrDefault(c.env.DB, r.key, r.s!.address);
   const sessions = await listSessions(c.env.DB, r.s!.address, r.s!.token);
-  return c.json({ exportedAt: Date.now(), address: r.s!.address, settings: publicView(cur), sessions, note: 'The Discord webhook URL is stored encrypted and is not included.' });
+  return c.json({ exportedAt: Date.now(), address: r.s!.address, settings: await viewOf(c.env.DB, r.key, cur), sessions, note: 'The Discord webhook URL is stored encrypted and is not included.' });
 });
 
 /** Delete everything: settings (incl. webhook), all sessions and API keys. */

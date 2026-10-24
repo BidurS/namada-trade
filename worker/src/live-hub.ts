@@ -14,11 +14,49 @@ import { runBatch, stmt, kvGet, kvGetJson, kvSet } from './db';
 import { admitSocket } from './ws-admit';
 import { fetchNamPools } from './sources/sqs';
 import { HubQuote, askQuoteService, storedQuoteReader } from './live-quote';
-import { configureAlerts, isNamWhale, offeredForAlerts, sendDiscordWhaleAlert, sendsAlerts } from './sources/discord';
+import { alarmBudget, configureAlerts, fanoutBudget, flushAlerts, isNamWhale, noteNotSent, offeredForAlerts, sendDiscordWhaleAlert, sendsAlerts, spentOut, FANOUT_DEADLINE_MS, UsersUnreadError, WEBHOOK_TIMEOUT_MS, type AlertBudget, type PendingAlert } from './sources/discord';
 import { fetchJson, FETCH_TEXT_MAX_BYTES, ReadBudgetError, ResponseTooLargeError, type ReadBudget } from './util';
 
 /** Moves found late (by the catch-up search, or by a Namada scan that was behind) alert only when they happened within this window. */
 export const LATE_ALERT_MAX_AGE_MS = 24 * 3600_000;
+/**
+ * The alerts' pending list: the subscribers' part of each move's alert that a dispatch could not send (its post count,
+ * its deadline, an alert's window or the invalid-answer budget cut it; discord.ts PendingAlert), one entry per move
+ * under a key of this prefix, its time and a sequence number, in this object's own storage (not D1: the list is the
+ * hub's alone, and the storage holds at most 128 KiB a value, so each part is a value of its own). The next alarm
+ * sends them first, in order, marked found late, under its own budget, and keeps what does not fit. An alert an
+ * honest subscriber is entitled to is sent now, or waits and is sent so (owner decision 14); it is never dropped for a
+ * budget, a deadline or a count, and a part is let go only when every channel left was posted or recorded as not sent
+ * (a hook held for the window as kept rate-limited, discord.ts RATE_LIMITED_HOLD_AFTER, or a channel past its share
+ * of the list, PENDING_CHANNEL_MAX), no row holds its links, or its move is older than LATE_ALERT_MAX_AGE_MS.
+ */
+export const PENDING_PREFIX = 'alerts.pending:';
+/**
+ * The most subscriber posts the list holds across its parts (a part counts at least one): past it a part is recorded
+ * with the posts not sent (kv alerts.skipped) instead of kept, and each channel holds at most its share of it
+ * (PENDING_CHANNEL_MAX). The list is read in pages of PENDING_PAGE parts, and an alarm reads only as far as its count
+ * lets it post, so the bound is what the storage holds, not what an alarm reads:
+ * a part holds a move (about 1 KB) and at most DELIVERABLE_MAX channel digests (about 17 KB), so the list stays under
+ * about 850 MB at the very most, far less in practice (a busy address's watchers after an outage make parts of one
+ * move each, a few hundred bytes). The count is kept here and read from the list once per instance (countPending).
+ */
+export const PENDING_POSTS_MAX = 50_000;
+/**
+ * Each channel's share of the pending list: the most posts its parts hold for one channel (a link's digest, discord.ts
+ * PendingAlert `only`). Past it, that channel's post of a part is recorded with the posts not sent and the rest of the
+ * part is kept, so the other channels' posts are untouched: hooks whose posts keep waiting without ever being held (a
+ * 429 of shared scope is neither counted toward the hold nor an invalid answer, and such a part is let go only at
+ * LATE_ALERT_MAX_AGE_MS) fill the list only twenty-five channels at their share together. It is twice the backlog
+ * one honest watcher of a busy address can have after an outage (a catch-up search of about a thousand of its moves,
+ * test/pending-list-bound.test.ts), so an honest channel reaches it only with that many of its own alerts waiting at
+ * once, which only an outage of hours of the delivery itself leaves. A part that names no channel (its settings could
+ * not be read, or it was kept by code before 2026-10-23) is bounded by PENDING_POSTS_MAX alone.
+ */
+export const PENDING_CHANNEL_MAX = PENDING_POSTS_MAX / 25;
+/** Parts read per page of the pending list (DO storage lists in key order, so a page follows the last key read). */
+export const PENDING_PAGE = 100;
+/** kv `alerts.pending`: the pending list's size as the hub last wrote it (notePending), read by the cron's health row. */
+export interface AlertsPending { parts: number; posts: number; at: number }
 /**
  * How long after a Namada block's own time the live scan may read it and still be keeping up. A block read later was
  * read by a scan that was behind (an outage of the Worker or of the nodes, or blocks read again), not by the scan's
@@ -208,6 +246,14 @@ export class LiveHub extends DurableObject<Env> {
   private reread: { to: number; rpcs: Rpc[] } | null = null;
   /** Whether this instance has made sure both live decoders' kv rows exist (notePosStarts). */
   private posStartsNoted = false;
+  /** How many parts the alerts' pending list holds (PENDING_PREFIX) and how many posts across them, as last counted (countPending); null until counted. */
+  private pendingN: number | null = null;
+  private pendingPosts: number | null = null;
+  /** How many posts the pending list holds for each channel its parts name (PENDING_CHANNEL_MAX), counted with them. */
+  private pendingBy: Map<string, number> | null = null;
+  /** The counts last written to kv `alerts.pending` (notePending), so a tick writes only a change. */
+  private pendingNoted: string | null = null;
+  private pendingSeq = 0;
   private lastAgreedSaved = 0;
   private osmoSince: number | null = null;
   private osmoLastMsgAt: number | null = null;
@@ -416,21 +462,195 @@ export class LiveHub extends DurableObject<Env> {
    * from which a move is offered to the per-user rules at all (100 on Osmosis, 10 on Namada); shielded moves and
    * moves in another coin (no NAM size, watchlist only) always are (discord.ts offeredForAlerts). The whale size is
    * NAM too: another coin's units never make a NAM whale.
+   *
+   * `budget` is the dispatch's (discord.ts AlertBudget): an alarm's (alarmBudget), shared by its pending alerts, its
+   * Namada scan and its Osmosis catch-up search, bounds their posts together by one count and the alarm's own
+   * deadline, each alert with a fan-out window of its own, so a slow or hostile set of webhooks cannot push the alarm
+   * past its deadline and starve the other chain's catch-up search or the next block scan, and the time the search
+   * spends reading blocks between its alerts never cuts a subscriber. A caller that gives none (the live stream, a
+   * direct call) gets one for these moves (fanoutBudget: one window across them and a post count), whose records are
+   * written when they are sent. Subscribers' posts the budget cuts are kept for the next alarm (defer), never dropped.
    */
-  private async alertFlows(flows: Flow[], threshold = Number(this.env.WHALE_OSMOSIS_NAM || 10000), minNam = 100) {
+  private async alertFlows(flows: Flow[], threshold = Number(this.env.WHALE_OSMOSIS_NAM || 10000), minNam = 100, budget?: AlertBudget) {
+    const own = budget ?? fanoutBudget(true);
+    try {
+      await this.alertEach(flows, threshold, minNam, own);
+    } finally {
+      if (!budget) {
+        await flushAlerts(this.env.DB, own);
+        await this.notePending().catch((e) => console.error('alerts: the pending list\'s size was not written:', e));
+      }
+    }
+  }
+
+  private async alertEach(flows: Flow[], threshold: number, minNam: number, budget: AlertBudget) {
     for (const f of flows) {
       if (isNamWhale(f, threshold)) f.whale = true;
       if (offeredForAlerts(f, minNam)) {
         // valued by the row's own price only: a move found late with no quote for its minute is never valued at today's
-        await sendDiscordWhaleAlert(
-          this.env.DISCORD_WEBHOOK_URL,
-          f,
-          null,
-          this.env.DB,
-          threshold,
-        );
+        const left = await sendDiscordWhaleAlert(this.env.DISCORD_WEBHOOK_URL, f, null, this.env.DB, threshold, budget);
+        if (left) await this.defer(left, budget);
       }
     }
+  }
+
+  /** The posts a part counts for the list's bound: at least one, so a part whose subscribers are not yet known (a failed read) is bounded too. */
+  private static partPosts = (p: PendingAlert) => Math.max(1, p.n);
+
+  /**
+   * Counts the pending list once per instance, in pages (PENDING_PAGE), so the count is this object's and never
+   * trusted from an earlier write: how many parts, how many posts across them (partPosts), and how many for each
+   * channel they name (pendingBy). A restart or a deploy counts again from the storage.
+   */
+  private async countPending(): Promise<void> {
+    if (this.pendingN != null && this.pendingPosts != null) { this.pendingBy ??= new Map(); return; }
+    let n = 0, posts = 0, after: string | undefined;
+    const by = new Map<string, number>();
+    for (;;) {
+      const page = await this.ctx.storage.list<PendingAlert>({ prefix: PENDING_PREFIX, limit: PENDING_PAGE, ...(after ? { startAfter: after } : {}) });
+      if (!page.size) break;
+      for (const [key, p] of page) {
+        n++;
+        posts += LiveHub.partPosts(p);
+        for (const k of p.only ?? []) by.set(k, (by.get(k) ?? 0) + 1);
+        after = key;
+      }
+      if (page.size < PENDING_PAGE) break;
+    }
+    this.pendingN = n;
+    this.pendingPosts = posts;
+    this.pendingBy = by;
+  }
+
+  /** Adds (`sign` 1) or takes out (-1) one post for each channel part `p` names, in the per-channel count. */
+  private countChannels(p: PendingAlert, sign: 1 | -1) {
+    const by = (this.pendingBy ??= new Map());
+    for (const k of p.only ?? []) {
+      const n = (by.get(k) ?? 0) + sign;
+      if (n > 0) by.set(k, n);
+      else by.delete(k);
+    }
+  }
+
+  /**
+   * Keeps the subscribers' part of an alert that did not fit this dispatch for the next alarm (PENDING_PREFIX), at
+   * once, so an invocation the platform ends keeps it too. A channel the list already holds PENDING_CHANNEL_MAX posts
+   * for has its post of the part recorded with the posts not sent, and the rest of the part is kept. Past
+   * PENDING_POSTS_MAX posts across the parts, or when the storage cannot be written, the part is recorded with the
+   * posts not sent instead: never dropped unseen.
+   */
+  private async defer(p: PendingAlert, budget: AlertBudget) {
+    try {
+      await this.countPending();
+      if (p.only?.length) {
+        const by = this.pendingBy!;
+        const full = new Set(p.only.filter((k) => (by.get(k) ?? 0) >= PENDING_CHANNEL_MAX));
+        if (full.size) {
+          console.warn(`alerts: ${full.size} subscriber post(s) for move ${p.flow.id} not kept: the channel holds its share of the pending list`);
+          await noteNotSent(this.env.DB, budget, full.size, `move ${p.flow.id} (${full.size} post(s), each to a channel past its share of the pending list, ${PENDING_CHANNEL_MAX} posts)`).catch(() => {});
+          p = { ...p, only: p.only.filter((k) => !full.has(k)), n: Math.max(0, p.n - full.size) };
+          if (!p.only!.length) return;
+        }
+      }
+      const posts = LiveHub.partPosts(p);
+      if (this.pendingPosts! + posts > PENDING_POSTS_MAX) throw new Error(`the pending list holds ${this.pendingPosts} posts (${PENDING_POSTS_MAX} at most)`);
+      const key = `${PENDING_PREFIX}${String(p.at).padStart(14, '0')}:${String(this.pendingSeq++ % 10_000).padStart(4, '0')}`;
+      await this.ctx.storage.put(key, p);
+      this.pendingN!++;
+      this.pendingPosts! += posts;
+      this.countChannels(p, 1);
+    } catch (e) {
+      console.error(`alerts: ${p.n} subscriber post(s) for move ${p.flow.id} could not be kept for the next alarm:`, e);
+      await noteNotSent(this.env.DB, budget, p.n, `move ${p.flow.id} (not kept for a later run: ${String(e).slice(0, 80)})`).catch(() => {});
+    }
+  }
+
+  /**
+   * Sends the alerts' pending list first, in order, under this alarm's `budget`: each part to the subscribers that
+   * still match its move, marked found late (discord.ts sendDiscordWhaleAlert `resume`); what does not fit, waits for
+   * its quiet hours to end, or could not be read is kept again, in its place, and the parts after it wait too once
+   * the budget is spent or the settings could not be read (UsersUnreadError: every part would fail the same way). The
+   * list is read in pages (PENDING_PAGE), as far as the budget lets the alarm post, so the whole list is never read at
+   * once, and a part is written back only when it changed. A part whose move happened more than LATE_ALERT_MAX_AGE_MS
+   * ago is let go and recorded, as a move found that late is never alerted; nothing else lets a part go but every
+   * channel posted or recorded as not sent (a hook held as kept rate-limited), or no row holding its links any more.
+   */
+  private async sendPending(budget: AlertBudget) {
+    try {
+      await this.countPending();
+    } catch (e) {
+      console.error('alerts: the pending list could not be read; it is read again next alarm:', e);
+      return;
+    }
+    let after: string | undefined;
+    for (let more = true; more && !spentOut(budget);) {
+      let page: Map<string, PendingAlert>;
+      try {
+        page = await this.ctx.storage.list<PendingAlert>({ prefix: PENDING_PREFIX, limit: PENDING_PAGE, ...(after ? { startAfter: after } : {}) });
+      } catch (e) {
+        console.error('alerts: the pending list could not be read; it is read again next alarm:', e);
+        return;
+      }
+      more = page.size >= PENDING_PAGE;
+      for (const [key, p] of page) {
+        after = key;
+        if (spentOut(budget)) return;
+        try {
+          if (Date.now() - p.flow.ts > LATE_ALERT_MAX_AGE_MS) {
+            await noteNotSent(this.env.DB, budget, p.n, `move ${p.flow.id} (waited past ${LATE_ALERT_MAX_AGE_MS / 3_600_000} h)`);
+            await this.dropPending(key, p);
+            continue;
+          }
+          const left = await sendDiscordWhaleAlert(undefined, p.flow, null, this.env.DB, undefined, budget, p);
+          if (left) {
+            // Written back only when it changed: a part found paused, or cut whole by the budget, is the same part,
+            // and writing it at every alarm would be a storage write per part per alarm for nothing.
+            if (!LiveHub.samePart(p, left)) {
+              await this.ctx.storage.put(key, left);
+              this.countChannels(p, -1);
+              this.countChannels(left, 1);
+            }
+            this.pendingPosts! += LiveHub.partPosts(left) - LiveHub.partPosts(p);
+          } else await this.dropPending(key, p);
+        } catch (e) {
+          if (e instanceof UsersUnreadError) {
+            console.error(`alerts: the pending alerts wait for the next alarm: ${e.message}`);
+            return;
+          }
+          console.error(`alerts: the pending alert for move ${p.flow.id} was not sent this alarm:`, e);
+        }
+      }
+    }
+  }
+
+  /** Whether two parts of one move are the same part: as many posts, the same claims, and the same channels left. */
+  private static samePart(a: PendingAlert, b: PendingAlert): boolean {
+    if (a.n !== b.n || a.claims !== b.claims || !!a.only !== !!b.only) return false;
+    if (!a.only || !b.only) return true;
+    if (a.only.length !== b.only.length) return false;
+    const keys = new Set(a.only);
+    return b.only.every((k) => keys.has(k));
+  }
+
+  /** Lets a part go (every channel posted or recorded, nobody left to post to, or past the age limit) and counts it out. */
+  private async dropPending(key: string, p: PendingAlert) {
+    await this.ctx.storage.delete(key);
+    this.pendingN!--;
+    this.pendingPosts! -= LiveHub.partPosts(p);
+    this.countChannels(p, -1);
+  }
+
+  /**
+   * Writes the pending list's size to kv `alerts.pending` (parts, posts, when), once per dispatch when it changed,
+   * so the cron's "Discord alert delivery" health row shows a sustained delay. A failed write is tried again by the
+   * next dispatch.
+   */
+  private async notePending() {
+    if (this.pendingN == null || this.pendingPosts == null) return;
+    const note = `${this.pendingN}:${this.pendingPosts}`;
+    if (note === this.pendingNoted) return;
+    await kvSet(this.env.DB, 'alerts.pending', { parts: this.pendingN, posts: this.pendingPosts, at: Date.now() } satisfies AlertsPending);
+    this.pendingNoted = note;
   }
 
   /** A block the scan could not read as a block, or a head or a cursor it could not follow: recorded for the health view (kv `namada.scan`). */
@@ -520,19 +740,29 @@ export class LiveHub extends DurableObject<Env> {
     const sweepDue = this.needSweep || started - this.lastSweep >= OSMOSIS_SWEEP_EVERY_MS;
     const scanEnd = new AbortController();
     const scanTimer = setTimeout(() => scanEnd.abort('alarm deadline'), sweepDue ? ALARM_DEADLINE_MS - SWEEP_RESERVE_MS : ALARM_DEADLINE_MS);
+    // One alert budget for the whole alarm (discord.ts alarmBudget): the pending alerts', the Namada scan's and the
+    // catch-up search's posts share one count, each alert has a fan-out window of its own, and no subscriber post
+    // starts once its last answer could come after the alarm's deadline; what the count or the deadline cuts waits
+    // for the next alarm (defer). The scan's alerts also leave the search its reserve: when a search is due, their
+    // subscriber posts all end within FANOUT_DEADLINE_MS of the end of the scan's reads.
+    const alertEnd = started + ALARM_DEADLINE_MS - WEBHOOK_TIMEOUT_MS;
+    const alerts = alarmBudget(sweepDue ? Math.min(alertEnd, started + ALARM_DEADLINE_MS - SWEEP_RESERVE_MS + FANOUT_DEADLINE_MS - WEBHOOK_TIMEOUT_MS) : alertEnd, true);
 
     try {
       if (stale) {
         console.error(`LiveHub alarm: the run started ${new Date(stale.since).toISOString()} never ended; this one takes over`);
         await this.noteScanFailure(this.namadaHeight, `the live scan's alarm of ${new Date(stale.since).toISOString()} never ended; the next one took over after ${ALARM_LEASE_MS / 60_000} min`);
       }
+      // 0. The alerts kept from earlier dispatches go first (sendPending), in order.
+      await this.sendPending(alerts);
       // 1. The Namada scan. Whatever happens to it (both nodes down, a D1 error), the Osmosis side below still runs:
       //    one chain's outage is never the other's.
       try {
-        await this.scanNamada(scanEnd.signal);
+        await this.scanNamada(scanEnd.signal, alerts);
       } catch (err) {
         console.error('Namada scan:', err);
       }
+      alerts.deadline = alertEnd;
 
       // The quote for new moves (at most one ask of the quote service every 30 s; else the cron's stored minute)
       await this.refreshQuote();
@@ -550,13 +780,17 @@ export class LiveHub extends DurableObject<Env> {
       if (!deadline.signal.aborted && (this.needSweep || t - this.lastSweep >= OSMOSIS_SWEEP_EVERY_MS)) {
         this.lastSweep = t;
         this.needSweep = false;
-        await this.sweepOsmosis(deadline.signal).catch((e) => console.error('Osmosis catch-up search:', e));
+        await this.sweepOsmosis(deadline.signal, alerts).catch((e) => console.error('Osmosis catch-up search:', e));
       }
     } catch (err) {
       console.error('LiveHub alarm error:', err);
     } finally {
       clearTimeout(timer);
       clearTimeout(scanTimer);
+      // The alarm's shared records (invalid answers, posts not sent, successful posts) are written once, and the
+      // pending list's size when it changed.
+      await flushAlerts(this.env.DB, alerts).catch((e) => console.error('LiveHub alerts:', e));
+      await this.notePending().catch((e) => console.error('alerts: the pending list\'s size was not written:', e));
       // A run taken over after ALARM_LEASE_MS that ends later leaves the newer run's mark alone.
       if (this.alarmRun === run) this.alarmRun = null;
       // Reschedule alarm every 6 seconds
@@ -572,12 +806,15 @@ export class LiveHub extends DurableObject<Env> {
    * `byNodes`), it reads on from its cursor until the alarm's deadline, and on any other head at most SCAN_MAX_LAG
    * blocks a tick, never past where the chain can have gone since the last agreed head (headBound). A cursor found
    * above the head is moved back below it, and said so, only on a head two nodes agree on; otherwise it waits.
-   * Alerts go out after the cursor is written, so a slow webhook can hold up alerts, never the scan. A move in a block
-   * read more than LATE_SCAN_MS after its time (a scan reading on after an outage) is marked found late (meta.via
-   * 'late scan') and alerted so; one older than LATE_ALERT_MAX_AGE_MS is stored and not alerted. `signal`: the alarm's
-   * deadline (ALARM_DEADLINE_MS); the blocks after it wait for the next alarm, as a block that cannot be fetched does.
+   * Each block's moves are alerted right after its rows are written, as the catch-up search's are, so a scan that
+   * reads on to the alarm's deadline sends its alerts throughout the alarm; the cursor is written before a block's
+   * alerts, so a slow webhook holds up the next block's read, never what the scan has done, and the subscriber posts
+   * the alarm's budget cuts wait for the next alarm (alertFlows). A move in a block read more than LATE_SCAN_MS after
+   * its time (a scan reading on after an outage) is marked found late (meta.via 'late scan') and alerted so; one older
+   * than LATE_ALERT_MAX_AGE_MS is stored and not alerted. `signal`: the alarm's deadline (ALARM_DEADLINE_MS); the
+   * blocks after it wait for the next alarm, as a block that cannot be fetched does.
    */
-  private async scanNamada(signal?: AbortSignal) {
+  private async scanNamada(signal?: AbortSignal, alerts?: AlertBudget) {
     // Every node's status side by side: the scan follows only nodes whose answer shows they are at this chain's head
     // (sources/namada.ts chainHead: the chain id, not catching up, a recent newest block, agreement), and reads the
     // blocks from those nodes only.
@@ -674,8 +911,13 @@ export class LiveHub extends DurableObject<Env> {
     const times = new Map<number, number>();
     let metasTo = lastScanned; // the last block a window of metas was asked for
     let done = lastScanned;
-    const toAlert: Flow[] = [];
+    let written = lastScanned; // the cursor as last written this tick
+    const whaleNam = Number(this.env.WHALE_NAMADA_NAM || 10000);
     for (let h = lastScanned + 1; h <= upTo; h++) {
+      // The block's moves to alert once its rows are written (found late when the scan was behind, and never when
+      // older than LATE_ALERT_MAX_AGE_MS: blocks read on after a long outage are stored and shown, never alerted, so
+      // the channels are not flooded with old news; owner decision 14, as the catch-up search's moves).
+      const toAlert: Flow[] = [];
       if (signal?.aborted) break;
       if (!times.has(h) && h > metasTo) {
         metasTo = Math.min(upTo, h + 19);
@@ -762,7 +1004,7 @@ export class LiveHub extends DurableObject<Env> {
             }
             if (!retryBlock && parsed.flows.length > 0) {
               this.broadcast({ type: 'flows', flows: parsed.flows });
-              toAlert.push(...parsed.flows);
+              toAlert.push(...parsed.flows.filter((f) => now - f.ts <= LATE_ALERT_MAX_AGE_MS));
             }
           }
         }
@@ -773,15 +1015,16 @@ export class LiveHub extends DurableObject<Env> {
       if (retryBlock) break;
       done = h;
       this.namadaHeight = h;
+      if (toAlert.length) {
+        // The cursor first: a cursor write that fails leaves the block to be read again next tick, and its moves'
+        // claims keep them from being posted twice.
+        try { await kvSet(this.env.DB, 'namada.cursor', String(done)); written = done; } catch (e) { console.error(`Namada block ${h}: the cursor could not be written before its alerts:`, e); }
+        await this.alertFlows(toAlert, whaleNam, 10, alerts).catch((e) => console.error('Namada alerts:', e));
+      }
     }
-    if (done > lastScanned) await kvSet(this.env.DB, 'namada.cursor', String(done));
+    if (done > written) await kvSet(this.env.DB, 'namada.cursor', String(done));
     // What the scan read while the head was agreed on (lastAgreed.read): blocks up to it are not read again.
     if (at.agreed && this.lastAgreed) this.lastAgreed.read = done;
-    // As the catch-up search's moves found late (owner decision 14): a move the scan read late carries meta.via 'late
-    // scan', so its alert says it was found late and when it happened; one older than LATE_ALERT_MAX_AGE_MS (blocks
-    // read on after a long outage) is stored and shown, never alerted, so the channels are not flooded with old news.
-    const recent = toAlert.filter((f) => Date.now() - f.ts <= LATE_ALERT_MAX_AGE_MS);
-    if (recent.length) await this.alertFlows(recent, Number(this.env.WHALE_NAMADA_NAM || 10000), 10).catch((e) => console.error('Namada alerts:', e));
   }
 
   /**
@@ -846,8 +1089,21 @@ export class LiveHub extends DurableObject<Env> {
    * it in pages of 1; a single transaction past it is skipped and named in the cursor (`skipped`), so the query still
    * answers and the search can finish.
    */
-  private async sweepOsmosis(signal?: AbortSignal) {
+  private async sweepOsmosis(signal?: AbortSignal, alerts?: AlertBudget) {
     const prev = await kvGetJson<OsmosisCursor>(this.env.DB, 'osmosis.cursor');
+    // The search's late alerts: each has a fan-out window of its own, opened at its first post, so the time the search
+    // spends reading blocks and writing rows between two alerts never cuts a subscriber; together they are bounded by
+    // the alarm's post count and its deadline (`alerts`, discord.ts alarmBudget), or, called on its own, by a budget
+    // of the same kind ending with the alarm's deadline from now.
+    const budget = alerts ?? alarmBudget(Date.now() + ALARM_DEADLINE_MS - WEBHOOK_TIMEOUT_MS, true);
+    try {
+      await this.sweepOsmosisWith(signal, prev, budget);
+    } finally {
+      if (!alerts) await flushAlerts(this.env.DB, budget);
+    }
+  }
+
+  private async sweepOsmosisWith(signal: AbortSignal | undefined, prev: OsmosisCursor | null, alerts: AlertBudget) {
     const rpcs = [{ provider: 'publicnode', url: OSMOSIS.publicRpc }, ...(this.env.KEPLR_KEY ? [{ provider: 'keplr', url: OSMOSIS.keplrRpc(this.env.KEPLR_KEY) }] : [])];
     // A node that failed a read of this search is asked last for the rest of it: one that accepts requests and never
     // answers would otherwise cost every read its 25 s before the other is asked.
@@ -1070,7 +1326,7 @@ export class LiveHub extends DurableObject<Env> {
       // Owner decision 14: a move the live stream missed still alerts, marked as found late (discord.ts), unless
       // it is older than LATE_ALERT_MAX_AGE_MS, so a long outage does not flood the channels with old news.
       const recent = parsed.flows.filter((f) => Date.now() - f.ts <= LATE_ALERT_MAX_AGE_MS);
-      if (recent.length) await this.alertFlows(recent).catch((e) => console.error('late alert:', e));
+      if (recent.length) await this.alertFlows(recent, undefined, undefined, alerts).catch((e) => console.error('late alert:', e));
     }
     if (head > this.osmoHeight) this.osmoHeight = head;
     if (complete && this.osmoRetryGen === retryGen) {

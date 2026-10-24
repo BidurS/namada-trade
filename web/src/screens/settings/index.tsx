@@ -15,7 +15,7 @@ import type { AlertRuleId, SessionInfo, UserSettings } from '../../../../shared/
 import { SITE } from '../../../../shared/copy';
 import type { ScreenProps } from '../../app/index';
 import { navigate, THEME_LABELS, useHeaderPrice, useLocation, useNow, useOverlays, useReplay, useSession, useTheme, type ThemePref } from '../../app/index';
-import { createApiKey, deleteMe, exportMe, fetchSessions, revokeSession, testDiscord } from '../../api';
+import { createApiKey, deleteMe, exportMe, fetchSessions, revokeSession, settingsOfRefusal, testDiscord } from '../../api';
 import { Button, Derived, Field, Notice, Segmented, Skeleton, SourceLine, Switch, Tag, Term, type Stamp } from '../../ui/index';
 import { Icon } from '../../ui/Icon';
 import { fmtAddr, fmtAgo, fmtNamRule, fmtUsdRule, fmtUtcClock, fmtUtcLong } from '../../lib/format';
@@ -23,6 +23,7 @@ import { conditionFor, useAlertRules, type RuleView } from '../alerts/rules';
 import { PairDevice } from '../sheets/PairDevice';
 import { downloadJson, plainError, useCopy, viaWord } from '../sheets/util';
 import { useUserSettings } from './account';
+import { deliveryView, savedWords } from './delivery';
 
 type Save = (patch: unknown) => Promise<UserSettings>;
 interface Section { id: string; label: string }
@@ -349,32 +350,57 @@ function ChannelLinkHelp() {
   return <Term id="channel-link" className="st-help">Where to find it</Term>;
 }
 
-function DeliveryPanel({ s, save }: { s: UserSettings; save: Save }) {
+/** "Where alerts go": the saved Discord channel, its test message and its switch (rendered by test/settings-stopped-channel.test.ts too). */
+export function DeliveryPanel({ s, save }: { s: UserSettings; save: Save }) {
   const d = s.channels.discord;
   const [url, setUrl] = useState('');
   const st = useStatus();
   const test = useStatus();
   const tail = d.webhookUrlMasked ? d.webhookUrlMasked.slice(-4) : null;
   const inputId = 'st-discord';
+  const view = deliveryView(d);
 
   return (
-    <Panel id="delivery" title="Where alerts go" lead="Alerts are posted to a Discord channel you control the moment a move is recorded, whether or not this site is open.">
+    <Panel id="delivery" title="Where alerts go" lead="Alerts are posted to a Discord channel you control the moment a move is recorded, whether or not this site is open. Saving a link posts a short connection notice to the channel; sending turns on once Discord takes it.">
       <p className="st-state">
-        <i className="dot" data-status={d.hasUrl && d.enabled ? 'fresh' : 'none'} aria-hidden="true" />
+        <i className="dot" data-status={view.state === 'on' ? 'fresh' : view.state === 'unproven' ? 'old' : 'none'} aria-hidden="true" />
         <span>
-          {d.hasUrl
-            ? d.enabled
-              ? <>Alerts go to a Discord channel. The saved link ends in <span className="mono">{tail}</span>.</>
-              : <>A Discord channel link ending in <span className="mono">{tail}</span> is saved, but sending is off.</>
+          {view.state === 'on'
+            ? <>Alerts go to a Discord channel. The saved link ends in <span className="mono">{tail}</span>.</>
+            : view.state === 'unproven'
+            ? <>Alerts go to a Discord channel link ending in <span className="mono">{tail}</span>, but no post has reached it yet: the connection notice did not, and the first alert or a test message will show whether the link works.</>
+            : view.state === 'paused'
+            ? <>A Discord channel link ending in <span className="mono">{tail}</span> is saved, but sending is off.</>
+            : view.state === 'stopped'
+            ? <>Sending to the channel link ending in <span className="mono">{tail}</span> is off, because Discord said the link no longer works.</>
+            : view.state === 'notice'
+            ? <>A channel link ending in <span className="mono">{tail}</span> is saved; sending is off because the connection notice did not reach the channel.</>
             : 'No Discord channel is saved yet, so alerts are not sent anywhere.'}
         </span>
       </p>
+      {view.notice ? <Notice tone="warning" title={view.notice.title}>{view.notice.text}</Notice> : null}
       <form
         className="st-form"
         onSubmit={(e) => {
           e.preventDefault();
           if (!url) return;
-          void st.run(() => save({ channels: { discord: { enabled: true, webhookUrl: url } } }), 'Saved. Alerts now go to this channel.').then((ok) => ok && setUrl(''));
+          // The save posts the connection notice to the link and answers with the channel on, or off with the reason
+          // (delivery.ts savedWords); either way the link was saved, so the field is cleared. A save the channel cap
+          // refused (409) saved the link with sending off too: the page shows that (useUserSettings), and the field is
+          // cleared as well.
+          let saved = false;
+          void st.run(async () => {
+            let next: UserSettings;
+            try {
+              next = await save({ channels: { discord: { enabled: true, webhookUrl: url } } });
+            } catch (e) {
+              if (settingsOfRefusal(e)) saved = true;
+              throw e;
+            }
+            saved = true;
+            const words = savedWords(next.channels.discord);
+            if (!words.ok) throw new Error(words.text);
+          }, 'Saved. A connection notice was posted to the channel, and alerts now go there.').then(() => saved && setUrl(''));
         }}
       >
         <div className="st-in">
@@ -420,10 +446,16 @@ function DeliveryPanel({ s, save }: { s: UserSettings; save: Save }) {
       </form>
       <Switch
         label="Send alerts to this channel"
-        description={d.hasUrl ? 'Switch off to pause sending without removing the link.' : 'Save a link first.'}
+        description={view.switchDescription}
         checked={d.enabled}
-        disabled={!d.hasUrl || st.busy}
-        onChange={(v) => void st.run(() => save({ channels: { discord: { enabled: v } } }), v ? 'Sending is on.' : 'Sending is paused.')}
+        disabled={view.switchDisabled || st.busy}
+        onChange={(v) =>
+          void st.run(async () => {
+            const next = await save({ channels: { discord: { enabled: v } } });
+            // Switching on a link no post has reached posts the connection notice; the server says whether Discord took it.
+            if (v) { const words = savedWords(next.channels.discord); if (!words.ok) throw new Error(words.text); }
+          }, v ? 'Sending is on.' : 'Sending is paused.')
+        }
       />
       <StatusLine status={st.status ?? test.status} />
       <p className="st-cap">Telegram and email are not available yet. When one is, it appears here.</p>

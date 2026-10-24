@@ -6,17 +6,18 @@ import { PRICE_HOW_KEY, priceHealth, priceHowStmt, type PriceHowLog } from './pr
 import { QUOTE_KEYS } from '../../shared/settle';
 import { namBalance, namTotalSupply, namTotalStake, namadaEpoch, namadaStatusAll, delegationsAt, answeringRpcs, listingHeads, QUICK, RpcBreaker, allNamBalances, allBonds, ListingTooLargeError, LISTING_MAX_VALUE_BYTES, type BalanceListing, type BondListing, type ReadOpts, type Rpc } from './sources/namada';
 import { fetchIntelChecked } from './sources/intel';
-import { sendDiscordForumAlert, sendDiscordGovAlert, sendsAlerts } from './sources/discord';
+import { sendDiscordForumAlert, sendDiscordGovAlert, sendsAlerts, alertBudget, flushAlerts, sweepNoticeChannels, RUN_ALERT_POSTS, RUN_ALERT_WINDOW_MS } from './sources/discord';
 import { NAM, NAMADA, OSMOSIS } from './config';
 import { fetchJson, toNam, isRealAddress, FETCH_TEXT_MAX_BYTES } from './util';
 import type { IntelResponse, SourceHealth } from '../../shared/types';
 import type { Stmt } from './db';
 import { sweepAuth } from './auth';
+import { userRowCount, placeCount, USER_ROWS_MAX, DELIVERABLE_MAX, type SettingsRefused } from './settings';
 import { NOT_LEGACY_TWIN } from './flows-query';
 import { unbondAddresses, fetchUnbonds, buildUnbondTermStructure, cachedChainParams, UNLOCKS_MIN_NAM, UNBOND_WITHDRAW_STALE_MS, type UnbondWithdrawCache } from './analytics';
 import { chainParams, indexState, NAMADA_CURSOR_MAX_LAG, NAMADA_CURSOR_STALE_MS, OSMOSIS_LIVE_STALE_MS, OSMOSIS_SWEEP_STALE_MS, timedOutSends, ibcRowOf, safeParseJson } from './analytics';
 import { INDEXER_IBC_STATUS, innerTxOfRow, reconcileStuckPackets, stuckTotalNam, type StuckCandidate, type StuckList } from './ibc-stuck';
-import type { LiveBondStatus, LiveUnbondStatus, LiveScanStatus } from './live-hub';
+import type { AlertsPending, LiveBondStatus, LiveUnbondStatus, LiveScanStatus } from './live-hub';
 import type { AlertsSkipped } from './sources/discord';
 import {
   INTERNAL_ADDRS, BALANCE_LISTING_SRC, BOND_LISTING_SRC, SPAN_EXTEND_MS, HAS_READING, listingTimes, readHolderFigures, refreshHolderFigures, figuresDue,
@@ -47,12 +48,53 @@ export function alertDeliveryOff(env: { SEND_ALERTS?: string }, now: number): So
   return { name: ALERT_DELIVERY_HEALTH, ok: false, at: now, note: 'Off on this Worker, SEND_ALERTS is not yes: no alert is posted to any channel.' };
 }
 
+/**
+ * The Sources sheet's row for the saved alert settings: room for new wallets under settings.ts USER_ROWS_MAX, and
+ * for Discord channels under DELIVERABLE_MAX.
+ */
+export const SETTINGS_ROWS_HEALTH = 'Saved alert settings';
+/**
+ * Not ok from 80% of either cap, and for a day after a cap refused a save (a wallet's first save past USER_ROWS_MAX,
+ * or a channel turned on past DELIVERABLE_MAX). The numbers are said only from 80%: below it the row says there is
+ * room, and no more.
+ */
+export async function settingsRowsHealth(db: D1Database, now: number): Promise<SourceHealth> {
+  const DAY = 24 * 3600000;
+  try {
+    const taken = await userRowCount(db);
+    // Channels (distinct links) that hold a place: the links of the rows with Discord on, each a link a post reached.
+    const on = await placeCount(db);
+    const refused = await kvGetJson<SettingsRefused>(db, 'settings.refused');
+    const recent = !!refused?.lastAt && now - refused.lastAt < DAY;
+    const recentOn = !!refused?.channelsAt && now - refused.channelsAt < DAY;
+    const near = taken >= Math.ceil(USER_ROWS_MAX * 0.8);
+    const nearOn = on >= Math.ceil(DELIVERABLE_MAX * 0.8);
+    const places = `${taken} of ${USER_ROWS_MAX} places taken`;
+    const channels = `${on} of ${DELIVERABLE_MAX} Discord channels on`;
+    if (recent) return { name: SETTINGS_ROWS_HEALTH, ok: false, at: refused!.lastAt, note: `${places}; a new wallet's first save was refused (${refused!.total} in all).` };
+    if (recentOn) return { name: SETTINGS_ROWS_HEALTH, ok: false, at: refused!.channelsAt!, note: `${channels}; a save turning one more on was refused (${refused!.channels ?? 0} in all).` };
+    if (near) return { name: SETTINGS_ROWS_HEALTH, ok: false, at: now, note: `${places}; new wallets are refused at ${USER_ROWS_MAX}.` };
+    if (nearOn) return { name: SETTINGS_ROWS_HEALTH, ok: false, at: now, note: `${channels}; more are refused at ${DELIVERABLE_MAX}.` };
+    return { name: SETTINGS_ROWS_HEALTH, ok: true, at: now, note: `Room for new wallets (under ${Math.ceil(USER_ROWS_MAX * 0.8)} of ${USER_ROWS_MAX} places taken).` };
+  } catch (e) {
+    return { name: SETTINGS_ROWS_HEALTH, ok: false, at: now, note: `The saved settings could not be counted: ${String(e).slice(0, 100)}` };
+  }
+}
+
 async function syncIntelAndAlerts(env: Env, health: SourceHealth[]) {
+  // The forum and governance alerts of this run share one budget (sources/discord.ts alertBudget): RUN_ALERT_POSTS
+  // posts in all, subscribers' posts that start within RUN_ALERT_DEADLINE_MS, and later alerts that start within
+  // RUN_ALERT_WINDOW_MS, each with a fan-out window of its own. Subscribers that do not fit wait for the next run, and
+  // the stored cursor and states stop before their alert, so a run's posts never grow with the subscribers times the
+  // alerts. The operator's channel is posted at once for every alert, whether its subscribers wait or not. The run's
+  // shared records (invalid answers, posts not sent) are written once, when it ends.
+  const budget = alertBudget(Date.now());
   try {
     const t0 = Date.now();
     const { intel: read, postsError } = await fetchIntelChecked();
     let intel = read;
     let keepStored = false;
+    let forumRow: SourceHealth;
     if (postsError) {
       // The posts could not be read (an answer past its size cap, a timeout): the cached posts are kept, as an empty
       // list would blank the feed until the next good read, no forum alert is sent from them, and the row says why.
@@ -63,33 +105,17 @@ async function syncIntelAndAlerts(env: Env, health: SourceHealth[]) {
       if (cached === undefined) keepStored = true;
       else intel = { ...read, latestPosts: cached?.latestPosts ?? [] };
       const kept = keepStored ? 'and the stored copy could not be read, so it stands' : 'so the ones cached are kept';
-      health.push({ name: FORUM_POSTS_HEALTH, ok: false, at: Date.now(), latencyMs: Date.now() - t0, note: `The forum's latest posts could not be read, ${kept}: ${postsError}`.slice(0, 160) });
-    } else health.push({ name: FORUM_POSTS_HEALTH, ok: true, at: Date.now(), latencyMs: Date.now() - t0, note: `${read.latestPosts.length} latest posts read` });
+      forumRow = { name: FORUM_POSTS_HEALTH, ok: false, at: Date.now(), latencyMs: Date.now() - t0, note: `The forum's latest posts could not be read, ${kept}: ${postsError}`.slice(0, 160) };
+    } else forumRow = { name: FORUM_POSTS_HEALTH, ok: true, at: Date.now(), latencyMs: Date.now() - t0, note: `${read.latestPosts.length} latest posts read` };
+    health.push(forumRow);
 
     // 1. Cache latest intel snapshot in D1 kv for instant API reads
     if (!keepStored && (intel.topics.length > 0 || intel.proposals.length > 0)) {
       await kvSet(env.DB, 'intel.cache', JSON.stringify(intel));
     }
 
-    // 2. Check Namada Forum latest posts for new topics or replies (only from posts read this tick)
-    if (!postsError && intel.latestPosts.length > 0) {
-      const maxPostId = Math.max(...intel.latestPosts.map((p) => p.id));
-      const storedPostIdStr = await kvGet(env.DB, 'forum.last_post_id');
-
-      if (!storedPostIdStr) {
-        // Initialize cursor to current head so we don't spam historical posts on first boot
-        await kvSet(env.DB, 'forum.last_post_id', String(maxPostId));
-      } else {
-        const lastPostId = Number(storedPostIdStr);
-        if (maxPostId > lastPostId) {
-          const newPosts = intel.latestPosts.filter((p) => p.id > lastPostId).sort((a, b) => a.id - b.id);
-          for (const post of newPosts) await sendDiscordForumAlert(env.DISCORD_WEBHOOK_URL, post, env.DB);
-          await kvSet(env.DB, 'forum.last_post_id', String(maxPostId));
-        }
-      }
-    }
-
-    // 3. Check Namada On-Chain Governance Proposals for new proposals or status changes
+    // 2. Check Namada On-Chain Governance Proposals for new proposals or status changes. They go before the forum
+    //    posts: anyone can post on the forum, and a run of posts must not keep a proposal's alert waiting.
     if (intel.proposals.length > 0) {
       const storedGovStr = await kvGet(env.DB, 'gov.state');
       const currentState: Record<string, string> = {};
@@ -104,21 +130,56 @@ async function syncIntelAndAlerts(env: Env, health: SourceHealth[]) {
         let changed = false;
         for (const prop of [...intel.proposals].sort((a, b) => a.id - b.id)) {
           const prevStatus = prevState[String(prop.id)];
-          if (!prevStatus) {
-            changed = true;
-            await sendDiscordGovAlert(env.DISCORD_WEBHOOK_URL, prop, true, env.DB);
-            prevState[String(prop.id)] = prop.status;
-          } else if (prevStatus !== prop.status) {
-            changed = true;
-            await sendDiscordGovAlert(env.DISCORD_WEBHOOK_URL, prop, false, env.DB);
-            prevState[String(prop.id)] = prop.status;
-          }
+          if (prevStatus === prop.status) continue;
+          // A proposal whose subscribers wait keeps its stored state, so the next run finds it new or changed again;
+          // every later one is still offered, so the operator hears each at once (its subscribers wait too).
+          if ((await sendDiscordGovAlert(env.DISCORD_WEBHOOK_URL, prop, !prevStatus, env.DB, budget)) === 'waiting') continue;
+          changed = true;
+          prevState[String(prop.id)] = prop.status;
         }
         if (changed) await kvSet(env.DB, 'gov.state', JSON.stringify(prevState));
       }
-  }
+    }
+
+    // 3. Check Namada Forum latest posts for new topics or replies (only from posts read this tick)
+    if (!postsError && intel.latestPosts.length > 0) {
+      const maxPostId = Math.max(...intel.latestPosts.map((p) => p.id));
+      const storedPostIdStr = await kvGet(env.DB, 'forum.last_post_id');
+
+      if (!storedPostIdStr) {
+        // Initialize cursor to current head so we don't spam historical posts on first boot
+        await kvSet(env.DB, 'forum.last_post_id', String(maxPostId));
+      } else {
+        const lastPostId = Number(storedPostIdStr);
+        if (maxPostId > lastPostId) {
+          const newPosts = intel.latestPosts.filter((p) => p.id > lastPostId).sort((a, b) => a.id - b.id);
+          // The cursor moves to the last post whose alert was handled before any that waits; one that waits is read
+          // again next run. Every new post is still offered, so the operator hears each at once (once one alert
+          // waits, every later one's subscribers wait too: discord.ts admit).
+          let done = lastPostId, waited = false;
+          for (const post of newPosts) {
+            if ((await sendDiscordForumAlert(env.DISCORD_WEBHOOK_URL, post, env.DB, budget)) === 'waiting') waited = true;
+            else if (!waited) done = post.id;
+          }
+          if (done > lastPostId) await kvSet(env.DB, 'forum.last_post_id', String(done));
+        }
+      }
+    }
+
+    // Alerts left for the next run are said on the forum's row: pushed after its first copy, so the merge keeps this one.
+    if (budget.waiting) {
+      const why = budget.unread
+        ? 'alerts wait for the next run: the subscribers\' settings could not be read this run'
+        : budget.paused
+        ? 'alerts wait for the next run: Discord limited the site\'s address this run'
+        : `alerts wait for the next run, this run's ${RUN_ALERT_POSTS} posts or ${RUN_ALERT_WINDOW_MS / 1000} s being spent`;
+      console.warn(`alerts: forum or governance ${why}`);
+      health.push({ ...forumRow, at: Date.now(), note: `${forumRow.note}; forum or governance ${why}`.slice(0, 160) });
+    }
   } catch (err) {
     console.error('syncIntelAndAlerts error:', err);
+  } finally {
+    await flushAlerts(env.DB, budget).catch((e) => console.error('alerts: the run\'s records were not written', e));
   }
 }
 
@@ -1430,8 +1491,16 @@ export async function runCron(env: Env) {
   // runBalanceListing write its record whatever the answer). A tick that fails in between records the read as failed
   // (the catch below), so the retry wait applies instead of the same multi-megabyte read every minute.
   let listingOpen: { key: 'bond.listing' | 'balance.listing' } | null = null;
+  // The channels on trial whose notice this tick posts again, beside the chain reads (sources/discord.ts
+  // sweepNoticeChannels); it ends before the tick's lock is released.
+  let trials: Promise<unknown> = Promise.resolve();
   try {
     await sweepAuth(env.DB);
+    // A channel saved on while its connection notice did not reach it is on trial: one no post reached within a day
+    // has the notice posted again, once a day, and its answer proves the link or turns the channel off, visibly
+    // (sources/discord.ts sweepNoticeChannels). Only a Worker that sends alerts does it: a copy of the database posts
+    // nothing, so it proves nothing either.
+    if (env.SETTINGS_KEY && sendsAlerts(env)) trials = sweepNoticeChannels(env.DB, env.SETTINGS_KEY).catch((e) => console.error('settings: the channels on trial were not swept', e));
 
     // Which Namada nodes answer this tick (a short status read each). A node that does not is left out of every
     // read below, so a node that accepts requests and never answers costs one status read, not one per address.
@@ -1658,11 +1727,16 @@ export async function runCron(env: Env) {
     // outlast the secret being put.
     if (!alertsOff) {
       const skipped = await kvGetJson<AlertsSkipped>(env.DB, 'alerts.skipped');
+      // The live hub's pending list (live-hub.ts notePending): alerts that wait for a later alarm, so a sustained
+      // delay shows here, not only a post not sent.
+      const pending = await kvGetJson<AlertsPending>(env.DB, 'alerts.pending').catch(() => null);
+      const waiting = pending && pending.parts > 0 ? ` ${pending.parts} alert part(s), ${pending.posts} post(s), wait in the live hub's pending list.` : '';
       if (skipped?.last.at) {
         const recent = now - skipped.last.at < 24 * 3600000;
-        health.push({ name: ALERT_DELIVERY_HEALTH, ok: !recent, at: skipped.last.at, note: `${skipped.last.n} post(s) for ${skipped.last.what} not sent; ${skipped.total} in all`.slice(0, 160) });
-      } else health.push({ name: ALERT_DELIVERY_HEALTH, ok: true, at: now, note: 'On: this Worker posts alerts, and no post not sent is on record.' });
+        health.push({ name: ALERT_DELIVERY_HEALTH, ok: !recent, at: skipped.last.at, note: `${skipped.last.n} post(s) for ${skipped.last.what} not sent; ${skipped.total} in all${waiting ? `.${waiting}` : ''}`.slice(0, 160) });
+      } else health.push({ name: ALERT_DELIVERY_HEALTH, ok: true, at: now, note: `On: this Worker posts alerts, and no post not sent is on record.${waiting}` });
     }
+    health.push(await settingsRowsHealth(env.DB, now));
 
     if (idxBlock && headHeight) {
       const idxH = Number(idxBlock.block);
@@ -1948,6 +2022,7 @@ export async function runCron(env: Env) {
     // already written and cannot be held up by them. The forum's row, when its read ended after that write, is
     // merged now.
     await intel;
+    await trials;
     if (health.length > merged) await mergeHealth(env, health.slice(merged));
     await releaseTickLock(env.DB, lockId);
   }

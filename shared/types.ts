@@ -1035,7 +1035,20 @@ export interface NotificationPrefs {
   quietHoursUtc: { start: number; end: number } | null;
 }
 
-export interface DiscordChannel { enabled: boolean; webhookUrlMasked: string | null; hasUrl: boolean }
+/**
+ * `stopped`: why the channel is off though its owner did not pause it: Discord answered that its webhook is gone (404)
+ * or its token is wrong (401), to an alert or to the connection notice a save posts; or (reason 'notice') that notice
+ * did not reach the channel when the link was saved (`status` is Discord's answer, or 0 when it gave none); with
+ * `savedAt`, a channel saved on with the note below was turned off later because no post reached it (`status`: the
+ * answer at `at` that blamed the link, or, with `tries`, the answer to the last of the notices posted again on as many
+ * days, none of which reached it).
+ * `notice`: sending is on, but the connection notice the save posted did not reach the channel, twice, with an answer
+ * that says nothing of the link (`status`: a 5xx, a 429 that is not the link's own, or 0 for no answer; `at`: when the
+ * link was saved): no post has reached the link yet, and the first alert, or a test message, proves or stops it; a
+ * day with no post taken has the notice posted again, once a day (`tries`: how many, and the last one's answer and
+ * time), which proves or stops it the same way. Left out once a post has succeeded.
+ */
+export interface DiscordChannel { enabled: boolean; webhookUrlMasked: string | null; hasUrl: boolean; stopped?: { status: number; at: number; reason?: 'notice'; savedAt?: number; tries?: number } | null; notice?: { status: number; at: number; tries?: { n: number; status: number; at: number } } | null }
 
 /** What the API returns: secrets are never included, only whether they exist. */
 export interface UserSettings {

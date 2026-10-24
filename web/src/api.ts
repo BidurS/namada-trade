@@ -506,7 +506,30 @@ async function meJson<T>(path: string, init: RequestInit = {}): Promise<T> {
   return data;
 }
 export const fetchSettings = () => meJson<{ settings: UserSettings }>('/api/me/settings').then((r) => r.settings);
-export const updateSettings = (patch: unknown) => meJson<{ settings: UserSettings }>('/api/me/settings', { method: 'PUT', body: JSON.stringify(patch) }).then((r) => r.settings);
+/**
+ * A save the server refused but kept in part: with every Discord channel taken, PUT /api/me/settings answers 409
+ * CHANNELS_FULL and saves the row with the link and sending off, and the answer carries the saved settings, so the
+ * page can show them (the saved link, sending off, a switch that can be used) instead of a link that was never saved.
+ */
+export class SettingsRefusedError extends Error {
+  readonly settings: UserSettings;
+  constructor(message: string, settings: UserSettings) {
+    super(message);
+    this.name = 'SettingsRefusedError';
+    this.settings = settings;
+  }
+}
+/** The settings a refused save kept (SettingsRefusedError), or null for any other failure. */
+export const settingsOfRefusal = (e: unknown): UserSettings | null => (e instanceof SettingsRefusedError ? e.settings : null);
+export async function updateSettings(patch: unknown): Promise<UserSettings> {
+  const res = await authFetch('/api/me/settings', { method: 'PUT', body: JSON.stringify(patch) });
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok || data.error) {
+    const message = data.error || `HTTP ${res.status}`;
+    throw data.settings ? new SettingsRefusedError(message, data.settings as UserSettings) : new Error(message);
+  }
+  return data.settings as UserSettings;
+}
 export const testDiscord = () => meJson<{ success: boolean }>('/api/me/settings/test', { method: 'POST', body: '{}' });
 export const fetchSessions = () => meJson<{ sessions: SessionInfo[] }>('/api/me/sessions').then((r) => r.sessions);
 export const revokeSession = (id: string) => meJson<{ success: boolean }>(`/api/me/sessions/${id}`, { method: 'DELETE' });
