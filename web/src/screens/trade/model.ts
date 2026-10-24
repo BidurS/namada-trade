@@ -143,7 +143,7 @@ export function fromTable(c: QuoteCurveResponse | null, n: number, side: Side): 
 /** The reference price for "Worth about" when no reading has one: the quoted price, else the last trade price. */
 export function refPrice(o: Overview | null): { value: number | null; prov: Stamp } | null {
   if (!o) return null;
-  if (fin(o.price.usd.value)) return { value: o.price.usd.value, prov: { ...o.price.usd.prov, plain: 'Osmosis quote' } };
+  if (fin(o.price.usd.value)) return { value: o.price.usd.value, prov: o.price.usd.prov };
   if (fin(o.price.swap1h.value)) return { value: o.price.swap1h.value, prov: o.price.swap1h.prov };
   return { value: null, prov: o.price.usd.prov };
 }

@@ -63,7 +63,8 @@ const NO_OVERVIEW: Stamp = { source: 'site overview', plain: 'Site overview', at
 
 export function Head({ overview, overviewFailed, depth, changes, volume, rewound }: HeadProps) {
   const price = overview ? overview.price.usd.value : null;
-  const priceStamp: Stamp | null = overview ? stampOf(overview.price.usd.prov, 'Osmosis quote') : null;
+  // the price's own source says it in plain words (prov.ts plainSource): the price list, or the route and its size
+  const priceStamp: Stamp | null = overview ? stampOf(overview.price.usd.prov) : null;
   const waiting = !overview && !overviewFailed;
 
   // ---- all NAM and spendable NAM at today's price (derived: the oldest input's age, the worst status)

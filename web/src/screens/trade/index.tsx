@@ -146,7 +146,7 @@ export default function TradeScreen({ route }: ScreenProps) {
     const sp = history.data?.prov ?? {};
     const p = {
       executed: sp.executed ?? overview?.price.swap1h.prov ?? null,
-      quoted: sp.quoted ? { ...sp.quoted, plain: 'Osmosis quote' } : overview ? { ...overview.price.usd.prov, plain: 'Osmosis quote' } : null,
+      quoted: sp.quoted ?? overview?.price.usd.prov ?? null,
       pool: sp.pool ? { ...sp.pool, plain: 'Osmosis app data' } : null,
       bars: sp.bars ? { ...sp.bars, plain: 'Executed swaps' } : null,
     };

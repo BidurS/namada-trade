@@ -29,6 +29,8 @@ import { explorerHashOf } from '../../shared/flow-rules';
 import { label_plain, labelAuthorShort } from './labels';
 import { VALUE_WORDS } from '../../shared/copy';
 import { provAt, coverageOf, safeParseJson, settlePrices } from './analytics';
+import { kvGetJson } from './db';
+import { PRICE_HOW_KEY, priceHowAt, storedPriceNote, storedPriceSource, type PriceHowLog } from './price-how';
 import { tradeValue } from '../../shared/settle';
 import { OSMOSIS, INTERNAL_LABELS } from './config';
 import { OSMOSIS_DATA_SOURCE } from './sources/osmosis-data';
@@ -452,6 +454,8 @@ async function readPoolSeries(db: DB, key: string, pool: string, col: PoolColumn
 const QUOTED_KEY = 'price.usd', POOL_KEY = 'price.pool_1h';
 const QUOTED_SOURCE = 'Osmosis SQS (stored)';
 const QUOTED_MAX_AGE = 5 * MIN;
+/** A provenance with a note added after its own (a route price's words after an age note). */
+const withNote = (p: Provenance, note: string | undefined): Provenance => (note ? { ...p, note: [p.note, note].filter(Boolean).join('. ') } : p);
 const POOL_MAX_AGE = 3 * H;
 const WINDOW_WORD: Record<PriceChangeWindow | PoolChangeWindow, string> = { h1: '1-hour', h6: '6-hour', h24: '24-hour', d7: '7-day', d30: '30-day', y1: '1-year' };
 const lagText = (ms: number) => (ms < H ? `${Math.round(ms / MIN)} minutes` : ms < 2 * D ? `${(ms / H).toFixed(ms < 10 * H ? 1 : 0)} hours` : `${(ms / D).toFixed(1)} days`);
@@ -501,8 +505,14 @@ export function priceChange(window: PriceChangeWindow | PoolChangeWindow, window
  * hours closed by the time asked are read (under Rewind, never a close from after the rewound time).
  */
 export async function readChanges(db: DB, asOf: number, replay: boolean): Promise<PriceChangesResponse> {
-  const r = await db.prepare(CHANGES_NOW_SQL).bind(QUOTED_KEY, POOL_KEY, asOf, asOf - H).first<any>();
+  // price.how (price-how.ts): how the newest quoted price was read, the price list or the route's spot
+  const [r, howLog] = await Promise.all([
+    db.prepare(CHANGES_NOW_SQL).bind(QUOTED_KEY, POOL_KEY, asOf, asOf - H).first<any>(),
+    kvGetJson<PriceHowLog>(db, PRICE_HOW_KEY).catch(() => null),
+  ]);
   const qNow: PriceReading | null = r?.q_ts != null ? { at: Number(r.q_ts), value: Number(r.q_v) } : null;
+  const qHow = qNow ? priceHowAt(howLog, qNow.at) : null;
+  const qSource = storedPriceSource(qHow), qNote = storedPriceNote(qHow);
   const pNow: PriceReading | null = r?.p_ts != null ? { at: Number(r.p_ts) + H, value: Number(r.p_v) } : null;
   const qWins = Object.keys(PRICE_CHANGE_WINDOW_MS) as PriceChangeWindow[];
   const pWins = Object.keys(POOL_CHANGE_WINDOW_MS) as PoolChangeWindow[];
@@ -515,7 +525,7 @@ export async function readChanges(db: DB, asOf: number, replay: boolean): Promis
   const off = qNow ? qWins.length : 0;
   const reading = (i: number): PriceReading | null => (b && b[`t${i}`] != null ? { at: Number(b[`t${i}`]) + (i >= off ? H : 0), value: Number(b[`v${i}`]) } : null);
   const qProv: Provenance = !qNow ? { source: QUOTED_SOURCE, at: null, status: 'missing', note: 'No quoted price is recorded at that time.' }
-    : replay ? { source: QUOTED_SOURCE, at: qNow.at, status: 'live' } : provAt(QUOTED_SOURCE, qNow.at, asOf, QUOTED_MAX_AGE);
+    : replay ? { source: qSource, at: qNow.at, status: 'live', ...(qNote ? { note: qNote } : {}) } : withNote(provAt(qSource, qNow.at, asOf, QUOTED_MAX_AGE), qNote);
   const pProv: Provenance = !pNow ? { source: OSMOSIS_DATA_SOURCE, at: null, status: 'missing', note: 'No pool price is recorded at that time.' }
     : replay ? { source: OSMOSIS_DATA_SOURCE, at: pNow.at, status: 'live' } : provAt(OSMOSIS_DATA_SOURCE, pNow.at, asOf, POOL_MAX_AGE);
   // the pool price's first close: its first hour's end

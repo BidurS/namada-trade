@@ -292,8 +292,9 @@ export function OverviewProvider({ children }: { children: React.ReactNode }) {
             return [...msg.flows.filter((f) => !ids.has(f.id)), ...prev].slice(0, FLOW_KEEP);
           });
         } else if (msg.type === 'price') {
-          // the streamed quote keeps the server's own source name for the price; only the time and the note change
-          setOverview((prev) => (prev ? { ...prev, price: { ...prev.price, usd: { value: msg.usd, prov: { source: prev.price.usd.prov.source, at: msg.at, status: 'live', note: STREAM_NOTE } } } } : prev));
+          // the streamed quote carries the hub's source name for the price (the price list, or the route's spot) and
+          // its note; a hub from before 2026-10-24 sends neither, and the server's own source name is kept
+          setOverview((prev) => (prev ? { ...prev, price: { ...prev.price, usd: { value: msg.usd, prov: { source: msg.source ?? prev.price.usd.prov.source, at: msg.at, status: 'live', note: msg.note ? `${STREAM_NOTE} ${msg.note}` : STREAM_NOTE } } } } : prev));
           streamPriceAt.current = msg.at;
           checkAge();
         }

@@ -7,7 +7,8 @@ import type {
   Overview, Holder, AddressReport, SearchResult, Check, IntelResponse, DonationConfig, SourceHealth, Provenance, Sourced,
   AlertsRecentResponse, HoldersResponse, FlowsResponse, HolderCountsKv, SearchGroup, SearchMatch, SearchResponse, Chain, Flow,
 } from '../../shared/types';
-import { fetchNamPools, fetchNamPrice, quoteNamTrade, quoteSlippageCurve } from './sources/sqs';
+import { fetchNamPools, fetchNamPrice, quoteNamTrade, quoteSlippageCurve, priceSourceName } from './sources/sqs';
+import { PRICE_HOW_KEY, livePriceProv, priceHowAt, storedPriceNote, storedPriceSource, type PriceHowLog } from './price-how';
 import { namBalance, namadaEpoch, delegationsAt, QUICK, type ReadOpts } from './sources/namada';
 import { fetchIntel } from './sources/intel';
 import { alertsOn, sendDiscordTestAlert } from './sources/discord';
@@ -143,7 +144,7 @@ app.get('/api/overview', async (c) => {
   const MASP = INTERNAL_ADDRESSES.masp;
   // When the chain listings last confirmed every Namada balance and bond: the holder figures are as of then.
   const listed = await listingTimes(db);
-  const [osmoStats, netIbc, namadaStats, heights, refPriceRow, cov, holderFig] = await Promise.all([
+  const [osmoStats, netIbc, namadaStats, heights, refPriceRow, cov, holderFig, priceHow] = await Promise.all([
     db.prepare(`SELECT COUNT(*) total_flows,
           SUM(CASE WHEN kind='buy' THEN 1 ELSE 0 END) buys, SUM(CASE WHEN kind='sell' THEN 1 ELSE 0 END) sells,
           SUM(CASE WHEN kind='buy' THEN amount_num ELSE 0 END) buy_nam, SUM(CASE WHEN kind='sell' THEN amount_num ELSE 0 END) sell_nam
@@ -166,16 +167,23 @@ app.get('/api/overview', async (c) => {
     // Same definition as the holder list: spendable or staked, protocol and pool accounts excluded. Stored by the
     // cron after each complete listing (holders.ts holderFigureValues, one kv row); the queries only without it.
     holderFigureValues(db, now, listed),
+    // how each stored price was read (price-how.ts): the price list, or the route's spot from a time on
+    kvGetJson<PriceHowLog>(db, PRICE_HOW_KEY).catch(() => null),
   ]);
   const { counts: holderCounts, top10Osmosis: top10Osmo, top10Namada: top10Nam, dust } = holderFig;
 
-  // Price: live SQS when available; otherwise the last stored value, honestly marked stale.
+  // Price: live SQS when available; otherwise the last stored value, honestly marked stale. Each names how it was
+  // read: the price list ('Osmosis SQS') or the spot of the route the router quotes for 1,000 NAM, with its pools.
   let priceUsd: Sourced<number>;
-  if (priceLive?.usd) priceUsd = { value: priceLive.usd, prov: { source: 'Osmosis SQS', at: priceLive.at, status: 'live' } };
+  if (priceLive?.usd) priceUsd = { value: priceLive.usd, prov: livePriceProv(priceLive) };
   else if (mv('price.usd') != null) {
     // A live fetch just failed: the stored value is at best "old", however recent it is, and the note says why.
-    // Rewound: the stored price is the price as of that time (the rewound banner says so; no note needed).
-    const base = replay ? { source: 'Osmosis SQS (stored)', at: mt('price.usd'), status: 'live' as const } : provAt('Osmosis SQS (stored)', mt('price.usd'), now, 0, { note: priceLive?.error ?? 'The live price could not be fetched.' });
+    // Rewound: the stored price is the price as of that time (the rewound banner says so; no note needed but the route's).
+    const how = priceHowAt(priceHow, mt('price.usd'));
+    const source = storedPriceSource(how), routeWords = storedPriceNote(how);
+    const base = replay
+      ? { source, at: mt('price.usd'), status: 'live' as const, ...(routeWords ? { note: routeWords } : {}) }
+      : provAt(source, mt('price.usd'), now, 0, { note: [priceLive?.error ?? 'The live price could not be fetched.', routeWords].filter(Boolean).join(' ') });
     priceUsd = { value: mv('price.usd'), prov: base };
   }
   else priceUsd = { value: null, prov: { source: 'Osmosis SQS', at: null, status: 'missing', note: priceLive?.error ?? 'no price recorded' } };
@@ -759,9 +767,13 @@ app.get('/api/quote', async (c) => {
   if (side !== 'buy' && side !== 'sell') return c.json({ quote: null, error: 'side must be buy or sell.' }, 400);
   // The spot the quote is measured against: the Osmosis quote the cron stored in the last two minutes (said with its own
   // time in the quote's note), so a visitor's quote asks the quote service for the route only.
-  const stored = await c.env.DB.prepare(`SELECT ts, value FROM metrics WHERE key = 'price.usd' AND ts >= ? ORDER BY ts DESC LIMIT 1`).bind(Date.now() - 120_000).first<{ ts: number; value: number }>().catch(() => null);
+  // The quote's note names how that minute's price was read (price-how.ts): the price list, or the route's spot.
+  const [stored, priceHow] = await Promise.all([
+    c.env.DB.prepare(`SELECT ts, value FROM metrics WHERE key = 'price.usd' AND ts >= ? ORDER BY ts DESC LIMIT 1`).bind(Date.now() - 120_000).first<{ ts: number; value: number }>().catch(() => null),
+    kvGetJson<PriceHowLog>(c.env.DB, PRICE_HOW_KEY).catch(() => null),
+  ]);
   const spot = stored && Number(stored.value) > 0 ? { usd: Number(stored.value), at: Number(stored.ts) } : null;
-  return c.json(await quoteNamTrade(amount, side, spot?.usd, quoteBudget(c.env), spot?.at));
+  return c.json(await quoteNamTrade(amount, side, spot?.usd, quoteBudget(c.env), spot?.at, spot ? priceSourceName(priceHowAt(priceHow, spot.at)) : undefined));
 });
 
 app.get('/api/quote/curve', async (c) => c.json(await quoteSlippageCurve()));

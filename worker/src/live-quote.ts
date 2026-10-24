@@ -8,7 +8,13 @@
 // the cron stored for the minute (metrics price.usd, the same service's answer). A quote older than QUOTE_MATCH_MS
 // prices nothing: a move gets its own minute's quote or none. A move found late (the catch-up search, a Namada scan
 // that fell behind) gets the quote stored for its own minute, never the current one.
+//
+// The hub's ask is sources/sqs.ts fetchNamPrice, the cron's own read: when the price list gives NAM no price (from
+// 16:36 UTC on 23 Oct 2026), the spot of the route the router quotes for 1,000 NAM, with the source name and note
+// that say so (price-how.ts), which the hub sends with the price it streams.
 import { QUOTE_MATCH_MS } from './analytics';
+import { fetchNamPrice } from './sources/sqs';
+import { livePriceProv } from './price-how';
 
 /** The hub asks the quote service at most this often (the cron reads it once a minute). */
 export const QUOTE_ASK_EVERY_MS = 30_000;
@@ -20,7 +26,13 @@ export interface HubQuoteNow {
   /** when the quote was read: the hub's ask, or the cron's stored reading */
   at: number;
   source: 'live' | 'stored';
+  /** for the hub's own ask: the price's technical source name, and its note (the route's), as the ask gave them */
+  priceSource?: string;
+  priceNote?: string;
 }
+
+/** What an ask answers: the price alone, or the price with the source name and note of how it was read. */
+export type HubAsk = number | { usd: number | null; priceSource?: string; priceNote?: string } | null;
 
 const ok = (x: number | null | undefined): x is number => x != null && Number.isFinite(x) && x > 0;
 
@@ -30,11 +42,11 @@ export class HubQuote {
   private storedAt = -Infinity;
 
   /**
-   * `ask`: the quote service's NAM price now (null when it does not answer). `stored(ts)`: the newest stored quote at
-   * or before `ts` (null when none).
+   * `ask`: the quote service's NAM price now (null when it does not answer), alone or with how it was read.
+   * `stored(ts)`: the newest stored quote at or before `ts` (null when none).
    */
   constructor(
-    private readonly ask: () => Promise<number | null>,
+    private readonly ask: () => Promise<HubAsk>,
     private readonly stored: (ts: number) => Promise<{ usd: number; at: number } | null>,
   ) {}
 
@@ -52,9 +64,13 @@ export class HubQuote {
     let unanswered = false;
     if (now - this.askedAt >= QUOTE_ASK_EVERY_MS) {
       this.askedAt = now;
-      const usd = await this.ask().catch(() => null);
-      if (ok(usd)) this.cur = { usd, at: now, source: 'live' };
-      else unanswered = true;
+      const a = await this.ask().catch(() => null);
+      const usd = a != null && typeof a === 'object' ? a.usd : a;
+      if (ok(usd)) {
+        this.cur = { usd, at: now, source: 'live' };
+        if (a != null && typeof a === 'object' && a.priceSource) this.cur.priceSource = a.priceSource;
+        if (a != null && typeof a === 'object' && a.priceNote) this.cur.priceNote = a.priceNote;
+      } else unanswered = true;
     }
     const stale = !this.cur || this.cur.source === 'stored' || now - this.cur.at > QUOTE_ASK_EVERY_MS;
     if ((unanswered || stale) && (unanswered || now - this.storedAt >= QUOTE_STORED_EVERY_MS)) {
@@ -76,6 +92,17 @@ export class HubQuote {
     const s = await this.stored(ts);
     return s && ok(s.usd) && s.at <= ts && ts - s.at <= QUOTE_MATCH_MS ? s.usd : null;
   }
+}
+
+/**
+ * The hub's ask: the cron's own read (sources/sqs.ts fetchNamPrice: the price list, else the route's spot), with the
+ * source name and note that say which (price-how.ts livePriceProv); null when it gives no price.
+ */
+export async function askQuoteService(): Promise<HubAsk> {
+  const p = await fetchNamPrice();
+  if (p.usd == null) return null;
+  const prov = livePriceProv(p);
+  return { usd: p.usd, priceSource: prov.source, ...(prov.note ? { priceNote: prov.note } : {}) };
 }
 
 /** The newest quote the cron stored (metrics price.usd) at or before `ts`: one key seek. */

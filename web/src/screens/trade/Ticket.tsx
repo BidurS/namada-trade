@@ -160,7 +160,7 @@ function GetBlock({ side, mode, reading, overview }: { side: Side; mode: TicketM
   );
 
   // the pair under the sentence
-  const lastQuoted = overview ? { value: overview.price.usd.value, prov: { ...overview.price.usd.prov, plain: 'Osmosis quote' } as Stamp } : null;
+  const lastQuoted = overview ? { value: overview.price.usd.value, prov: overview.price.usd.prov as Stamp } : null;
   const lastTrade = overview ? overview.price.swap1h : null;
   const pairLeft =
     mode === 'rewind' ? (

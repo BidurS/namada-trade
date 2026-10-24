@@ -53,25 +53,128 @@ async function edgeCached<T>(key: string, ttlSec: number, make: () => Promise<T>
 }
 
 /**
- * The NAM quote in USD, and in the same answer OSMO's (`osmoUsd`, stored each minute as price.osmo_usd so a trade
- * paid in OSMO with no OSMO/USDC swap of its own can be valued at its minute: shared/settle.ts).
+ * The NAM sell size the router is asked to quote when the price list gives no NAM price (fetchNamPrice): small
+ * against the route's liquidity, and large enough that the router takes the main route rather than the dust pools.
+ * What SQS answered at 02:24 UTC on 2026-10-24, its price list answering NAM with {} since 16:36 UTC on 23 Oct
+ * (test/fixtures/sqs_route_nam_*.json):
+ * 1 NAM went through pool 3009 (NAM/OSMO, $17 of liquidity) then pool 3515 ($4), spot 0.000954003607608017;
+ * 100 NAM was split in two, half through pools 3005 then 3497 and half through 3009 then 3576 ($30), spot
+ * 0.000918592550525163; 1,000 NAM went through pool 3005 (NAM/USDC, $165) then pool 3497 (the allUSDC transmuter,
+ * $2,346,179), 0.898521 allUSDC out, price impact 0.44%, spot 0.000903440360921879; 10,000 NAM took the same route at
+ * the same spot with a price impact of 2.6%. Every one of these answers gave NAM a liquidity_cap of 0 in its token
+ * list. The 1,000 NAM spot is pool 3005's own price: the Osmosis data API's hourly close of that pool was
+ * 0.00090344036092204 from 20:00 UTC on 23 Oct.
  */
-export async function fetchNamPrice(tries = 3): Promise<{ usd: number | null; osmoUsd?: number | null; coinUsd?: Record<string, number>; at: number; error?: string }> {
+export const ROUTE_REF_NAM = 1_000;
+
+/** One pool of a route the router quoted, with the liquidity SQS gave it (its liquidity_cap, USD). */
+export interface RoutePool { id: string; liquidityUsd: number | null }
+
+/**
+ * How fetchNamPrice read the NAM price. 'list': the price list. 'route': the spot price of the route the router quoted
+ * for selling `refNam` NAM, with the pools of each route in order and `liquidityUsd`, the liquidity of the thinnest
+ * pool on them. The answer's own top-level liquidity_cap is not kept: it is the sum of its pools' (165 + 2,346,179 =
+ * 2,346,344 on 2026-10-24), so it says nothing of how deep the NAM side is.
+ */
+export type NamPriceHow =
+  | { how: 'list' }
+  | { how: 'route'; refNam: number; routes: RoutePool[][]; liquidityUsd: number | null };
+
+export interface NamPrice {
+  usd: number | null;
+  osmoUsd?: number | null;
+  coinUsd?: Record<string, number>;
+  at: number;
+  error?: string;
+  /** How the price was read; set whenever `usd` is. */
+  how?: NamPriceHow;
+}
+
+/**
+ * The NAM quote in USD, and in the same answer OSMO's (`osmoUsd`, stored each minute as price.osmo_usd so a trade
+ * paid in OSMO with no OSMO/USDC swap of its own can be valued at its minute: shared/settle.ts) and the other quoted
+ * coins'. When the price list answers but gives NAM no price (it has since 16:36 UTC on 23 Oct 2026, after the 21 Oct
+ * sell-off left NAM's pools holding little besides NAM; the service gives no reason), the NAM price is the spot price of the route
+ * the router quotes for selling ROUTE_REF_NAM NAM for allUSDC, the coin the list prices in; the coins keep the list's
+ * prices. A list that does not answer at all is not followed by the router: the service is then not answering. With a
+ * `budget` (a visitor's quote), the router call spends one call of it.
+ */
+export async function fetchNamPrice(tries = 3, budget?: QuoteBudget): Promise<NamPrice> {
   const at = Date.now();
+  let res: any;
   try {
     const denoms = [NAM.osmoDenom, ...Object.values(OSMOSIS.quotedCoins)];
     const url = `${OSMOSIS.sqs}/tokens/prices?base=${denoms.map(encodeURIComponent).join(',')}`;
-    const res = await sqsGet(url, 10000, tries);
-    const read = (d: string) => { const v = parseFloat(res[d]?.[OSMOSIS.allUsdc]); return Number.isFinite(v) && v > 0 ? v : null; };
-    const usd = read(NAM.osmoDenom);
-    // each quoted coin's USD (OSMOSIS.quotedCoins), stored each minute under shared/settle.ts QUOTE_KEYS
-    const coinUsd: Record<string, number> = {};
-    for (const [symbol, d] of Object.entries(OSMOSIS.quotedCoins)) { const v = read(d); if (v != null) coinUsd[symbol] = v; }
-    const osmoUsd = coinUsd.OSMO ?? null;
-    return usd ? { usd, osmoUsd, coinUsd, at } : { usd: null, osmoUsd, coinUsd, at, error: quoteErrorText('no_price') };
+    res = await sqsGet(url, 10000, tries);
   } catch (e) {
     return { usd: null, at, error: quoteErrorText(classify(e)) };
   }
+  const read = (d: string) => { const v = parseFloat(res?.[d]?.[OSMOSIS.allUsdc]); return Number.isFinite(v) && v > 0 ? v : null; };
+  // each quoted coin's USD (OSMOSIS.quotedCoins), stored each minute under shared/settle.ts QUOTE_KEYS
+  const coinUsd: Record<string, number> = {};
+  for (const [symbol, d] of Object.entries(OSMOSIS.quotedCoins)) { const v = read(d); if (v != null) coinUsd[symbol] = v; }
+  const osmoUsd = coinUsd.OSMO ?? null;
+  const usd = read(NAM.osmoDenom);
+  if (usd) return { usd, osmoUsd, coinUsd, at, how: { how: 'list' } };
+  // only the price list's own answer (an object of coins) that leaves NAM out is followed by the router; anything else
+  // (null, an array) is not the list answering
+  if (!res || typeof res !== 'object' || Array.isArray(res)) return { usd: null, osmoUsd, coinUsd, at, error: quoteErrorText('no_price') };
+  if (budget && !(await budget())) return { usd: null, osmoUsd, coinUsd, at, error: quoteErrorText('busy') };
+  try {
+    const r = routeSpot(await sqsGet(routeSpotUrl(), 12000, tries));
+    if (r && 'usd' in r) return { usd: r.usd, osmoUsd, coinUsd, at, how: r.how };
+    return { usd: null, osmoUsd, coinUsd, at, error: r ? routeOtherPoolsText(r.otherPools) : routeNoSpotText() };
+  } catch (e) {
+    return { usd: null, osmoUsd, coinUsd, at, error: quoteErrorText(classify(e)) };
+  }
+}
+
+/**
+ * The technical source name of a NAM price read `how`: 'Osmosis SQS' for the price list, 'Osmosis SQS route spot,
+ * 1,000 NAM' for the route (web/src/lib/prov.ts plainSource says each in plain words).
+ */
+export function priceSourceName(how: NamPriceHow | null | undefined): string {
+  return how?.how === 'route' ? `${SOURCE} route spot, ${how.refNam.toLocaleString('en-US')} NAM` : SOURCE;
+}
+
+/** The router quote fetchNamPrice asks when the price list gives no NAM price: ROUTE_REF_NAM NAM for allUSDC. */
+export const routeSpotUrl = () =>
+  `${OSMOSIS.sqs}/router/quote?tokenIn=${BigInt(ROUTE_REF_NAM) * 10n ** BigInt(NAM.decimals)}${encodeURIComponent(NAM.osmoDenom)}&tokenOutDenom=${encodeURIComponent(OSMOSIS.allUsdc)}`;
+
+/** The allUSDC transmuter (Noble USDC to allUSDC one for one, no fee): the router's last hop from pool 3005 to allUSDC. */
+export const ALLUSDC_TRANSMUTER_POOL = '3497';
+
+/**
+ * A route the NAM price may be read from: the reference pool (OSMOSIS.refPoolId, the only pool whose price the site
+ * takes: config.ts pricePoolIds), then at most the allUSDC transmuter. Anyone can make a pool with any price, and the
+ * router sends a small sale through whichever pool pays most (1 NAM went through pools 3009 and 3515, $17 and $4, at a
+ * spot 5.6% above pool 3005's on 2026-10-24), so a route through any other pool gives no price.
+ */
+const isPriceRoute = (r: RoutePool[]) => r.length > 0 && r[0].id === OSMOSIS.refPoolId && r.slice(1).every((p) => p.id === ALLUSDC_TRANSMUTER_POOL);
+
+const LIST_GIVES_NO_NAM = 'The Osmosis quote service\'s price list gives NAM no price';
+/** The price row's note when the router's answer has no spot price above zero. */
+export const routeNoSpotText = () => `${LIST_GIVES_NO_NAM}, and its router's quote for selling ${ROUTE_REF_NAM.toLocaleString('en-US')} NAM gave no spot price.`;
+/** The price row's note when the router's answer went through a pool other than the reference pool and the transmuter. */
+export const routeOtherPoolsText = (ids: string[]) =>
+  `${LIST_GIVES_NO_NAM}, and its router's quote for selling ${ROUTE_REF_NAM.toLocaleString('en-US')} NAM went through ${ids.length ? `pool${ids.length > 1 ? 's' : ''} ${ids.join(', ')}` : 'no pool'} instead of pool ${OSMOSIS.refPoolId} alone, so no price is taken from it.`;
+
+/**
+ * The NAM price in a router answer: its in_base_out_quote_spot_price, in allUSDC base units per NAM base unit, which
+ * is USD per NAM as both have 6 decimals. Null for an answer with no spot, or one that is not a finite number above
+ * zero; `otherPools` for an answer whose route is not pool 3005 then the transmuter (isPriceRoute).
+ */
+function routeSpot(res: any): { usd: number; how: Extract<NamPriceHow, { how: 'route' }> } | { otherPools: string[] } | null {
+  const usd = parseFloat(res?.in_base_out_quote_spot_price);
+  if (!(Number.isFinite(usd) && usd > 0)) return null;
+  const cap = (v: unknown) => { const n = parseFloat(String(v)); return Number.isFinite(n) && n >= 0 ? n : null; };
+  const routes: RoutePool[][] = (Array.isArray(res.route) ? res.route : []).map((r: any) =>
+    (Array.isArray(r?.pools) ? r.pools : []).map((p: any) => ({ id: String(p?.id ?? ''), liquidityUsd: cap(p?.liquidity_cap) })));
+  if (!routes.length || !routes.every(isPriceRoute)) {
+    return { otherPools: [...new Set(routes.flat().map((p) => p.id))].filter((id) => id !== OSMOSIS.refPoolId && id !== ALLUSDC_TRANSMUTER_POOL) };
+  }
+  const caps = routes.flat().map((p) => p.liquidityUsd).filter((v): v is number => v != null);
+  return { usd, how: { how: 'route', refNam: ROUTE_REF_NAM, routes, liquidityUsd: caps.length ? Math.min(...caps) : null } };
 }
 
 /**
@@ -150,6 +253,7 @@ export async function quoteNamTrade(
   knownSpotUsd?: number | null,
   budget?: QuoteBudget,
   knownSpotAt?: number,
+  knownSpotSource?: string,
 ): Promise<{ quote: PriceQuote | null; error?: string; code?: QuoteErrorCode }> {
   // The same quote asked within 10 s (typing, preset clicks, two tabs, the home page's and the Trade page's opening
   // 5,000 NAM) is the stored answer, before anything is asked of SQS: the spot price included.
@@ -172,18 +276,21 @@ export async function quoteNamTrade(
     };
     let spotUsd = knownSpotUsd ?? null;
     let spotAt = knownSpotUsd != null && knownSpotAt != null ? knownSpotAt : Date.now();
+    // where the spot came from, as the price's own source name says it (priceSourceName)
+    let spotFrom = (knownSpotUsd != null && knownSpotSource) || SOURCE;
     if (spotUsd == null) {
-      let pr: Awaited<ReturnType<typeof fetchNamPrice>> = { usd: null, at: Date.now() };
+      let pr: NamPrice = { usd: null, at: Date.now() };
       for (let a = 0; a < (budget ? QUOTE_TRIES : 1) && pr.usd == null; a++) {
         if (budget && !(await budget())) return { quote: null, error: quoteErrorText('busy'), code: 'busy' as const };
         if (a) await sleep(350 * 2 ** (a - 1) + Math.floor(Math.random() * 250));
-        pr = await fetchNamPrice(budget ? 1 : 3);
+        pr = await fetchNamPrice(budget ? 1 : 3, budget);
       }
       spotUsd = pr.usd;
       spotAt = pr.at;
       if (spotUsd == null) return { quote: null, error: pr.error ?? quoteErrorText('no_price'), code: 'no_price' as const };
+      spotFrom = priceSourceName(pr.how);
     }
-    return side === 'sell' ? quoteSell(amountNam, spotUsd, spotAt, call) : quoteBuyFor(amountNam, spotUsd, spotAt, call);
+    return side === 'sell' ? quoteSell(amountNam, spotUsd, spotAt, call, spotFrom) : quoteBuyFor(amountNam, spotUsd, spotAt, call, spotFrom);
   }, (v) => !!v.quote);
 }
 
@@ -213,7 +320,7 @@ async function routerQuote(inBase: string, inDenom: string, outDenom: string, tr
   };
 }
 
-function quoteOf(amountNam: number, side: 'buy' | 'sell', inAmount: number, outAmount: number, raw: Raw, spotUsd: number, spotAt: number, extraNote = ''): PriceQuote {
+function quoteOf(amountNam: number, side: 'buy' | 'sell', inAmount: number, outAmount: number, raw: Raw, spotUsd: number, spotAt: number, extraNote = '', spotFrom = SOURCE): PriceQuote {
   const effectivePriceUsd = side === 'sell' ? outAmount / inAmount : inAmount / outAmount;
   // SQS reports 0 impact on some multi-hop routes; fall back to realised impact vs spot.
   const derivedImpact = Math.abs(((effectivePriceUsd - spotUsd) / spotUsd) * 100);
@@ -228,16 +335,16 @@ function quoteOf(amountNam: number, side: 'buy' | 'sell', inAmount: number, outA
     priceImpactPct: raw.impactPct > 0.001 ? raw.impactPct : derivedImpact,
     effectiveFeePct: raw.feePct,
     route: raw.route,
-    prov: { source: `${SOURCE} router`, at: Date.now(), status: 'live', note: `spot from ${SOURCE} at ${new Date(spotAt).toISOString()}${extraNote}` },
+    prov: { source: `${SOURCE} router`, at: Date.now(), status: 'live', note: `spot from ${spotFrom} at ${new Date(spotAt).toISOString()}${extraNote}` },
   };
 }
 
-async function quoteSell(amountNam: number, spotUsd: number, spotAt: number, call: typeof routerQuote = routerQuote): Promise<{ quote: PriceQuote | null; error?: string; code?: QuoteErrorCode }> {
+async function quoteSell(amountNam: number, spotUsd: number, spotAt: number, call: typeof routerQuote = routerQuote, spotFrom = SOURCE): Promise<{ quote: PriceQuote | null; error?: string; code?: QuoteErrorCode }> {
   const namBase = BigInt(Math.max(1, Math.round(amountNam * 10 ** NAM.decimals))).toString();
   try {
     const raw = await call(namBase, NAM.osmoDenom, OSMOSIS.usdcDenom);
     if (!(raw.out > 0)) return { quote: null, error: quoteErrorText('no_route'), code: 'no_route' };
-    return { quote: quoteOf(amountNam, 'sell', amountNam, raw.out, raw, spotUsd, spotAt) };
+    return { quote: quoteOf(amountNam, 'sell', amountNam, raw.out, raw, spotUsd, spotAt, '', spotFrom) };
   } catch (e) {
     const code = classify(e);
     return { quote: null, error: quoteErrorText(code), code };
@@ -256,7 +363,7 @@ export const BUY_MAX_CALLS = 4;
  * the attempt whose NAM out came closest, with its own USDC and NAM. (The router's exact-out quotes were not
  * used: on 2026-10-17 they priced 100,000 NAM below spot, contradicting its own exact-in answers.)
  */
-export async function quoteBuyFor(amountNam: number, spotUsd: number, spotAt: number, call: typeof routerQuote = routerQuote): Promise<{ quote: PriceQuote | null; error?: string; code?: QuoteErrorCode }> {
+export async function quoteBuyFor(amountNam: number, spotUsd: number, spotAt: number, call: typeof routerQuote = routerQuote, spotFrom = SOURCE): Promise<{ quote: PriceQuote | null; error?: string; code?: QuoteErrorCode }> {
   const tries: { usdc: number; nam: number; raw: Raw }[] = [];
   let usdc = amountNam * spotUsd;
   try {
@@ -285,7 +392,7 @@ export async function quoteBuyFor(amountNam: number, spotUsd: number, spotAt: nu
   const best = [...tries].sort((x, y) => Math.abs(x.nam - amountNam) - Math.abs(y.nam - amountNam))[0];
   const exact = Math.abs(best.nam - amountNam) / amountNam <= BUY_TOLERANCE;
   const note = `; ${tries.length} router quote${tries.length > 1 ? 's' : ''} to find the USDC for ${amountNam} NAM: ${best.usdc} USDC buys ${best.nam.toFixed(6)} NAM${exact ? '' : ' (the closest the router came)'}`;
-  return { quote: quoteOf(amountNam, 'buy', best.usdc, best.nam, best.raw, spotUsd, spotAt, note) };
+  return { quote: quoteOf(amountNam, 'buy', best.usdc, best.nam, best.raw, spotUsd, spotAt, note, spotFrom) };
 }
 
 export async function quoteSlippageCurve(): Promise<QuoteCurveResponse> {
@@ -394,8 +501,9 @@ async function buildCurve(): Promise<QuoteCurveResponse> {
   const refPool = pools.find((p) => p.id === OSMOSIS.refPoolId) ?? null;
   const spotUsd = priceRes.usd;
 
+  // the spot's own source name: the price list, or the route's spot when the list gives NAM no price
   const prov: Provenance = spotUsd
-    ? { source: SOURCE, at: priceRes.at, status: 'live' }
+    ? { source: priceSourceName(priceRes.how), at: priceRes.at, status: 'live' }
     : { source: SOURCE, at: null, status: 'missing', note: priceRes.error ?? 'spot price unavailable' };
 
   const tiers = [1000, 5000, 10000, 25000, 50000, 100000];

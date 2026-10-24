@@ -1055,7 +1055,8 @@ export type LiveMessage =
   | { type: 'hello'; at: number; upstream: { osmosis: boolean; namada: boolean } }
   | { type: 'flows'; flows: Flow[] }
   | { type: 'status'; upstream: { osmosis: boolean; namada: boolean }; heights: { osmosis?: number; namada?: number }; at: number }
-  | { type: 'price'; usd: number; at: number };
+  /** `source` and `note`: how the hub read the price (the price list, or the route's spot), as the overview says it */
+  | { type: 'price'; usd: number; at: number; source?: string; note?: string };
 
 // ---------------------------------------------------------------- series and the Trade basics
 // docs/design/screener-plan.md 2.1 to 2.6, 2.11 and the read contract 2.12; mounted at /api/series by one line in

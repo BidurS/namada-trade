@@ -12,8 +12,8 @@ import { blockMetas, blockResults, blockTxs, chainHead, headBound, headSince, na
 import type { NamadaBlock } from './parse/namada';
 import { runBatch, stmt, kvGet, kvGetJson, kvSet } from './db';
 import { admitSocket } from './ws-admit';
-import { fetchNamPools, fetchNamPrice } from './sources/sqs';
-import { HubQuote, storedQuoteReader } from './live-quote';
+import { fetchNamPools } from './sources/sqs';
+import { HubQuote, askQuoteService, storedQuoteReader } from './live-quote';
 import { configureAlerts, isNamWhale, offeredForAlerts, sendDiscordWhaleAlert, sendsAlerts } from './sources/discord';
 import { fetchJson, FETCH_TEXT_MAX_BYTES, ReadBudgetError, ResponseTooLargeError, type ReadBudget } from './util';
 
@@ -226,7 +226,8 @@ export class LiveHub extends DurableObject<Env> {
   constructor(ctx: DurableObjectState, env: Env) {
     super(ctx, env);
     configureAlerts(env.SETTINGS_KEY, sendsAlerts(env));
-    this.quote = new HubQuote(async () => (await fetchNamPrice()).usd, storedQuoteReader(env.DB));
+    // the cron's own read (the price list, else the route's spot), with the source name and note that say which
+    this.quote = new HubQuote(askQuoteService, storedQuoteReader(env.DB));
     this.ctx.blockConcurrencyWhile(async () => {
       // Initialize pool mappings & price
       await this.refreshContext();
@@ -263,7 +264,7 @@ export class LiveHub extends DurableObject<Env> {
     this.osmoCtx.priceUsd = usd;
     if (usd !== this.lastPriceUsd) {
       this.lastPriceUsd = usd;
-      if (q?.source === 'live') this.broadcast({ type: 'price', usd: q.usd, at: q.at });
+      if (q?.source === 'live') this.broadcast({ type: 'price', usd: q.usd, at: q.at, ...(q.priceSource ? { source: q.priceSource } : {}), ...(q.priceNote ? { note: q.priceNote } : {}) });
     }
   }
 

@@ -317,3 +317,48 @@ describe('the per-tick node breaker', () => {
     expect(b.failures('B')).toBe(0);
   });
 });
+
+// From 16:36 UTC on 23 Oct 2026 the quote service's price list answered NAM with {} and the cron stored no price.usd.
+// The tick against the answers SQS gave at 02:24 UTC on 24 Oct (test/fixtures/sqs_*.json): the route's spot is stored,
+// the price row is ok with a note that says how, and price.how records the way once.
+describe('a tick whose price list gives NAM no price', () => {
+  const raw = (n: string) => new Response(readFileSync(new URL(`./fixtures/${n}`, import.meta.url), 'utf8'), { status: 200, headers: { 'content-type': 'application/json' } });
+  const sqs = (route: string) => (url: string) =>
+    url.includes('sqs.osmosis.zone/tokens/prices') ? raw('sqs_prices_no_nam.json')
+    : url.includes('sqs.osmosis.zone/router/quote') ? (route === 'refused' ? new Response('refused', { status: 403 }) : raw(route))
+    : url.includes('sqs.osmosis.zone/pools') ? json([])
+    : undefined;
+  const priceRows = (db: any) => db.raw.prepare("SELECT ts, value FROM metrics WHERE key = 'price.usd' ORDER BY ts").all();
+
+  it('stores the spot of the 1,000 NAM route, the coins from the list, an ok price row and price.how written once', async () => {
+    const db = seeded(PLAIN);
+    const calls = network({ hung: () => false, answer: sqs('sqs_route_nam_1000.json') });
+    await virtualTick({ DB: db, KEPLR_KEY: 'k' }, PLAIN);
+    expect(calls.filter((u) => u.includes('/router/quote?tokenIn=1000000000'))).toHaveLength(1);
+    expect(priceRows(db)).toEqual([{ ts: PLAIN, value: 0.000903440360921879 }]);
+    expect(metricKeys(db)).toEqual(expect.arrayContaining(['price.osmo_usd', 'price.atom_usd', 'price.tia_usd', 'price.eth_usd', 'price.kyve_usd']));
+    const h = healthOf(db)['Osmosis SQS (price)'];
+    expect(h.ok).toBe(true);
+    expect(h.note).toBe('The Osmosis quote service\'s price list gives NAM no price, so the price is the spot price of the route its router quotes for selling 1,000 NAM: pool 3005 ($165 besides its NAM), then pool 3497 ($2,346,179). The service counts no NAM in a pool\'s liquidity, as it gives NAM no price.');
+    const how = record<{ log: any[] }>(db, 'price.how')!;
+    expect(how.log).toEqual([{ how: 'route', refNam: 1000, routes: [[{ id: '3005', liquidityUsd: 165 }, { id: '3497', liquidityUsd: 2346179 }]], liquidityUsd: 165, since: PLAIN }]);
+    const written = db.raw.prepare("SELECT updated_at FROM kv WHERE key = 'price.how'").get().updated_at;
+    // the next tick reads the same way: price.how is not written again
+    network({ hung: () => false, answer: sqs('sqs_route_nam_1000.json') });
+    await virtualTick({ DB: db, KEPLR_KEY: 'k' }, PLAIN + 60000);
+    expect(priceRows(db)).toHaveLength(2);
+    expect(db.raw.prepare("SELECT updated_at FROM kv WHERE key = 'price.how'").get().updated_at).toBe(written);
+    expect(record<{ log: any[] }>(db, 'price.how')!.log).toHaveLength(1);
+  });
+
+  it('neither way gives a price: none is stored, the row says the service is not answering, price.how is not written', async () => {
+    const db = seeded(PLAIN);
+    network({ hung: () => false, answer: sqs('refused') });
+    await virtualTick({ DB: db, KEPLR_KEY: 'k' }, PLAIN);
+    expect(priceRows(db)).toEqual([]);
+    expect(healthOf(db)['Osmosis SQS (price)']).toMatchObject({ ok: false, note: 'The Osmosis quote service is busy right now.' });
+    expect(record(db, 'price.how')).toBeNull();
+    // the coins are still the list's
+    expect(metricKeys(db)).toContain('price.osmo_usd');
+  });
+});

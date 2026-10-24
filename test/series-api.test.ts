@@ -909,7 +909,7 @@ describe('query plans: every statement the routes run', () => {
     const count = async (path: string) => { db.queries = 0; await call(db, path); return db.queries; };
     expect(await count('/api/series?key=price.usd')).toBe(3); // range, tail, start
     expect(await count(`/api/series?key=price.usd&step=1m&from=${NOW - H}`)).toBe(2);
-    expect(await count('/api/series/changes')).toBe(2);
+    expect(await count('/api/series/changes')).toBe(3); // the two price reads and price.how, side by side
     expect(await count('/api/series/volume')).toBe(4); // two sides, meta, coverage
     expect(await count('/api/series/values')).toBe(1);
     // head page: 2 sides (+1 each for the last millisecond whole), start, coverage, 2 maker counts, small buys

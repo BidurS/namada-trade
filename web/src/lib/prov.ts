@@ -89,12 +89,20 @@ const PREFIXES: [string, string][] = [
   ['indexer', 'Namada indexer'],
 ];
 
+/**
+ * The NAM price read as the spot of the route the Osmosis router quotes for a size (the worker's price-how.ts, when
+ * the price list gives NAM no price): 'Osmosis SQS route spot, 1,000 NAM', stored or not, says the size in plain words.
+ */
+const ROUTE_SPOT = /^Osmosis SQS route spot(, [\d,.]+ NAM)?/;
+
 /** Plain words for a stamp's source. Unknown names pass through unchanged (never invented). */
 export const plainSource = (p: Pick<Stamp, 'source' | 'plain'> | null | undefined): string => {
   if (!p) return 'Unknown source';
   if (p.plain) return p.plain;
   const exact = PLAIN_SOURCE[p.source];
   if (exact) return exact;
+  const route = ROUTE_SPOT.exec(p.source);
+  if (route) return `Osmosis route quote${route[1] ?? ''}`;
   for (const [pre, word] of PREFIXES) if (p.source.startsWith(pre)) return word;
   return p.source;
 };

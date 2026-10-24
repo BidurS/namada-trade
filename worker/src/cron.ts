@@ -1,7 +1,8 @@
 import type { Env } from './util';
 import { runBatch, stmt, kvGet, kvSet, kvGetJson } from './db';
 import { fetchOsmosisHolderList, fetchOsmosisSupplyBase, fetchOsmosisBalanceBase, OSMOSIS_HOLDER_PAGES, OSMOSIS_NEXT_KEY_MAX, KEPLR_REST_SRC, type HolderListRead, type KeplrOpts, type OsmosisBalanceRead } from './sources/osmosis';
-import { fetchNamPools, fetchNamPrice } from './sources/sqs';
+import { fetchNamPools, fetchNamPrice, priceSourceName } from './sources/sqs';
+import { PRICE_HOW_KEY, priceHealth, priceHowStmt, type PriceHowLog } from './price-how';
 import { QUOTE_KEYS } from '../../shared/settle';
 import { namBalance, namTotalSupply, namTotalStake, namadaEpoch, namadaStatusAll, delegationsAt, answeringRpcs, listingHeads, QUICK, RpcBreaker, allNamBalances, allBonds, ListingTooLargeError, LISTING_MAX_VALUE_BYTES, type BalanceListing, type BondListing, type ReadOpts, type Rpc } from './sources/namada';
 import { fetchIntelChecked } from './sources/intel';
@@ -1488,7 +1489,12 @@ export async function runCron(env: Env) {
     // did on 2026-10-20 while Papadritta took 3.5 s), so the read gets the rest of the tick, not what the checks
     // leave. The node that served the last listing is asked first (unless it failed a read this tick); one listing
     // a tick, the bond listing (the shorter interval) before the balance listing.
-    const [balPrev, bondPrev] = await Promise.all([kvGetJson<BalanceListingRecord>(env.DB, 'balance.listing').catch(() => null), kvGetJson<BondListingRecord>(env.DB, 'bond.listing').catch(() => null)]);
+    const [balPrev, bondPrev, howPrev] = await Promise.all([
+      kvGetJson<BalanceListingRecord>(env.DB, 'balance.listing').catch(() => null), kvGetJson<BondListingRecord>(env.DB, 'bond.listing').catch(() => null),
+      // the way the NAM quote was last read (price-how.ts): price.how is written only when it changes; undefined when
+      // the read failed, so a failed read never replaces the log with a new one
+      kvGetJson<PriceHowLog>(env.DB, PRICE_HOW_KEY).catch(() => undefined),
+    ]);
     // What the chain listings are checked against (the check rows below keep the highest node height, headHeight, so
     // a node's lie shows there): the head this tick's answers agree on (listingHeads: the nodes' statuses and the
     // indexer's latest block). One node's status far from every other answer is not the head, and a listing or a
@@ -1510,7 +1516,8 @@ export async function runCron(env: Env) {
     if (which) listingOpen = { key: which === 'bond' ? 'bond.listing' : 'balance.listing' };
     const started = <T,>(p: Promise<{ v?: T; e?: unknown }>) => async () => { const r = await p; if (r.e !== undefined || !r.v) throw r.e ?? new Error('listing: no answer'); return r.v; };
     const osmoSupply = osmoSupplyRes ? toNam(osmoSupplyRes) : null;
-    health.push({ name: 'Osmosis SQS (price)', ok: price.usd != null, at: price.at, note: price.error });
+    // ok when the price list or the route gave a price; a route price says so in its note (price-how.ts priceHealth)
+    health.push(priceHealth(price));
     // A listed pool whose address is not a pool account's is said here, and its address is never labelled.
     const refusedNote = poolRes.refused ? `The pool list named ${poolRes.refused} address${poolRes.refused === 1 ? '' : 'es'} that ${poolRes.refused === 1 ? 'is' : 'are'} not an Osmosis pool account; ${poolRes.refused === 1 ? 'it is' : 'they are'} not labelled a pool.` : undefined;
     const poolsRow: SourceHealth = { name: 'Osmosis SQS (pools)', ok: poolRes.pools.length > 0 && !poolRes.refused, at: poolRes.at, note: poolRes.error ?? refusedNote };
@@ -1550,6 +1557,8 @@ export async function runCron(env: Env) {
     }
     if (epoch != null && epoch > 0) metricStmts.push(stmt.metric(now, 'epoch', epoch));
     if (price.usd) metricStmts.push(stmt.metric(now, 'price.usd', price.usd));
+    // a price read another way than the last one (the price list, or the route and its pools) is recorded from this minute
+    const howStmt = price.usd && howPrev !== undefined ? priceHowStmt(howPrev, price.how, now) : null;
     for (const [symbol, v] of Object.entries(price.coinUsd ?? {})) if (QUOTE_KEYS[symbol]) metricStmts.push(stmt.metric(now, QUOTE_KEYS[symbol], v));
     if (poolRes.pools.length) {
       // Pool depth is recorded so replay can show what liquidity looked like at the time.
@@ -1578,7 +1587,7 @@ export async function runCron(env: Env) {
       poolsRow.ok = false;
       poolsRow.note = [poolsRow.note, `Not a number, so not stored: ${unreadable.join(', ')}`].filter(Boolean).join(' ').slice(0, 160);
     }
-    await runBatch(env.DB, [...internalStmts, ...metricStmts.filter((s) => Number.isFinite(s.params[2]))]);
+    await runBatch(env.DB, [...internalStmts, ...(howStmt ? [howStmt] : []), ...metricStmts.filter((s) => Number.isFinite(s.params[2]))]);
 
     // 3b. The series (worker/src/series.ts): once an hour and once a day, each in the first minutes of the hour, on a
     //     tick that reads no chain listing unless the window is closing. The two run side by side, so their outside
@@ -1772,7 +1781,8 @@ export async function runCron(env: Env) {
       const lastTradeAt = fresh ? null
         : (await env.DB.prepare(`SELECT MAX(ts) t FROM flows WHERE ${SINGLE_POOL_USDC_SWAP}`).first<{ t: number | null }>().catch(() => null))?.t ?? null;
       const r = priceVsExecution(price.usd, lastSwap, lastTradeAt, now);
-      if (r) checkStmts.push(stmt.check('price_vs_execution', r.status, 'SQS mid price vs executed swap price (last hour with trades)', r.detail, now));
+      // the detail names how the quote was read: the price list, or the route's spot (price-how.ts)
+      if (r) checkStmts.push(stmt.check('price_vs_execution', r.status, 'SQS mid price vs executed swap price (last hour with trades)', { ...r.detail, quoteSource: priceSourceName(price.how) }, now));
     }
 
     await runBatch(env.DB, checkStmts);
