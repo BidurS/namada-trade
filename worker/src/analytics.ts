@@ -10,7 +10,7 @@ import { QUOTE_KEYS, quotesNeeded, settleMetaOf, settleOf, type Settle } from '.
 import { SELLS_MOST_CUT } from '../../shared/supply-thresholds';
 import { kvGetJson, kvSet } from './db';
 import { NAM_AMOUNT, NOT_LEGACY_TWIN } from './flows-query';
-import { safeHttpUrl, explorerHashOf, isOtherCoin } from '../../shared/flow-rules';
+import { safeHttpUrl, explorerHashOf, isOtherCoin, priceAtOf } from '../../shared/flow-rules';
 import { fetchJson } from './util';
 import { INTERNAL_LABELS } from './config';
 import { label_plain, labelAuthorShort } from './labels';
@@ -1388,8 +1388,10 @@ export async function withSettles(db: D1Database, flows: Flow[]): Promise<Flow[]
  * Each trade hit's price. First what it settled at for its trader (settlePrices: every coin their balance changed by,
  * fees and gas in; 'settled'). Else, for a row recorded before the parser kept those coins, its own USDC per NAM
  * ('paid', set by the rule). Else the NAM quote stored for its minute: the latest price.usd reading at or before the
- * trade, at most QUOTE_MATCH_MS before it, labelled 'quote' so it is never read as what the trade paid. None found:
- * the hit says no price is on record. One key seek per quote.
+ * trade, at most QUOTE_MATCH_MS before it, labelled 'quote' so it is never read as what the trade paid. Else, when a
+ * repair priced the row at the pool's hourly close because no quote was stored for its minute (meta.priceSource
+ * 'pool_1h'), that price, labelled 'pool_1h' with its hour (meta.priceAt). None found: the hit says no price is on
+ * record. One key seek per quote.
  */
 export async function withQuotes(db: D1Database, hits: AlertHit[], flows: Flow[] = []): Promise<AlertHit[]> {
   const byId = new Map(flows.map((f) => [f.id, f]));
@@ -1408,6 +1410,11 @@ export async function withQuotes(db: D1Database, hits: AlertHit[], flows: Flow[]
       const row = (r.results?.[0] ?? null) as { ts: number; value: number } | null;
       if (row && row.value > 0) part[j].price = { usd: row.value, source: 'quote', at: Number(row.ts) };
     });
+  }
+  for (const h of need) {
+    const f = h.price ? null : byId.get(h.flowId);
+    const at = f ? priceAtOf(f) : null;
+    if (f && at != null && f.priceUsd != null && f.priceUsd > 0) h.price = { usd: f.priceUsd, source: 'pool_1h', at };
   }
   return hits;
 }

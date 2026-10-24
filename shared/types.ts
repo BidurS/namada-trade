@@ -30,7 +30,8 @@ export interface Flow {
   priceUsd?: number | null;
   valueUsd?: number | null;
   /** May carry `tsSource` ('block' | 'extrapolated' | 'interpolated'), `priceSource`
-   *  ('execution' | 'swap_1h' | 'spot' | 'unknown'), `arb`, `trader`, `source`, and `textCut`: the whole length of
+   *  ('execution' | 'swap_1h' | 'spot' | 'pool_1h' | 'unknown'; 'pool_1h' with `priceAt`, the hour of the stored
+   *  price.pool_1h close it is, and `repaired`, the day of the repair that set it), `arb`, `trader`, `source`, and `textCut`: the whole length of
    *  each sender's text the row keeps only the start of (`memo`, `from`, `to`; worker/src/util.ts boundFlowText). */
   meta?: Record<string, unknown> | null;
   fromLabel?: string | null;
@@ -719,9 +720,11 @@ export interface AlertHit {
    * by with the fees and the transaction fee in (`settle` says which coins, at what rates; shared/settle.ts). 'paid':
    * for a row recorded before the parser kept those coins, its own USDC per NAM. 'quote': the trade has neither (paid
    * in a coin with no price at that minute), so the Osmosis NAM quote stored for that minute (`at` = the quote's
-   * time). `at` is otherwise the trade's time. null when none is on record.
+   * time). 'pool_1h': no quote was stored for that minute either, and the row's price is the pool's hourly close a
+   * repair set (Flow.meta.priceSource 'pool_1h'; `at` = the hour, meta.priceAt). `at` is otherwise the trade's time.
+   * null when none is on record.
    */
-  price?: { usd: number; source: 'settled' | 'paid' | 'quote'; at: number; settle?: Settle } | null;
+  price?: { usd: number; source: 'settled' | 'paid' | 'quote' | 'pool_1h'; at: number; settle?: Settle } | null;
 }
 
 export interface AlertRuleInfo {
@@ -1353,7 +1356,9 @@ export interface TradeRow {
   counterAmount: number | null;
   /** the trade's own price, dollars per NAM, and where it came from; null with `priceNote` when none was recorded (no pool spot price stands in) */
   priceUsd: number | null;
-  priceSource: 'execution' | 'swap_1h' | 'spot' | 'unknown' | null;
+  priceSource: 'execution' | 'swap_1h' | 'spot' | 'pool_1h' | 'unknown' | null;
+  /** with priceSource 'pool_1h': the hour of the pool's close the price is (Flow.meta.priceAt) */
+  priceAt?: number;
   valueUsd: number | null;
   priceNote?: string;
   /**

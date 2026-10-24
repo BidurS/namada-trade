@@ -8,7 +8,7 @@ import type {
 } from '../../../../shared/types';
 import { SERIES_MAX_POINTS, SERIES_STEP_MS, TRADE_FOLD_MS, TRADE_FOLD_UNDER_NAM } from '../../../../shared/types';
 import { DAY_MS, HISTORY_FETCH_DAYS, type HistoryRange } from '../../../../shared/history';
-import { isBotFlow } from '../../../../shared/flow-rules';
+import { isBotFlow, priceAtOf } from '../../../../shared/flow-rules';
 import { QUOTE_KEYS, quotesNeeded, settleMetaOf, settleOf, tradeValue } from '../../../../shared/settle';
 import { priceHow } from '../../lib/flows';
 
@@ -235,7 +235,8 @@ export function tradeOfFlow(f: Flow): TradeRow | null {
     counterSymbol: f.counterDenom ?? null,
     counterAmount: fin(f.counterAmount) ? f.counterAmount : null,
     priceUsd: priced ? (f.priceUsd as number) : null,
-    priceSource: !priced ? null : how === 'execution' || how === 'swap_1h' || how === 'spot' ? how : 'unknown',
+    priceSource: !priced ? null : how === 'execution' || how === 'swap_1h' || how === 'spot' || how === 'pool_1h' ? how : 'unknown',
+    ...(priced && how === 'pool_1h' && priceAtOf(f) != null ? { priceAt: priceAtOf(f)! } : {}),
     valueUsd: fin(f.valueUsd) ? f.valueUsd : null,
     ...(priced ? {} : { priceNote: 'No price was recorded for this trade.' }),
     ...(settle ? { settle } : {}),

@@ -135,7 +135,8 @@ describe('the moves list and its exports carry each trade\'s settle price', () =
     expect(json.flows[0].settle.usdPerNam).toBeCloseTo(saleUsdPerNam, 12);
     const csv = (await (await app.request(`/api/export/flows?format=csv`, {}, { DB: db } as any)).text()).trim().split('\n');
     const head = csv[0].split(','), cells = csv[1].split(',');
-    expect(head.slice(-2)).toEqual(['settle_usd_per_nam', 'settle_usd']);
+    // the settle columns keep their places; price_basis, added later, comes after them
+    expect(head.slice(-3)).toEqual(['settle_usd_per_nam', 'settle_usd', 'price_basis']);
     expect(Number(cells[head.indexOf('settle_usd_per_nam')])).toBeCloseTo(saleUsdPerNam, 12);
     expect(Number(cells[head.indexOf('settle_usd')])).toBeCloseTo(saleUsdPerNam * 20000, 9);
     // the live stream's row has no Worker price: the page prices it from its own coins

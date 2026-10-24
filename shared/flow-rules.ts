@@ -117,3 +117,62 @@ export function safeHttpUrl(x: unknown): string | null {
     return null;
   }
 }
+
+// ---------------------------------------------------------------- how a move's price was set
+
+/**
+ * How a move's dollar price was set, from meta.priceSource: 'execution', a trade's own USDC per NAM; 'swap_1h', the
+ * median of that hour's trades; 'spot', the Osmosis quote stored for the move's minute; 'pool_1h', the pool's hourly
+ * close (metric price.pool_1h from the Osmosis data API, the hour named by meta.priceAt), which
+ * scripts/repair-pool-hour-prices.ts sets on a move recorded while no quote was stored; 'unstated', a price whose
+ * basis the row does not say; 'none', no price.
+ */
+export type PriceHow = 'execution' | 'swap_1h' | 'spot' | 'pool_1h' | 'unstated' | 'none';
+type PricedLike = Pick<Flow, 'kind' | 'amount' | 'priceUsd' | 'counterDenom' | 'counterAmount'> & { meta?: Record<string, unknown> | null };
+
+/** How the move's dollar price was set: from meta.priceSource, or a USDC trade's own price. The moves list and its CSV use this one rule. */
+export function priceHowOf(f: PricedLike): PriceHow {
+  const s = f.meta?.priceSource;
+  if (s === 'execution' || s === 'swap_1h' || s === 'spot' || s === 'pool_1h') return s;
+  if (f.priceUsd == null) return 'none';
+  // a USDC trade's own price is its USDC amount divided by its NAM amount
+  if ((f.kind === 'buy' || f.kind === 'sell') && f.counterDenom === 'USDC' && f.counterAmount && f.amount > 0) {
+    const own = f.counterAmount / f.amount;
+    if (Math.abs(own - f.priceUsd) <= own * 1e-6) return 'execution';
+  }
+  return 'unstated';
+}
+
+/** The hour a pool-close price is the close of: meta.priceAt, the time of the stored price.pool_1h row it was read from; null otherwise. */
+export function priceAtOf(f: { meta?: Record<string, unknown> | null }): number | null {
+  if (f.meta?.priceSource !== 'pool_1h') return null;
+  const at = f.meta.priceAt;
+  return typeof at === 'number' && Number.isFinite(at) && at > 0 ? at : null;
+}
+
+const two = (n: number) => String(n).padStart(2, '0');
+/** "18:00 UTC" */
+export const hourUtcWords = (at: number): string => `${two(new Date(at).getUTCHours())}:${two(new Date(at).getUTCMinutes())} UTC`;
+/**
+ * "hour ending 19:00 UTC" for the price.pool_1h row stamped 18:00: the row holds the pool's price at the close of the
+ * hour it is stamped with, so it is named by the hour's end, as the Trade page names a pool close.
+ */
+export const hourEndingWords = (at: number): string => `hour ending ${hourUtcWords(at + 3_600_000)}`;
+
+/** "the pool’s close for the hour ending 19:00 UTC (Osmosis app data)": a pool-close price, named by its hour's end. */
+export const poolHourWords = (at: number | null): string => `the pool’s close for the ${at != null ? `${hourEndingWords(at)} ` : 'hour '}(Osmosis app data)`;
+
+/**
+ * How a move's price was set, in plain words, as the moves list says it after "Price: $0.000944 per NAM," and the CSV
+ * export's price_basis column carries it. Empty for a move without a price.
+ */
+export function priceBasisWords(how: PriceHow, at: number | null): string {
+  switch (how) {
+    case 'execution': return 'from this trade itself';
+    case 'swap_1h': return 'the median of that hour’s trades';
+    case 'spot': return 'the Osmosis quote when the move was recorded';
+    case 'pool_1h': return `${poolHourWords(at)}, as no Osmosis quote was stored for that minute`;
+    case 'unstated': return 'recorded with the move; how it was set is not stated';
+    default: return '';
+  }
+}

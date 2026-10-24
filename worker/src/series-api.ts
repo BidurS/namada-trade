@@ -25,7 +25,7 @@ import {
 } from '../../shared/types';
 import { encodeFlowCursor, type BeforeParam } from '../../shared/paging';
 import { fmtDay } from '../../shared/search-grammar';
-import { explorerHashOf } from '../../shared/flow-rules';
+import { explorerHashOf, priceAtOf } from '../../shared/flow-rules';
 import { label_plain, labelAuthorShort } from './labels';
 import { VALUE_WORDS } from '../../shared/copy';
 import { provAt, coverageOf, safeParseJson, settlePrices } from './analytics';
@@ -751,7 +751,7 @@ const feedOrder = (a: { ts: number; height: number; id: string }, b: { ts: numbe
 export function priceSourceOf(r: Pick<TradeDbRow, 'price_usd' | 'counter_denom' | 'counter_amount' | 'amount_num'>, meta: Record<string, unknown>): TradeRow['priceSource'] {
   if (r.price_usd == null) return null;
   const s = meta.priceSource;
-  if (s === 'execution' || s === 'swap_1h' || s === 'spot' || s === 'unknown') return s;
+  if (s === 'execution' || s === 'swap_1h' || s === 'spot' || s === 'pool_1h' || s === 'unknown') return s;
   if (r.counter_denom === 'USDC' && r.counter_amount && r.amount_num > 0) {
     const own = r.counter_amount / r.amount_num;
     if (Math.abs(own - r.price_usd) <= own * 1e-6) return 'execution';
@@ -772,6 +772,9 @@ export function tradeRowOf(r: TradeDbRow): TradeRow {
     explorerHash: explorerHashOf({ txHash: r.tx_hash, meta }), pattern: null,
   };
   if (row.priceUsd == null) row.priceNote = 'No price was recorded for this trade.';
+  // a price from the pool's hourly close says which hour (the stored price.pool_1h row it was read from)
+  const at = row.priceSource === 'pool_1h' ? priceAtOf({ meta }) : null;
+  if (at != null) row.priceAt = at;
   return row;
 }
 

@@ -7,7 +7,8 @@ import { useId, useRef, useState } from 'react';
 import type { Flow } from '../../../shared/types';
 import { kindSign } from '../lib/kinds';
 import { MINUS, fmtAddr, fmtAgo, fmtCoin, fmtCount, fmtNamRule, fmtUsdRule, fmtUtcLong, explorerTxOf, labelNeedsAddr } from '../lib/format';
-import { PRICE_SHORT, chainWord, coinWord, dayHm, priceHow, tagOf, timeEstimated, type PriceHow } from '../lib/flows';
+import { chainWord, coinWord, dayHm, priceHow, priceShort, tagOf, timeEstimated, type PriceHow } from '../lib/flows';
+import { priceAtOf, priceBasisWords } from '../../../shared/flow-rules';
 import { flowSettle, settleGasNote, settleWords } from '../lib/settle';
 import { settleUsd, type Settle } from '../../../shared/settle';
 import { tagByline } from '../../../shared/labels';
@@ -135,7 +136,7 @@ function TxRow({ f, now, isNew, onAddr, rowIndex }: { f: Flow; now: number; isNe
       <span className="tx__src" role="cell">
         <span className="tx__srcw">
           <span>{timeEstimated(f) ? 'Estimated time' : 'Block time'}</span>
-          <span>{settle ? 'settle price' : PRICE_SHORT[how]}</span>
+          <span>{settle ? 'settle price' : priceShort(how, priceAtOf(f))}</span>
         </span>
       </span>
       <span className="tx__rec" role="cell">
@@ -163,6 +164,7 @@ function Detail({ f, how, settle }: { f: Flow; how: PriceHow; settle: Settle | n
     : how === 'execution' ? `Price: ${price}, from this trade itself.`
     : how === 'swap_1h' ? `Price: ${price}, the median of that hour’s trades.`
     : how === 'spot' ? `Price: ${price}, the Osmosis quote when the move was recorded.`
+    : how === 'pool_1h' ? `Price: ${price}, ${priceBasisWords(how, priceAtOf(f))}.`
     : how === 'unstated' ? `Price: ${price}, recorded with the move; how it was set is not stated.`
     : 'No price was recorded for this move, so it has no dollar value.';
   return (

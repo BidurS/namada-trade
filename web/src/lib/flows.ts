@@ -2,7 +2,7 @@
 // streamed rows (the live feed merges them on top of a filtered page) and, through lib/compat.ts, pages
 // from a server that predates W1.
 import type { Flow } from '../../../shared/types';
-import { isBotFlow, isIbcRefund, isOtherCoin, onePerCrossing } from '../../../shared/flow-rules';
+import { hourEndingWords, isBotFlow, isIbcRefund, isOtherCoin, onePerCrossing, priceHowOf, type PriceHow } from '../../../shared/flow-rules';
 import { tagKindOf, type TagKind } from './kinds';
 import { fmtDayMonth } from './format';
 
@@ -70,26 +70,20 @@ export const tagOf = (f: Flow): TagKind => (isIbcRefund(f) ? 'bridgeRefund' : is
 /** The other coin of a trade in words ("USDC"; a raw denom is "another coin"). */
 export const coinWord = (d: string | null | undefined) => (!d ? null : d.startsWith('ibc/') ? 'another coin' : d);
 
-export type PriceHow = 'execution' | 'swap_1h' | 'spot' | 'unstated' | 'none';
-/** How the move's dollar price was set: from meta.priceSource, or a USDC trade's own price. */
-export function priceHow(f: Flow): PriceHow {
-  const s = meta(f).priceSource;
-  if (s === 'execution' || s === 'swap_1h' || s === 'spot') return s;
-  if (f.priceUsd == null) return 'none';
-  // a USDC trade's own price is its USDC amount divided by its NAM amount
-  if ((f.kind === 'buy' || f.kind === 'sell') && f.counterDenom === 'USDC' && f.counterAmount && f.amount > 0) {
-    const own = f.counterAmount / f.amount;
-    if (Math.abs(own - f.priceUsd) <= own * 1e-6) return 'execution';
-  }
-  return 'unstated';
-}
+export type { PriceHow };
+/** How the move's dollar price was set: from meta.priceSource, or a USDC trade's own price (shared/flow-rules.ts, as the CSV says it). */
+export const priceHow = (f: Flow): PriceHow => priceHowOf(f);
 export const PRICE_SHORT: Record<PriceHow, string> = {
   execution: "trade's own price",
   swap_1h: 'hourly median price',
   spot: 'quote at the time',
+  pool_1h: "pool's hourly close",
   unstated: 'price basis not stated',
   none: 'no price',
 };
+/** The short words for a price's basis; a pool close says its hour ("pool's hourly close, hour ending 19:00 UTC"). */
+export const priceShort = (how: PriceHow, at: number | null | undefined): string =>
+  how === 'pool_1h' && at != null ? `${PRICE_SHORT.pool_1h}, ${hourEndingWords(at)}` : PRICE_SHORT[how];
 /** The time was estimated from nearby blocks (older Osmosis rows). */
 export const timeEstimated = (f: Flow) => meta(f).tsSource === 'interpolated' || meta(f).tsSource === 'extrapolated';
 

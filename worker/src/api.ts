@@ -26,7 +26,7 @@ import {
   type ListingTimes, type HolderBaseRow, type HolderChain, type HolderSort, type HolderWalk, type WordKeys,
 } from './holders';
 import { label_plain, category_plain, labelAuthorShort, tagByline } from './labels';
-import { counterpartiesOf } from '../../shared/flow-rules';
+import { counterpartiesOf, priceAtOf, priceBasisWords, priceHowOf } from '../../shared/flow-rules';
 import { settleUsd } from '../../shared/settle';
 import {
   FLOW_SELECT, flowSelect, rowToFlow, safeParseJson, provAt, metricAt, coverageOf, pressure, blindSpot, alertsBetween, lastAlertBefore, metricSeries, withSettles, metricSeriesRolled, type HistoryPoint, osmosisNetIbc, orderflowSeries,
@@ -1481,10 +1481,11 @@ app.get('/api/export/flows', async (c) => {
   if (format === 'json') return c.json({ count: flows.length, total: matching, truncated: cut, asOf, flows }, 200, { ...(matching != null ? { 'X-Total-Count': String(matching) } : {}), 'X-Truncated': String(cut) });
   const meta = (f: { meta?: Record<string, unknown> | null }, k: string) => (f.meta && typeof f.meta[k] === 'string' ? (f.meta[k] as string) : '');
   const csv = csvOf(
-    // each label with where it came from and, for a wallet's tag ('user'), who wrote it, as the JSON export sends them
-    ['time_utc', 'chain', 'kind', 'nam', 'value_usd', 'price_usd', 'from', 'from_label', 'from_label_source', 'from_label_author', 'to', 'to_label', 'to_label_source', 'to_label_author', 'tx_hash', 'time_source', 'price_source', 'settle_usd_per_nam', 'settle_usd'],
+    // each label with where it came from and, for a wallet's tag ('user'), who wrote it, as the JSON export sends them;
+    // price_basis says how the price was set in the moves list's words (shared/flow-rules.ts priceBasisWords)
+    ['time_utc', 'chain', 'kind', 'nam', 'value_usd', 'price_usd', 'from', 'from_label', 'from_label_source', 'from_label_author', 'to', 'to_label', 'to_label_source', 'to_label_author', 'tx_hash', 'time_source', 'price_source', 'settle_usd_per_nam', 'settle_usd', 'price_basis'],
     flows.map((f) => [isoOrBlank(f.ts), f.chain, f.kind, f.amount, f.valueUsd ?? '', f.priceUsd ?? '', f.from ?? '', f.fromLabelPlain ?? '', f.fromLabelSource ?? '', f.fromLabelAuthor ?? '', f.to ?? '', f.toLabelPlain ?? '', f.toLabelSource ?? '', f.toLabelAuthor ?? '', f.txHash, meta(f, 'tsSource') || 'block', meta(f, 'priceSource'),
-      f.settle?.usdPerNam ?? '', f.settle ? settleUsd(f.settle) : '']),
+      f.settle?.usdPerNam ?? '', f.settle ? settleUsd(f.settle) : '', priceBasisWords(priceHowOf(f), priceAtOf(f))]),
   );
   return new Response(csv, { headers: exportHeaders('text/csv; charset=utf-8', `namada-trade-moves-${cut ? `newest-${flows.length}-${matching != null ? `of-${matching}-` : ''}` : ''}${Date.now()}.csv`, matching, flows.length, cut) });
 });

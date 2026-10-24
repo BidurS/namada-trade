@@ -10,6 +10,7 @@ import { useCallback, useEffect, useMemo, useState } from 'react';
 import type { AlertHit, AlertRuleId, AlertsRecentResponse } from '../../../../shared/types';
 import type { Settle } from '../../../../shared/settle';
 import { settleGasNote, settleWords } from '../../lib/settle';
+import { poolHourWords } from '../../../../shared/flow-rules';
 import { BODY } from '../../../../shared/copy';
 import type { ScreenProps } from '../../app/index';
 import { useClock, useHeaderPrice, useOverlays, useOverview, useReplay, useSession } from '../../app/index';
@@ -301,7 +302,8 @@ function HitRow({ h, now }: { h: AlertHit; now: number }) {
 /**
  * What a trade settled at for its trader: every coin their balance changed by, fees and gas in, with the rate each
  * non-USDC coin was valued at; for an older row, the USDC it paid or got per NAM from its own coins; or, when it has
- * no USD price of its own, the Osmosis quote stored for that minute, said as a quote; or that no price is on record.
+ * no USD price of its own, the Osmosis quote stored for that minute, said as a quote; or, with no quote stored for that
+ * minute, the pool's hourly close a repair set on the row, said with its hour; or that no price is on record.
  */
 function HitPrice({ h }: { h: AlertHit }) {
   const p = h.price;
@@ -314,7 +316,9 @@ function HitPrice({ h }: { h: AlertHit }) {
           ? <Settled s={p.settle} />
           : p.source === 'paid'
             ? <>Settled at {fmtUsdRule(p.usd)} a NAM, {total} in USDC.</>
-            : <>Paid in another coin, so no USD settle price; the Osmosis quote at {fmtUtcLong(p.at)} was {fmtUsdRule(p.usd)} a NAM (about {total}).</>}
+            : p.source === 'pool_1h'
+              ? <>Paid in another coin, so no USD settle price; no Osmosis quote was stored for that minute, and {poolHourWords(p.at)}, was {fmtUsdRule(p.usd)} a NAM (about {total}).</>
+              : <>Paid in another coin, so no USD settle price; the Osmosis quote at {fmtUtcLong(p.at)} was {fmtUsdRule(p.usd)} a NAM (about {total}).</>}
     </p>
   );
 }
