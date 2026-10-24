@@ -252,7 +252,9 @@ export default function Holders({
     else if (!eff.what && fresh.page === 1) setCatRows({ base: baseKey, rows: loaded, server: null });
   }, [fresh, eff.what, baseKey, loaded]);
   const cats = useMemo(() => {
-    const mine = catRows?.base === baseKey ? catRows : null;
+    // the answer on screen carries the server's counts: they are used in the render that draws its rows, so the chips
+    // never count the loaded rows for one frame first (a narrower set that then grows and moves the list down)
+    const mine = fresh?.cats ? { base: baseKey, rows: [], server: fresh.cats } : catRows?.base === baseKey ? catRows : null;
     const m = new Map<string, { label: string; n: number }>();
     const word = (k: string, plain?: string | null) => (k === 'none' ? 'No label' : plain ?? category_plain(k) ?? k);
     let allN: number;
@@ -274,7 +276,7 @@ export default function Holders({
     const list = [...m.entries()].sort((a, b) => (a[0] === 'none' ? 1 : b[0] === 'none' ? -1 : b[1].n - a[1].n));
     if (eff.what && !m.has(eff.what)) list.push([eff.what, { label: word(eff.what), n: 0 }]);
     return { list, allN, whole };
-  }, [catRows, baseKey, loaded, eff.what, fresh?.page]);
+  }, [catRows, baseKey, loaded, eff.what, fresh?.page, fresh?.cats]);
   /** The chip legend: plain "What" when the counts cover every holder, else what they count. */
   const catLegend = cats.whole || !cats.allN ? 'What' : `What, counted among the ${fmtCount(cats.allN)} biggest loaded`;
   const serverFiltered = !eff.what || loaded.every((h) => catKey(h) === eff.what);
@@ -393,14 +395,19 @@ export default function Holders({
   );
   const controls = (
     <>
-      <FilterSet label="Chain">
-        <Segmented label="Chain" value={eff.chain} onChange={(v) => set({ chain: v, what: null })} options={[{ value: 'namada', label: 'Namada' }, { value: 'osmosis', label: 'Osmosis' }, { value: 'all', label: 'Both' }]} />
-      </FilterSet>
-      {eff.chain !== 'osmosis' ? (
-        <FilterSet label="Biggest by">
-          <Segmented label="Biggest by" value={eff.by} onChange={(v) => set({ by: v })} options={[{ value: 'total', label: 'Total' }, { value: 'spendable', label: 'Spendable' }, { value: 'staked', label: 'Staked' }]} />
+      {/* Chain and Biggest by. From 1024 px, while both show, they are a row of their own: the What chips, whose number
+          and counts come with the answer, are wider than the room beside them, so they start the next row from the first
+          paint instead of moving there and pushing the list down when the answer lands. In the sheet the box is not drawn. */}
+      <div className={`act-frow${eff.chain !== 'osmosis' && !search ? ' act-frow--by' : ''}`}>
+        <FilterSet label="Chain">
+          <Segmented label="Chain" value={eff.chain} onChange={(v) => set({ chain: v, what: null })} options={[{ value: 'namada', label: 'Namada' }, { value: 'osmosis', label: 'Osmosis' }, { value: 'all', label: 'Both' }]} />
         </FilterSet>
-      ) : null}
+        {eff.chain !== 'osmosis' ? (
+          <FilterSet label="Biggest by">
+            <Segmented label="Biggest by" value={eff.by} onChange={(v) => set({ by: v })} options={[{ value: 'total', label: 'Total' }, { value: 'spendable', label: 'Spendable' }, { value: 'staked', label: 'Staked' }]} />
+          </FilterSet>
+        ) : null}
+      </div>
       <SelectChip
         label={catLegend}
         className="act-cats"
@@ -491,6 +498,10 @@ export default function Holders({
               </p>
             ) : null}
           </div>
+        ) : !fresh && !error ? (
+          // until this list's rows are in, its sentence about the 7-day changes is not known: one line is held for it,
+          // so the count line and the list do not move down when it lands
+          <div className="act-sentence act-sentence--wait" aria-hidden="true" />
         ) : null}
         <div className="act-head" ref={headRef}>
           <p className="act-count" aria-live="polite">

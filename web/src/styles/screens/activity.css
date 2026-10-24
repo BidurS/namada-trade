@@ -23,6 +23,8 @@
   .act-facts .facts__old { margin-top: var(--s-3); font-size: var(--t-13); line-height: var(--lh-13); }
   .act-facts .facts__old .dot { margin-top: 6px; }
   .act-facts .act-facts__note { margin-top: var(--s-3); }
+  /* the holder count in the note while it loads: about the width of "4,263" in the line's face */
+  .act-facts__nwait { display: inline-block; width: 4.5ch; height: 14px; vertical-align: middle; }
   .act-hero .scope__old { color: var(--c-ink); }
   .act-src-ph { min-height: 44px; margin-top: var(--s-2); }
 
@@ -39,6 +41,9 @@
   .act-fbody .seg { width: 100%; }
   .act-fset { min-width: 0; }
   .act-clear { justify-self: start; }
+  /* Holders: Chain and Biggest by (Holders.tsx). No box of its own in the sheet; from 1024 px a full row while both
+     show, so the What chips always start the row under them (their width arrives with the answer) */
+  .act-frow { display: contents; }
 
   /* search: 48 px box, 16 px text (no zoom on iOS), a 44 px clear button */
 
@@ -46,6 +51,8 @@
   .act-scope { display: grid; gap: 0; min-width: 0; }
   .act-scope .dl-scope { display: grid; gap: var(--s-4); min-width: 0; }
   .act-sentence { display: grid; gap: var(--s-1); margin-top: var(--s-4); font-size: var(--t-15); line-height: var(--lh-15); color: var(--c-ink-2); max-width: 60ch; }
+  /* the holder list's sentence slot while its rows load: one line, the height of the sentence most lists carry */
+  .act-sentence--wait { min-height: var(--lh-15); }
   .act-count { display: block; min-height: var(--lh-13); margin: var(--s-4) 0 var(--s-2); font-size: var(--t-13); line-height: var(--lh-13); color: var(--c-ink-2); }
   .act-count > [data-num] { color: var(--c-ink); }
   .act-count__sk { display: inline-block; width: min(60%, 320px); height: 14px; vertical-align: middle; }
@@ -166,6 +173,7 @@
     .act-filters .fset__l { margin-bottom: var(--s-2); }
     .act-filters .act-kinds { flex: 1 1 100%; order: 5; }
     .act-filters .act-cats { flex: 0 1 auto; }
+    .act-filters .act-frow--by { display: flex; flex: 1 1 100%; flex-wrap: wrap; align-items: inherit; gap: inherit; min-width: 0; }
     .act-filters .act-clear { align-self: flex-end; }
     .act-count { margin-top: var(--s-6); }
     .act-head { margin-top: var(--s-6); }

@@ -6,7 +6,7 @@
 // the filters (a sheet with a count badge below 1024 px, inline from 1024 px) and the list.
 // The URL is the state of both lists (urlState.ts, nav-search-plan 2.4): a filter, the sort, the text, the page and
 // the rows per page are query parameters; each page tab's link leads back to that list as it was left.
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useState, type ReactNode } from 'react';
 import { BODY } from '../../../../shared/copy';
 import type { Holder, Overview } from '../../../../shared/types';
 import type { ScreenProps } from '../../app/index';
@@ -89,11 +89,14 @@ const MOVE_LABELS = [`NAM bought on Osmosis, ${H24}`, `NAM sold on Osmosis, ${H2
 /** A figure whose request failed: the shell's bar under the header says why and offers Try again, once. */
 const NONE = <span data-num="" data-status="none">—</span>;
 
+/** The line under the strip, whose words do not wait for the figures: drawn while they load too, so the band does not grow when they land. */
+const MOVE_NOTE = <p className="cap act-facts__note">A negative net figure means more NAM was bridged from Osmosis to Namada than the other way.</p>;
+
 /** Transactions: what moved in the last 24 hours (bots left out of the Osmosis figures by the server). */
 function MoveFacts({ overview: o }: { overview: Overview | null }) {
   const now = useClock();
   const failed = useOverviewFailed();
-  if (!o) return <Fact items={failed ? MOVE_LABELS.map((label) => ({ n: NONE, label })) : waiting(MOVE_LABELS)} className="act-facts" />;
+  if (!o) return failed ? <Fact items={MOVE_LABELS.map((label) => ({ n: NONE, label }))} className="act-facts" /> : <Fact items={waiting(MOVE_LABELS)} className="act-facts">{MOVE_NOTE}</Fact>;
   const osm: Stamp = { ...o.dex.coverage, plain: 'Flow index' };
   const nam: Stamp = { ...o.namada.coverage, plain: 'Flow index' };
   const items: FactItem[] = [
@@ -113,7 +116,7 @@ function MoveFacts({ overview: o }: { overview: Overview | null }) {
       old={old && Number.isFinite(oldest)}
       oldSentence={<>The flow index last checked the chain {fmtAge(now - oldest)} ago, so these totals may miss later moves and are shown dimmed.</>}
     >
-      <p className="cap act-facts__note">A negative net figure means more NAM was bridged from Osmosis to Namada than the other way.</p>
+      {MOVE_NOTE}
     </Fact>
   );
 }
@@ -122,6 +125,19 @@ function MoveFacts({ overview: o }: { overview: Overview | null }) {
 // all NAM on Osmosis, pools included.
 const HOLDER_LABELS = ['holders on Namada', 'owned by the top 10', 'holders on Osmosis', 'of NAM on Osmosis owned by the top 10 wallets'];
 const MIN = 60_000;
+
+/**
+ * The line under the holder strip; `dust` is the count of holders under one NAM, or null when the server sends none.
+ * While the figures load it is drawn with a block where the count goes (as Home's holder sentence waits), so the band
+ * keeps its height when they land.
+ */
+const holderNote = (dust: ReactNode | null) => (
+  <p className="cap act-facts__note">
+    Every address with any NAM counts as a holder, however small the amount
+    {dust != null ? <>: {dust} of the holders on Namada hold under one NAM in all</> : null}.
+  </p>
+);
+const DUST_WAIT = <span className="skel__b act-facts__nwait" aria-hidden="true" />;
 
 /**
  * The ten biggest holders on one chain, for the age of the holder figures when the server does not stamp
@@ -160,7 +176,7 @@ function HolderFacts({ overview: o, rewoundAt }: { overview: Overview | null; re
   const nam = useTopHolders('namada', !!o && !serverHolderProv(o, 'namada'));
   const osm = useTopHolders('osmosis', !!o && !serverHolderProv(o, 'osmosis'));
   const failed = useOverviewFailed();
-  if (!o) return <Fact items={failed ? HOLDER_LABELS.map((label) => ({ n: NONE, label })) : waiting(HOLDER_LABELS)} className="act-facts" />;
+  if (!o) return failed ? <Fact items={HOLDER_LABELS.map((label) => ({ n: NONE, label }))} className="act-facts" /> : <Fact items={waiting(HOLDER_LABELS)} className="act-facts">{holderNote(DUST_WAIT)}</Fact>;
   const rwNote = rewoundAt ? REWIND_WORDS.balances(rewoundAt) : null;
   const namP = holderFiguresStamp(o, 'namada', nam.rows, nam.failed, rewoundAt, rwNote);
   const osmP = holderFiguresStamp(o, 'osmosis', osm.rows, osm.failed, rewoundAt, rwNote);
@@ -207,12 +223,8 @@ function HolderFacts({ overview: o, rewoundAt }: { overview: Overview | null; re
       sourceText={rewoundAt ? ` · ${sourcesText(scope)} · current, not as of the rewound time` : undefined}
     >
       {oldLine}
-      {namP && o.namada.holders != null ? (
-        <p className="cap act-facts__note">
-          Every address with any NAM counts as a holder, however small the amount
-          {dust != null ? <>: <Num v={dust} prov={namP} fmt={fmtCount} showAge={false} /> of the holders on Namada hold under one NAM in all</> : null}.
-        </p>
-      ) : null}
+      {/* the count waits with the figures above it (their stamp is its stamp) */}
+      {o.namada.holders != null ? holderNote(dust == null ? null : namP ? <Num v={dust} prov={namP} fmt={fmtCount} showAge={false} /> : DUST_WAIT) : null}
     </Fact>
   );
 }
