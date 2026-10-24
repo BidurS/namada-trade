@@ -11,7 +11,7 @@
 // - Every history entry carries { scrollY } in history.state (written when scrolling stops and before every
 //   push), so Back and Forward restore the scroll offset as well as the URL (nav-search-plan 2.4).
 import { useSyncExternalStore, type MouseEvent as ReactMouseEvent } from 'react';
-import { ROUTES, ROUTE_ALIASES, SITE, classifyPath, fullTitle, legacyHashTarget, type RouteDef, type RouteId } from '../../../shared/routes';
+import { ROUTES, SITE, aliasOf, classifyPath, fullTitle, legacyHashTarget, type RouteDef, type RouteId } from '../../../shared/routes';
 
 export type { RouteDef, RouteId };
 
@@ -106,7 +106,7 @@ function isOldHash(hash: string, boot: boolean): boolean {
   if (hash.startsWith('#/')) return true;
   if (!boot) return false;
   const seg = hash.slice(1).split('?')[0].toLowerCase();
-  return OLD_VIEW_IDS.includes(seg) || seg in ROUTE_ALIASES;
+  return OLD_VIEW_IDS.includes(seg) || aliasOf(seg) !== undefined;
 }
 
 /** The view for a path (after normalising). */

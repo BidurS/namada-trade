@@ -269,7 +269,20 @@ export const BODY: Record<string, PageCopy> = {
           'It does not trade, hold funds, give investment advice or ask for a wallet\'s secret. Signing in is a signed message that costs nothing and moves nothing, and what is stored is the alert choices and where they are sent.',
         ],
       },
+      {
+        h2: 'Is NamadaTrade run by the Namada team?',
+        paras: [
+          'No. NamadaTrade is an independent site. It is not run by or affiliated with the Anoma Foundation, which operates namada.net, with Heliax, or with any other team that builds Namada. It reads public data from Namada and Osmosis, and its guides cite Namada\'s own docs, specs, site, blog or code for each paragraph about the network.',
+        ],
+      },
     ],
+  },
+  guides: {
+    paras: [
+      'Plain guides to the questions people ask about Namada and NAM, each written from Namada\'s own documentation, specifications and posts, with a numbered source after every paragraph.',
+      'No live figure is typed into a guide: where a number changes, such as the staking rate, the unstaking wait or the price, the guide links the page of this site that shows it now, with its source and age.',
+    ],
+    facts: [],
   },
 };
 

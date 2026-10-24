@@ -251,7 +251,7 @@ export function Osmosis({ route }: ScreenProps) {
           <GoLink to="/holders">Who holds NAM</GoLink>
         </QSection>
 
-        <Related paths={['/trade', '/activity', '/supply', '/learn/how-nam-trading-works']} />
+        <Related paths={['/guides/how-to-buy-nam', '/trade', '/activity', '/supply', '/learn/how-nam-trading-works']} />
       </Band>
     </article>
   );

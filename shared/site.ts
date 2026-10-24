@@ -27,4 +27,15 @@ export const SITE = {
   privacy: 'This site loads no analytics or advertising scripts, and its fonts are served from this site. Cloudflare, which hosts it, sees standard request data such as IP addresses.',
   /** Trade ticket and Home mini-ticket. */
   quoteNotOrder: 'An Osmosis quote, not an order. This site never trades for you.',
+  /**
+   * Ownership tokens of the search engines' webmaster tools (public by design: they sit in every page's <head>
+   * and in the two files worker/src/hosts.ts answers). Removing one unverifies the site.
+   */
+  verify: {
+    /** Google Search Console: the meta tag's content, and the HTML file's name. */
+    google: 'y8MMHleNrKmUJyxHkUw0Dan_z39wLvq4SD_G2FmiEJo',
+    googleFile: 'google759de8fb39112be6.html',
+    /** Bing Webmaster Tools: msvalidate.01, and the <user> of /BingSiteAuth.xml. */
+    bing: '241A8F4305CDCFD2D9EAEA30B9EF8E3F',
+  },
 } as const;

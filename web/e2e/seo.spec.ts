@@ -220,7 +220,7 @@ test.describe('once', () => {
     await expect(page.locator('h1')).toHaveText(NOT_FOUND.h1);
     const main = page.locator('main');
     for (const t of TABS) await expect(main.getByRole('link', { name: pageLink(t.label) })).toHaveAttribute('href', t.path);
-    for (const r of ROUTES.filter((x) => x.index && !TABS.some((t) => t.path === x.path))) await expect(main.getByRole('link', { name: pageLink(r.label) })).toBeVisible();
+    for (const r of ROUTES.filter((x) => x.index && !x.guide && !TABS.some((t) => t.path === x.path))) await expect(main.getByRole('link', { name: pageLink(r.label) })).toBeVisible();
     await main.getByRole('button', { name: 'Search' }).click();
     await expect(page.locator('dialog.pal')).toBeVisible();
   });

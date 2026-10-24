@@ -155,7 +155,7 @@ export function Learn({ route }: ScreenProps) {
             ]}
           />
         </QSection>
-        <Related paths={['/staking', '/osmosis', '/supply', '/trade', '/shielded']} />
+        <Related paths={['/guides/how-to-buy-nam', '/staking', '/osmosis', '/supply', '/trade', '/shielded']} />
       </Band>
     </article>
   );

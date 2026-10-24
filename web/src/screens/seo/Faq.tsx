@@ -42,7 +42,7 @@ export function Faq({ route }: ScreenProps) {
   const { rewound } = useReplay();
   const { openSources } = useOverlays();
   const { o, loading } = useOv();
-  const [qPrice, qShielded, qAge, qData, qBuy, qNot] = copy.sections!;
+  const [qPrice, qShielded, qAge, qData, qBuy, qNot, qWho] = copy.sections!;
 
   const priceP: Stamp | null = o ? o.price.usd.prov : null;
   const tradeP: Stamp | null = o ? o.price.swap1h.prov : null;
@@ -140,9 +140,13 @@ export function Faq({ route }: ScreenProps) {
           <Q id="q-not" h2={qNot.h2} paras={qNot.paras}>
             <p className="seo-p">{SITE.privacy}</p>
           </Q>
+
+          <Q id="q-who" h2={qWho.h2} paras={qWho.paras}>
+            <GoLink to="/guides">Guides to Namada, with their sources</GoLink>
+          </Q>
         </div>
         {rewound ? <Say>{REWIND_WORDS.bannerMore}</Say> : null}
-        <Related paths={['/trade', '/shielded', '/staking', '/osmosis', '/learn/how-nam-trading-works']} />
+        <Related paths={['/trade', '/shielded', '/staking', '/osmosis', '/learn/how-nam-trading-works', '/guides']} />
       </Band>
     </article>
   );

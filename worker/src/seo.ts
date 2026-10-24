@@ -5,8 +5,10 @@
 // in the raw HTML is also the visible text. Nothing here invents numbers: every figure is read from the
 // same metrics the API serves, carries the time it was recorded, and is left out when missing.
 import type { Env } from './util';
-import { ROUTES, TABS, EXPLAINER_ROUTES, classifyPath, routeByPath, fullTitle, type RouteDef } from '../../shared/routes';
+import { ROUTES, TABS, EXPLAINER_ROUTES, GUIDE_ROUTES, classifyPath, routeByPath, fullTitle, type RouteDef } from '../../shared/routes';
 import { SITE, BODY, NOT_FOUND, type FactKey, type PageCopy } from '../../shared/copy';
+import { GUIDES } from '../../shared/guides';
+import { citations, GUIDE_INDEPENDENCE, type GPara } from '../../shared/guide-types';
 import { metricAt, cachedChainParams, coverageOf, unbondingWait } from './analytics';
 import { holderFigureValues, listingTimes } from './holders';
 
@@ -124,12 +126,57 @@ function navHtml(): string {
 export function pageHtml(route: RouteDef, f: Facts | null): string {
   const body: PageCopy | undefined = BODY[route.id];
   const shown = new Set<FactKey>();
-  const sections = (body?.sections ?? []).map((s) => `<section><h2 style="${S.h2}">${esc(s.h2)}</h2>\n${paras(s.paras)}\n${factList(s.facts ?? [], f, shown)}</section>`).join('\n');
+  const sections = route.id === 'guides'
+    ? guideListHtml()
+    : (body?.sections ?? []).map((s) => `<section><h2 style="${S.h2}">${esc(s.h2)}</h2>\n${paras(s.paras)}\n${factList(s.facts ?? [], f, shown)}</section>`).join('\n');
   return `<div id="ssr" style="${S.root}"><div style="${S.wrap}">
 <h1 style="${S.h1}">${esc(route.h1)}</h1>
 ${paras(body?.paras ?? [route.description])}
 ${factList(body?.facts ?? [], f, shown)}
 ${sections}
+${navHtml()}
+<p class="ssr-2" style="${S.small}">${esc(SITE.disclaimer)}</p>
+</div></div>`;
+}
+
+/** The guides' list: each guide's question as an H2 link with its description. */
+function guideListHtml(): string {
+  // the heading's own line height: S.a's fixed 16 px line would draw a wrapped 24 px heading over itself
+  const a = 'color:#f5f5f5;text-decoration:underline;text-underline-offset:4px';
+  return GUIDE_ROUTES.map((g) => `<section><h2 style="${S.h2}"><a href="${g.path}" style="${a}">${esc(g.h1)}</a></h2>\n<p style="${S.p}">${esc(g.description)}</p></section>`).join('\n');
+}
+
+const sup = 'font-size:12px;line-height:0;vertical-align:super;margin-left:2px';
+const citeHtml = (p: GPara, num: Record<string, number>) => p.src.filter((id) => num[id] != null)
+  .map((id) => `<a href="#src-${num[id]}" style="${sup};color:inherit">[${num[id]}]</a>`).join('');
+const gparas = (ps: GPara[], num: Record<string, number>) => ps.map((p) => `<p style="${S.p}">${esc(p.t)}${citeHtml(p, num)}</p>`).join('\n');
+
+/**
+ * A guide as served before the app mounts: the date it was checked, the H1, the lead, each section with its
+ * citations and links to the pages that show the live figures, the questions, the numbered sources, the
+ * independence line, links and the disclaimer. The same text the guide screen renders.
+ */
+export function guideHtml(route: RouteDef): string {
+  const g = route.guide ? GUIDES[route.guide] : undefined;
+  if (!g) return pageHtml(route, null);
+  const { list, num } = citations(g);
+  const sections = g.sections.map((s) => `<section><h2 id="${s.id}" style="${S.h2}">${esc(s.h2)}</h2>
+${gparas(s.paras, num)}
+${s.see?.length ? `<p style="${S.p}">${s.see.map((x) => `<a href="${x.to}" style="${S.a}">${esc(x.label)}</a>`).join(' · ')}</p>` : ''}</section>`).join('\n');
+  const faq = g.faq.map((q) => `<h3 style="${S.p};font-weight:600;margin-top:20px">${esc(q.q)}</h3>\n${gparas(q.a, num)}`).join('\n');
+  const sources = list.map((x) => `<li id="src-${x.n}" style="${S.li}"><a href="${esc(x.source.url)}" rel="noopener" style="${S.a}">${esc(x.source.publisher)}: ${esc(x.source.title)}</a></li>`).join('');
+  const related = g.related.map((p) => routeByPath(p)).filter((r): r is RouteDef => !!r);
+  return `<div id="ssr" style="${S.root}"><div style="${S.wrap}">
+<p class="ssr-2" style="${S.stamp}">Guide · checked against its sources on ${esc(route.updated ?? '')}</p>
+<h1 style="${S.h1}">${esc(route.h1)}</h1>
+${gparas(g.lead, num)}
+${sections}
+<section><h2 id="questions" style="${S.h2}">Questions</h2>
+${faq}</section>
+<section><h2 id="sources" style="${S.h2}">Sources</h2>
+<ol style="${S.ul}">${sources}</ol></section>
+<p class="ssr-2" style="${S.small}">${esc(GUIDE_INDEPENDENCE)}</p>
+${related.length ? `<nav aria-label="Related" style="${S.nav}">${related.map((x) => `<a href="${x.path}" style="${S.a}">${esc(x.label)}</a>`).join('')}</nav>` : ''}
 ${navHtml()}
 <p class="ssr-2" style="${S.small}">${esc(SITE.disclaimer)}</p>
 </div></div>`;
@@ -144,13 +191,33 @@ ${navHtml()}
 </div></div>`;
 }
 
+/** The canonical URL of a route. */
+const canonicalOf = (r: RouteDef) => `${SITE.origin}${r.path === '/' ? '/' : r.path}`;
+
+/** The crumbs from Home to a route: Home › (Guides ›) the page. */
+function breadcrumbs(route: RouteDef): RouteDef[] {
+  const home = ROUTES[0];
+  if (route.path === '/') return [home];
+  const hub = routeByPath('/guides');
+  return route.guide && hub ? [home, hub, route] : [home, route];
+}
+
 /**
- * Structured data: WebSite on the home page only (its url the canonical '/'), FAQPage on the questions page. No
+ * Structured data, only what the page states visibly: WebSite on the home page (its url the canonical '/'), a
+ * BreadcrumbList on every other indexable page, FAQPage on the questions page and on each guide (the questions are
+ * on the page), and Article on each guide, with the date its text was checked and the sources it cites. No
  * WebApplication: Google's software-app result needs a rating or review, which this site cannot honestly give.
  */
 export function jsonLd(route: RouteDef, _f: Facts | null): string | null {
   const data: unknown[] = [];
-  if (route.id === 'home') data.push({ '@context': 'https://schema.org', '@type': 'WebSite', name: SITE.name, url: `${SITE.origin}/`, description: SITE.description, inLanguage: 'en' });
+  const org = { '@type': 'Organization', name: SITE.name, url: `${SITE.origin}/` };
+  if (route.id === 'home') data.push({ '@context': 'https://schema.org', '@type': 'WebSite', name: SITE.name, alternateName: ['Namada Trade', 'namada.trade'], url: `${SITE.origin}/`, description: SITE.description, inLanguage: 'en' });
+  else {
+    data.push({
+      '@context': 'https://schema.org', '@type': 'BreadcrumbList',
+      itemListElement: breadcrumbs(route).map((r, i) => ({ '@type': 'ListItem', position: i + 1, name: r.label, item: canonicalOf(r) })),
+    });
+  }
   // The questions page states its questions and answers visibly (same copy), so they can be marked up as such.
   const sections = BODY[route.id]?.sections;
   if (route.id === 'faq' && sections?.length) {
@@ -159,33 +226,63 @@ export function jsonLd(route: RouteDef, _f: Facts | null): string | null {
       mainEntity: sections.map((s) => ({ '@type': 'Question', name: s.h2, acceptedAnswer: { '@type': 'Answer', text: s.paras.join(' ') } })),
     });
   }
+  const g = route.guide ? GUIDES[route.guide] : undefined;
+  if (g) {
+    data.push({
+      '@context': 'https://schema.org', '@type': 'Article',
+      headline: route.h1, description: route.description, inLanguage: 'en', url: canonicalOf(route), mainEntityOfPage: canonicalOf(route),
+      datePublished: g.published, dateModified: route.updated, image: `${SITE.origin}/og.png`, author: org, publisher: org, isAccessibleForFree: true,
+      citation: citations(g).list.map((x) => ({ '@type': 'CreativeWork', name: `${x.source.publisher}: ${x.source.title}`, url: x.source.url })),
+    });
+    if (g.faq.length) {
+      data.push({
+        '@context': 'https://schema.org', '@type': 'FAQPage',
+        mainEntity: g.faq.map((q) => ({ '@type': 'Question', name: q.q, acceptedAnswer: { '@type': 'Answer', text: q.a.map((p) => p.t).join(' ') } })),
+      });
+    }
+  }
   if (!data.length) return null;
   return `<script type="application/ld+json">${JSON.stringify(data).replace(/</g, '\\u003c')}</script>`;
 }
 
-/** Rewrite the SPA shell for a path. Unknown paths get status 404 and noindex. */
+/**
+ * Query parameters that only track a visit (the page is the same page). Any other parameter makes the URL a view of
+ * a list (a search, a filter, a page number, a rewound time): crawlable, never indexed, canonical to the plain page.
+ */
+const TRACKING = /^(utm_[a-z_]+|gclid|fbclid|msclkid|mc_cid|mc_eid|ref)$/i;
+export const isListView = (q: URLSearchParams): boolean => [...q.keys()].some((k) => !TRACKING.test(k));
+
+/** Rewrite the SPA shell for a path. Unknown paths get status 404 and noindex; views of a list get noindex. */
 export async function seoHtml(env: Env, req: Request, res: Response): Promise<Response> {
   const url = new URL(req.url);
   const found = routeByPath(url.pathname);
   const route = found ?? ROUTES[0];
   let f: Facts | null = null;
-  try { f = await facts(env); } catch {}
+  // a guide and the guides' list state no figure, so they never wait on the database
+  if (found && !found.updated) {
+    try { f = await facts(env); } catch {}
+  }
 
   const title = !found ? `Page not found · ${SITE.name}` : fullTitle(route);
-  const canonical = `${SITE.origin}${route.path === '/' ? '/' : route.path}`;
-  const indexable = !!found && route.index;
+  const canonical = canonicalOf(route);
+  const indexable = !!found && route.index && !isListView(url.searchParams);
   const description = found ? route.description : SITE.description;
-  const inner = !found ? notFoundHtml() : route.index ? pageHtml(route, f) : null;
+  const inner = !found ? notFoundHtml() : route.guide ? guideHtml(route) : route.index ? pageHtml(route, f) : null;
+  const article = !!found && !!route.guide;
+  const v = SITE.verify;
   const head = `
 <meta name="description" content="${esc(description)}">
-<meta name="robots" content="${indexable ? 'index,follow,max-image-preview:large' : 'noindex,nofollow'}">
+<meta name="robots" content="${indexable ? 'index,follow,max-image-preview:large' : !found ? 'noindex,nofollow' : 'noindex,follow'}">
 ${found ? `<link rel="canonical" href="${canonical}">` : ''}
-<meta property="og:type" content="website">
+<meta name="google-site-verification" content="${esc(v.google)}">
+<meta name="msvalidate.01" content="${esc(v.bing)}">
+<meta property="og:type" content="${article ? 'article' : 'website'}">
 <meta property="og:site_name" content="${esc(SITE.name)}">
 <meta property="og:locale" content="en_US">
 <meta property="og:title" content="${esc(title)}">
 <meta property="og:description" content="${esc(description)}">
 ${found ? `<meta property="og:url" content="${canonical}">` : ''}
+${article && route.updated ? `<meta property="article:modified_time" content="${esc(route.updated)}">` : ''}
 <meta property="og:image" content="${SITE.origin}/og.png">
 <meta property="og:image:alt" content="NamadaTrade: what moved, who moved it, and what it costs to trade NAM">
 <meta property="og:image:width" content="1200">
@@ -205,6 +302,10 @@ ${indexable ? jsonLd(route, f) ?? '' : ''}`;
     .transform(res);
   const h = new Headers(out.headers);
   h.set('cache-control', 'public, max-age=0, must-revalidate');
+  // the static shell's validators describe the shell, not this page with its figures of this minute
+  h.delete('etag');
+  h.delete('last-modified');
+  if (!indexable) h.set('X-Robots-Tag', found ? 'noindex' : 'noindex, nofollow');
   return new Response(out.body, { status: found ? out.status : 404, headers: h });
 }
 
@@ -230,11 +331,65 @@ Sitemap: ${SITE.origin}/sitemap.xml
   return new Response(body, { headers: { 'content-type': 'text/plain; charset=utf-8', 'cache-control': 'public, max-age=3600' } });
 }
 
-/** Every indexable route, nothing else. */
-export function sitemapXml(): Response {
-  const today = new Date().toISOString().slice(0, 10);
-  const urls = ROUTES.filter((r) => r.index).map((r) => `  <url><loc>${SITE.origin}${r.path === '/' ? '/' : r.path}</loc><lastmod>${today}</lastmod></url>`);
-  return new Response(`<?xml version="1.0" encoding="UTF-8"?>\n<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">\n${urls.join('\n')}\n</urlset>\n`, { headers: { 'content-type': 'application/xml; charset=utf-8', 'cache-control': 'public, max-age=3600' } });
+/** A time as the sitemap writes it (W3C datetime, to the second, UTC). */
+const w3c = (ms: number) => new Date(ms).toISOString().replace(/\.\d{3}Z$/, 'Z');
+
+/**
+ * The day or time a route's content last changed, or null when it is not known: a guide (and the guides' list) has
+ * the day its text was checked; a page that states live figures changes with them, so its date is the time of the
+ * newest figure it states. With no figure read, the date is left out rather than guessed.
+ */
+export function lastmodOf(route: RouteDef, f: Facts | null): string | null {
+  if (route.updated) return route.updated;
+  const keys = [...(BODY[route.id]?.facts ?? []), ...(BODY[route.id]?.sections ?? []).flatMap((s) => s.facts ?? [])];
+  const times = keys.map((k) => f?.[k]?.at).filter((t): t is number => typeof t === 'number' && Number.isFinite(t));
+  return times.length ? w3c(Math.max(...times)) : null;
+}
+
+/** Every indexable route, nothing else, each with the date its content last changed when that is known. */
+export async function sitemapXml(env: Env | null): Promise<Response> {
+  let f: Facts | null = null;
+  if (env) {
+    try { f = await facts(env); } catch {}
+  }
+  const urls = ROUTES.filter((r) => r.index).map((r) => {
+    const mod = lastmodOf(r, f);
+    return `  <url><loc>${canonicalOf(r)}</loc>${mod ? `<lastmod>${mod}</lastmod>` : ''}</url>`;
+  });
+  return new Response(`<?xml version="1.0" encoding="UTF-8"?>\n<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">\n${urls.join('\n')}\n</urlset>\n`, { headers: { 'content-type': 'application/xml; charset=utf-8', 'cache-control': 'public, max-age=600' } });
+}
+
+/**
+ * /llms.txt (llmstxt.org): what the site is, in a few lines, and every indexable page with what it answers, so a
+ * language model reading the site starts from the right page. No figure is typed: the pages state them.
+ */
+export function llmsTxt(): Response {
+  const line = (r: RouteDef) => `- [${r.label}](${canonicalOf(r)}): ${r.description}`;
+  const pages = ROUTES.filter((r) => r.index && !r.guide && r.id !== 'guides');
+  const body = `# ${SITE.name}
+
+> ${SITE.description} ${SITE.disclaimer}
+
+Every figure on the pages below states its source and the time it was read; the sources are Namada nodes, indexer.namada.net and the Osmosis router. The guides explain Namada in plain words and cite Namada's own documentation for every claim. The site is read-only: it never trades or holds funds.
+
+## Pages
+
+${pages.map(line).join('\n')}
+
+## Guides
+
+- [Guides](${SITE.origin}/guides): every guide, with what it answers
+${GUIDE_ROUTES.map(line).join('\n')}
+
+## Data
+
+- [Overview (JSON)](${SITE.origin}/api/overview): the figures behind the home page, each with its source and time
+
+## Optional
+
+- [Source code](${SITE.repo}): the site's code, MIT licence
+`;
+  return new Response(body, { headers: { 'content-type': 'text/plain; charset=utf-8', 'cache-control': 'public, max-age=3600' } });
 }
 
 export { classifyPath };

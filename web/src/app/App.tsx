@@ -57,6 +57,7 @@ import { SessionProvider } from './session';
 import { TabBar } from './TabBar';
 import { UpdateBanner } from './UpdateBanner';
 import { StaleBanner } from './StaleBanner';
+import { GUIDE_ROUTES } from '../../../shared/routes';
 
 export interface ScreenProps {
   view: ViewId;
@@ -80,8 +81,12 @@ const LOADERS: Partial<Record<ViewId, Loader>> = {
   learn: () => seo().then((m) => ({ default: m.Learn })),
   faq: () => seo().then((m) => ({ default: m.Faq })),
   notfound: () => seo().then((m) => ({ default: m.NotFound })),
+  guides: () => seo().then((m) => ({ default: m.Guides })),
 };
 LOADERS.holders = LOADERS.activity;
+// every guide is drawn by the one guide screen (one loader, so moving between guides keeps it mounted)
+const guideLoader: Loader = () => seo().then((m) => ({ default: m.Guide }));
+for (const r of GUIDE_ROUTES) LOADERS[r.id] = guideLoader;
 
 // The kit's demo route, development only (web/src/ui/Demo.tsx, written by the UI kit team).
 const DEMO = import.meta.env.DEV ? import.meta.glob<{ default?: ComponentType; Demo?: ComponentType }>('../ui/Demo.tsx') : {};

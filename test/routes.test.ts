@@ -20,7 +20,7 @@ const BANNED = [/\bSQS\b/i, /\bIBC\b/i, /\bDEX\b/i, /\bPoS\b/i, /\bMASP\b/i, /\b
 function visibleStrings(): [string, string][] {
   const out: [string, string][] = [];
   for (const r of ROUTES) for (const k of ['h1', 'title', 'description', 'label'] as const) out.push([`${r.id}.${k}`, r[k]]);
-  for (const [k, v] of Object.entries(COPY_SITE)) if (k !== 'origin') out.push([`SITE.${k}`, v]);
+  for (const [k, v] of Object.entries(COPY_SITE)) if (k !== 'origin' && typeof v === 'string') out.push([`SITE.${k}`, v]);
   for (const [id, b] of Object.entries(BODY)) {
     b.paras.forEach((p, i) => out.push([`BODY.${id}.paras[${i}]`, p]));
     (b.sections ?? []).forEach((s, i) => {
@@ -77,7 +77,8 @@ describe('search-facing route copy', () => {
   });
 
   it('every indexable route has page copy, and every page names its figures instead of typing them (N2)', () => {
-    for (const r of ROUTES.filter((x) => x.index)) {
+    // a guide's text is in shared/guides.ts (test/guides.test.ts holds it to the same rules)
+    for (const r of ROUTES.filter((x) => x.index && !x.guide)) {
       const b = BODY[r.id];
       expect(b, `BODY for ${r.id}`).toBeDefined();
       expect(b.paras.length, `lead for ${r.id}`).toBeGreaterThan(0);
@@ -131,7 +132,8 @@ describe('what the Worker does with a path', () => {
     expect(act('/index.html')).toEqual({ kind: 'redirect', to: '/' });
     expect(act('/learn/how-nam-trading-works/')).toEqual({ kind: 'redirect', to: '/learn/how-nam-trading-works' });
     expect(act('/Learn/How-NAM-Trading-Works')).toEqual({ kind: 'redirect', to: '/learn/how-nam-trading-works' });
-    expect(act('/favicon.ico')).toMatchObject({ kind: 'redirect' });
+    // a real icon served by the static host (web/public/favicon.ico), never a redirect
+    expect(act('/favicon.ico')).toEqual({ kind: 'not_found', asset: true });
   });
 
   it('301s every old path to its new home', () => {
@@ -183,7 +185,7 @@ describe('what the Worker does with a path', () => {
 
 describe('sitemap, robots and the server-rendered page', () => {
   it('the sitemap lists every indexable route once and nothing private', async () => {
-    const xml = await sitemapXml().text();
+    const xml = await (await sitemapXml(null)).text();
     const locs = [...xml.matchAll(/<loc>([^<]+)<\/loc>/g)].map((m) => m[1]);
     const want = ROUTES.filter((r) => r.index).map((r) => `${SITE.origin}${r.path === '/' ? '/' : r.path}`);
     expect(locs).toEqual(want);
@@ -200,7 +202,7 @@ describe('sitemap, robots and the server-rendered page', () => {
   });
 
   it('renders the H1, the copy, the sections and the disclaimer on the black ground, with no figure when none is known', () => {
-    for (const r of ROUTES.filter((x) => x.index)) {
+    for (const r of ROUTES.filter((x) => x.index && !x.guide)) {
       const html = pageHtml(r, null);
       const esc = (s: string) => s.replace(/&/g, '&amp;').replace(/'/g, '&#39;').replace(/"/g, '&quot;');
       expect(html.match(/<h1\b/g)?.length, `one h1 on ${r.path}`).toBe(1);
@@ -236,16 +238,22 @@ describe('sitemap, robots and the server-rendered page', () => {
     expect(jsonLd(routeById('home'), null)).not.toContain('FAQPage');
   });
 
-  it('structured data is only what Google can accept honestly: WebSite on the home page, FAQPage on the questions page', () => {
+  it('structured data is only what the page states: WebSite on the home page, crumbs elsewhere, FAQPage where questions are answered, Article on guides', () => {
     const parse = (id: string) => { const ld = jsonLd(routeById(id), null); return ld ? JSON.parse(ld.replace(/^<script[^>]*>|<\/script>$/g, '')) : []; };
     for (const r of ROUTES) {
       const types = parse(r.id).map((d: any) => d['@type']);
       // A software-app result needs a rating or review, which this site cannot honestly give.
       expect(types, r.path).not.toContain('WebApplication');
       expect(types.includes('WebSite'), r.path).toBe(r.id === 'home');
+      expect(types.includes('BreadcrumbList'), r.path).toBe(r.id !== 'home');
+      expect(types.includes('FAQPage'), r.path).toBe(r.id === 'faq' || !!r.guide);
+      expect(types.includes('Article'), r.path).toBe(!!r.guide);
     }
     expect(parse('home')[0].url).toBe(`${SITE.origin}/`);
-    expect(jsonLd(routeById('trade'), null)).toBeNull();
+    expect(parse('home')[0].alternateName).toContain('Namada Trade');
+    const trade = parse('trade');
+    expect(trade.map((d: any) => d['@type'])).toEqual(['BreadcrumbList']);
+    expect(trade[0].itemListElement.map((c: any) => c.item)).toEqual([`${SITE.origin}/`, `${SITE.origin}/trade`]);
   });
 
   it('robots.txt blocks no public read path the pages fetch (rules match by prefix: /api/me would block /api/metrics)', async () => {

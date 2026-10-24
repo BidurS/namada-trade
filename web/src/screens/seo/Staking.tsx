@@ -172,7 +172,7 @@ export function Staking({ route }: ScreenProps) {
           {rewound && at ? <Say>{`Figures are as they were at ${fmtUtcLong(at)}.`}</Say> : null}
         </QSection>
 
-        <Related paths={['/supply', '/learn/how-nam-trading-works', '/osmosis', '/holders']} />
+        <Related paths={['/guides/how-to-stake-nam', '/supply', '/learn/how-nam-trading-works', '/osmosis', '/holders']} />
       </Band>
     </article>
   );

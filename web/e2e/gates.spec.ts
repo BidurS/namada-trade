@@ -296,7 +296,7 @@ const findBanned = (text: string) => BANNED.filter((b) => b.re.test(text)).map((
 
 /** Words that keep a capital inside a sentence-case heading. */
 const MONTHS = new Set(['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun']);
-const PROPER = new Set(['Ethereum', 'Google', 'Cloudflare', 'NAM', 'Namada', 'Osmosis', 'USDC', 'UTC', 'Discord', 'Keplr', 'Keychain', 'Anoma', 'Foundation', 'Heliax', 'API', 'CSV', 'QR', 'I', 'NamadaTrade', 'Namada’s', "Namada's", 'Osmosis’s']);
+const PROPER = new Set(['Ethereum', 'Google', 'Cloudflare', 'NAM', 'Namada', 'Osmosis', 'USDC', 'UTC', 'Discord', 'Keplr', 'Keychain', 'Anoma', 'Foundation', 'Heliax', 'Zcash', 'Sapling', 'Namadillo', 'Ledger', 'Cosmos', 'CometBFT', 'Solana', 'API', 'CSV', 'QR', 'I', 'NamadaTrade', 'Namada’s', "Namada's", 'Osmosis’s']);
 
 test.describe('G5 copy, rendered', () => {
   test.beforeEach(({}, info) => test.skip(onlyIn(info.project.name), 'runs once'));
