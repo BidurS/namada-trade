@@ -91,7 +91,7 @@ describe('Security review (2026-10-22), the reason a wallet waits travels with t
     // An alert's post to the link is answered 429 with a two-second Retry-After: the link is paused here that long.
     answer = () => rateLimited(2);
     t += 60_000;
-    await sendDiscordWhaleAlert(undefined, moveFromWatched(1), null, db as any, 10000);
+    await sendDiscordWhaleAlert(undefined, moveFromWatched(1), db as any, 10000);
     expect(d.to(SHARED)).toBe(2);
     // A second wallet of the community saves the same link within the pause.
     const b = await signIn(db, addr('commtwo'));
@@ -123,11 +123,11 @@ describe('Security review (2026-10-22), the reason a wallet waits travels with t
     answer = () => rateLimited(2);
     for (let i = 0; i < RATE_LIMITED_HOLD_AFTER; i++) {
       t += 60_000;
-      await sendDiscordWhaleAlert(undefined, moveFromWatched(10 + i), null, db as any, 10000);
+      await sendDiscordWhaleAlert(undefined, moveFromWatched(10 + i), db as any, 10000);
     }
     expect(d.to(BUSY)).toBe(1 + RATE_LIMITED_HOLD_AFTER);
     t += 60_000;
-    await sendDiscordWhaleAlert(undefined, moveFromWatched(20), null, db as any, 10000);
+    await sendDiscordWhaleAlert(undefined, moveFromWatched(20), db as any, 10000);
     expect(d.to(BUSY)).toBe(1 + RATE_LIMITED_HOLD_AFTER); // held: not posted
     const b = await signIn(db, addr('busytwo'));
     const held = await put(db, b, { channels: { discord: { enabled: true, webhookUrl: BUSY } } });

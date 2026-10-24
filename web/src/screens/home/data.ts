@@ -10,12 +10,12 @@
 // The shell's fetch wrapper adds ?at= to every /api GET while rewound; asOf is passed as well.
 import { useEffect, useMemo, useState } from 'react';
 import type { AlertHit, AlertRuleInfo, Flow, FlowsResponse, HoldersResponse, Pressure, PriceQuote, QuoteCurveResponse } from '../../../../shared/types';
-import { isInternal } from '../../../../shared/alerts';
 import { type AlertsWithLast, fetchAlertRules, fetchAlertsRecentWithLast, fetchHolders, fetchLatestMoves, fetchMetricHistory, fetchPressure, fetchQuote, fetchQuoteCurve } from '../../api';
 import { applyFlowRules, mergeFlows } from '../../lib/flows';
 import { fmtAddr, fmtUtcClock } from '../../lib/format';
 import { ageOutStamps } from '../../lib/prov';
 import type { TagKind } from '../../lib/kinds';
+import { partyOf as sharedPartyOf } from '../../../../shared/flow-words';
 import { useOverview, useVisible } from '../../app/index';
 
 // ---------------------------------------------------------------- fetching
@@ -203,16 +203,9 @@ export const latestMoves = (rows: Flow[], min = MOVES_MIN_NAM): Flow[] => applyF
 
 const CHAIN_WORD = { namada: 'Namada', osmosis: 'Osmosis' } as const;
 
-/** Which side of a move to name: the person, never the protocol account (staking, bridge, shielded pool). */
+/** Which side of a move to name: the person, never the protocol account (staking, bridge, shielded pool); the same rule a Discord alert names its person by (shared/flow-words.ts). */
 export function partyOf(f: Flow): { address: string | null; label: string | null; source: string | null; author: string | null } {
-  const from = { address: f.from, label: f.fromLabelPlain ?? null, source: f.fromLabelSource ?? null, author: f.fromLabelAuthor ?? null };
-  const to = { address: f.to, label: f.toLabelPlain ?? null, source: f.toLabelSource ?? null, author: f.toLabelAuthor ?? null };
-  if (f.kind === 'buy') return to;
-  if (f.kind === 'sell') return from;
-  if (isInternal(f.from) && !isInternal(f.to)) return to;
-  if (isInternal(f.to) && !isInternal(f.from)) return from;
-  if (f.kind === 'shield' || f.kind === 'bond') return from;
-  return to.address ? to : from;
+  return sharedPartyOf(f);
 }
 
 /** Where a bridge crossing went, in place names ("Osmosis to Namada"); null for other kinds. */

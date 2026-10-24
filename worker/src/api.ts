@@ -11,7 +11,8 @@ import { fetchNamPools, fetchNamPrice, quoteNamTrade, quoteSlippageCurve, priceS
 import { PRICE_HOW_KEY, livePriceProv, priceHowAt, storedPriceNote, storedPriceSource, type PriceHowLog } from './price-how';
 import { namBalance, namadaEpoch, delegationsAt, QUICK, type ReadOpts } from './sources/namada';
 import { fetchIntel } from './sources/intel';
-import { alertsOn, sendDiscordTestPost, testPostHeld, INVALID_WINDOW_MS, type TestPostAnswer } from './sources/discord';
+import { alertsOn, sendDiscordPreview, sendDiscordTestPost, testPostHeld, INVALID_WINDOW_MS, type TestPostAnswer, type WebhookPost } from './sources/discord';
+import { previewPosts } from './digest/deliver';
 import { stmt, TAGS_PER_AUTHOR, TAGS_PER_DAY, kvGet, kvSet, kvGetJson } from './db';
 import { toNam, chainOf } from './util';
 import { OSMOSIS, INTERNAL_LABELS } from './config';
@@ -1476,8 +1477,15 @@ app.put('/api/me/settings', async (c) => {
   return full ? c.json({ error: CHANNELS_FULL, settings: view }, 409) : c.json({ settings: view });
 });
 
+/** What the preview of the digest answers when the digest could not be built: nothing was posted. */
+export const PREVIEW_NOT_BUILT = 'The digest could not be built just now, so nothing was posted. Try again in a few minutes.';
+
 app.post('/api/me/settings/test', async (c) => {
   const r = await me(c); if (r instanceof Response) return r;
+  // { preview: 'digest' } posts the daily digest as built now, with this wallet's watchlist, in place of the test
+  // message, under the same checks, cooldown and test budget; any other body sends the test message.
+  const asked = await c.req.json().catch(() => null) as { preview?: unknown } | null;
+  const preview = asked?.preview === 'digest';
   // A Worker that does not send alerts (its SEND_ALERTS secret is not yes) says so plainly: nothing is posted, the
   // user's settings are not read, the cooldown is not started, and the user's link is not blamed.
   if (!alertsOn()) return c.json({ error: 'Alerts are off on this server' }, 503);
@@ -1499,7 +1507,18 @@ app.post('/api/me/settings/test', async (c) => {
   if (held) return paused(held);
   const { wait, why } = await takeCooldown(c.env.DB, address, now);
   if (wait) return c.json({ error: cooldownWords(wait, 'test', why) }, 429);
-  const sent = await sendDiscordTestPost(url, cur, c.env.DB, proven, fresh);
+  // the test message: the rules as saved and, as its example, the newest move on record that matches them; or the
+  // digest's preview, built before any unit of the test budget is taken (no claim, no delivery record)
+  let sent: 'held' | TestPostAnswer;
+  if (preview) {
+    let posts: WebhookPost[];
+    try { posts = await previewPosts(c.env.DB, cur, now); } catch (e) {
+      console.error('settings: the digest preview could not be built', e);
+      await giveBackCooldown(c.env.DB, address, now);
+      return c.json({ error: PREVIEW_NOT_BUILT }, 503);
+    }
+    sent = await sendDiscordPreview(url, posts, c.env.DB, proven, fresh);
+  } else sent = await sendDiscordTestPost(url, cur, c.env.DB, proven, fresh, 'test');
   if (sent === 'held') {
     // Another test post took the budget's last unit meanwhile: nothing was posted, so the cooldown is given back.
     await giveBackCooldown(c.env.DB, address, now);

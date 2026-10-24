@@ -151,7 +151,7 @@ describe('Security review (2026-10-22), an honest burst to one hook when Discord
         return new Response(JSON.stringify({ message: 'You are being rate limited.', retry_after: Number(after), global: false }), { status: 429, headers: { 'content-type': 'application/json', 'retry-after': String(Math.max(1, Math.ceil(Number(after)))), 'x-ratelimit-scope': 'user', 'x-ratelimit-limit': '5', 'x-ratelimit-remaining': '0', 'x-ratelimit-reset-after': after } });
       }
       used++;
-      delivered.add(String(JSON.parse(String(init?.body)).embeds[0].url));
+      delivered.add(String(/\/(?:tx|transactions)\/(\w+)\)/.exec(String(JSON.parse(String(init?.body)).embeds[0].description))?.[1]));
       return new Response(null, { status: 204, headers: { 'x-ratelimit-limit': '5', 'x-ratelimit-remaining': String(5 - used), 'x-ratelimit-reset-after': after } });
     }));
     vi.spyOn(console, 'warn').mockImplementation(() => {});

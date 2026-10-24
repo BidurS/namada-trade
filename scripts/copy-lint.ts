@@ -121,6 +121,61 @@ export function lintFile(file: string): Finding[] {
 }
 
 // ---------------------------------------------------------------------------------------------
+// The same banned words in the Discord alerts' text (docs/design/system.md 5.4: an alert is copy too): every string
+// and template literal inside the message builders of worker/src/sources/discord.ts and in shared/flow-words.ts,
+// but import paths, property names, case labels, comparison operands and the patterns of string methods. The
+// rendered half is test/discord-words.test.ts, over the cards built from real rows.
+// ---------------------------------------------------------------------------------------------
+/** The files whose literals are Discord message text, each with the functions and constants that build it (null: the whole file). */
+export const MESSAGE_SOURCES: { file: string; names: Set<string> | null }[] = [
+  { file: 'shared/flow-words.ts', names: null },
+  {
+    file: 'worker/src/sources/discord.ts',
+    names: new Set(['sideWords', 'crossingSide', 'PROTOCOL_WORDS', 'coinWords', 'settleField', 'worthWords', 'runClauses', 'moveCard', 'forumCard', 'govCard', 'settingsFields', 'CARD_WORDS', 'testBody', 'noticeBody', 'COLOUR', 'SENDER', 'FILES_REFUSED_NOTE']),
+  },
+];
+
+/** Is this literal inside one of `names` (a function declaration or a top-level constant)? */
+function insideNamed(node: ts.Node, names: Set<string> | null): boolean {
+  if (!names) return true;
+  for (let p: ts.Node | undefined = node.parent; p; p = p.parent) {
+    if ((ts.isFunctionDeclaration(p) || ts.isVariableDeclaration(p)) && p.name && ts.isIdentifier(p.name) && names.has(p.name.text)) return true;
+  }
+  return false;
+}
+
+/** Is this literal message text (not an import, a key, a case label, an operand or a pattern)? */
+function isMessageText(node: ts.Node): boolean {
+  const p = node.parent;
+  if (!p) return false;
+  if (ts.isImportDeclaration(p) || ts.isExportDeclaration(p) || ts.isLiteralTypeNode(p)) return false;
+  if (ts.isPropertyAssignment(p) && p.name === node) return false;
+  if (ts.isComputedPropertyName(p) || ts.isElementAccessExpression(p) || ts.isCaseClause(p)) return false;
+  if (ts.isBinaryExpression(p) && [ts.SyntaxKind.EqualsEqualsEqualsToken, ts.SyntaxKind.ExclamationEqualsEqualsToken, ts.SyntaxKind.EqualsEqualsToken, ts.SyntaxKind.ExclamationEqualsToken].includes(p.operatorToken.kind)) return false;
+  if (ts.isCallExpression(p) && /(^|\.)(includes|startsWith|endsWith|test|match|replace|split|padStart|join|toLocaleString|prepare|get|has)$/.test(p.expression.getText())) return false;
+  return true;
+}
+
+export function lintMessageFile(file: string, names: Set<string> | null): Finding[] {
+  const src = readFileSync(file, 'utf8');
+  const sf = ts.createSourceFile(file, src, ts.ScriptTarget.Latest, true, ts.ScriptKind.TS);
+  const out: Finding[] = [];
+  const check = (node: ts.Node, text: string) => {
+    if (!text.trim() || !insideNamed(node, names) || !isMessageText(node)) return;
+    for (const b of BANNED) {
+      if (b.re.test(text)) out.push({ file: relative(ROOT, file), line: sf.getLineAndCharacterOfPosition(node.getStart()).line + 1, word: b.word, text: text.trim().slice(0, 80) });
+    }
+  };
+  const walk = (node: ts.Node) => {
+    if (ts.isStringLiteral(node) || ts.isNoSubstitutionTemplateLiteral(node)) check(node, node.text);
+    else if (ts.isTemplateExpression(node)) check(node, [node.head.text, ...node.templateSpans.map((x) => x.literal.text)].join(' '));
+    ts.forEachChild(node, walk);
+  };
+  walk(sf);
+  return out;
+}
+
+// ---------------------------------------------------------------------------------------------
 // Gate G10 N2, the source half: no figure is typed into JSX. A digit in JSX text (or in a string
 // rendered as a JSX child) is a finding unless it is part of a definition the copy states: a time
 // window ("24 h", "last 30 days", "48 h after unlocking", "30-day"), the top-ten definition the
@@ -180,8 +235,11 @@ if (import.meta.url === `file://${process.argv[1]}`) {
   const all = list.flatMap(lintFile);
   for (const f of all) console.log(`${f.file}:${f.line}  ${f.word}  "${f.text}"`);
   console.log(JSON.stringify({ gate: 'G5 copy lint (source)', files: list.length, findings: all.length }));
+  const msgs = MESSAGE_SOURCES.flatMap((m) => lintMessageFile(join(ROOT, m.file), m.names));
+  for (const f of msgs) console.log(`${f.file}:${f.line}  ${f.word}  "${f.text}"`);
+  console.log(JSON.stringify({ gate: 'G5 copy lint (Discord messages)', files: MESSAGE_SOURCES.length, findings: msgs.length }));
   const nums = list.flatMap(numLintFile);
   for (const f of nums) console.log(`${f.file}:${f.line}  typed number  "${f.text}"`);
   console.log(JSON.stringify({ gate: 'G10 N2 numeric literals in JSX (source)', files: list.length, findings: nums.length }));
-  process.exit(all.length || nums.length ? 1 : 0);
+  process.exit(all.length || msgs.length || nums.length ? 1 : 0);
 }

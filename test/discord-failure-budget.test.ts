@@ -73,7 +73,7 @@ describe('a hook Discord says is gone or has a wrong token', () => {
     for (const [i, url] of [GONE, TOKEN, GOOD].entries()) await s.saveSettings(db as any, KEY, user(s, addr('dead', i), url));
     const placed = updatedAtCol(db, addr('dead', 0));
     at(5);
-    await d.sendDiscordWhaleAlert(OP, sell(), null, db as any, 10000);
+    await d.sendDiscordWhaleAlert(OP, sell(), db as any, 10000);
     expect([f.count(OP), f.count(GONE), f.count(TOKEN), f.count(GOOD)]).toEqual([1, 1, 1, 1]);
     const gone = (await s.loadSettings(db as any, KEY, addr('dead', 0)))!;
     expect(gone.channels.discord).toEqual({ enabled: false, webhookUrl: GONE, stopped: { status: 404, at: T0 + 5 } });
@@ -85,12 +85,12 @@ describe('a hook Discord says is gone or has a wrong token', () => {
     // Later moves, past the users cache, the backoff and the window: the two are never posted again.
     for (let k = 1; k <= 4; k++) {
       at(k * (d.BACKOFF_MS + d.USERS_CACHE_MS));
-      await d.sendDiscordWhaleAlert(OP, sell(), null, db as any, 10000);
+      await d.sendDiscordWhaleAlert(OP, sell(), db as any, 10000);
     }
     expect([f.count(OP), f.count(GONE), f.count(TOKEN), f.count(GOOD)]).toEqual([5, 1, 1, 5]);
     // In a new isolate too: the row is off.
     const fresh = await isolate();
-    await fresh.d.sendDiscordWhaleAlert(OP, sell(), null, db as any, 10000);
+    await fresh.d.sendDiscordWhaleAlert(OP, sell(), db as any, 10000);
     expect(f.count(GONE)).toBe(1);
     // The owner saves a link: the stop is cleared and the channel is on.
     const next = fresh.s.applyUpdate(gone, { channels: { discord: { enabled: true, webhookUrl: 'https://discord.com/api/webhooks/13/new' } } }) as StoredSettings;
@@ -106,7 +106,7 @@ describe('a hook Discord says is gone or has a wrong token', () => {
     await s.saveSettings(db as any, KEY, user(s, addr('free', 0), GONE));
     await s.saveSettings(db as any, KEY, user(s, addr('free', 1), GOOD));
     expect(await s.deliverableCount(db as any)).toBe(2);
-    await d.sendDiscordWhaleAlert(undefined, sell(), null, db as any, 10000);
+    await d.sendDiscordWhaleAlert(undefined, sell(), db as any, 10000);
     expect(await s.deliverableCount(db as any)).toBe(1);
     expect((await s.readDeliverable(db as any, KEY)).users.map((u) => u.address)).toEqual([addr('free', 1)]);
   });
@@ -118,7 +118,7 @@ describe('a hook Discord says is gone or has a wrong token', () => {
     const f = discord((url) => blockPage(Number(url.slice(-3))));
     const db = testD1();
     for (const [i, url] of urls.entries()) await s.saveSettings(db as any, KEY, user(s, addr('blk', i), url));
-    for (let n = 0; n < d.BACKOFF_AFTER + 2; n++) await d.sendDiscordWhaleAlert(undefined, sell(), null, db as any, 10000);
+    for (let n = 0; n < d.BACKOFF_AFTER + 2; n++) await d.sendDiscordWhaleAlert(undefined, sell(), db as any, 10000);
     for (const url of urls) expect(f.count(url)).toBe(d.BACKOFF_AFTER);
     for (let i = 0; i < 3; i++) expect((await s.loadSettings(db as any, KEY, addr('blk', i)))!.channels.discord).toEqual({ enabled: true, webhookUrl: urls[i] });
     expect(kvJson(db, 'alerts.invalid').n).toBe(3 * d.BACKOFF_AFTER);
@@ -136,7 +136,7 @@ describe('a hook Discord says is gone or has a wrong token', () => {
       return new Response(null, { status: 204 });
     }));
     await s.saveSettings(db as any, KEY, user(s, a, GONE));
-    await d.sendDiscordWhaleAlert(undefined, sell(), null, db as any, 10000);
+    await d.sendDiscordWhaleAlert(undefined, sell(), db as any, 10000);
     expect((await s.loadSettings(db as any, KEY, a))!.channels.discord).toEqual({ enabled: true, webhookUrl: FIXED });
   });
 });
@@ -149,7 +149,7 @@ describe('a 429 answer', () => {
     const f = discord(() => rateLimited(30));
     const db = testD1();
     await s.saveSettings(db as any, KEY, user(s, addr('rl', 0), RL));
-    for (const t of [0, 1_000, 31_000, 62_000, 93_000, 124_000]) { at(t); await d.sendDiscordWhaleAlert(undefined, sell(), null, db as any, 10000); }
+    for (const t of [0, 1_000, 31_000, 62_000, 93_000, 124_000]) { at(t); await d.sendDiscordWhaleAlert(undefined, sell(), db as any, 10000); }
     // Posted at 0, 31 and 62 s (at 1 s it was waiting out the first Retry-After); the third 429 in a row holds the hook
     // for the window, so the posts at 93 and 124 s are recorded as not sent and never leave. A 429 never backs the hook
     // off (BACKOFF_AFTER is for failures), and a hook that takes a post now and then is held all the same (a later case).
@@ -164,7 +164,7 @@ describe('a 429 answer', () => {
     expect(kvJson(db, 'alerts.invalid').n).toBe(3);
     // The next window: the hook is posted once, answered 429, and held again at once (no success since).
     at(WINDOW + 5_000);
-    for (const t of [0, 31_000, 62_000]) { at(WINDOW + 5_000 + t); await d.sendDiscordWhaleAlert(undefined, sell(), null, db as any, 10000); }
+    for (const t of [0, 31_000, 62_000]) { at(WINDOW + 5_000 + t); await d.sendDiscordWhaleAlert(undefined, sell(), db as any, 10000); }
     expect(f.count(RL)).toBe(4);
     expect(kvJson(db, 'alerts.invalid')).toMatchObject({ n: 1 });
   });
@@ -174,7 +174,7 @@ describe('a 429 answer', () => {
     const { d } = await isolate();
     const f = discord(() => rateLimited(30));
     const db = testD1();
-    for (const t of [0, 1_000, 31_000, 62_000, 93_000, 124_000, 155_000]) { at(t); await d.sendDiscordWhaleAlert(OP, sell(), null, db as any, 10000); }
+    for (const t of [0, 1_000, 31_000, 62_000, 93_000, 124_000, 155_000]) { at(t); await d.sendDiscordWhaleAlert(OP, sell(), db as any, 10000); }
     expect(f.count(OP)).toBe(6);
   });
 
@@ -185,7 +185,7 @@ describe('a 429 answer', () => {
     discord(() => rateLimited(1, 'shared'));
     const db = testD1();
     await s.saveSettings(db as any, KEY, user(s, addr('sh', 0), SH));
-    await d.sendDiscordWhaleAlert(undefined, sell(), null, db as any, 10000);
+    await d.sendDiscordWhaleAlert(undefined, sell(), db as any, 10000);
     expect(kvJson(db, 'alerts.invalid')).toBeNull();
   });
 
@@ -198,7 +198,7 @@ describe('a 429 answer', () => {
     const f = discord((_u, nth) => (nth % 2 ? new Response(null, { status: 204 }) : rateLimited(1)));
     const db = testD1();
     await s.saveSettings(db as any, KEY, user(s, addr('alt', 0), ALT));
-    for (let k = 0; k < 20; k++) { at(k * 2_000); await d.sendDiscordWhaleAlert(undefined, sell(), null, db as any, 10000); }
+    for (let k = 0; k < 20; k++) { at(k * 2_000); await d.sendDiscordWhaleAlert(undefined, sell(), db as any, 10000); }
     expect(f.count(ALT)).toBe(2 * d.RATE_LIMITED_HOLD_AFTER);
     expect(kvJson(db, 'alerts.invalid').n).toBe(d.RATE_LIMITED_HOLD_AFTER);
     expect(kvJson(db, 'alerts.skipped').last.what).toMatch(/held for the window/);
@@ -211,7 +211,7 @@ describe('a 429 answer', () => {
     const f = discord((_u, nth) => (nth % 2 ? new Response(null, { status: 204 }) : discordJson(403, MISSING_ACCESS)));
     const db = testD1();
     await s.saveSettings(db as any, KEY, user(s, addr('alt', 1), ALT));
-    for (let k = 0; k < 20; k++) { at(k * 2_000); await d.sendDiscordWhaleAlert(undefined, sell(), null, db as any, 10000); }
+    for (let k = 0; k < 20; k++) { at(k * 2_000); await d.sendDiscordWhaleAlert(undefined, sell(), db as any, 10000); }
     expect(f.count(ALT)).toBe(2 * d.BACKOFF_AFTER);
     expect(kvJson(db, 'alerts.invalid').n).toBe(d.BACKOFF_AFTER);
   });
@@ -230,11 +230,11 @@ describe('the window\'s budget of invalid answers', () => {
     // A subscriber who saved a working link just now, and one whose row has not changed for a day and more.
     await s.saveSettings(db as any, KEY, user(s, addr('good', 0), GOOD));
     await s.saveSettings(db as any, KEY, user(s, addr('good', 1), SETTLED, T0 - d.SETTLED_MS - 1000));
-    await d.sendDiscordWhaleAlert(OP, sell(), null, db as any, 10000);
+    await d.sendDiscordWhaleAlert(OP, sell(), db as any, 10000);
     for (let i = 0; i < N; i++) await s.saveSettings(db as any, KEY, user(s, addr('bad', i), bad(i)));
     at(d.USERS_CACHE_MS + 1);
     f.calls.length = 0;
-    await d.sendDiscordWhaleAlert(OP, sell(), null, db as any, 10000);
+    await d.sendDiscordWhaleAlert(OP, sell(), db as any, 10000);
     // the operator first; then every subscriber in one rotation, the hooks that worked among them, and of the others
     // the budget's worth
     expect(f.calls[0]).toBe(OP);
@@ -246,19 +246,19 @@ describe('the window\'s budget of invalid answers', () => {
     expect(kvJson(db, 'alerts.skipped').last).toMatchObject({ n: 50, what: expect.stringContaining('50 held: invalid-answer budget spent') });
     // The next move: the operator and the working hooks only.
     f.calls.length = 0;
-    await d.sendDiscordWhaleAlert(OP, sell(), null, db as any, 10000);
+    await d.sendDiscordWhaleAlert(OP, sell(), db as any, 10000);
     expect(f.calls.sort()).toEqual([OP, GOOD, SETTLED].sort());
     // Another isolate reads the same count: no bad hook is posted there; the two links that worked are, since their
     // rows record the success (okAt, written by the first alert's dispatch), which proves a link in every isolate
     // (changed with the link proven at save: before, the link saved just now was held there until it worked there).
     const other = await isolate();
     f.calls.length = 0;
-    await other.d.sendDiscordWhaleAlert(OP, sell(), null, db as any, 10000);
+    await other.d.sendDiscordWhaleAlert(OP, sell(), db as any, 10000);
     expect(f.calls.sort()).toEqual([OP, GOOD, SETTLED].sort());
     // The next window: the budget again, never more.
     at(WINDOW);
     f.calls.length = 0;
-    await other.d.sendDiscordWhaleAlert(OP, sell(), null, db as any, 10000);
+    await other.d.sendDiscordWhaleAlert(OP, sell(), db as any, 10000);
     expect(f.calls.filter((u) => u.includes('/51/'))).toHaveLength(d.INVALID_BUDGET);
   }, 60_000);
 
@@ -270,11 +270,11 @@ describe('the window\'s budget of invalid answers', () => {
     const db = testD1();
     await s.saveSettings(db as any, KEY, user(s, addr('ceil', 0), GOOD));
     await s.saveSettings(db as any, KEY, user(s, addr('ceil', 1), SETTLED, T0 - d.SETTLED_MS - 1000));
-    await d.sendDiscordWhaleAlert(OP, sell(), null, db as any, 10000);
+    await d.sendDiscordWhaleAlert(OP, sell(), db as any, 10000);
     expect(f.calls.sort()).toEqual([OP, GOOD, SETTLED].sort());
     db.raw.prepare("INSERT INTO kv (key, value, updated_at) VALUES ('alerts.invalid', ?, ?)").run(JSON.stringify({ w: Math.floor(T0 / WINDOW), n: d.INVALID_CEILING }), T0);
     f.calls.length = 0;
-    await d.sendDiscordWhaleAlert(OP, sell(), null, db as any, 10000);
+    await d.sendDiscordWhaleAlert(OP, sell(), db as any, 10000);
     expect(f.calls).toEqual([OP]);
     expect(kvJson(db, 'alerts.skipped').last).toMatchObject({ n: 2, what: expect.stringContaining('2 held') });
   });

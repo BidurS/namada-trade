@@ -64,6 +64,8 @@ Traders are not watching the screen when the move happens.
 - Blind: Discord webhooks only reach whoever configured them.
 - Action: get interrupted only for events that change D1–D5.
 - Screen: an alert rule per decision with a plain-language condition, and an in-app "since you were away" list.
+- Alert card (Discord): why it reached the channel; the amount and what happened; who moved it and the price with its source; links to the mover's page and the record; what the person did before (this site's records) and what the site's page says such a move means; the figures with their sources; the record and block. Every figure from a stored row, nothing guessed (owner decision 16).
+- Daily digest (Discord, 08:00 UTC; the weekly on Mondays): the day's stake, requests, unbonding pipeline, rewards, price, trades, bridge, shielded pool, holders, governance and validators, each figure with its source and time and "not read" with no number when its source did not answer; the charts; the trades worth attention; a subscriber's own watchlist; the operator's sources, checks and deliveries. Off by default for subscribers, sent in quiet hours too (owner decision 17).
 
 ## What this removes
 

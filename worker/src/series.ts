@@ -505,6 +505,18 @@ export async function readDay(db: D1Database, day: string): Promise<DayAggregate
 
 export interface CohortRow { bucket?: string; category?: string; holders?: number; addrs?: number; addrs_with_nam?: number; nam?: number; spendable: number; staked: number }
 
+/**
+ * The NAM the day's Namada holders hold in all (the snapshot's sum over its size lines: spendable and staked, protocol
+ * and pool accounts out), as a metrics row at the snapshot's time (holders.namada.union_nam), the denominator a
+ * top-10 share over the holders themselves uses. No row when the snapshot has no holder.
+ */
+export function unionStmts(rows: CohortRow[], asOf: number): Stmt[] {
+  const lines = rows.filter((r) => r.bucket && (r.holders ?? 0) > 0);
+  if (!lines.length) return [];
+  const nam = lines.reduce((a, r) => a + (Number(r.nam) || 0), 0);
+  return Number.isFinite(nam) ? [stmt.metric(asOf, 'holders.namada.union_nam', nam)] : [];
+}
+
 export function holderCohortStmts(day: string, chain: string, rows: CohortRow[], asOf: number): Stmt[] {
   return rows.filter((r) => r.bucket && (r.holders ?? 0) > 0).map((r) => ({ sql: HOLDER_COHORT_ROW_SQL, params: [day, chain, r.bucket, r.holders, r.nam ?? 0, r.spendable ?? 0, r.staked ?? 0, asOf] }));
 }
@@ -611,7 +623,7 @@ export async function daily(env: Env, now: number, ctx: DailyCtx): Promise<Daily
     }
     const [cohorts, labelled] = await Promise.all([env.DB.prepare(HOLDER_COHORTS_NAMADA_SQL).all<CohortRow>(), env.DB.prepare(COHORT_LABELLED_SQL).all<CohortRow>()]);
     const lab = labelled.results || [];
-    return [...holderCohortStmts(day, 'namada', cohorts.results || [], asOf), ...cohortStmts(day, [...lab, noneCohort(cohorts.results || [], lab)], asOf)];
+    return [...holderCohortStmts(day, 'namada', cohorts.results || [], asOf), ...cohortStmts(day, [...lab, noneCohort(cohorts.results || [], lab)], asOf), ...unionStmts(cohorts.results || [], asOf)];
   });
   await part('snapshot osmosis', 'snapOsmosis', async () => {
     const oh = await osmosisHolders(env.DB);

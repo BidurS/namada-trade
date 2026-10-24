@@ -15,7 +15,8 @@ import type { AlertRuleId, SessionInfo, UserSettings } from '../../../../shared/
 import { SITE } from '../../../../shared/copy';
 import type { ScreenProps } from '../../app/index';
 import { navigate, THEME_LABELS, useHeaderPrice, useLocation, useNow, useOverlays, useReplay, useSession, useTheme, type ThemePref } from '../../app/index';
-import { createApiKey, deleteMe, exportMe, fetchSessions, revokeSession, settingsOfRefusal, testDiscord } from '../../api';
+import { createApiKey, deleteMe, exportMe, fetchSessions, previewDigest, revokeSession, settingsOfRefusal, testDiscord } from '../../api';
+import { DIGEST_HOUR_UTC } from '../../../../shared/alerts';
 import { Button, Derived, Field, Notice, Segmented, Skeleton, SourceLine, Switch, Tag, Term, type Stamp } from '../../ui/index';
 import { Icon } from '../../ui/Icon';
 import { fmtAddr, fmtAgo, fmtNamRule, fmtUsdRule, fmtUtcClock, fmtUtcLong } from '../../lib/format';
@@ -226,7 +227,8 @@ function SignedIn({ s, save, onSignOutHere }: { s: UserSettings | null; save: Sa
 // ---------------------------------------------------------------- alert rules
 const digits = (v: string) => v.replace(/[\s,_]/g, '');
 
-function RulesPanel({ s, save, rules, rulesStamp }: { s: UserSettings; save: Save; rules: RuleView[] | null; rulesStamp: Stamp | null }) {
+/** "Alert rules": a switch and a size per rule, the votes-and-forum switch and the digest switch (rendered by test/digest-subscribers.test.ts too). */
+export function RulesPanel({ s, save, rules, rulesStamp }: { s: UserSettings; save: Save; rules: RuleView[] | null; rulesStamp: Stamp | null }) {
   const { rewound } = useReplay();
   const price = useHeaderPrice();
   const prefs = s.notifications.rules as Record<string, { on: boolean; thresholdNam: number }>;
@@ -327,6 +329,26 @@ function RulesPanel({ s, save, rules, rulesStamp }: { s: UserSettings; save: Sav
             }}
           />
         </div>
+        <div className="st-rule">
+          <Switch
+            label={`Daily digest at ${hh(DIGEST_HOUR_UTC)} UTC`}
+            description={s.channels.discord.hasUrl
+              ? `The day’s figures in one post at ${hh(DIGEST_HOUR_UTC)} UTC every day, and the week’s on Mondays, one digest per channel. It is posted even during quiet hours.`
+              : 'Save a Discord link first.'}
+            checked={optimistic.digest ?? !!s.notifications.dailyDigest}
+            disabled={!s.channels.discord.hasUrl}
+            onChange={(v) => {
+              setOptimistic((o) => ({ ...o, digest: v }));
+              void st.run(() => save({ notifications: { dailyDigest: v } }), `Daily digest: ${v ? 'on' : 'off'}. Saved.`).then(() =>
+                setOptimistic((o) => {
+                  const n = { ...o };
+                  delete n.digest;
+                  return n;
+                }),
+              );
+            }}
+          />
+        </div>
         <StatusLine status={st.status} />
         <SourceLine
           items={[
@@ -344,6 +366,8 @@ function RulesPanel({ s, save, rules, rulesStamp }: { s: UserSettings; save: Sav
 // ---------------------------------------------------------------- where alerts go
 /** What the test button says when the server sends no alerts at all: the saved link is not at fault and was not tried. */
 const TEST_ALERTS_OFF = 'Alerts are off on this server, so no test message was sent. Your saved link was not tried and is not at fault.';
+/** The same for the digest's preview. */
+const PREVIEW_ALERTS_OFF = 'Alerts are off on this server, so no preview was posted. Your saved link was not tried and is not at fault.';
 
 /** "Where to find it": the glossary's channel-link entry (the expert word lives in lib/glossary.ts). */
 function ChannelLinkHelp() {
@@ -361,7 +385,7 @@ export function DeliveryPanel({ s, save }: { s: UserSettings; save: Save }) {
   const view = deliveryView(d);
 
   return (
-    <Panel id="delivery" title="Where alerts go" lead="Alerts are posted to a Discord channel you control the moment a move is recorded, whether or not this site is open. Saving a link posts a short connection notice to the channel; sending turns on once Discord takes it.">
+    <Panel id="delivery" title="Where alerts go" lead="Alerts are posted to a Discord channel you control the moment a move is recorded, whether or not this site is open. Each alert is one card: the amount and what happened, who moved it with the names this site knows, the price with its source, and links back here and to an explorer. Saving a link posts a short connection notice to the channel; sending turns on once Discord takes it. A test message shows one card, built from the newest move that matches your rules.">
       <p className="st-state">
         <i className="dot" data-status={view.state === 'on' ? 'fresh' : view.state === 'unproven' ? 'old' : 'none'} aria-hidden="true" />
         <span>
@@ -437,6 +461,21 @@ export function DeliveryPanel({ s, save }: { s: UserSettings; save: Save }) {
           >
             Send a test message
           </Button>
+          <Button
+            disabled={!d.hasUrl || test.busy}
+            busy={test.busy}
+            onClick={() =>
+              void test.run(async () => {
+                const r = await previewDigest().catch((e: unknown) => {
+                  if (e instanceof Error && /alerts are off on this server/i.test(e.message)) throw new Error(PREVIEW_ALERTS_OFF);
+                  throw e;
+                });
+                if (!r.success) throw new Error('Discord refused the preview. Check that the link still exists in the channel.');
+              }, 'A preview of the digest was posted to the channel.')
+            }
+          >
+            Preview the digest
+          </Button>
           {d.hasUrl ? (
             <Button onClick={() => void st.run(() => save({ channels: { discord: { webhookUrl: '' } } }), 'The link was removed. Alerts are not sent anywhere now.')}>
               Remove the link
@@ -510,13 +549,13 @@ function WatchlistPanel({ s, save }: { s: UserSettings; save: Save }) {
 // ---------------------------------------------------------------- quiet hours
 const hh = (h: number) => `${String(h).padStart(2, '0')}:00`;
 
-function QuietPanel({ s, save }: { s: UserSettings; save: Save }) {
+export function QuietPanel({ s, save }: { s: UserSettings; save: Save }) {
   const q = s.notifications.quietHoursUtc;
   const st = useStatus();
   const now = useNow();
   const set = (next: { start: number; end: number } | null, ok: string) => void st.run(() => save({ notifications: { quietHoursUtc: next } }), ok);
   return (
-    <Panel id="quiet" title="Quiet hours" lead={<>Nothing is sent between these hours. Times are in UTC; it is {fmtUtcClock(now)} now.</>}>
+    <Panel id="quiet" title="Quiet hours" lead={<>Nothing is sent between these hours, and nothing is sent later for them: a move made in them, or a forum post or proposal read in them, gets no alert. The daily digest, when it is on, is still posted at {hh(DIGEST_HOUR_UTC)} UTC. Times are in UTC; it is {fmtUtcClock(now)} now.</>}>
       <Switch
         label="Quiet hours"
         description={q ? `From ${hh(q.start)} to ${hh(q.end)} UTC${q.start > q.end ? ', overnight' : ''}.` : 'Off: alerts are sent at any hour.'}
@@ -680,7 +719,7 @@ function DataPanel({ s, signedIn, onDeleted }: { s: UserSettings | null; signedI
     <Panel id="data" title="Your data" lead={signedIn ? 'What is stored about you, who can read it, and how to take it or delete it.' : 'What would be stored about you if you signed in, and who could read it.'}>
       <dl className="st-stored">
         <div><dt>Your address</dt><dd>Public on the chain anyway. It is the key for your settings and sessions.</dd></div>
-        <div><dt>Alert choices, watchlist and quiet hours</dt><dd>Encrypted before they are stored, and decrypted only in memory while a new move is matched against them.</dd></div>
+        <div><dt>Alert choices, watchlist and quiet hours</dt><dd>Encrypted before they are stored, and decrypted only in memory while a new move is matched against them or the daily digest is sent.</dd></div>
         <div><dt>Discord channel link</dt><dd>Encrypted before it is stored. The site never shows it again, only its last characters, and decrypts it only to post an alert.</dd></div>
         <div><dt>Sessions and keys</dt><dd>Random tokens with when they were made and last used. No IP address and no browser details are stored with them.</dd></div>
         <div><dt>Your tags on addresses</dt><dd>Public: every user sees them, signed with your address. The only thing you write that others see.</dd></div>

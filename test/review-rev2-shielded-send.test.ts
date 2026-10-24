@@ -86,7 +86,7 @@ describe('a shielded NAM withdrawal to Osmosis is keyed on its packet', () => {
     // the Namada scan's pass, then the stream's (whale size 10,000; offered from 10 and 100 NAM)
     await hub.alertFlows(send, 10000, 10);
     await hub.alertFlows(recv, 10000, 100);
-    expect(calls.filter((c) => c.url === OP).map((c) => c.body.embeds[0].title)).toEqual(['🌉 IBC Bridge Namada → Osmosis: 30,000 NAM']);
+    expect(calls.filter((c) => c.url === OP).map((c) => c.body.embeds[0].title)).toEqual(['30,000 NAM bridged to Osmosis']);
   });
 
   it('block 3,837,012 shape: the pool\'s fee unshield of the same inner transaction stays a flow of its own, the escrow leg takes the packet', () => {

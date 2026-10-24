@@ -4,20 +4,12 @@ import type { GovernanceProposal, Pressure } from '../../../../shared/types';
 import { Icon, ProvScope, SourceLine } from '../../ui';
 import { fmtNamRule, fmtPctRule } from '../../lib/format';
 import { safeHttpUrl } from '../../../../shared/flow-rules';
+import { proposalStatusWords, proposalTypeWords } from '../../../../shared/flow-words';
 
-const plainStatus = (s: string) => {
-  const t = s.trim().toLowerCase();
-  if (/voting/.test(t)) return 'Voting now';
-  if (/pending/.test(t)) return 'Voting not started';
-  return t ? t.charAt(0).toUpperCase() + t.slice(1).replace(/_/g, ' ') : 'Status not known';
-};
-const plainType = (s: string) => {
-  const t = s.trim().toLowerCase().replace(/_/g, ' ');
-  if (/pgf/.test(t)) return t.includes('payment') ? 'Public funding payment' : 'Public funding';
-  if (/wasm|code/.test(t)) return 'Code change';
-  if (/default/.test(t)) return 'Proposal';
-  return t ? t.charAt(0).toUpperCase() + t.slice(1) : 'Proposal';
-};
+// the status and type in the words the governance alert uses too (shared/flow-words.ts): an executed rejection reads
+// "Rejected", never "Executedrejected"
+const plainStatus = proposalStatusWords;
+const plainType = proposalTypeWords;
 
 export function Votes({ data }: { data: Pressure }) {
   if (!data.proposals.length) return null;

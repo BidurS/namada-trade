@@ -4,6 +4,7 @@
 // the tag with nothing saying who wrote it.
 import { describe, it, expect } from 'vitest';
 import { evaluateFlow } from '../shared/alerts';
+import { buildFlowDiscordBody } from '../worker/src/sources/discord';
 import { app } from '../worker/src/api';
 import { testD1, insert } from './d1-sqlite';
 import type { Flow } from '../shared/types';
@@ -34,6 +35,18 @@ describe('a wallet tag keeps its byline', () => {
       expect(h.detail).toContain('Early backer');
       expect(h.detail).not.toContain('Tag by');
     }
+  });
+
+  it("in a Discord alert's first line and its link: the tag, its short address, then who wrote it; a curated name has no byline", () => {
+    // addresses of a real address's shape (an alert treats text that is no address as the sender's text)
+    const staker = 'tnam1qstaker' + '0'.repeat(33), curated = 'tnam1qcurated' + '0'.repeat(32);
+    const tagged = buildFlowDiscordBody(unbond(staker, { toLabel: 'Heliax team wallet', toLabelPlain: 'Heliax team wallet', toLabelSource: 'user', toLabelAuthor: 'tnam1qauthor…', fromLabel: 'Namada PoS account (staked + unstaking + unclaimed rewards)', fromLabelSource: 'auto' }), {}).embeds[0];
+    const line1 = String(tagged.description).split('\n')[0];
+    expect(line1).toContain('Heliax team wallet tnam1qstak…00000 (Tag by tnam1qauthor…)');
+    expect(JSON.stringify(tagged)).not.toContain('PoS');
+    const plain = buildFlowDiscordBody(unbond(curated, { toLabel: 'Genesis: af_backers', toLabelPlain: 'Early backers (genesis)', toLabelSource: 'genesis' }), {}).embeds[0];
+    expect(String(plain.description).split('\n')[0]).toContain('Early backers (genesis) tnam1qcura…00000');
+    expect(JSON.stringify(plain)).not.toContain('Tag by');
   });
 
   it('in the moves CSV: each label with its source and, for a wallet tag, its author', async () => {

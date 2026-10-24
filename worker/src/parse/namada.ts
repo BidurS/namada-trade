@@ -340,6 +340,8 @@ export function parseNamadaBlock(block: NamadaBlock, priceUsd: number | null, fe
         ...(innerTxHash ? { innerTxHash } : {}),
         ...(k === 0 && maspFee !== null ? { maspFeeNam: toNam(maspFee) } : {}),
         ...(assumed ? { pairing: 'largest-first' } : {}),
+        // priced at the quote for the block's minute, and says so (as the PoS requests and Osmosis rows do)
+        ...(priceUsd != null ? { priceSource: 'spot' } : {}),
       };
 
       // Pair with the IBC packet of the same inner transaction (including a direct IBC -> MASP shield, escrow -> pool)

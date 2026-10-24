@@ -531,6 +531,8 @@ export async function updateSettings(patch: unknown): Promise<UserSettings> {
   return data.settings as UserSettings;
 }
 export const testDiscord = () => meJson<{ success: boolean }>('/api/me/settings/test', { method: 'POST', body: '{}' });
+/** Posts the daily digest as it would look now, with this wallet's watchlist, to the saved channel (the test route's checks and cooldown). */
+export const previewDigest = () => meJson<{ success: boolean }>('/api/me/settings/test', { method: 'POST', body: JSON.stringify({ preview: 'digest' }) });
 export const fetchSessions = () => meJson<{ sessions: SessionInfo[] }>('/api/me/sessions').then((r) => r.sessions);
 export const revokeSession = (id: string) => meJson<{ success: boolean }>(`/api/me/sessions/${id}`, { method: 'DELETE' });
 export const createApiKey = () => meJson<{ token: string; expiresAt: number }>('/api/me/apikey', { method: 'POST', body: '{}' });

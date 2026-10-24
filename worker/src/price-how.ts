@@ -93,3 +93,41 @@ export const storedPriceSource = (how: NamPriceHow | null | undefined): string =
 /** The route note of a stored price, with the time its liquidity was read; undefined for the price list. */
 export const storedPriceNote = (how: PriceHowEntry | null | undefined): string | undefined =>
   how?.how === 'route' ? routeNote(how, how.since) : undefined;
+
+// ---------------------------------------------------------------- the route's mark on a move's price
+
+/** The cron's log of how the quote was read, as the live hub keeps it: read again at most this often. */
+export const PRICE_HOW_READ_MS = 60_000;
+let howCopy: { at: number; log: PriceHowLog | null } | null = null;
+
+/**
+ * The NAM size of the route whose spot the quote stored at `at` is (the cron read it so: price.how), null when it was
+ * the price list's, undefined when the log cannot be read. The log is read again at most every PRICE_HOW_READ_MS.
+ */
+export async function priceRouteAt(db: D1Database, at: number, now = Date.now()): Promise<number | null | undefined> {
+  if (!howCopy || now - howCopy.at >= PRICE_HOW_READ_MS) {
+    try {
+      const v = await db.prepare('SELECT value FROM kv WHERE key = ?').bind(PRICE_HOW_KEY).first<{ value: string }>();
+      howCopy = { at: now, log: v ? (JSON.parse(v.value) as PriceHowLog) : null };
+    } catch {
+      return undefined;
+    }
+  }
+  const e = priceHowAt(howCopy.log, at);
+  return e?.how === 'route' ? e.refNam : null;
+}
+
+/** Forgets the live hub's copy of the log (tests). */
+export const resetPriceRouteCopy = () => { howCopy = null; };
+
+/**
+ * Marks the moves priced at a quote that was a route's spot (meta.priceSource 'spot') with the route's NAM size
+ * (meta.priceRoute), so the moves list and an alert name the route as the price's source ("Osmosis route quote,
+ * 1,000 NAM"). `refNam` null or undefined: the quote was the price list's, or how it was read is not known; nothing
+ * is marked.
+ */
+export function stampPriceRoute<F extends { meta?: Record<string, unknown> | null; priceUsd?: number | null }>(flows: F[], refNam: number | null | undefined): F[] {
+  if (refNam == null || !(refNam > 0)) return flows;
+  for (const f of flows) if (f.priceUsd != null && f.meta?.priceSource === 'spot') f.meta = { ...f.meta, priceRoute: refNam };
+  return flows;
+}

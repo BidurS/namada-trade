@@ -108,7 +108,7 @@ describe('Security review (2026-10-22), Settings test posts sent together', () =
     // A whale alert straight after: the operator and the settled subscriber both hear it.
     calls.length = 0;
     const whale: Flow = { id: 'osmosis:RACE1:0', chain: 'osmosis', height: 1, ts: T0, txHash: 'RACE1', kind: 'sell', from: 'osmo1yl6hdjhmkf37639730gffanpzndzdpmhxy9ep3', to: null, amount: 20000, meta: null } as Flow;
-    await d.sendDiscordWhaleAlert(OP, whale, null, db as any, 10000);
+    await d.sendDiscordWhaleAlert(OP, whale, db as any, 10000);
     expect(calls).toContain(OP);
     expect(calls).toContain(SETTLED);
     expect(kvJson(db, 'alerts.skipped')).toBeNull();

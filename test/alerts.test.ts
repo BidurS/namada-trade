@@ -5,8 +5,8 @@ import { lastAlertBefore } from '../worker/src/analytics';
 import { app } from '../worker/src/api';
 import { testD1, insert } from './d1-sqlite';
 import type { AlertsRecentResponse, Flow } from '../shared/types';
+import { BANNED } from './banned-words';
 
-const BANNED = /\b(SQS|IBC|DEX|PoS|MASP|ABCI|RPC|cron|webhook|npm|D[1-7])\b|unbond|unshield|arbitrage|≥/i;
 
 describe('alert rules in plain words (W9)', () => {
   it('keeps ids, thresholds and decisions; titles are the brief\'s names', () => {

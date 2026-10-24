@@ -75,7 +75,7 @@ describe('Security review (2026-10-22), a channel on trial that no alert matched
     // The next move the default rules match.
     t += HOUR;
     const before = d.to(HONEST);
-    await sendDiscordWhaleAlert(undefined, unshield(1), null, db as any, 1e9);
+    await sendDiscordWhaleAlert(undefined, unshield(1), db as any, 1e9);
     const sent = d.to(HONEST) - before;
     expect(v.enabled, 'the honest channel is still on').toBe(true);
     expect(v.notice, 'the notice the tick posted reached it, so the note goes').toBeNull();
@@ -102,7 +102,7 @@ describe('Security review (2026-10-22), a channel on trial that no alert matched
     // The next matching move.
     t += HOUR;
     const before = d.to(HONEST);
-    await sendDiscordWhaleAlert(undefined, unshield(2), null, db as any, 1e9);
+    await sendDiscordWhaleAlert(undefined, unshield(2), db as any, 1e9);
     expect(after.enabled, 'the working link is still on').toBe(true);
     expect(d.to(HONEST) - before, 'the 60,000 NAM unshield reached the honest subscriber').toBe(1);
   });
@@ -208,7 +208,7 @@ describe('Security review (2026-10-22), a channel on trial that no alert matched
     expect(await linkProven(db as any, KEY, addr('lrepost', 0), LATER)).toBe(true);
     for (let k = 0; k < 4; k++) { t += DAY; await tick(db); }
     expect(d.to(LATER), 'a proven link is not posted the notice again').toBe(4);
-    await sendDiscordWhaleAlert(undefined, unshield(3), null, db as any, 1e9);
+    await sendDiscordWhaleAlert(undefined, unshield(3), db as any, 1e9);
     expect(d.to(LATER)).toBe(5);
   });
 

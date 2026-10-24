@@ -75,7 +75,7 @@ describe('Security review (2026-10-22), a channel saved on while its connection 
     atSave = false;
     // The first alert the row's rules match: Discord refuses the post (the link's own 400), and the trial ends.
     t += HOUR;
-    await sendDiscordWhaleAlert(undefined, bigSell(1), null, db as any, 1e9);
+    await sendDiscordWhaleAlert(undefined, bigSell(1), db as any, 1e9);
     expect(d.to(FORUM)).toBe(2);
     expect(await placeCount(db as any), 'a link no post reached holds no place').toBe(0);
     expect((await readDeliverable(db as any, KEY)).users).toEqual([]);
@@ -87,7 +87,7 @@ describe('Security review (2026-10-22), a channel saved on while its connection 
     expect(page.notice!.text).toContain('Discord answered 400 to a post to it');
     expect(page.switchDisabled).toBe(false);
     // Thirty days of alerts after: nothing is posted to it again, and its place stays free.
-    for (let k = 0; k < 120; k++) { t += DAY / 4; await sendDiscordWhaleAlert(undefined, bigSell(100 + k), null, db as any, 1e9); }
+    for (let k = 0; k < 120; k++) { t += DAY / 4; await sendDiscordWhaleAlert(undefined, bigSell(100 + k), db as any, 1e9); }
     expect(d.to(FORUM)).toBe(2);
     expect(await placeCount(db as any)).toBe(0);
   });
@@ -135,7 +135,7 @@ describe('Security review (2026-10-22), a channel saved on while its connection 
     expect(((await r.json()) as any).settings.channels.discord).toMatchObject({ enabled: true, notice: { status: 503 } });
     answer = ok;
     t += HOUR;
-    await sendDiscordWhaleAlert(undefined, bigSell(500), null, db as any, 1e9);
+    await sendDiscordWhaleAlert(undefined, bigSell(500), db as any, 1e9);
     expect(d.to(HONEST)).toBe(3);
     expect(await linkProven(db as any, KEY, addr('honest', 0), HONEST)).toBe(true);
     expect(await view(db, me)).toMatchObject({ enabled: true, stopped: null, notice: null });
@@ -145,7 +145,7 @@ describe('Security review (2026-10-22), a channel saved on while its connection 
     expect(await view(db, me)).toMatchObject({ enabled: true, stopped: null, notice: null });
     // Its later posts go as any proven link's.
     t += HOUR;
-    await sendDiscordWhaleAlert(undefined, bigSell(501), null, db as any, 1e9);
+    await sendDiscordWhaleAlert(undefined, bigSell(501), db as any, 1e9);
     expect(d.to(HONEST)).toBe(4);
   });
 

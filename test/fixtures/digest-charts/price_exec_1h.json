@@ -1,0 +1,364 @@
+[
+  {
+    "results": [
+      {
+        "key": "price.swap_1h",
+        "ts": 1792152000000,
+        "value": 0.0010212303697223557
+      },
+      {
+        "key": "price.swap_1h",
+        "ts": 1792155600000,
+        "value": 0.0010327061477299069
+      },
+      {
+        "key": "price.swap_1h",
+        "ts": 1792162800000,
+        "value": 0.0010483630048561412
+      },
+      {
+        "key": "price.swap_1h",
+        "ts": 1792188000000,
+        "value": 0.0010265038585679867
+      },
+      {
+        "key": "price.swap_1h",
+        "ts": 1792231200000,
+        "value": 0.001011995601178413
+      },
+      {
+        "key": "price.swap_1h",
+        "ts": 1792274400000,
+        "value": 0.001013415720329548
+      },
+      {
+        "key": "price.swap_1h",
+        "ts": 1792303200000,
+        "value": 0.0010546586769347983
+      },
+      {
+        "key": "price.swap_1h",
+        "ts": 1792306800000,
+        "value": 0.0011210660295669621
+      },
+      {
+        "key": "price.swap_1h",
+        "ts": 1792310400000,
+        "value": 0.0011620158024845946
+      },
+      {
+        "key": "price.swap_1h",
+        "ts": 1792317600000,
+        "value": 0.001119211997568711
+      },
+      {
+        "key": "price.swap_1h",
+        "ts": 1792335600000,
+        "value": 0.001025585507755322
+      },
+      {
+        "key": "price.swap_1h",
+        "ts": 1792346400000,
+        "value": 0.0010732878602359589
+      },
+      {
+        "key": "price.swap_1h",
+        "ts": 1792350000000,
+        "value": 0.0010983832864260386
+      },
+      {
+        "key": "price.swap_1h",
+        "ts": 1792353600000,
+        "value": 0.0010556165455856922
+      },
+      {
+        "key": "price.swap_1h",
+        "ts": 1792389600000,
+        "value": 0.0010349270915151524
+      },
+      {
+        "key": "price.swap_1h",
+        "ts": 1792400400000,
+        "value": 0.001311940568103995
+      },
+      {
+        "key": "price.swap_1h",
+        "ts": 1792404000000,
+        "value": 0.001439419545479418
+      },
+      {
+        "key": "price.swap_1h",
+        "ts": 1792411200000,
+        "value": 0.0013813014751558506
+      },
+      {
+        "key": "price.swap_1h",
+        "ts": 1792432800000,
+        "value": 0.0009558860908204113
+      },
+      {
+        "key": "price.swap_1h",
+        "ts": 1792440000000,
+        "value": 0.0012067422897984565
+      },
+      {
+        "key": "price.swap_1h",
+        "ts": 1792476000000,
+        "value": 0.0011709354104854149
+      },
+      {
+        "key": "price.swap_1h",
+        "ts": 1792479600000,
+        "value": 0.0011769589376721722
+      },
+      {
+        "key": "price.swap_1h",
+        "ts": 1792515600000,
+        "value": 0.0011472949235140286
+      },
+      {
+        "key": "price.swap_1h",
+        "ts": 1792551600000,
+        "value": 0.0011320451872608819
+      },
+      {
+        "key": "price.swap_1h",
+        "ts": 1792562400000,
+        "value": 0.001104067318923423
+      },
+      {
+        "key": "price.swap_1h",
+        "ts": 1792566000000,
+        "value": 0.0011111621476179944
+      },
+      {
+        "key": "price.swap_1h",
+        "ts": 1792584000000,
+        "value": 0.0011171020442348142
+      },
+      {
+        "key": "price.swap_1h",
+        "ts": 1792587600000,
+        "value": 0.0011281160920439477
+      },
+      {
+        "key": "price.swap_1h",
+        "ts": 1792591200000,
+        "value": 0.0001640206145883375
+      },
+      {
+        "key": "price.swap_1h",
+        "ts": 1792594800000,
+        "value": 0.00034807468395997847
+      },
+      {
+        "key": "price.swap_1h",
+        "ts": 1792602000000,
+        "value": 0.00040729712101840324
+      },
+      {
+        "key": "price.swap_1h",
+        "ts": 1792605600000,
+        "value": 0.0006681211257837332
+      },
+      {
+        "key": "price.swap_1h",
+        "ts": 1792609200000,
+        "value": 0.0007796650176708223
+      },
+      {
+        "key": "price.swap_1h",
+        "ts": 1792731600000,
+        "value": 0.0009165048816351421
+      },
+      {
+        "key": "price.swap_1h.n",
+        "ts": 1792152000000,
+        "value": 4
+      },
+      {
+        "key": "price.swap_1h.n",
+        "ts": 1792155600000,
+        "value": 4
+      },
+      {
+        "key": "price.swap_1h.n",
+        "ts": 1792162800000,
+        "value": 2
+      },
+      {
+        "key": "price.swap_1h.n",
+        "ts": 1792188000000,
+        "value": 1
+      },
+      {
+        "key": "price.swap_1h.n",
+        "ts": 1792231200000,
+        "value": 2
+      },
+      {
+        "key": "price.swap_1h.n",
+        "ts": 1792274400000,
+        "value": 2
+      },
+      {
+        "key": "price.swap_1h.n",
+        "ts": 1792303200000,
+        "value": 6
+      },
+      {
+        "key": "price.swap_1h.n",
+        "ts": 1792306800000,
+        "value": 16
+      },
+      {
+        "key": "price.swap_1h.n",
+        "ts": 1792310400000,
+        "value": 2
+      },
+      {
+        "key": "price.swap_1h.n",
+        "ts": 1792317600000,
+        "value": 1
+      },
+      {
+        "key": "price.swap_1h.n",
+        "ts": 1792335600000,
+        "value": 1
+      },
+      {
+        "key": "price.swap_1h.n",
+        "ts": 1792346400000,
+        "value": 8
+      },
+      {
+        "key": "price.swap_1h.n",
+        "ts": 1792350000000,
+        "value": 1
+      },
+      {
+        "key": "price.swap_1h.n",
+        "ts": 1792353600000,
+        "value": 9
+      },
+      {
+        "key": "price.swap_1h.n",
+        "ts": 1792389600000,
+        "value": 14
+      },
+      {
+        "key": "price.swap_1h.n",
+        "ts": 1792400400000,
+        "value": 21
+      },
+      {
+        "key": "price.swap_1h.n",
+        "ts": 1792404000000,
+        "value": 8
+      },
+      {
+        "key": "price.swap_1h.n",
+        "ts": 1792411200000,
+        "value": 3
+      },
+      {
+        "key": "price.swap_1h.n",
+        "ts": 1792432800000,
+        "value": 3
+      },
+      {
+        "key": "price.swap_1h.n",
+        "ts": 1792440000000,
+        "value": 4
+      },
+      {
+        "key": "price.swap_1h.n",
+        "ts": 1792476000000,
+        "value": 3
+      },
+      {
+        "key": "price.swap_1h.n",
+        "ts": 1792479600000,
+        "value": 1
+      },
+      {
+        "key": "price.swap_1h.n",
+        "ts": 1792515600000,
+        "value": 1
+      },
+      {
+        "key": "price.swap_1h.n",
+        "ts": 1792551600000,
+        "value": 1
+      },
+      {
+        "key": "price.swap_1h.n",
+        "ts": 1792562400000,
+        "value": 6
+      },
+      {
+        "key": "price.swap_1h.n",
+        "ts": 1792566000000,
+        "value": 2
+      },
+      {
+        "key": "price.swap_1h.n",
+        "ts": 1792584000000,
+        "value": 4
+      },
+      {
+        "key": "price.swap_1h.n",
+        "ts": 1792587600000,
+        "value": 1
+      },
+      {
+        "key": "price.swap_1h.n",
+        "ts": 1792591200000,
+        "value": 8
+      },
+      {
+        "key": "price.swap_1h.n",
+        "ts": 1792594800000,
+        "value": 3
+      },
+      {
+        "key": "price.swap_1h.n",
+        "ts": 1792602000000,
+        "value": 3
+      },
+      {
+        "key": "price.swap_1h.n",
+        "ts": 1792605600000,
+        "value": 7
+      },
+      {
+        "key": "price.swap_1h.n",
+        "ts": 1792609200000,
+        "value": 4
+      },
+      {
+        "key": "price.swap_1h.n",
+        "ts": 1792731600000,
+        "value": 1
+      }
+    ],
+    "success": true,
+    "meta": {
+      "served_by": "v3-prod",
+      "served_by_region": "WNAM",
+      "served_by_colo": "SJC",
+      "served_by_primary": true,
+      "timings": {
+        "sql_duration_ms": 3.0283
+      },
+      "duration": 3.0283,
+      "changes": 0,
+      "last_row_id": 0,
+      "changed_db": false,
+      "size_after": 178671616,
+      "rows_read": 72,
+      "rows_written": 0,
+      "total_attempts": 1
+    }
+  }
+]

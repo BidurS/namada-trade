@@ -6,7 +6,7 @@ import { PRICE_HOW_KEY, priceHealth, priceHowStmt, type PriceHowLog } from './pr
 import { QUOTE_KEYS } from '../../shared/settle';
 import { namBalance, namTotalSupply, namTotalStake, namadaEpoch, namadaStatusAll, delegationsAt, answeringRpcs, listingHeads, QUICK, RpcBreaker, allNamBalances, allBonds, ListingTooLargeError, LISTING_MAX_VALUE_BYTES, type BalanceListing, type BondListing, type ReadOpts, type Rpc } from './sources/namada';
 import { fetchIntelChecked } from './sources/intel';
-import { sendDiscordForumAlert, sendDiscordGovAlert, sendsAlerts, alertBudget, flushAlerts, sweepNoticeChannels, RUN_ALERT_POSTS, RUN_ALERT_WINDOW_MS } from './sources/discord';
+import { sendDiscordForumAlert, sendDiscordGovAlert, sendsAlerts, alertBudget, flushAlerts, sweepNoticeChannels, RUN_ALERT_POSTS, RUN_ALERT_WINDOW_MS, type GovContext } from './sources/discord';
 import { NAM, NAMADA, OSMOSIS } from './config';
 import { fetchJson, toNam, isRealAddress, FETCH_TEXT_MAX_BYTES } from './util';
 import type { IntelResponse, SourceHealth } from '../../shared/types';
@@ -25,6 +25,8 @@ import {
   OSMOSIS_PASS_KV, OSMOSIS_READ_AT_SQL, OSMOSIS_DROPPED_SQL, OSMOSIS_RECHECK_TOP_SQL, OSMOSIS_ROWS_SUM_SQL,
 } from './holders';
 import * as series from './series';
+import { prepareDigests, sendDigests, type DigestRun } from './digest/deliver';
+import { DIGEST_HEALTH_LOG_KV } from './digest/operator';
 
 const INDEXER = 'https://indexer.namada.net/api/v1';
 /** kv key of the IBC packets stuck in the escrow (ibc-stuck.ts). */
@@ -91,6 +93,13 @@ async function syncIntelAndAlerts(env: Env, health: SourceHealth[]) {
   const budget = alertBudget(Date.now());
   try {
     const t0 = Date.now();
+    // The digests due (the day's from 08:00 UTC, the week's on Mondays; digest/deliver.ts) are built from D1 alone
+    // beside the intel read, so its timeout never delays them; they are sent after the governance alerts and before
+    // the forum's, under the same budget. A Worker that does not send alerts builds and claims none.
+    const digests = prepareDigests(env.DB, t0, sendsAlerts(env)).catch((e): DigestRun => {
+      console.error('digest: the periods due could not be read', e);
+      return { jobs: [], rows: [] };
+    });
     const { intel: read, postsError } = await fetchIntelChecked();
     let intel = read;
     let keepStored = false;
@@ -128,18 +137,39 @@ async function syncIntelAndAlerts(env: Env, health: SourceHealth[]) {
         try { prevState = JSON.parse(storedGovStr); } catch {}
 
         let changed = false;
+        // What the alert says of the proposal's epochs: the current epoch, and the measured epoch length for the clock
+        // times ahead (an estimate, said so); the cached parameters only, so a slow indexer never holds the run, read
+        // once a run and only when a proposal changed.
+        let g: GovContext | undefined;
+        const govContext = async (): Promise<GovContext> => {
+          if (g) return g;
+          const params = await cachedChainParams(env.DB).catch(() => null);
+          return (g = { nowEpoch: intel.indexerEpoch ?? null, epochSec: params?.epochSec ?? null, epochNote: params?.epochSecNote ?? null, readAt: intel.fetchedAt || Date.now() });
+        };
         for (const prop of [...intel.proposals].sort((a, b) => a.id - b.id)) {
           const prevStatus = prevState[String(prop.id)];
           if (prevStatus === prop.status) continue;
           // A proposal whose subscribers wait keeps its stored state, so the next run finds it new or changed again;
           // every later one is still offered, so the operator hears each at once (its subscribers wait too).
-          if ((await sendDiscordGovAlert(env.DISCORD_WEBHOOK_URL, prop, !prevStatus, env.DB, budget)) === 'waiting') continue;
+          if ((await sendDiscordGovAlert(env.DISCORD_WEBHOOK_URL, prop, !prevStatus, env.DB, budget, await govContext())) === 'waiting') continue;
           changed = true;
           prevState[String(prop.id)] = prop.status;
         }
         if (changed) await kvSet(env.DB, 'gov.state', JSON.stringify(prevState));
       }
     }
+
+    // 2b. The digests: the daily first, then the weekly. The posts a digest leaves for the next run are said on its own
+    //     row (digest/deliver.ts DIGEST_HEALTH), not on the forum's. A digest is two posts a channel, and a run that
+    //     cannot take every channel closes the budget, so the forum's subscribers wait until the run after the one that
+    //     posts the digest's last channel: with 500 digest subscribers about three runs (a Monday's weekly adds about
+    //     two), not one. The forum's cursor holds, so nothing is lost, and the operator hears each post in the first
+    //     run that reads it.
+    const run = await digests;
+    health.push(...run.rows);
+    const waitingBefore = budget.waiting;
+    await sendDigests(env.DB, env.DISCORD_WEBHOOK_URL, run, budget, health);
+    const digestWaits = budget.waiting - waitingBefore;
 
     // 3. Check Namada Forum latest posts for new topics or replies (only from posts read this tick)
     if (!postsError && intel.latestPosts.length > 0) {
@@ -158,7 +188,9 @@ async function syncIntelAndAlerts(env: Env, health: SourceHealth[]) {
           // waits, every later one's subscribers wait too: discord.ts admit).
           let done = lastPostId, waited = false;
           for (const post of newPosts) {
-            if ((await sendDiscordForumAlert(env.DISCORD_WEBHOOK_URL, post, env.DB, budget)) === 'waiting') waited = true;
+            // the topic's category, as the forum's topic list names it
+            const category = intel.topics.find((t) => t.id === post.topicId)?.categoryName ?? null;
+            if ((await sendDiscordForumAlert(env.DISCORD_WEBHOOK_URL, post, env.DB, budget, category)) === 'waiting') waited = true;
             else if (!waited) done = post.id;
           }
           if (done > lastPostId) await kvSet(env.DB, 'forum.last_post_id', String(done));
@@ -167,7 +199,7 @@ async function syncIntelAndAlerts(env: Env, health: SourceHealth[]) {
     }
 
     // Alerts left for the next run are said on the forum's row: pushed after its first copy, so the merge keeps this one.
-    if (budget.waiting) {
+    if (budget.waiting > digestWaits) {
       const why = budget.unread
         ? 'alerts wait for the next run: the subscribers\' settings could not be read this run'
         : budget.paused
@@ -1859,6 +1891,8 @@ export async function runCron(env: Env) {
       if (r) checkStmts.push(stmt.check('price_vs_execution', r.status, 'SQS mid price vs executed swap price (last hour with trades)', { ...r.detail, quoteSource: priceSourceName(price.how) }, now));
     }
 
+    // A check whose status changes is logged for the digest's operator embed before the new status is written.
+    await appendHealthLog(env.DB, await checkFlips(env.DB, checkStmts, now), now).catch(() => {});
     await runBatch(env.DB, checkStmts);
     // What has been learnt so far is written now: a stall in the stake phase must not hide it.
     await mergeHealth(env, health);
@@ -1899,7 +1933,9 @@ export async function runCron(env: Env) {
     if (stakeNam != null) {
       const sample = sampleRec ?? (await kvGetJson<StakeSampleRecord>(env.DB, 'stake.sample').catch(() => null));
       const stakesChanged = estimatesRan || (!!bondRead && bondRec?.at === now && (bondRec.written + bondRec.zeroed) > 0);
-      await runBatch(env.DB, [await bondedCoverageCheck(env.DB, now, stakeNam, posNam, bondRec, sample, stakesChanged)]).catch(() => {});
+      const coverage = await bondedCoverageCheck(env.DB, now, stakeNam, posNam, bondRec, sample, stakesChanged);
+      await appendHealthLog(env.DB, await checkFlips(env.DB, [coverage], now), now).catch(() => {});
+      await runBatch(env.DB, [coverage]).catch(() => {});
     }
     // 5d. Spendable balances: the balance listing, when it was the listing due this tick.
     if (balRead) {
@@ -2066,10 +2102,61 @@ export function listingOverdue(health: SourceHealth[], name: string, what: 'bond
 /** Probes that no longer run (replaced by the listings on 2026-10-20, the bond index by the bond listing); their last result is dropped from the map. */
 export const RETIRED_HEALTH = ['Namada RPC (balance refresh)', 'Namada RPC (stake verification)', 'Namada RPC (staker discovery)', 'Namada RPC (bond index)'];
 
-/** Merge into the stored health map so a probe that did not run this tick keeps its last result. */
+/**
+ * Merge into the stored health map so a probe that did not run this tick keeps its last result. A row whose ok
+ * changed from the one stored is a flip, appended to the health log (appendHealthLog): source.health keeps one row a
+ * name, so a source that failed at 03:00 and recovered at 03:01 would otherwise leave no trace for the digest's
+ * operator embed. A row seen for the first time is no flip.
+ */
 async function mergeHealth(env: Env, health: SourceHealth[]) {
   const prev = (await kvGetJson<Record<string, SourceHealth>>(env.DB, 'source.health').catch(() => null)) ?? {};
   for (const n of RETIRED_HEALTH) delete prev[n];
-  for (const h of health) prev[h.name] = h;
+  const flips: HealthLogEntry[] = [];
+  for (const h of health) {
+    const before = prev[h.name];
+    if (before && !!before.ok !== !!h.ok) flips.push({ name: h.name, at: Number.isFinite(h.at) ? h.at : Date.now(), ok: !!h.ok, note: (h.note ?? '').slice(0, HEALTH_LOG_NOTE_MAX) });
+    prev[h.name] = h;
+  }
   await kvSet(env.DB, 'source.health', prev).catch(() => {});
+  if (flips.length) await appendHealthLog(env.DB, flips, Date.now());
+}
+
+/** One entry of the health log (kv source.health.log): a health row's ok flip, or a check's status change (name `check:<key>`). */
+export interface HealthLogEntry { name: string; at: number; ok: boolean; note: string }
+/** The health log keeps the entries of this long, and at most HEALTH_LOG_MAX of them, the newest. */
+export const HEALTH_LOG_KEEP_MS = 48 * 3600_000;
+export const HEALTH_LOG_MAX = 200;
+export const HEALTH_LOG_NOTE_MAX = 120;
+
+/**
+ * Appends entries to the health log: read once, the entries older than HEALTH_LOG_KEEP_MS dropped, the newest
+ * HEALTH_LOG_MAX kept, written once. Called only when something flipped, so a quiet tick writes nothing. A log that
+ * cannot be read is started again rather than left unwritten; a failed write is logged and costs only the entries.
+ */
+export async function appendHealthLog(db: D1Database, entries: HealthLogEntry[], now: number): Promise<void> {
+  if (!entries.length) return;
+  let cur: HealthLogEntry[] = [];
+  try {
+    const v = await kvGetJson<HealthLogEntry[]>(db, DIGEST_HEALTH_LOG_KV);
+    if (Array.isArray(v)) cur = v.filter((e) => e && typeof e.name === 'string' && Number.isFinite(e.at));
+  } catch { cur = []; }
+  const next = [...cur, ...entries].filter((e) => e.at >= now - HEALTH_LOG_KEEP_MS).sort((a, b) => a.at - b.at).slice(-HEALTH_LOG_MAX);
+  await kvSet(db, DIGEST_HEALTH_LOG_KV, next).catch((e) => console.error('health log: not written', e));
+}
+
+/**
+ * The checks whose status these statements change, as health log entries (`check:<key>`; ok while 'ok' or 'idle',
+ * idle being no fault): one read of the checks table before the statements are written. A check seen for the first
+ * time is no change. A read that fails logs nothing.
+ */
+export async function checkFlips(db: D1Database, stmts: Stmt[], now: number): Promise<HealthLogEntry[]> {
+  const next = stmts.filter((s) => /^INSERT OR REPLACE INTO checks\b/.test(s.sql)).map((s) => ({ key: String(s.params[0]), status: String(s.params[1]) }));
+  if (!next.length) return [];
+  let rows: { key: string; status: string }[];
+  try { rows = (await db.prepare('SELECT key, status FROM checks').all<{ key: string; status: string }>()).results ?? []; } catch { return []; }
+  const was = new Map(rows.map((r) => [r.key, r.status]));
+  const okOf = (st: string) => st === 'ok' || st === 'idle';
+  return next
+    .filter((c) => was.has(c.key) && was.get(c.key) !== c.status)
+    .map((c) => ({ name: `check:${c.key}`, at: now, ok: okOf(c.status), note: c.status }));
 }

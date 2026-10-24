@@ -1,0 +1,774 @@
+[
+  {
+    "results": [
+      {
+        "key": "bridge.in_daily",
+        "ts": 1790121600000,
+        "value": 0
+      },
+      {
+        "key": "bridge.in_daily",
+        "ts": 1790208000000,
+        "value": 135901
+      },
+      {
+        "key": "bridge.in_daily",
+        "ts": 1790294400000,
+        "value": 465380
+      },
+      {
+        "key": "bridge.in_daily",
+        "ts": 1790380800000,
+        "value": 42.245261
+      },
+      {
+        "key": "bridge.in_daily",
+        "ts": 1790467200000,
+        "value": 0
+      },
+      {
+        "key": "bridge.in_daily",
+        "ts": 1790553600000,
+        "value": 0
+      },
+      {
+        "key": "bridge.in_daily",
+        "ts": 1790640000000,
+        "value": 0
+      },
+      {
+        "key": "bridge.in_daily",
+        "ts": 1790726400000,
+        "value": 0
+      },
+      {
+        "key": "bridge.in_daily",
+        "ts": 1790812800000,
+        "value": 0
+      },
+      {
+        "key": "bridge.in_daily",
+        "ts": 1790899200000,
+        "value": 0
+      },
+      {
+        "key": "bridge.in_daily",
+        "ts": 1790985600000,
+        "value": 0
+      },
+      {
+        "key": "bridge.in_daily",
+        "ts": 1791072000000,
+        "value": 0
+      },
+      {
+        "key": "bridge.in_daily",
+        "ts": 1791158400000,
+        "value": 0
+      },
+      {
+        "key": "bridge.in_daily",
+        "ts": 1791244800000,
+        "value": 33548.669059
+      },
+      {
+        "key": "bridge.in_daily",
+        "ts": 1791331200000,
+        "value": 0
+      },
+      {
+        "key": "bridge.in_daily",
+        "ts": 1791417600000,
+        "value": 0
+      },
+      {
+        "key": "bridge.in_daily",
+        "ts": 1791504000000,
+        "value": 0
+      },
+      {
+        "key": "bridge.in_daily",
+        "ts": 1791590400000,
+        "value": 0
+      },
+      {
+        "key": "bridge.in_daily",
+        "ts": 1791676800000,
+        "value": 0
+      },
+      {
+        "key": "bridge.in_daily",
+        "ts": 1791763200000,
+        "value": 0
+      },
+      {
+        "key": "bridge.in_daily",
+        "ts": 1791849600000,
+        "value": 140234.513862
+      },
+      {
+        "key": "bridge.in_daily",
+        "ts": 1791936000000,
+        "value": 1000
+      },
+      {
+        "key": "bridge.in_daily",
+        "ts": 1792022400000,
+        "value": 54630
+      },
+      {
+        "key": "bridge.in_daily",
+        "ts": 1792108800000,
+        "value": 60000
+      },
+      {
+        "key": "bridge.in_daily",
+        "ts": 1792195200000,
+        "value": 60000
+      },
+      {
+        "key": "bridge.in_daily",
+        "ts": 1792281600000,
+        "value": 50000
+      },
+      {
+        "key": "bridge.in_daily",
+        "ts": 1792368000000,
+        "value": 120000
+      },
+      {
+        "key": "bridge.in_daily",
+        "ts": 1792454400000,
+        "value": 70000
+      },
+      {
+        "key": "bridge.in_daily",
+        "ts": 1792540800000,
+        "value": 0
+      },
+      {
+        "key": "bridge.in_daily",
+        "ts": 1792627200000,
+        "value": 359041.657201
+      },
+      {
+        "key": "bridge.out_daily",
+        "ts": 1790121600000,
+        "value": 0
+      },
+      {
+        "key": "bridge.out_daily",
+        "ts": 1790208000000,
+        "value": 2
+      },
+      {
+        "key": "bridge.out_daily",
+        "ts": 1790294400000,
+        "value": 10
+      },
+      {
+        "key": "bridge.out_daily",
+        "ts": 1790380800000,
+        "value": 0
+      },
+      {
+        "key": "bridge.out_daily",
+        "ts": 1790467200000,
+        "value": 2103
+      },
+      {
+        "key": "bridge.out_daily",
+        "ts": 1790553600000,
+        "value": 0
+      },
+      {
+        "key": "bridge.out_daily",
+        "ts": 1790640000000,
+        "value": 0
+      },
+      {
+        "key": "bridge.out_daily",
+        "ts": 1790726400000,
+        "value": 965
+      },
+      {
+        "key": "bridge.out_daily",
+        "ts": 1790812800000,
+        "value": 0
+      },
+      {
+        "key": "bridge.out_daily",
+        "ts": 1790899200000,
+        "value": 0
+      },
+      {
+        "key": "bridge.out_daily",
+        "ts": 1790985600000,
+        "value": 0
+      },
+      {
+        "key": "bridge.out_daily",
+        "ts": 1791072000000,
+        "value": 0
+      },
+      {
+        "key": "bridge.out_daily",
+        "ts": 1791158400000,
+        "value": 1374
+      },
+      {
+        "key": "bridge.out_daily",
+        "ts": 1791244800000,
+        "value": 0
+      },
+      {
+        "key": "bridge.out_daily",
+        "ts": 1791331200000,
+        "value": 0
+      },
+      {
+        "key": "bridge.out_daily",
+        "ts": 1791417600000,
+        "value": 0
+      },
+      {
+        "key": "bridge.out_daily",
+        "ts": 1791504000000,
+        "value": 0
+      },
+      {
+        "key": "bridge.out_daily",
+        "ts": 1791590400000,
+        "value": 0
+      },
+      {
+        "key": "bridge.out_daily",
+        "ts": 1791676800000,
+        "value": 1685
+      },
+      {
+        "key": "bridge.out_daily",
+        "ts": 1791763200000,
+        "value": 1
+      },
+      {
+        "key": "bridge.out_daily",
+        "ts": 1791849600000,
+        "value": 1
+      },
+      {
+        "key": "bridge.out_daily",
+        "ts": 1791936000000,
+        "value": 17166.836558
+      },
+      {
+        "key": "bridge.out_daily",
+        "ts": 1792022400000,
+        "value": 1070
+      },
+      {
+        "key": "bridge.out_daily",
+        "ts": 1792108800000,
+        "value": 0
+      },
+      {
+        "key": "bridge.out_daily",
+        "ts": 1792195200000,
+        "value": 0
+      },
+      {
+        "key": "bridge.out_daily",
+        "ts": 1792281600000,
+        "value": 765
+      },
+      {
+        "key": "bridge.out_daily",
+        "ts": 1792368000000,
+        "value": 164.346635
+      },
+      {
+        "key": "bridge.out_daily",
+        "ts": 1792454400000,
+        "value": 0
+      },
+      {
+        "key": "bridge.out_daily",
+        "ts": 1792540800000,
+        "value": 1500912
+      },
+      {
+        "key": "bridge.out_daily",
+        "ts": 1792627200000,
+        "value": 1454.202387
+      },
+      {
+        "key": "bridge.refunded_daily",
+        "ts": 1790121600000,
+        "value": 0
+      },
+      {
+        "key": "bridge.refunded_daily",
+        "ts": 1790208000000,
+        "value": 0
+      },
+      {
+        "key": "bridge.refunded_daily",
+        "ts": 1790294400000,
+        "value": 0
+      },
+      {
+        "key": "bridge.refunded_daily",
+        "ts": 1790380800000,
+        "value": 0
+      },
+      {
+        "key": "bridge.refunded_daily",
+        "ts": 1790467200000,
+        "value": 0
+      },
+      {
+        "key": "bridge.refunded_daily",
+        "ts": 1790553600000,
+        "value": 0
+      },
+      {
+        "key": "bridge.refunded_daily",
+        "ts": 1790640000000,
+        "value": 0
+      },
+      {
+        "key": "bridge.refunded_daily",
+        "ts": 1790726400000,
+        "value": 0
+      },
+      {
+        "key": "bridge.refunded_daily",
+        "ts": 1790812800000,
+        "value": 0
+      },
+      {
+        "key": "bridge.refunded_daily",
+        "ts": 1790899200000,
+        "value": 0
+      },
+      {
+        "key": "bridge.refunded_daily",
+        "ts": 1790985600000,
+        "value": 0
+      },
+      {
+        "key": "bridge.refunded_daily",
+        "ts": 1791072000000,
+        "value": 0
+      },
+      {
+        "key": "bridge.refunded_daily",
+        "ts": 1791158400000,
+        "value": 0
+      },
+      {
+        "key": "bridge.refunded_daily",
+        "ts": 1791244800000,
+        "value": 0
+      },
+      {
+        "key": "bridge.refunded_daily",
+        "ts": 1791331200000,
+        "value": 36.789678
+      },
+      {
+        "key": "bridge.refunded_daily",
+        "ts": 1791417600000,
+        "value": 23439.601769
+      },
+      {
+        "key": "bridge.refunded_daily",
+        "ts": 1791504000000,
+        "value": 0
+      },
+      {
+        "key": "bridge.refunded_daily",
+        "ts": 1791590400000,
+        "value": 7.67817
+      },
+      {
+        "key": "bridge.refunded_daily",
+        "ts": 1791676800000,
+        "value": 0
+      },
+      {
+        "key": "bridge.refunded_daily",
+        "ts": 1791763200000,
+        "value": 280469
+      },
+      {
+        "key": "bridge.refunded_daily",
+        "ts": 1791849600000,
+        "value": 140233.513862
+      },
+      {
+        "key": "bridge.refunded_daily",
+        "ts": 1791936000000,
+        "value": 0
+      },
+      {
+        "key": "bridge.refunded_daily",
+        "ts": 1792022400000,
+        "value": 0
+      },
+      {
+        "key": "bridge.refunded_daily",
+        "ts": 1792108800000,
+        "value": 0
+      },
+      {
+        "key": "bridge.refunded_daily",
+        "ts": 1792195200000,
+        "value": 0
+      },
+      {
+        "key": "bridge.refunded_daily",
+        "ts": 1792281600000,
+        "value": 0
+      },
+      {
+        "key": "bridge.refunded_daily",
+        "ts": 1792368000000,
+        "value": 0
+      },
+      {
+        "key": "bridge.refunded_daily",
+        "ts": 1792454400000,
+        "value": 0
+      },
+      {
+        "key": "bridge.refunded_daily",
+        "ts": 1792540800000,
+        "value": 1049
+      },
+      {
+        "key": "bridge.refunded_daily",
+        "ts": 1792627200000,
+        "value": 0
+      },
+      {
+        "key": "masp.in_daily",
+        "ts": 1790121600000,
+        "value": 0
+      },
+      {
+        "key": "masp.in_daily",
+        "ts": 1790208000000,
+        "value": 0
+      },
+      {
+        "key": "masp.in_daily",
+        "ts": 1790294400000,
+        "value": 0
+      },
+      {
+        "key": "masp.in_daily",
+        "ts": 1790380800000,
+        "value": 100
+      },
+      {
+        "key": "masp.in_daily",
+        "ts": 1790467200000,
+        "value": 0
+      },
+      {
+        "key": "masp.in_daily",
+        "ts": 1790553600000,
+        "value": 0
+      },
+      {
+        "key": "masp.in_daily",
+        "ts": 1790640000000,
+        "value": 0
+      },
+      {
+        "key": "masp.in_daily",
+        "ts": 1790726400000,
+        "value": 0
+      },
+      {
+        "key": "masp.in_daily",
+        "ts": 1790812800000,
+        "value": 0
+      },
+      {
+        "key": "masp.in_daily",
+        "ts": 1790899200000,
+        "value": 0
+      },
+      {
+        "key": "masp.in_daily",
+        "ts": 1790985600000,
+        "value": 0
+      },
+      {
+        "key": "masp.in_daily",
+        "ts": 1791072000000,
+        "value": 0
+      },
+      {
+        "key": "masp.in_daily",
+        "ts": 1791158400000,
+        "value": 0
+      },
+      {
+        "key": "masp.in_daily",
+        "ts": 1791244800000,
+        "value": 42200
+      },
+      {
+        "key": "masp.in_daily",
+        "ts": 1791331200000,
+        "value": 0
+      },
+      {
+        "key": "masp.in_daily",
+        "ts": 1791417600000,
+        "value": 0
+      },
+      {
+        "key": "masp.in_daily",
+        "ts": 1791504000000,
+        "value": 0
+      },
+      {
+        "key": "masp.in_daily",
+        "ts": 1791590400000,
+        "value": 0
+      },
+      {
+        "key": "masp.in_daily",
+        "ts": 1791676800000,
+        "value": 0
+      },
+      {
+        "key": "masp.in_daily",
+        "ts": 1791763200000,
+        "value": 0
+      },
+      {
+        "key": "masp.in_daily",
+        "ts": 1791849600000,
+        "value": 0
+      },
+      {
+        "key": "masp.in_daily",
+        "ts": 1791936000000,
+        "value": 1000
+      },
+      {
+        "key": "masp.in_daily",
+        "ts": 1792022400000,
+        "value": 54630
+      },
+      {
+        "key": "masp.in_daily",
+        "ts": 1792108800000,
+        "value": 60000
+      },
+      {
+        "key": "masp.in_daily",
+        "ts": 1792195200000,
+        "value": 60000
+      },
+      {
+        "key": "masp.in_daily",
+        "ts": 1792281600000,
+        "value": 50000
+      },
+      {
+        "key": "masp.in_daily",
+        "ts": 1792368000000,
+        "value": 120000
+      },
+      {
+        "key": "masp.in_daily",
+        "ts": 1792454400000,
+        "value": 70000
+      },
+      {
+        "key": "masp.in_daily",
+        "ts": 1792540800000,
+        "value": 0
+      },
+      {
+        "key": "masp.in_daily",
+        "ts": 1792627200000,
+        "value": 100003
+      },
+      {
+        "key": "masp.out_daily",
+        "ts": 1790121600000,
+        "value": 0
+      },
+      {
+        "key": "masp.out_daily",
+        "ts": 1790208000000,
+        "value": 2502.937961
+      },
+      {
+        "key": "masp.out_daily",
+        "ts": 1790294400000,
+        "value": 0
+      },
+      {
+        "key": "masp.out_daily",
+        "ts": 1790380800000,
+        "value": 0
+      },
+      {
+        "key": "masp.out_daily",
+        "ts": 1790467200000,
+        "value": 0
+      },
+      {
+        "key": "masp.out_daily",
+        "ts": 1790553600000,
+        "value": 0
+      },
+      {
+        "key": "masp.out_daily",
+        "ts": 1790640000000,
+        "value": 0
+      },
+      {
+        "key": "masp.out_daily",
+        "ts": 1790726400000,
+        "value": 0
+      },
+      {
+        "key": "masp.out_daily",
+        "ts": 1790812800000,
+        "value": 0
+      },
+      {
+        "key": "masp.out_daily",
+        "ts": 1790899200000,
+        "value": 0
+      },
+      {
+        "key": "masp.out_daily",
+        "ts": 1790985600000,
+        "value": 0
+      },
+      {
+        "key": "masp.out_daily",
+        "ts": 1791072000000,
+        "value": 0
+      },
+      {
+        "key": "masp.out_daily",
+        "ts": 1791158400000,
+        "value": 0
+      },
+      {
+        "key": "masp.out_daily",
+        "ts": 1791244800000,
+        "value": 0
+      },
+      {
+        "key": "masp.out_daily",
+        "ts": 1791331200000,
+        "value": 0
+      },
+      {
+        "key": "masp.out_daily",
+        "ts": 1791417600000,
+        "value": 0
+      },
+      {
+        "key": "masp.out_daily",
+        "ts": 1791504000000,
+        "value": 0
+      },
+      {
+        "key": "masp.out_daily",
+        "ts": 1791590400000,
+        "value": 0
+      },
+      {
+        "key": "masp.out_daily",
+        "ts": 1791676800000,
+        "value": 0
+      },
+      {
+        "key": "masp.out_daily",
+        "ts": 1791763200000,
+        "value": 0
+      },
+      {
+        "key": "masp.out_daily",
+        "ts": 1791849600000,
+        "value": 0
+      },
+      {
+        "key": "masp.out_daily",
+        "ts": 1791936000000,
+        "value": 81500.781732
+      },
+      {
+        "key": "masp.out_daily",
+        "ts": 1792022400000,
+        "value": 54701.181732000005
+      },
+      {
+        "key": "masp.out_daily",
+        "ts": 1792108800000,
+        "value": 60001.074209000006
+      },
+      {
+        "key": "masp.out_daily",
+        "ts": 1792195200000,
+        "value": 0.22499999999999998
+      },
+      {
+        "key": "masp.out_daily",
+        "ts": 1792281600000,
+        "value": 60000.376659
+      },
+      {
+        "key": "masp.out_daily",
+        "ts": 1792368000000,
+        "value": 60002.96697400001
+      },
+      {
+        "key": "masp.out_daily",
+        "ts": 1792454400000,
+        "value": 35000.519159
+      },
+      {
+        "key": "masp.out_daily",
+        "ts": 1792540800000,
+        "value": 1736000.7422880002
+      },
+      {
+        "key": "masp.out_daily",
+        "ts": 1792627200000,
+        "value": 24003.424318
+      }
+    ],
+    "success": true,
+    "meta": {
+      "served_by": "v3-prod",
+      "served_by_region": "WNAM",
+      "served_by_colo": "SJC",
+      "served_by_primary": true,
+      "timings": {
+        "sql_duration_ms": 3.4177
+      },
+      "duration": 3.4177,
+      "changes": 0,
+      "last_row_id": 132999,
+      "changed_db": false,
+      "size_after": 178683904,
+      "rows_read": 160,
+      "rows_written": 0,
+      "total_attempts": 1
+    }
+  }
+]

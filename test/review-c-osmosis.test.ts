@@ -268,7 +268,7 @@ describe('only a send on channel-98451 is a crossing to Namada, with its own pac
     raw.tx_result.events.push(...real);
     const p = parseOsmosisTx(normFromTxSearch(raw, 100), ctx);
     const outs = p.flows.filter((f) => f.kind === 'ibc_out');
-    expect(outs.map((f) => f.meta)).toEqual([{ memo: '', channel: NAM.osmoChannel, packetSequence: '7' }]);
+    expect(outs.map((f) => f.meta)).toEqual([{ memo: '', channel: NAM.osmoChannel, packetSequence: '7', priceSource: 'spot' }]);
     const rows = outs.map((f) => ({ id: f.id, ts: f.ts, from_addr: f.from, to_addr: f.to, amount_num: f.amount, meta: JSON.stringify(f.meta) }));
     const gone = timedOutSends(rows.map(ibcRowOf), [ibcRowOf({ id: 'r', ts: 200, from_addr: OSMOSIS.transferModule, to_addr: SENDER, amount_num: 1, meta: '{"packetSequence":"7","refundReceiver":"' + SENDER + '"}' })]);
     expect([...gone]).toEqual([outs[0].id]);

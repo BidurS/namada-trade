@@ -163,16 +163,60 @@ export const hourEndingWords = (at: number): string => `hour ending ${hourUtcWor
 export const poolHourWords = (at: number | null): string => `the pool’s close for the ${at != null ? `${hourEndingWords(at)} ` : 'hour '}(Osmosis app data)`;
 
 /**
- * How a move's price was set, in plain words, as the moves list says it after "Price: $0.000944 per NAM," and the CSV
- * export's price_basis column carries it. Empty for a move without a price.
+ * The NAM size of the route the Osmosis router quoted, for a move priced at a quote read as that route's spot (the
+ * quote service's price list gave NAM no price: worker/src/price-how.ts). The live hub stamps it (meta.priceRoute)
+ * beside meta.priceSource 'spot'; null for any other move.
  */
-export function priceBasisWords(how: PriceHow, at: number | null): string {
+export function priceRouteOf(f: { meta?: Record<string, unknown> | null }): number | null {
+  const r = f.meta?.priceRoute;
+  return f.meta?.priceSource === 'spot' && typeof r === 'number' && Number.isFinite(r) && r > 0 ? r : null;
+}
+
+/**
+ * How a move's price was set, in plain words, as the moves list says it after "Price: $0.000944 per NAM," and the CSV
+ * export's price_basis column carries it. Empty for a move without a price. `route`: the route size of a quote read
+ * as a route's spot (priceRouteOf).
+ */
+export function priceBasisWords(how: PriceHow, at: number | null, route: number | null = null): string {
   switch (how) {
     case 'execution': return 'from this trade itself';
     case 'swap_1h': return 'the median of that hour’s trades';
-    case 'spot': return 'the Osmosis quote when the move was recorded';
+    case 'spot': return route != null ? `the Osmosis route quote for selling ${route.toLocaleString('en-US')} NAM when the move was recorded` : 'the Osmosis quote when the move was recorded';
     case 'pool_1h': return `${poolHourWords(at)}, as no Osmosis quote was stored for that minute`;
     case 'unstated': return 'recorded with the move; how it was set is not stated';
     default: return '';
+  }
+}
+
+/** The short words for a price's basis: the trades tape, the moves list and a Discord alert's figures. */
+export const PRICE_SHORT: Record<PriceHow, string> = {
+  execution: "trade's own price",
+  swap_1h: 'hourly median price',
+  spot: 'quote at the time',
+  pool_1h: "pool's hourly close",
+  unstated: 'price basis not stated',
+  none: 'no price',
+};
+/** The short words for a price's basis; a pool close says its hour ("pool's hourly close, hour ending 19:00 UTC"). */
+export const priceShort = (how: PriceHow, at: number | null | undefined): string =>
+  how === 'pool_1h' && at != null ? `${PRICE_SHORT.pool_1h}, ${hourEndingWords(at)}` : PRICE_SHORT[how];
+
+/**
+ * A price's source as a Discord alert names it: `long` inside a sentence ("Worth $1,678 at $0.001119 a NAM, the Osmosis
+ * quote for that minute"), `short` in a parenthesis or under a figure ("Osmosis quote"). The quote's words are the
+ * ones the settle sentence uses ("the Osmosis OSMO quote for that minute", web/src/lib/settle.ts); a route's spot is
+ * named as the site's price stamp names it ("Osmosis route quote, 1,000 NAM", web/src/lib/prov.ts plainSource); a pool
+ * close and an hour's median are priceBasisWords'. Empty for a move without a price.
+ */
+export function priceSourceWords(how: PriceHow, at: number | null, route: number | null = null): { long: string; short: string } {
+  switch (how) {
+    case 'spot': return route != null
+      ? { long: `the Osmosis route quote for that minute (the route for selling ${route.toLocaleString('en-US')} NAM)`, short: `Osmosis route quote, ${route.toLocaleString('en-US')} NAM` }
+      : { long: 'the Osmosis quote for that minute', short: 'Osmosis quote' };
+    case 'pool_1h': return { long: priceBasisWords('pool_1h', at), short: priceShort('pool_1h', at) };
+    case 'swap_1h': return { long: priceBasisWords('swap_1h', at), short: PRICE_SHORT.swap_1h };
+    case 'execution': return { long: 'the trade’s own price', short: PRICE_SHORT.execution };
+    case 'unstated': return { long: 'the stored price for that minute (source not stated)', short: 'stored price, source not stated' };
+    default: return { long: '', short: '' };
   }
 }

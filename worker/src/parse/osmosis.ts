@@ -560,10 +560,15 @@ function mv(tx: NormTx, address: string, delta: number, idx: number): Move {
   return { chain: 'osmosis', address, height: tx.height, ts: tx.ts, txHash: tx.hash, idx, delta };
 }
 
+/**
+ * A row priced at the quote for its minute (ctx.priceUsd: every row here but the swaps, which say how they were priced
+ * themselves) says so, as a swap priced at the quote does: meta.priceSource 'spot'. A row with no price says nothing.
+ */
 function flow(
   tx: NormTx, suffix: string, kind: Flow['kind'], from: string | null, to: string | null,
-  amount: number, priceUsd: number | null, meta: Record<string, unknown> | null,
+  amount: number, priceUsd: number | null, given: Record<string, unknown> | null,
 ): Flow {
+  const meta = priceUsd != null ? { ...(given ?? {}), priceSource: 'spot' } : given;
   return {
     id: `osmosis:${tx.hash}:${suffix}`,
     chain: 'osmosis',

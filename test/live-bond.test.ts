@@ -409,7 +409,7 @@ describe('moves the live scan reads late are alerted as found late (owner decisi
     expect(sent.map((f) => [f.kind, f.amount, f.meta?.via ?? null])).toEqual([['bond', 13000, 'late scan'], ['transfer', 20000, null]]);
     // the stored row carries the mark too
     expect(metaOf(db, H).via).toBe('late scan');
-    const field = (f: any) => buildFlowDiscordBody(f, null).embeds[0].fields.find((x) => x.name === 'Found late');
+    const field = (f: any) => buildFlowDiscordBody(f, {}).embeds[0].fields.find((x) => x.name === 'Found late');
     const t = Math.floor(late / 1000);
     expect(field(sent[0])?.value).toBe(`The live scan was behind and read this move late; it happened <t:${t}:f> (<t:${t}:R>).`);
     expect(field(sent[1])).toBeUndefined();

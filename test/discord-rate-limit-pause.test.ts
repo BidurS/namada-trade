@@ -59,13 +59,13 @@ describe('Security review (2026-10-22), an honest hook that Discord rate limits 
     for (let run = 0; run < 3; run++) {
       for (let k = 0; k < 10; k++) {
         vi.setSystemTime(T0 + run * 120_000 + k * 250);
-        await d.sendDiscordWhaleAlert(undefined, move(), null, db as any, 10000);
+        await d.sendDiscordWhaleAlert(undefined, move(), db as any, 10000);
       }
     }
     const before = posts.length;
     // A minute after the last run: Discord's bucket is long since empty.
     vi.setSystemTime(T0 + 2 * 120_000 + 60_000);
-    await d.sendDiscordWhaleAlert(undefined, move(), null, db as any, 10000);
+    await d.sendDiscordWhaleAlert(undefined, move(), db as any, 10000);
     expect(posts.length - before).toBe(1);
   });
 });

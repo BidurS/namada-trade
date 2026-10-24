@@ -273,6 +273,8 @@ One large moment per screen: Home the price, Trade "You get", inner pages the H1
 
 Sentence case everywhere. Caps only in the H1 (display), eyebrows, currency codes and the wordmark. Banned strings in rendered text and TSX literals (copy lint): SQS, IBC, DEX, PoS, MASP, ABCI, RPC, cron, webhook, npm, bare D1 to D7, "Loading…" (outside the glossary, Sources "How it is computed", For developers).
 
+A Discord alert is copy too, read on a lock screen before the site: the same words, sentence case, no emoji, no rule ids, no "address(es)", no "≥", none of the words above nor "unbond", "unshield" or "arbitrage" (test/banned-words.ts). The title and the first line carry no markdown and no Discord time stamp (a lock screen shows them raw); times in each reader's own zone (`<t:…>`) only further down. The copy lint reads the message builders' literals (`scripts/copy-lint.ts` MESSAGE_SOURCES) and test/discord-words.test.ts the cards built from real rows.
+
 ---
 
 ## 6. Space, shape, elevation

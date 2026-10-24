@@ -51,7 +51,7 @@ describe('Security review (2026-10-22), a link proven in its row is not held for
     vi.stubGlobal('fetch', vi.fn(async (u: string, init?: RequestInit) => {
       const url = String(u);
       const body = JSON.parse(String(init?.body));
-      posts.push({ url, tx: String(body.embeds[0].description).slice(5, 8) });
+      posts.push({ url, tx: String(/\/transactions\/(\w+)\)/.exec(String(body.embeds[0].description))?.[1] ?? '') });
       if (url === OP || url === HONEST) return new Response(null, { status: 204 });
       return new Response(JSON.stringify({ message: 'Unknown Webhook', code: 10015 }), { status: 404, headers: { 'content-type': 'application/json' } });
     }));

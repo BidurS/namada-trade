@@ -91,7 +91,7 @@ describe('a mixed-token event keeps its NAM legs', () => {
     await saveSettings(db as any, KEY, s);
     const p = parse(ev('A2'.repeat(32), [[MASP, NAMT, '1000000000000'], [MASP, OSMO, '1']], [[USER, NAMT, '1000000000000'], [USER, OSMO, '1']]));
     // LiveHub.alertFlows offers every shield/unshield, in parse order
-    for (const f of p.flows) await sendDiscordWhaleAlert('https://discord.com/api/webhooks/30/op', f, null, db as any, 10000);
+    for (const f of p.flows) await sendDiscordWhaleAlert('https://discord.com/api/webhooks/30/op', f, db as any, 10000);
     expect(calls.filter((u) => u.endsWith('/30/op'))).toHaveLength(1);
     expect(calls.filter((u) => u.endsWith('/31/u'))).toHaveLength(1);
   });

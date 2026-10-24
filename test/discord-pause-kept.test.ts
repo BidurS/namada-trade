@@ -43,7 +43,7 @@ describe('Security review (2026-10-22), an honest hook under a Retry-After pause
     const budget = alarmBudget(Date.now() + 142_000, true);
     const kept: PendingAlert[] = [];
     for (let i = 1; i <= 10; i++) {
-      const left = await sendDiscordWhaleAlert(undefined, move(i), null, db as any, 10000, budget);
+      const left = await sendDiscordWhaleAlert(undefined, move(i), db as any, 10000, budget);
       if (left) kept.push(left);
     }
     await flushAlerts(db as any, budget);
@@ -61,7 +61,7 @@ describe('Security review (2026-10-22), an honest hook under a Retry-After pause
     taken = 0;
     const next = alarmBudget(Date.now() + 142_000, true);
     let sent = 0;
-    for (const k of kept) { const left = await sendDiscordWhaleAlert(undefined, k.flow, null, db as any, 10000, next, k); if (!left) sent++; }
+    for (const k of kept) { const left = await sendDiscordWhaleAlert(undefined, k.flow, db as any, 10000, next, k); if (!left) sent++; }
     await flushAlerts(db as any, next);
     expect(sent).toBe(5);
     expect(posts.filter((s) => s === 200)).toHaveLength(10);
@@ -75,7 +75,7 @@ describe('Security review (2026-10-22), an honest hook under a Retry-After pause
       answers.push(answers.length ? 204 : 429);
       return answers.length === 1 ? rateLimited(1) : new Response(null, { status: 204 });
     }));
-    await sendDiscordWhaleAlert(OP, move(20), null, db as any, 10000);
+    await sendDiscordWhaleAlert(OP, move(20), db as any, 10000);
     expect(answers).toEqual([429, 204]);
     expect(db.raw.prepare("SELECT value FROM kv WHERE key = 'alerts.skipped'").get()).toBeUndefined();
   });

@@ -42,6 +42,8 @@ const stubFetch = () => {
 };
 afterEach(() => vi.unstubAllGlobals());
 const titles = (url: string) => calls.filter((c) => c.url === url).map((c) => c.body.embeds[0].title as string);
+/** Why each post reached the channel (the line above its title): the subscriber's rule, or the watchlist. */
+const authors = (url: string) => calls.filter((c) => c.url === url).map((c) => String(c.body.embeds[0].author?.name ?? ''));
 const alertKeys = (db: ReturnType<typeof testD1>) =>
   db.raw.prepare("SELECT key FROM kv WHERE key LIKE 'alert:%' ORDER BY key").all().map((r: any) => r.key as string);
 
@@ -105,8 +107,9 @@ describe('a bridge crossing reaches each channel once, from whichever record rea
     // the Namada scan's pass, then the stream's (whale size 10,000; offered from 10 and 100 NAM)
     await hub.alertFlows(send, 10000, 10);
     await hub.alertFlows(recv, 10000, 100);
-    expect(titles(OP)).toEqual(['🌉 IBC Bridge Namada → Osmosis: 30,000 NAM']);
-    expect(titles(SUB)).toEqual(['[IBC_INVENTORY] 🌉 IBC Bridge Namada → Osmosis: 30,000 NAM']);
+    expect(titles(OP)).toEqual(['30,000 NAM bridged to Osmosis']);
+    expect(titles(SUB)).toEqual(['30,000 NAM bridged to Osmosis']);
+    expect(authors(SUB)[0]).toMatch(/^NAM bridged to Osmosis · your rule at /);
     // the crossing is claimed per channel on its packet, the channel by a digest: no webhook URL is ever stored
     const keys = alertKeys(db);
     expect(keys.filter((k) => k.startsWith('alert:ibc:'))).toHaveLength(2);
@@ -125,8 +128,10 @@ describe('a bridge crossing reaches each channel once, from whichever record rea
     const hub = hubWith({ DB: db }); // no operator channel
     await hub.alertFlows(namadaSends(T, sendEvents(30_000, '9201', hex('A'), hex('B'))), 10000, 10);
     await hub.alertFlows(osmoReceive(T + 20_000, 30_000, '9201', hex('C')), 10000, 100);
-    expect(titles(WATCH)).toEqual(['[WATCHLIST] 🌉 IBC Bridge Namada → Osmosis: 30,000 NAM']);
-    expect(titles(SUB)).toEqual(['[IBC_INVENTORY] 🌉 IBC Bridge Namada → Osmosis: 30,000 NAM']);
+    expect(titles(WATCH)).toEqual(['30,000 NAM bridged to Osmosis']);
+    expect(authors(WATCH)[0]).toMatch(/^Watchlist: /);
+    expect(titles(SUB)).toEqual(['30,000 NAM bridged to Osmosis']);
+    expect(authors(SUB)[0]).toMatch(/^NAM bridged to Osmosis · your rule at /);
   });
 
   it('Osmosis receive first: every channel hears of it once and the Namada send posts nothing more', async () => {
@@ -158,12 +163,12 @@ describe('the pairing key is the packet both chains record', () => {
     expect(sends.map((f) => [f.amount, f.to])).toEqual([[1_000_000, 'osmo137zwfeku64lzfg4laedyg628qnepqpgkahqyk3'], [1_000_000, 'osmo137zwfeku64lzfg4laedyg628qnepqpgkahqyk3']]);
     const hub = hubWith({ DISCORD_WEBHOOK_URL: OP, DB: db });
     await hub.alertFlows(sends, 10000, 10);
-    expect(titles(OP)).toEqual(['🌉 IBC Bridge Namada → Osmosis: 1,000,000 NAM', '🌉 IBC Bridge Namada → Osmosis: 1,000,000 NAM']);
+    expect(titles(OP)).toEqual(['1,000,000 NAM bridged to Osmosis', '1,000,000 NAM bridged to Osmosis']);
     expect(sends.map(crossingOf)).toEqual(['channel-1:9401', 'channel-1:9402']);
     await hub.alertFlows([...osmoReceive(T + 30_000, 1_000_000, '9401', hex('4')), ...osmoReceive(T + 40_000, 1_000_000, '9402', hex('5'))], 10000, 100);
     expect(titles(OP)).toHaveLength(2);
     // the rule subscriber hears of each crossing from its Osmosis receive
-    expect(titles(SUB)).toEqual(['[IBC_INVENTORY] 🌉 IBC Bridge Namada → Osmosis: 1,000,000 NAM', '[IBC_INVENTORY] 🌉 IBC Bridge Namada → Osmosis: 1,000,000 NAM']);
+    expect(titles(SUB)).toEqual(['1,000,000 NAM bridged to Osmosis', '1,000,000 NAM bridged to Osmosis']);
   });
 
   it("the two records of one crossing pair across a ten-minute boundary (send 5 s before it, receive 15 s after)", async () => {
@@ -174,7 +179,7 @@ describe('the pairing key is the packet both chains record', () => {
     const hub = hubWith({ DISCORD_WEBHOOK_URL: OP, DB: db });
     await hub.alertFlows(namadaSends(BOUNDARY - 5_000, sendEvents(31_000, '9501', hex('6'), hex('7'))), 10000, 10);
     await hub.alertFlows(osmoReceive(BOUNDARY + 15_000, 31_000, '9501', hex('8')), 10000, 100);
-    expect(titles(OP)).toEqual(['🌉 IBC Bridge Namada → Osmosis: 31,000 NAM']);
+    expect(titles(OP)).toEqual(['31,000 NAM bridged to Osmosis']);
   });
 
   it('each direction names its source channel and sequence; a record without its packet pairs with nothing', () => {
@@ -252,7 +257,7 @@ describe('an Osmosis stream transaction whose write fails is read again by the c
     await hub.sweepOsmosis();
     expect(rows()).toBe(1);
     expect(posts).toHaveLength(1);
-    expect(posts[0].embeds[0].title).toBe('🐋 Flow [TRANSFER]: 1,000,000 NAM');
+    expect(posts[0].embeds[0].title).toBe('1,000,000 NAM transferred on Osmosis · found late');
     expect(posts[0].embeds[0].fields.some((f: any) => f.name === 'Found late')).toBe(true);
     expect(cursor()).toBe(200);
     expect(hub.osmoRetryFrom).toBeNull();

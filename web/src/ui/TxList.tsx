@@ -8,7 +8,7 @@ import type { Flow } from '../../../shared/types';
 import { kindSign } from '../lib/kinds';
 import { MINUS, fmtAddr, fmtAgo, fmtCoin, fmtCount, fmtNamRule, fmtUsdRule, fmtUtcLong, explorerTxOf, labelNeedsAddr } from '../lib/format';
 import { chainWord, coinWord, dayHm, priceHow, priceShort, tagOf, timeEstimated, type PriceHow } from '../lib/flows';
-import { priceAtOf, priceBasisWords } from '../../../shared/flow-rules';
+import { priceAtOf, priceBasisWords, priceRouteOf } from '../../../shared/flow-rules';
 import { flowSettle, settleGasNote, settleWords } from '../lib/settle';
 import { settleUsd, type Settle } from '../../../shared/settle';
 import { tagByline } from '../../../shared/labels';
@@ -137,6 +137,8 @@ function TxRow({ f, now, isNew, onAddr, rowIndex }: { f: Flow; now: number; isNe
         <span className="tx__srcw">
           <span>{timeEstimated(f) ? 'Estimated time' : 'Block time'}</span>
           <span>{settle ? 'settle price' : priceShort(how, priceAtOf(f))}</span>
+          {/* the words a Discord alert of this move carries in its title (owner decision 14) */}
+          {foundLateOf(f) ? <span>found late</span> : null}
         </span>
       </span>
       <span className="tx__rec" role="cell">
@@ -154,6 +156,16 @@ function TxRow({ f, now, isNew, onAddr, rowIndex }: { f: Flow; now: number; isNe
   );
 }
 
+/**
+ * Why a move was found late, in the words of its Discord alert (owner decision 14): the live feed missed it and the
+ * catch-up search found it (meta.via 'catch-up search'), or the live scan read its block late (meta.via 'late scan');
+ * null for a move read live.
+ */
+const foundLateOf = (f: Flow): string | null => {
+  const via = (f.meta as Record<string, unknown> | null | undefined)?.via;
+  return via === 'catch-up search' ? 'the live feed missed this move' : via === 'late scan' ? 'the live scan was behind and read this move late' : null;
+};
+
 /** Line 3 on phones: when, how the price was set, what it traded against, and the record. */
 function Detail({ f, how, settle }: { f: Flow; how: PriceHow; settle: Settle | null }) {
   const coin = coinWord(f.counterDenom);
@@ -163,7 +175,7 @@ function Detail({ f, how, settle }: { f: Flow; how: PriceHow; settle: Settle | n
   const priceText = settle ? `Settled at ${fmtUsdRule(settle.usdPerNam)} a NAM: ${settleWords(settle)}.${gasNote ? ` ${gasNote}` : ''}`
     : how === 'execution' ? `Price: ${price}, from this trade itself.`
     : how === 'swap_1h' ? `Price: ${price}, the median of that hour’s trades.`
-    : how === 'spot' ? `Price: ${price}, the Osmosis quote when the move was recorded.`
+    : how === 'spot' ? `Price: ${price}, ${priceBasisWords('spot', null, priceRouteOf(f))}.`
     : how === 'pool_1h' ? `Price: ${price}, ${priceBasisWords(how, priceAtOf(f))}.`
     : how === 'unstated' ? `Price: ${price}, recorded with the move; how it was set is not stated.`
     : 'No price was recorded for this move, so it has no dollar value.';
@@ -172,6 +184,7 @@ function Detail({ f, how, settle }: { f: Flow; how: PriceHow; settle: Settle | n
       <span>
         {timeEstimated(f) ? 'Time: estimated from nearby blocks, ' : 'Time: from the block, '}
         {fmtUtcLong(f.ts)}.
+        {foundLateOf(f) ? ` Found late: ${foundLateOf(f)}; its alert says so.` : null}
       </span>
       <span>{priceText}</span>
       {coin && f.counterAmount != null ? (

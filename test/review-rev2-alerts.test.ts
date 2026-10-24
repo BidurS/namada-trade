@@ -96,7 +96,7 @@ describe('an Osmosis stream transaction whose failed write left rows stored is w
     expect(count('flows')).toBe(30);
     expect(count('moves')).toBe(60);
     expect(posts).toHaveLength(30);
-    expect(new Set(posts.map((p) => p.embeds[0].title))).toEqual(new Set(['🐋 Flow [TRANSFER]: 20,000 NAM']));
+    expect(new Set(posts.map((p) => p.embeds[0].title))).toEqual(new Set(['20,000 NAM transferred on Osmosis']));
     expect(flowClaims()).toBe(30);
     expect(cursor()).toBe(200);
     expect(hub.osmoRetryFrom).toBeNull();
@@ -111,7 +111,7 @@ describe('an Osmosis stream transaction whose failed write left rows stored is w
     expect(count('flows')).toBe(1);
     expect(count('moves')).toBe(2);
     expect(posts).toHaveLength(1);
-    expect(posts[0].embeds[0].title).toBe('🐋 Flow [TRANSFER]: 1,000,000 NAM');
+    expect(posts[0].embeds[0].title).toBe('1,000,000 NAM transferred on Osmosis · found late');
     expect(posts[0].embeds[0].fields.some((f: any) => f.name === 'Found late')).toBe(true);
     expect(cursor()).toBe(200);
     expect(hub.osmoRetryFrom).toBeNull();
@@ -138,7 +138,7 @@ describe('an Osmosis stream transaction whose failed write left rows stored is w
     await hub.sweepOsmosis();
     expect(count('flows')).toBe(1);
     expect(posts).toHaveLength(1);
-    expect(posts[0].embeds[0].title).toBe('🐋 Flow [TRANSFER]: 1,000,000 NAM');
+    expect(posts[0].embeds[0].title).toBe('1,000,000 NAM transferred on Osmosis · found late');
     expect(hub.osmoRetryTx.size).toBe(0);
     expect(hub.osmoRetryFrom).toBeNull();
   });
@@ -162,7 +162,7 @@ describe('an Osmosis stream transaction whose failed write left rows stored is w
     expect({ ...link() }).toEqual({ transfers: 1, volume_num: 30_000 });
     await hub.sweepOsmosis();
     expect(count('flows')).toBe(1);
-    expect(posts.map((p) => p.embeds[0].title)).toEqual(['🌉 IBC Bridge Namada → Osmosis: 30,000 NAM']);
+    expect(posts.map((p) => p.embeds[0].title)).toEqual(['30,000 NAM bridged to Osmosis · found late']);
     // the rows were all stored by the write that threw: the search alerts them without writing them again
     expect({ ...link() }).toEqual({ transfers: 1, volume_num: 30_000 });
   });
@@ -220,7 +220,7 @@ describe('a crossing claimed per channel: a later claim batch that fails never r
     vi.resetModules();
     const first = await import('../worker/src/sources/discord');
     first.configureAlerts(KEY);
-    await first.sendDiscordWhaleAlert(OP, send, null, db as any, 10_000);
+    await first.sendDiscordWhaleAlert(OP, send, db as any, 10_000);
     expect(calls).toHaveLength(91);
     const heard = new Set(calls);
 
@@ -232,7 +232,7 @@ describe('a crossing claimed per channel: a later claim batch that fails never r
     const realBatch = db.batch.bind(db);
     (db as any).batch = async (s: any[]) => { if (++n === 2) throw new Error('D1 transient'); return realBatch(s); };
     calls.length = 0;
-    await second.sendDiscordWhaleAlert(OP, recv, null, db as any, 10_000);
+    await second.sendDiscordWhaleAlert(OP, recv, db as any, 10_000);
     // the 80 channels D1 refused in the first batch (the operator's among them) hear nothing again; the 11 of the
     // batch that failed are unknown and count as claimed (a repeat post is better than a lost alert)
     expect(calls).not.toContain(OP);

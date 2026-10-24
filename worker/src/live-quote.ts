@@ -29,10 +29,15 @@ export interface HubQuoteNow {
   /** for the hub's own ask: the price's technical source name, and its note (the route's), as the ask gave them */
   priceSource?: string;
   priceNote?: string;
+  /**
+   * for the hub's own ask: the NAM size of the route whose spot the price is (the price list gave NAM none), or null
+   * for the price list; absent for a stored quote, whose way the cron's price.how log says (price-how.ts priceRouteAt)
+   */
+  routeNam?: number | null;
 }
 
-/** What an ask answers: the price alone, or the price with the source name and note of how it was read. */
-export type HubAsk = number | { usd: number | null; priceSource?: string; priceNote?: string } | null;
+/** What an ask answers: the price alone, or the price with the source name, note and route size of how it was read. */
+export type HubAsk = number | { usd: number | null; priceSource?: string; priceNote?: string; routeNam?: number | null } | null;
 
 const ok = (x: number | null | undefined): x is number => x != null && Number.isFinite(x) && x > 0;
 
@@ -70,6 +75,7 @@ export class HubQuote {
         this.cur = { usd, at: now, source: 'live' };
         if (a != null && typeof a === 'object' && a.priceSource) this.cur.priceSource = a.priceSource;
         if (a != null && typeof a === 'object' && a.priceNote) this.cur.priceNote = a.priceNote;
+        if (a != null && typeof a === 'object' && a.routeNam !== undefined) this.cur.routeNam = a.routeNam;
       } else unanswered = true;
     }
     const stale = !this.cur || this.cur.source === 'stored' || now - this.cur.at > QUOTE_ASK_EVERY_MS;
@@ -87,10 +93,18 @@ export class HubQuote {
    * when the stored quote cannot be read, so the caller holds the move for a retry rather than store it unpriced.
    */
   async at(ts: number, now: number): Promise<number | null> {
+    return (await this.quoteFor(ts, now))?.usd ?? null;
+  }
+
+  /**
+   * The quote `at` gives, with when it was read and how: the current one (the hub's own ask carries its route size;
+   * a stored one does not) or the stored one of the move's minute (`stored`: its way is the cron's price.how log's).
+   */
+  async quoteFor(ts: number, now: number): Promise<{ usd: number; at: number; stored: boolean; routeNam?: number | null } | null> {
     const c = this.current(now);
-    if (c && now - ts <= QUOTE_ASK_EVERY_MS) return c.usd;
+    if (c && now - ts <= QUOTE_ASK_EVERY_MS) return { usd: c.usd, at: c.at, stored: c.source === 'stored', ...(c.routeNam !== undefined ? { routeNam: c.routeNam } : {}) };
     const s = await this.stored(ts);
-    return s && ok(s.usd) && s.at <= ts && ts - s.at <= QUOTE_MATCH_MS ? s.usd : null;
+    return s && ok(s.usd) && s.at <= ts && ts - s.at <= QUOTE_MATCH_MS ? { usd: s.usd, at: s.at, stored: true } : null;
   }
 }
 
@@ -102,7 +116,7 @@ export async function askQuoteService(): Promise<HubAsk> {
   const p = await fetchNamPrice();
   if (p.usd == null) return null;
   const prov = livePriceProv(p);
-  return { usd: p.usd, priceSource: prov.source, ...(prov.note ? { priceNote: prov.note } : {}) };
+  return { usd: p.usd, priceSource: prov.source, ...(prov.note ? { priceNote: prov.note } : {}), routeNam: p.how?.how === 'route' ? p.how.refNam : null };
 }
 
 /** The newest quote the cron stored (metrics price.usd) at or before `ts`: one key seek. */

@@ -124,10 +124,11 @@ describe('review C: NAM alert sizes and words apply to NAM amounts only', () => 
     const WATCH = 'https://discord.com/api/webhooks/77/watch';
     await saveSettings(db as any, KEY, subscriber('rules', RULES));
     await saveSettings(db as any, KEY, subscriber('watch', WATCH, [USER]));
-    await sendDiscordWhaleAlert(OP, osmoOut('osmo-discord'), 0.001, db as any, 10000);
+    await sendDiscordWhaleAlert(OP, osmoOut('osmo-discord'), db as any, 10000);
     expect(calls.map((c) => c.url)).toEqual([WATCH]);
     const embed = calls[0].body.embeds[0];
-    expect(embed.title).toBe('[WATCHLIST] 🔓 MASP Unshielded: 60,000 OSMO');
+    expect(embed.title).toBe('60,000 OSMO moved out of the shielded set');
+    expect(embed.author.name).toBe('Watchlist: tnam1qxuse…00000');
     expect(JSON.stringify(embed)).not.toMatch(NAM_WORD);
   });
 
@@ -142,14 +143,14 @@ describe('review C: NAM alert sizes and words apply to NAM amounts only', () => 
     const nam: Flow = { id: 'osmosis:V77IBC:ibc_in:3', chain: 'osmosis', height: 1, ts: usdc.ts + 1000, txHash: 'V77IBC', kind: 'ibc_in', from: USER, to: RECV, amount: 30000, meta: null };
     await saveSettings(db as any, KEY, subscriber('ibcwatch', 'https://discord.com/api/webhooks/77/ibc-watch', [USER]));
     configureAlerts(KEY);
-    await sendDiscordWhaleAlert(OP, usdc, null, db as any, 10000);
-    await sendDiscordWhaleAlert(OP, nam, null, db as any, 10000);
-    expect(calls.filter((c) => c.url === OP).map((c) => c.body.embeds[0].title)).toEqual(['🌉 IBC Bridge Namada → Osmosis: 30,000 NAM']);
+    await sendDiscordWhaleAlert(OP, usdc, db as any, 10000);
+    await sendDiscordWhaleAlert(OP, nam, db as any, 10000);
+    expect(calls.filter((c) => c.url === OP).map((c) => c.body.embeds[0].title)).toEqual(['30,000 NAM bridged to Osmosis']);
   });
 
   it('a move that names its coin only in meta.tokenSymbol is still named by it', () => {
-    const body = buildFlowDiscordBody({ ...osmoOut('meta-only'), counterDenom: null, counterAmount: null }, 0.001);
-    expect(body.embeds[0].title).toBe('🔓 MASP Unshielded: 60,000 OSMO');
+    const body = buildFlowDiscordBody({ ...osmoOut('meta-only'), counterDenom: null, counterAmount: null }, {});
+    expect(body.embeds[0].title).toBe('60,000 OSMO moved out of the shielded set');
     expect(JSON.stringify(body.embeds[0])).not.toMatch(NAM_WORD);
   });
 
@@ -167,12 +168,12 @@ describe('review C: NAM alert sizes and words apply to NAM amounts only', () => 
     await hubWith({ DISCORD_WEBHOOK_URL: OP, DB: db }).alertFlows([osmo, usdc, nam], 10000, 10);
     expect(osmo.whale).toBeUndefined();
     expect(nam.whale).toBe(true);
-    expect(calls.filter((c) => c.url === OP).map((c) => c.body.embeds[0].title)).toEqual(['🔓 MASP Unshielded: 60,000 NAM']);
+    expect(calls.filter((c) => c.url === OP).map((c) => c.body.embeds[0].title)).toEqual(['60,000 NAM moved out of the shielded set']);
     // the watcher's own NAM rule (unshield at the default 50,000) still fires on the NAM move
-    expect(calls.filter((c) => c.url === WATCH).map((c) => c.body.embeds[0].title)).toEqual([
-      '[WATCHLIST] 🔓 MASP Unshielded: 60,000 OSMO',
-      '[WATCHLIST] 🐋 Flow [TRANSFER]: 5 USDC',
-      '[UNSHIELD] 🔓 MASP Unshielded: 60,000 NAM',
+    expect(calls.filter((c) => c.url === WATCH).map((c) => [c.body.embeds[0].author.name, c.body.embeds[0].title])).toEqual([
+      ['Watchlist: tnam1qxuse…00000', '60,000 OSMO moved out of the shielded set'],
+      ['Watchlist: tnam1qxuse…00000', '5.00 USDC transferred on Namada'],
+      ['NAM left the shielded set · your rule at 50,000 NAM', '60,000 NAM moved out of the shielded set'],
     ]);
   });
 });

@@ -254,7 +254,7 @@ describe('Security review (2026-10-22), a 429 that limits the site\'s address', 
     // A move's subscriber post is answered 429 of global scope: the address is limited for the next second.
     const answers: string[] = [];
     vi.stubGlobal('fetch', vi.fn(async (u: string) => { answers.push(String(u)); return answers.length === 1 ? globalLimited() : ok(); }));
-    await m.d.sendDiscordWhaleAlert(undefined, unshield(), null, db as any, 10000);
+    await m.d.sendDiscordWhaleAlert(undefined, unshield(), db as any, 10000);
     const post = { id: 990001, topicId: 1, topicTitle: 't', topicSlug: 't', postNumber: 2, url: 'https://forum.namada.net/t/t/1/990001', username: 'u', displayName: null, avatarUrl: null, createdAt: new Date().toISOString(), excerpt: 'e', isNewTopic: false };
     const run1 = m.d.alertBudget(Date.now());
     expect(await m.d.sendDiscordForumAlert(OP, post, db as any, run1)).toBe('waiting');

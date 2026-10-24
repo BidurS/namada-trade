@@ -32,6 +32,9 @@ export const INTERNAL_ADDRESSES = {
 const INTERNAL = new Set<string>(Object.values(INTERNAL_ADDRESSES));
 export const isInternal = (a: string | null | undefined) => !!a && INTERNAL.has(a);
 
+/** The hour (UTC) the daily digest is due from, every day; the weekly one is due from the same hour on Mondays. */
+export const DIGEST_HOUR_UTC = 8;
+
 export interface AlertThresholds {
   ibcInventory: number;
   unlock: number;

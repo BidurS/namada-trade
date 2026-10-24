@@ -98,7 +98,7 @@ describe('Security review (2026-10-22), a link is proven by the save that turns 
     t += 3 * DAY;
     expect((await get(db, honest)).channels.discord.enabled).toBe(true);
     expect((await readDeliverable(db as any, KEY)).users.map((u) => u.address)).toEqual([addr('hon', 0)]);
-    await sendDiscordWhaleAlert(undefined, moveFromWatched(1), null, db as any, 10000);
+    await sendDiscordWhaleAlert(undefined, moveFromWatched(1), db as any, 10000);
     expect(d.to(HONEST)).toBe(2); // the notice, then the move
   });
 
@@ -110,7 +110,7 @@ describe('Security review (2026-10-22), a link is proven by the save that turns 
     expect((await put(db, sub, { channels: { discord: { enabled: true, webhookUrl: DEFAULTS } } })).status).toBe(200);
     expect(d.to(DEFAULTS)).toBe(1);
     t += 2 * DAY;
-    await sendDiscordWhaleAlert(undefined, bigSell(1), null, db as any, 10000);
+    await sendDiscordWhaleAlert(undefined, bigSell(1), db as any, 10000);
     expect(d.to(DEFAULTS)).toBe(2);
   });
 
@@ -169,7 +169,7 @@ describe('Security review (2026-10-22), a link is proven by the save that turns 
     // goes from the page.
     answer = () => new Response(null, { status: 204 });
     t += 60_000;
-    await sendDiscordWhaleAlert(undefined, moveFromWatched(41), null, db as any, 10000);
+    await sendDiscordWhaleAlert(undefined, moveFromWatched(41), db as any, 10000);
     expect(d.to(SLOW)).toBe(3);
     expect(await linkProven(db as any, KEY, addr('slow', 0), SLOW)).toBe(true);
     expect((await get(db, me)).channels.discord).toMatchObject({ enabled: true, stopped: null, notice: null });
@@ -181,7 +181,7 @@ describe('Security review (2026-10-22), a link is proven by the save that turns 
     expect(d.to(SLOW)).toBe(3);
     expect(await placeCount(db as any)).toBe(1);
     t += 60_000;
-    await sendDiscordWhaleAlert(undefined, moveFromWatched(42), null, db as any, 10000);
+    await sendDiscordWhaleAlert(undefined, moveFromWatched(42), db as any, 10000);
     expect(d.to(SLOW)).toBe(4);
   });
 

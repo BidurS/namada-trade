@@ -92,7 +92,7 @@ describe('review C: one move never holds back another move of the same transacti
     const flows = parseNamadaBlock(block8251377(), null).flows;
     expect(flows.map((f) => [f.kind, f.txHash.slice(0, 8), f.amount])).toEqual([['withdraw', '90D489A0', 50], ['withdraw', '90D489A0', 100]]);
     flows[1].amount = 20000; // the second inner tx of the batch as a whale
-    for (const f of flows) await sendDiscordWhaleAlert(OP2, f, null, db as any, 10000);
+    for (const f of flows) await sendDiscordWhaleAlert(OP2, f, db as any, 10000);
     expect(calls.map((c) => c.url)).toEqual([OP2]);
     expect(calls[0].body.embeds[0].title).toContain('20,000 NAM');
     expect(keys(db)).toEqual([`alert:flow:${flows[1].id}`]);
@@ -104,7 +104,7 @@ describe('review C: one move never holds back another move of the same transacti
     const OP = 'https://discord.com/api/webhooks/54/two';
     const flows = parseOsmosisTx(multiSend('V54TX3', 500_000, 1_000_000), osmoCtx()).flows;
     await hubWith({ DISCORD_WEBHOOK_URL: OP, DB: db }).alertFlows(flows, 10000, 100);
-    expect(calls.map((c) => c.body.embeds[0].title)).toEqual(['🐋 Flow [TRANSFER]: 500,000 NAM', '🐋 Flow [TRANSFER]: 1,000,000 NAM']);
+    expect(calls.map((c) => c.body.embeds[0].title)).toEqual(['500,000 NAM transferred on Osmosis', '1,000,000 NAM transferred on Osmosis']);
   });
 
   it('a move the stream posted and the catch-up search finds again is posted once, in this isolate and in another', async () => {
@@ -112,16 +112,16 @@ describe('review C: one move never holds back another move of the same transacti
     const db = testD1();
     const OP = 'https://discord.com/api/webhooks/54/once';
     const [, whale] = parseOsmosisTx(multiSend('V54TX4'), osmoCtx()).flows;
-    await sendDiscordWhaleAlert(OP, whale, null, db as any, 10000);
+    await sendDiscordWhaleAlert(OP, whale, db as any, 10000);
     // the catch-up search parses the same transaction into the same ids (and marks them found late)
     const [, again] = parseOsmosisTx(multiSend('V54TX4'), osmoCtx()).flows;
     expect(again.id).toBe(whale.id);
-    await sendDiscordWhaleAlert(OP, { ...again, meta: { via: 'catch-up search' } }, null, db as any, 10000);
+    await sendDiscordWhaleAlert(OP, { ...again, meta: { via: 'catch-up search' } }, db as any, 10000);
     expect(calls).toHaveLength(1);
     // a fresh isolate has no memory lock: the D1 claim alone stops the repeat
     vi.resetModules();
     const fresh = await import('../worker/src/sources/discord');
-    await fresh.sendDiscordWhaleAlert(OP, { ...again, meta: { via: 'catch-up search' } }, null, db as any, 10000);
+    await fresh.sendDiscordWhaleAlert(OP, { ...again, meta: { via: 'catch-up search' } }, db as any, 10000);
     expect(calls).toHaveLength(1);
     expect(keys(db)).toEqual([`alert:flow:${whale.id}`]);
   });

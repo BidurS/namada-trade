@@ -69,6 +69,7 @@ export function defaultPrefs(): NotificationPrefs {
     watchlist: [],
     watchlistOn: true,
     forumAndGov: false,
+    dailyDigest: false,
     quietHoursUtc: null,
   };
 }
@@ -484,6 +485,7 @@ export function applyUpdate(cur: StoredSettings, body: any): StoredSettings | st
     }
     if (typeof np.watchlistOn === 'boolean') n.notifications.watchlistOn = np.watchlistOn;
     if (typeof np.forumAndGov === 'boolean') n.notifications.forumAndGov = np.forumAndGov;
+    if (typeof np.dailyDigest === 'boolean') n.notifications.dailyDigest = np.dailyDigest;
     if (np.quietHoursUtc === null) n.notifications.quietHoursUtc = null;
     else if (np.quietHoursUtc && Number.isInteger(np.quietHoursUtc.start) && Number.isInteger(np.quietHoursUtc.end)) {
       const { start, end } = np.quietHoursUtc;

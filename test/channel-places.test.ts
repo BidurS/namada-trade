@@ -68,7 +68,7 @@ describe('Security review (2026-10-22), channel places are counted by link', () 
     for (let k = 0; k < 20; k++) {
       t += 20_000;
       await sendDiscordForumAlert(undefined, post(77000 + k), db as any);
-      await sendDiscordWhaleAlert(undefined, sell(k), null, db as any, 10000);
+      await sendDiscordWhaleAlert(undefined, sell(k), db as any, 10000);
     }
     // The shared link is never posted to; the newcomer hears every forum and whale alert (after the notice).
     expect(calls.filter((u) => u === SHARED)).toHaveLength(0);
@@ -93,7 +93,7 @@ describe('Security review (2026-10-22), channel places are counted by link', () 
     const calls = discord();
     for (let day = 1; day <= 31; day += 3) {
       t = Date.UTC(2026, 9, 23, 9) + day * DAY;
-      await sendDiscordWhaleAlert(undefined, sell(1000 + day), null, db as any, 10000);
+      await sendDiscordWhaleAlert(undefined, sell(1000 + day), db as any, 10000);
     }
     expect(calls.filter((u) => u === GOOD).length).toBeGreaterThan(5);
     // A month and a day later the quiet channels still hold their places (a quiet channel is not a dead one; no

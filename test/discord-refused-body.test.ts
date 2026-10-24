@@ -44,7 +44,7 @@ describe('a 400 from Discord counts as a refused body only when Discord says so 
     const db = testD1();
     configureAlerts(KEY);
     await saveSettings(db as any, KEY, user(`tnam1qforum${'q'.repeat(35)}`, FORUM));
-    await sendDiscordWhaleAlert(OP, sell('FA', 1), null, db as any, 10000);
+    await sendDiscordWhaleAlert(OP, sell('FA', 1), db as any, 10000);
     expect(posted).toEqual([OP]);
     expect(skippedRow(db)).toBeNull();
   });
@@ -55,7 +55,7 @@ describe('a 400 from Discord counts as a refused body only when Discord says so 
     const db = testD1();
     configureAlerts(KEY);
     await saveSettings(db as any, KEY, user(`tnam1qhtml${'q'.repeat(36)}`, HOOK));
-    await sendDiscordWhaleAlert(undefined, sell('HT', 1), null, db as any, 10000);
+    await sendDiscordWhaleAlert(undefined, sell('HT', 1), db as any, 10000);
     expect(skippedRow(db)).toBeNull();
   });
 
@@ -66,10 +66,10 @@ describe('a 400 from Discord counts as a refused body only when Discord says so 
     const db = testD1();
     configureAlerts(KEY);
     await saveSettings(db as any, KEY, user(`tnam1qagain${'q'.repeat(35)}`, FORUM));
-    for (let n = 1; n <= BACKOFF_AFTER; n++) await sendDiscordWhaleAlert(undefined, sell('FB', n), null, db as any, 10000);
+    for (let n = 1; n <= BACKOFF_AFTER; n++) await sendDiscordWhaleAlert(undefined, sell('FB', n), db as any, 10000);
     expect(calls).toHaveLength(BACKOFF_AFTER);
     expect(skippedRow(db)).toBeNull();
-    await sendDiscordWhaleAlert(undefined, sell('FB', 99), null, db as any, 10000);
+    await sendDiscordWhaleAlert(undefined, sell('FB', 99), db as any, 10000);
     expect(calls).toHaveLength(BACKOFF_AFTER);
     const rec = skippedRow(db);
     expect(rec).toMatchObject({ total: 1, last: { what: 'move osmosis:FB99:0', n: 1 } });
@@ -82,7 +82,7 @@ describe('a 400 from Discord counts as a refused body only when Discord says so 
     const db = testD1();
     configureAlerts(KEY);
     await saveSettings(db as any, KEY, user(`tnam1qinval${'q'.repeat(35)}`, HOOK));
-    await sendDiscordWhaleAlert(OP, sell('IF', 1), null, db as any, 10000);
+    await sendDiscordWhaleAlert(OP, sell('IF', 1), db as any, 10000);
     expect(skippedRow(db)).toMatchObject({ total: 2, last: { what: 'move osmosis:IF1:0 (2 refused by Discord)', n: 2 } });
   });
 

@@ -2,8 +2,9 @@
 // which the chain bounds only with the whole proposal (10,000 bytes on mainnet). Discord refuses a whole message
 // whose embed url is over 2048 characters or whose description is over 4096, and the alert's claim is taken before
 // the post, so a long link could keep every channel from ever hearing of that proposal. An alert carries the link
-// only up to GOV_LINK_MAX characters, links the proposal's page otherwise and says so, and a refused post is
-// recorded for the health view (kv alerts.skipped).
+// only up to GOV_LINK_MAX characters, links the proposal's page otherwise and says so in its footer, and a refused post
+// is recorded for the health view (kv alerts.skipped). The authors line is the author's own text too, bounded only by
+// the same 10,000 bytes: it is cut (sources/discord.ts TEXT_MAX), and fits() keeps the whole card inside the limits.
 import { describe, it, expect, vi, afterEach } from 'vitest';
 import { testD1 } from './d1-sqlite';
 import { fetchGovernanceAndValidators } from '../worker/src/sources/intel';
@@ -28,8 +29,8 @@ function hooks(status = 204) {
   return { f, bodies };
 }
 
-/** The characters Discord counts toward an embed's 6000 (title, description, field names and values, footer). */
-const counted = (e: any) => (e.title?.length ?? 0) + (e.description?.length ?? 0) + (e.footer?.text?.length ?? 0)
+/** The characters Discord counts toward an embed's 6000 (title, description, author, field names and values, footer). */
+const counted = (e: any) => (e.title?.length ?? 0) + (e.description?.length ?? 0) + (e.footer?.text?.length ?? 0) + (e.author?.name?.length ?? 0)
   + (e.fields ?? []).reduce((n: number, x: any) => n + x.name.length + x.value.length, 0);
 
 /** Every limit Discord sets on an embed that this body could cross. */
@@ -37,6 +38,8 @@ function withinDiscordLimits(e: any) {
   expect(e.title.length).toBeLessThanOrEqual(256);
   expect(e.url.length).toBeLessThanOrEqual(2048);
   expect(e.description.length).toBeLessThanOrEqual(4096);
+  expect(e.author?.name?.length ?? 0).toBeLessThanOrEqual(256);
+  expect(e.footer?.text?.length ?? 0).toBeLessThanOrEqual(2048);
   for (const x of e.fields) { expect(x.name.length).toBeLessThanOrEqual(256); expect(x.value.length).toBeLessThanOrEqual(1024); }
   expect(counted(e)).toBeLessThanOrEqual(6000);
 }
@@ -57,8 +60,9 @@ describe('governance alert size', () => {
     const e = bodies[0].embeds[0];
     withinDiscordLimits(e);
     expect(e.url).toBe('https://namada.valopers.com/proposals/990101');
-    expect(e.description).toContain('[View Discussion / Proposal ↗](https://namada.valopers.com/proposals/990101)');
-    expect(e.description).toContain('4173 characters long, too long to post here');
+    expect(e.description).toContain('[Proposal 990101 on namada.valopers.com](https://namada.valopers.com/proposals/990101)');
+    expect(e.description).not.toContain('Discussion on');
+    expect(e.footer.text).toContain('4173 characters long, too long to post here');
     expect(e.description).not.toContain('%E2%82%AC');
   });
 
@@ -69,20 +73,24 @@ describe('governance alert size', () => {
     const e = bodies[0].embeds[0];
     withinDiscordLimits(e);
     expect(e.url).toBe('https://namada.valopers.com/proposals/990102');
-    expect(e.description.startsWith('[View Proposal #990102 ↗](https://namada.valopers.com/proposals/990102)')).toBe(true);
+    expect(e.description).toContain('[Proposal 990102 on namada.valopers.com](https://namada.valopers.com/proposals/990102)');
+    expect(e.footer.text).toContain('too long to post here');
   });
 
-  it('the worst case the author controls (a 10 KB title, the longest abstract, a link just inside the bound) stays within every limit', async () => {
+  it('the worst case the author controls (a 10 KB title, 10,000 characters of authors, the longest abstract, a link just inside the bound) stays within every limit', async () => {
     expect(GOV_LINK_MAX).toBeGreaterThanOrEqual(200);
     expect(GOV_LINK_MAX).toBeLessThanOrEqual(2048);
     const edge = 'https://forum.namada.net/t/' + 'x'.repeat(GOV_LINK_MAX - 27);
     expect(edge.length).toBe(GOV_LINK_MAX);
     const { bodies } = hooks();
-    await sendDiscordGovAlert('https://discord.com/api/webhooks/1/g59c', prop(990103, edge, { title: '](x'.repeat(3400), abstract: '](x'.repeat(73) + 'z' }), false, testD1() as any);
+    await sendDiscordGovAlert('https://discord.com/api/webhooks/1/g59c', prop(990103, edge, { title: '](x'.repeat(3400), authors: '*_](x\n'.repeat(2000), abstract: '](x'.repeat(4000) + 'z' }), false, testD1() as any);
     const e = bodies[0].embeds[0];
     withinDiscordLimits(e);
     expect(e.url).toBe(edge);
-    expect(e.description).not.toContain('too long to post here');
+    expect(e.footer.text).not.toContain('too long to post here');
+    // the author's text is shown as text: no masked link, cut to its bound
+    expect(JSON.stringify(e)).not.toContain('](x');
+    expect(e.description.split('\n\n')[1].length).toBeLessThan(400);
   });
 
   it('a link one character over the bound is left out', async () => {
@@ -98,11 +106,13 @@ describe('governance alert size', () => {
     await sendDiscordGovAlert('https://discord.com/api/webhooks/1/g59e', prop(990105, link), true, testD1() as any);
     const e = bodies[0].embeds[0];
     expect(e.url).toBe(link);
-    expect(e.description).toBe(`a\n\n[View Discussion / Proposal ↗](${link})`);
+    expect(e.description).toContain(`[Discussion on forum.namada.net](${link}) · [Proposal 990105 on namada.valopers.com](https://namada.valopers.com/proposals/990105) · [Votes on NamadaTrade](https://namada.trade/supply)`);
+    expect(e.description).toContain('\n\n> a\n\n');
     const { bodies: b2 } = hooks();
     await sendDiscordGovAlert('https://discord.com/api/webhooks/1/g59e', prop(990106, null, { abstract: null }), true, testD1() as any);
     expect(b2[0].embeds[0].url).toBe('https://namada.valopers.com/proposals/990106');
-    expect(b2[0].embeds[0].description).toBe('[View Proposal #990106 ↗](https://namada.valopers.com/proposals/990106)');
+    expect(b2[0].embeds[0].description).toContain('[Proposal 990106 on namada.valopers.com](https://namada.valopers.com/proposals/990106)');
+    expect(b2[0].embeds[0].description).not.toContain('Discussion on');
   });
 
   it('a post Discord refuses (400) is recorded for the health view; a sent one records nothing', async () => {

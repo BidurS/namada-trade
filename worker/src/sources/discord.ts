@@ -1,11 +1,17 @@
-import { explorerHashOf, isOtherCoin } from '../../../shared/flow-rules';
+import { CROSSING_PAIR_MS, explorerHashOf, isBotFlow, isIbcRefund, isOtherCoin, priceAtOf, priceHowOf, priceRouteOf, priceSourceWords, safeHttpUrl } from '../../../shared/flow-rules';
 import type { Flow, ForumPost, GovernanceProposal } from '../../../shared/types';
-import { safeHttpUrl } from '../../../shared/flow-rules';
-import { EXPLORERS, NAM, NAMADA } from '../config';
-import { evaluateFlow } from '../../../shared/alerts';
+import { NAM } from '../config';
+import { alertRules, evaluateFlow, INTERNAL_ADDRESSES, isInternal } from '../../../shared/alerts';
 import { readDeliverable, inQuietHours, stopChannelStmt, hookOkStmt, thresholdsOf, trialsDue, noticeTriedStmt, NOTICE_TRIES_MAX, type StoredSettings } from '../settings';
 import { SITE } from '../../../shared/site';
+import { settleUsd, type Settle, type SettledCoin } from '../../../shared/settle';
+import { tagByline } from '../../../shared/labels';
+import { explorerTx, fmtAddr, fmtAge, fmtCoin, fmtNamRule, fmtPctRule, fmtUsdRule, labelNeedsAddr } from '../../../shared/format';
+import { bridgeDest, HUE_HEX, kindInfo } from '../../../shared/kinds';
+import { CHAIN_WORD, listWords, moveTitle, partiesOf, pastWords, proposalOpen, proposalStatusWords, proposalTypeWords, sidesOf, tagOfFlow, type Party } from '../../../shared/flow-words';
 import { chainOf } from '../util';
+import { readMoveContext, HISTORY_COUNT_MAX, type MoveContext, type PriorMove } from './discord-context';
+import { FLOW_SELECT, lastAlertBefore, rowToFlow } from '../analytics';
 import { kvGetJson, kvSet } from '../db';
 import { sha256 } from '@noble/hashes/sha2.js';
 import { bytesToHex } from '@noble/hashes/utils.js';
@@ -15,12 +21,47 @@ import { bytesToHex } from '@noble/hashes/utils.js';
  * stream): every post ends after this long.
  */
 export const WEBHOOK_TIMEOUT_MS = 8000;
+/** A file a post carries (a digest's picture), sent beside the post's JSON. */
+export interface PostFile { name: string; bytes: Uint8Array; type: string }
+/** One webhook post: its JSON body and the files it attaches, in the order the body's `attachments` name them (id = index). */
+export interface WebhookPost { body: Record<string, unknown>; files?: PostFile[] }
 /**
  * Every post names no one: a mention in text an outsider wrote (a forum post, a proposal, a label, a bridge receiver
- * string) is shown as text, never turned into a notification.
+ * string) is shown as text, never turned into a notification. A post with files goes as Discord's multipart form:
+ * the JSON as `payload_json`, each file as `files[n]`; it is still one request, with one answer.
  */
-const postWebhook = (url: string, body: Record<string, unknown>) =>
-  fetch(url, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ ...body, allowed_mentions: { parse: [] } }), signal: AbortSignal.timeout(WEBHOOK_TIMEOUT_MS) });
+const postWebhook = (url: string, body: Record<string, unknown>, files?: PostFile[]) => {
+  const json = JSON.stringify({ ...body, allowed_mentions: { parse: [] } });
+  const signal = AbortSignal.timeout(WEBHOOK_TIMEOUT_MS);
+  if (!files?.length) return fetch(url, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: json, signal });
+  const form = new FormData();
+  form.append('payload_json', json);
+  files.forEach((f, i) => form.append(`files[${i}]`, new Blob([f.bytes], { type: f.type }), f.name));
+  return fetch(url, { method: 'POST', body: form, signal });
+};
+
+/** What a post sent without its pictures says (Discord refused the files, or the request was too large). */
+export const FILES_REFUSED_NOTE = 'Sent without its pictures: Discord did not take them. Every figure is in the text.';
+/** Whether an answer refuses a post's files: Discord's Invalid Form Body (a file it will not take is one) or a request too large. */
+const filesRefused = (a: { refused: boolean; status: number }) => a.refused || a.status === 413;
+/**
+ * A post with files as text only: every embed keeps its words, the pictures it named are left out (an embed that held
+ * a picture alone goes), the attachments list goes, and a last embed says the pictures were not attached.
+ */
+export function textOnly(body: Record<string, unknown>): Record<string, unknown> {
+  const embeds = Array.isArray(body.embeds) ? (body.embeds as Record<string, any>[]) : [];
+  const kept = embeds
+    .map((e) => {
+      const img = e?.image?.url;
+      if (typeof img !== 'string' || !img.startsWith('attachment://')) return e;
+      const { image: _image, ...rest } = e;
+      return rest;
+    })
+    .filter((e) => !!(e?.title || e?.description || (Array.isArray(e?.fields) && e.fields.length) || e?.footer || e?.author));
+  const { attachments: _attachments, ...rest } = body;
+  const color = typeof kept[0]?.color === 'number' ? { color: kept[0].color } : {};
+  return { ...rest, embeds: [...kept.slice(0, 9), { description: FILES_REFUSED_NOTE, ...color }] };
+}
 /**
  * Lets go of the body of a webhook answer that nothing reads (Discord's 204 has none; a 429 or 5xx carries a short
  * JSON error): it is cancelled, never left for the garbage collector, as every other fetch in the Worker does
@@ -569,6 +610,20 @@ async function answerOf(res: Response): Promise<Answer> {
   };
 }
 
+/**
+ * One request to a hook: marked as started (notePost), answered, its answer's body read or cancelled, and the answer
+ * counted against the hook (noteAnswer, whose result it returns as `counted`). No answer at all is NO_ANSWER.
+ */
+async function postOnce(url: string, body: Record<string, unknown>, files: PostFile[] | undefined, user: boolean): Promise<{ a: Answer; counted: boolean }> {
+  let a: Answer;
+  const startedAt = notePost(url);
+  try {
+    const res = await postWebhook(url, body, files);
+    try { a = await answerOf(res); } finally { await releaseBody(res); }
+  } catch { a = NO_ANSWER; }
+  return { a, counted: noteAnswer(url, a, user, startedAt) };
+}
+
 /** Adds `n` posts not sent for `what` to kv `alerts.skipped` (the cron's health view shows the last). */
 async function recordSkipped(db: D1Database | undefined, n: number, what: string) {
   if (!db) return;
@@ -651,9 +706,14 @@ async function noteHooksOk(db: D1Database | undefined, urls: Set<string>) {
  * row that records a successful post to its link (`okAt`); `fresh`, a user's row with none whose link was first
  * turned on within SETTLED_MS (the only kind the invalid-answer budget holds once spent); `trial`, a user's row saved
  * on with the connection notice's note and no successful post, which the first answer that blames its link turns off
- * (stopTrialHooks).
+ * (stopTrialHooks). `files`: the files the post attaches (a digest's pictures; postWebhook sends them as a form), and,
+ * when Discord refuses them, the post goes once more as text only (textOnly). `more`: the posts that follow it to the
+ * same channel (a digest's second message), each sent only after the one before it was taken, in order, by the same
+ * worker of the dispatch, and each counted as a post.
  */
-interface Target { url: string; body: Record<string, unknown>; op?: boolean; proven?: boolean; fresh?: boolean; trial?: boolean }
+interface Target { url: string; body: Record<string, unknown>; files?: PostFile[]; more?: WebhookPost[]; op?: boolean; proven?: boolean; fresh?: boolean; trial?: boolean }
+/** The posts a target makes when every one is taken (its own and those that follow it). */
+const postsOf = (t: Target) => 1 + (t.more?.length ?? 0);
 /** A user's target as the fan-outs build it, with what the settings read knows of its link (`okAt`, `onAt`, by address). */
 const userTarget = (u: StoredSettings, body: Record<string, unknown>, db?: D1Database): Target => {
   const c = db ? usersCache.get(db) : undefined;
@@ -693,7 +753,7 @@ const startAt = (what: string, n: number): number => {
  * records are shared with the dispatch's other alerts, and the dispatch writes the records when it ends
  * (flushAlerts); without one, the alert writes its own.
  */
-async function postAll(targets: Target[], db: D1Database | undefined, what: string, budget?: AlertBudget): Promise<{ posted: number; skipped: number; left: Target[] }> {
+async function postAll(targets: Target[], db: D1Database | undefined, what: string, budget?: AlertBudget, handBack = false): Promise<{ posted: number; reached: number; skipped: number; left: Target[] }> {
   if (!sending) {
     // A run that does not send alerts (sendsAlerts) posts nothing; what it would have posted is logged and recorded
     // as not sent, so a production Worker left without SEND_ALERTS shows in the health view instead of going quiet.
@@ -702,9 +762,15 @@ async function postAll(targets: Target[], db: D1Database | undefined, what: stri
       console.log(`alerts: ${targets.length} posts for ${label} not sent`);
       await recordSkipped(db, targets.length, label);
     }
-    return { posted: 0, skipped: targets.length, left: [] };
+    return { posted: 0, reached: 0, skipped: targets.length, left: [] };
   }
   const b: AlertBudget = budget ?? { posts: Infinity, until: Infinity, started: true, waiting: 0 };
+  // `handBack`: this alert sends later what does not fit now although its dispatch does not (a digest, whose channels
+  // are claimed one by one and released when not posted), so its cuts are handed back as a deferring dispatch's are.
+  // A limit on the site's address then halts this alert only, and closes the run's budget for the alerts after it.
+  const defers = !!b.defers || handBack;
+  let haltedHere = false;
+  const halted = () => !!b.halted || haltedHere;
   const w = windowOf(Date.now());
   const rec = await recordsOf(db, b, w);
   const subs = targets.filter((t) => !t.op);
@@ -717,11 +783,15 @@ async function postAll(targets: Target[], db: D1Database | undefined, what: stri
   const used = (rec.spent ?? 0) + rec.pending;
   let room = INVALID_BUDGET - used, ceiling = INVALID_CEILING - used;
   // The window opens at the alert's first post (a stream message's at its first alert's), and lasts long enough for
-  // all of this alert's subscribers at Discord's pace; the dispatch's deadline bounds it.
+  // all of this alert's subscriber posts at Discord's pace (a target that makes two posts counts two); the dispatch's
+  // deadline bounds it.
   const opened = b.shared ? (b.opened ??= Date.now()) : Date.now();
-  const span = windowFor(subs.length);
+  const span = windowFor(subs.reduce((n, t) => n + postsOf(t), 0));
   const deadline = b.deadline ?? Infinity;
-  let posted = 0, skipped = 0, refused = 0, held = 0, invalid = 0, over = 0, late = 0, limited = 0;
+  let posted = 0, reached = 0, skipped = 0, refused = 0, held = 0, invalid = 0, over = 0, late = 0, limited = 0;
+  // Posts sent again without their pictures (Discord refused the files), and posts that follow a target's first that
+  // were not taken (a digest's second message).
+  let fellBack = 0, lostAfter = 0;
   // A subscriber's post answered 429 in a dispatch that cannot send later: a limit that is not the hook's own bucket is
   // waited out once and the post sent again; a hook's own bucket, a second 429, or a pause longer than the alert can
   // wait is recorded as not sent (the alert's claim is taken, so no later run posts it).
@@ -738,6 +808,35 @@ async function postAll(targets: Target[], db: D1Database | undefined, what: stri
   // The limit on the site's address this dispatch has waited out in place: a later post waits again only for a limit
   // heard since.
   let waited = 0;
+  // The posts that follow a target's first one (a digest's second message), once the first was taken: in order, each
+  // after the one before it was taken; a 429 whose Retry-After the alert can wait is waited out once, and files
+  // Discord refuses are dropped for the text alone. The hook has just taken a post, so it is proven: each post takes a
+  // unit of the ceiling only. Returns how many were not taken.
+  const postMore = async (t: Target): Promise<number> => {
+    const list = t.more ?? [];
+    for (let i = 0; i < list.length; i++) {
+      const m = list[i];
+      if (!t.op) ceiling--;
+      b.posts--;
+      let r = await postOnce(t.url, m.body, m.files, !t.op);
+      if (r.a.status === 429 && r.a.waitMs <= Math.min(opWait(), t.op ? Infinity : deadline - Date.now())) {
+        await sleep(r.a.waitMs);
+        b.posts--;
+        r = await postOnce(t.url, m.body, m.files, !t.op);
+      }
+      if (m.files?.length && filesRefused(r.a)) {
+        b.posts--;
+        fellBack++;
+        r = await postOnce(t.url, textOnly(m.body), undefined, !t.op);
+      }
+      if (r.a.invalid) invalid++;
+      else if (!t.op) ceiling++;
+      if (r.a.dead && !t.op) dead.set(t.url, r.a.status);
+      if (!r.a.ok) return list.length - i;
+      posted++;
+    }
+    return 0;
+  };
   const run = async () => {
     for (let t = queue.shift(); t; t = queue.shift()) {
       const f = hooks.get(t.url);
@@ -754,10 +853,10 @@ async function postAll(targets: Target[], db: D1Database | undefined, what: stri
       // one, a subscriber's post waits a short limit out here, once, within the alert's window and the dispatch's
       // deadline, and is posted anyway past a longer one, never recorded as not sent for it: its own answer decides.
       // The operator's channel waits a short one out, within the alert's window, and is posted anyway past it.
-      if (!t.op && b.halted) { left.push(t); waits.halted++; continue; }
+      if (!t.op && halted()) { left.push(t); waits.halted++; continue; }
       const wide = sitePause - Date.now();
       if (wide > 0) {
-        if (!t.op && b.defers) { left.push(t); waits.halted++; continue; }
+        if (!t.op && defers) { left.push(t); waits.halted++; continue; }
         const until = sitePause;
         if (until > waited && wide <= (t.op ? opWait() : Math.min(opWait(), deadline - Date.now()))) { await sleep(wide); waited = Math.max(waited, until); }
       }
@@ -766,7 +865,7 @@ async function postAll(targets: Target[], db: D1Database | undefined, what: stri
         // later (the pause is a few seconds; the alarm comes after it), else it is skipped as before; the operator's
         // channel waits a short pause out here.
         if (!t.op) {
-          if (b.defers) { left.push(t); waits.paused++; } else skipped++;
+          if (defers) { left.push(t); waits.paused++; } else skipped++;
           continue;
         }
         const wait = f.pause - Date.now();
@@ -776,9 +875,12 @@ async function postAll(targets: Target[], db: D1Database | undefined, what: stri
       const proven = !!f?.ok || !!t.proven || !t.fresh;
       if (!t.op) {
         const now = Date.now();
-        const cut = now - opened > span ? 'window' : now >= deadline ? 'late' : b.posts <= 0 ? 'over' : ceiling <= 0 || (!proven && room <= 0) ? 'held' : null;
+        // a target of two posts (a digest) starts only when its second can start before the deadline at Discord's pace
+        const cut = now - opened > span ? 'window' : now + (postsOf(t) - 1) * POST_PACE_MS >= deadline ? 'late' : b.posts < postsOf(t) ? 'over' : ceiling <= 0 || (!proven && room <= 0) ? 'held' : null;
         if (cut) {
-          if (b.defers) { left.push(t); waits[cut]++; continue; }
+          // an alert that hands back (a digest) keeps a hook held by the invalid-answer budget recorded, as before: the
+          // budget lasts the window, and handing it back would claim and release it every run of the day
+          if (b.defers || (handBack && cut !== 'held')) { left.push(t); waits[cut]++; continue; }
           if (cut === 'held') held++;
           else { skipped++; if (cut === 'late') late++; else if (cut === 'over') over++; }
           continue;
@@ -787,29 +889,38 @@ async function postAll(targets: Target[], db: D1Database | undefined, what: stri
         if (!proven) room--;
       }
       b.posts--;
-      let a: Answer;
-      const startedAt = notePost(t.url);
-      try {
-        const res = await postWebhook(t.url, t.body);
-        try { a = await answerOf(res); } finally { await releaseBody(res); }
-      } catch { a = NO_ANSWER; }
+      let { a, counted } = await postOnce(t.url, t.body, t.files, !t.op);
+      // Discord refused the files (or the request's size): the same words go once more without the pictures, with a
+      // note saying so, rather than the channel losing the message.
+      if (t.files?.length && filesRefused(a)) {
+        b.posts--;
+        fellBack++;
+        ({ a, counted } = await postOnce(t.url, textOnly(t.body), undefined, !t.op));
+      }
       if (a.invalid) invalid++;
       else if (!t.op) {
         ceiling++;
         if (!proven) room++;
       }
-      const counted = noteAnswer(t.url, a, !t.op, startedAt);
       // A limit on the site's address halts a dispatch that sends later: its subscribers' posts left wait for the
       // next alarm (spentOut), as the rest of its alerts do.
-      if (siteWide(a) && b.defers) b.halted = true;
-      if (a.ok) { posted++; rec.ok.add(t.url); }
+      if (siteWide(a) && defers) {
+        if (b.defers) b.halted = true;
+        else { haltedHere = true; b.closed = true; b.paused = true; }
+      }
+      if (a.ok) {
+        posted++;
+        reached++;
+        rec.ok.add(t.url);
+        if (t.more?.length) lostAfter += await postMore(t);
+      }
       // A refused body is lost and recorded with the posts not sent; any other failure counts against the hook only.
       else if (a.refused) refused++;
       // A 429 did not take the post: a dispatch that sends later takes a subscriber's back for its next alarm; the
       // operator's channel is posted once more after a short Retry-After, within the alert's window.
       else if (a.status === 429) {
         if (!t.op) {
-          if (b.defers) { left.push(t); waits.paused++; }
+          if (defers) { left.push(t); waits.paused++; }
           // not the hook's own bucket (the site's address, or a bucket shared beyond this hook): posted once more
           else if (a.scope !== 'user' && !retried.has(t) && a.waitMs <= opWait() && Date.now() + a.waitMs < deadline) { retried.add(t); await sleep(a.waitMs); queue.push(t); }
           else rateLimited++;
@@ -825,10 +936,12 @@ async function postAll(targets: Target[], db: D1Database | undefined, what: stri
   countInvalid(w, invalid);
   await stopDeadHooks(db, dead);
   await stopTrialHooks(db, blamed);
-  if (skipped || refused || held || rateLimited) {
-    const n = skipped + refused + held + rateLimited;
+  if (fellBack) console.warn(`alerts: ${fellBack} posts for ${what} were sent without their pictures (Discord refused the files)`);
+  if (skipped || refused || held || rateLimited || lostAfter) {
+    const n = skipped + refused + held + rateLimited + lostAfter;
     const notes = [
       refused ? `${refused} refused by Discord` : '',
+      lostAfter ? `${lostAfter} second message(s) not taken after the first was` : '',
       rateLimited ? `${rateLimited} answered rate-limited, the claim taken` : '',
       over ? `${over} past the run's post budget` : '',
       late ? `${late} past the run's deadline` : '',
@@ -851,7 +964,7 @@ async function postAll(targets: Target[], db: D1Database | undefined, what: stri
     console.warn(`alerts: ${left.length} of ${targets.length} posts for ${what} wait for a later run (${notes.join('; ')})`);
   }
   if (!budget) await flushAlerts(db, b);
-  return { posted, skipped: skipped + held, left };
+  return { posted, reached, skipped: skipped + held, left };
 }
 /** Waits `ms`. */
 const sleep = (ms: number) => new Promise<void>((r) => setTimeout(r, ms));
@@ -880,11 +993,10 @@ export function configureAlerts(key: string | undefined, send = true) { settings
  */
 export const alertsOn = (): boolean => sending;
 
-const NAMADA_AVATAR =
-  'https://raw.githubusercontent.com/anoma/namada-chain-registry/main/namada/images/namada.svg';
-
 // In-memory fast-path deduplication cache (protects against simultaneous WS fanout within the same isolate)
 const memoryAlertCache = new Set<string>();
+/** Forgets the claims this isolate holds in memory (a test's fresh isolate; the stored claims stay). */
+export const resetClaimMemory = () => memoryAlertCache.clear();
 
 function checkMemoryLock(keys: string[]): boolean {
   for (const k of keys) {
@@ -957,6 +1069,26 @@ async function claimEach(db: D1Database | undefined, keys: string[], now = Date.
 }
 
 /**
+ * Gives claims back: the keys of channels a digest claimed and could not post this run (postAll handed them back), so
+ * a later run can take them. A key whose delete D1 does not answer stays claimed, and its channel goes without that
+ * period's digest, as a claim taken and not posted always did; the caller records it.
+ */
+async function releaseClaims(db: D1Database, keys: string[]): Promise<number> {
+  for (const k of keys) memoryAlertCache.delete(k);
+  let freed = 0;
+  for (let i = 0; i < keys.length; i += 80) {
+    const part = keys.slice(i, i + 80);
+    try {
+      await db.prepare(`DELETE FROM kv WHERE key IN (${part.map(() => '?').join(',')})`).bind(...part).run();
+      freed += part.length;
+    } catch (err) {
+      console.error('digest: claims of channels not posted could not be given back', err);
+    }
+  }
+  return freed;
+}
+
+/**
  * The crossing a NAM bridge record belongs to: the packet both chains record, named by its source channel and its
  * sequence. The sending chain numbers the packets of a channel once each and the receiving chain's record carries
  * the same number, so a crossing's two records (Namada's and Osmosis's) give the same key and any other crossing
@@ -973,6 +1105,18 @@ export function crossingOf(flow: Flow): string | null {
   if (typeof seq !== 'string' || !/^\d+$/.test(seq)) return null;
   const toOsmosis = (flow.chain === 'osmosis') === (flow.kind === 'ibc_in');
   return `${toOsmosis ? NAM.namadaChannel : NAM.osmoChannel}:${seq}`;
+}
+
+/**
+ * Whether a "Before this" row is a record of the crossing read as crossingIn: the same record, the same packet, or,
+ * when a record carries no packet, the other chain's bridge record of the same amount within CROSSING_PAIR_MS (the
+ * rule shared/flow-rules.ts pairs the two records of a crossing by).
+ */
+function sameCrossing(m: PriorMove, c: NonNullable<MoveContext['crossingIn']>): boolean {
+  if (m.id === c.id) return true;
+  if (m.kind !== 'ibc_in' && m.kind !== 'ibc_out') return false;
+  if (m.crossing && c.crossing) return m.crossing === c.crossing;
+  return m.chain !== 'osmosis' && Math.abs(m.amount - c.amount) < 1e-6 && Math.abs(m.ts - c.ts) <= CROSSING_PAIR_MS;
 }
 
 /** A channel in a stored key: the webhook URL holds the token that posts to it, so the key keeps a digest, never the URL. */
@@ -1025,6 +1169,14 @@ async function getUsers(db?: D1Database, budget?: AlertBudget): Promise<StoredSe
 export const isNamWhale = (flow: Flow, whaleNam: number): boolean => !isOtherCoin(flow) && flow.amount >= whaleNam;
 
 /**
+ * A move the operator's channel hears of: a NAM whale (isNamWhale) that is neither a bot round trip (the site leaves
+ * those out of every buy and sell figure, and the Large trade rule leaves them out) nor a claim of staking rewards (no
+ * market event). Plain transfers stay: NAM moving between two wallets is the market's business. Owner's calls of
+ * 2026-10-23.
+ */
+export const operatorMove = (flow: Flow, whaleNam: number): boolean => isNamWhale(flow, whaleNam) && !isBotFlow(flow) && flow.kind !== 'rewards';
+
+/**
  * Whether the live alert pass (live-hub.ts alertFlows) offers a move to sendDiscordWhaleAlert at all. `minNam` is a
  * NAM size, so it reads NAM moves only. A move into or out of the shielded set is always offered, and so is a move
  * in another coin: no NAM size can measure it, and only a watchlist can match it (no rule or whale size is in its
@@ -1033,118 +1185,586 @@ export const isNamWhale = (flow: Flow, whaleNam: number): boolean => !isOtherCoi
 export const offeredForAlerts = (flow: Flow, minNam: number): boolean =>
   isOtherCoin(flow) || flow.kind === 'shield' || flow.kind === 'unshield' || flow.amount >= minNam;
 
+// ---------------------------------------------------------------- the messages
+//
+// Every message is one card with the same bones (docs/design/owner-decisions.md 16): above the title, why it reached
+// this channel; the title, the amount and what happened in the site's own words, which a lock screen shows; the first
+// line of the text, who moved it and the price with its source in plain words, which a lock screen shows next (no
+// markdown and no Discord time stamp there); then the links, what the person did before (this site's records) and what
+// the site's own page says such a move means; the figures, each with its source; the record and its block in the
+// footer; the move's own time. Text an outsider wrote (a label, a tag, a bridge receiver, a forum post, a proposal) is
+// shown as text, never as markdown or a link, and kept to TEXT_MAX; fits() keeps every message inside Discord's limits.
+
+const ORIGIN = SITE.origin;
+/** Every message comes from one sender, the site, with the site's own mark (owner decision 4: the Namada symbol is placed nowhere). */
+export const SENDER = { username: SITE.name, avatar_url: `${ORIGIN}/icon-512.png` } as const;
 /**
- * The embed of one move's alert. `customTag` names the rule or the watchlist that matched for a subscriber; `late`
- * marks an alert the LiveHub kept for a later alarm (PendingAlert): it says so, with the time the move happened, as a
- * move found late does (owner decision 14).
+ * The colour bar of a forum post, a governance proposal and the Settings test message: the site's --ink-3, --ink and
+ * --accent (docs/design/system.md 4.1, dark). A move's bar is the hue of the tag the site puts on it (shared/kinds.ts
+ * HUE_HEX): direction is in the words, never in a green or a red.
  */
-export function buildFlowDiscordBody(flow: Flow, usdPrice: number | null, customTag?: string, late = false) {
-  // The coin the amount is in: a move in another coin is named by its own symbol (meta.tokenSymbol), never as NAM.
-  const assetSymbol = isOtherCoin(flow)
-    ? String(flow.meta!.tokenSymbol)
-    : flow.chain === 'namada' && flow.counterDenom ? flow.counterDenom : 'NAM';
+export const COLOUR = { forum: 0x858585, governance: 0xf5f5f5, test: 0xffff00 } as const;
+/** Discord's limits on an embed's parts, and on all the embeds of one message together (`total`). */
+export const DISCORD_LIMITS = { title: 256, description: 4096, fieldName: 256, fieldValue: 1024, footer: 2048, author: 256, fields: 25, total: 6000 } as const;
+/**
+ * Outsider text is kept to these lengths in a message: a label or a tag, a validator's name, a proposal's authors, a
+ * forum display name and user name, a forum category, a forum excerpt, a proposal's abstract and a title. The chain
+ * bounds only a whole proposal (10,000 bytes), so its authors alone could otherwise fill a description.
+ */
+export const TEXT_MAX = { label: 80, validator: 60, authors: 120, displayName: 80, username: 60, category: 50, excerpt: 300, abstract: 220, title: 250 } as const;
 
-  const valueStr = flow.valueUsd
-    ? `$${flow.valueUsd.toLocaleString(undefined, { maximumFractionDigits: 2 })}`
-    : assetSymbol === 'NAM' && usdPrice
-    ? `$${(flow.amount * usdPrice).toLocaleString(undefined, { maximumFractionDigits: 2 })}`
-    : `${assetSymbol} Asset`;
+/**
+ * `s` cut to at most `max` characters, "…" last: never inside a character made of two code units, and never after a
+ * backslash left alone by the cut (it would escape the "…").
+ */
+export function cutText(s: string, max: number): string {
+  if (s.length <= max) return s;
+  if (max <= 1) return max === 1 ? '…' : '';
+  let t = s.slice(0, max - 1);
+  if (/[\uD800-\uDBFF]$/.test(t)) t = t.slice(0, -1);
+  const tail = /\\+$/.exec(t);
+  if (tail && tail[0].length % 2 === 1) t = t.slice(0, -1);
+  return `${t.trimEnd()}…`;
+}
+/**
+ * In a description or a field, where Discord renders markdown: the text on one line with every markdown character
+ * escaped (a leading quote, heading or list mark too, and "<" so no mention, channel or time stamp is made of it), so
+ * a label or a post reads as typed.
+ */
+export const textSafe = (s: string) =>
+  plainMd(s.replace(/[\r\n]+/g, ' ').replace(/[\\`*_<]/g, '\\$&').replace(/\|\|/g, '| |').replace(/~~/g, '~ ~').replace(/^\s*([>#-])/, '\\$1'));
+/** In a title or an author line (no markdown is rendered there): one line, links broken. */
+const oneLine = (s: string) => plainMd(s.replace(/[\r\n]+/g, ' ').trim());
+/** Inside a masked link's text a bracket would end the link: none is kept. */
+const linkText = (s: string) => textSafe(s).replace(/[[\]]/g, '');
+/** The page of an address on the site, where what it did before and after this move is listed. */
+const sitePage = (addr: string) => `${ORIGIN}/activity?addr=${encodeURIComponent(addr)}`;
+const unix = (ms: number) => Math.floor(ms / 1000);
+const EXPLORER_NAME: Record<string, string> = { osmosis: 'Mintscan', namada: 'namada.valopers.com' };
+const I = INTERNAL_ADDRESSES;
+/** A protocol account by its name inside a sentence; such an account is never the person of a card. */
+const PROTOCOL_WORDS: Record<string, string> = {
+  [I.masp]: 'the shielded pool', [I.pos]: 'the staking account', [I.ibc]: 'the bridge account', [I.pgf]: 'the public funding account',
+  [I.governance]: 'the governance account', [I.osmoTransfer]: 'the Osmosis bridge account',
+};
+/** An age inside a sentence ("50 min"); one under five seconds is "moments". */
+const ageWords = (ms: number) => (fmtAge(ms) === 'now' ? 'moments' : fmtAge(ms));
+const pct0 = (x: number) => `${Math.round(Math.abs(x))}%`;
+const capFirst = (s: string) => s.charAt(0).toUpperCase() + s.slice(1);
 
-  const amountStr = `${flow.amount.toLocaleString(undefined, { maximumFractionDigits: 2 })} ${assetSymbol}`;
+/**
+ * One side of a move in words: a protocol account by its name ("the shielded pool"); a label with the short address
+ * beside it (a genesis label names many addresses) and a wallet's own tag with its byline, as every page writes them;
+ * a short address; or, for text a bridge sender chose that is no address (an Osmosis receiver is free text), that text
+ * in a code span, where it can neither link nor format, said to be no address.
+ */
+function sideWords(s: Party): string {
+  const a = s.address;
+  if (!a) return 'an account this record does not name';
+  if (PROTOCOL_WORDS[a]) return PROTOCOL_WORDS[a];
+  if (!chainOf(a)) return `\`${plainMd(codeSafe(fmtAddr(a)))}\` (not an address)`;
+  if (!s.label) return fmtAddr(a);
+  const by = tagByline(s.source, s.author);
+  return `${textSafe(cutText(s.label, TEXT_MAX.label))}${labelNeedsAddr(a, s.label) ? ` ${fmtAddr(a)}` : ''}${by ? ` (${by})` : ''}`;
+}
+/** A bridge record's side: the bridge's own account stands for the other end, which this record does not name. */
+function crossingSide(s: Party, role: 'sender' | 'receiver', chain: string): string {
+  if (s.address === I.ibc || s.address === I.osmoTransfer) return `a ${role} on ${chain} this record does not name`;
+  return sideWords(s);
+}
+/** The person of a card, when it has a page on the site: a real address of either chain, never a protocol account. */
+const pagePerson = (s: Party): Party | null => (s.address && !isInternal(s.address) && chainOf(s.address) ? s : null);
+/** A masked link to an address's page on the site, its text the label and short address, or the short address. */
+const personLink = (s: Party) => `[${linkText(s.label ? `${cutText(s.label, TEXT_MAX.label)} ${fmtAddr(s.address)}` : fmtAddr(s.address))} on NamadaTrade](${sitePage(s.address!)})`;
 
-  const txUrl =
-    flow.chain === 'osmosis'
-      ? EXPLORERS.osmoTx(flow.txHash)
-      : NAMADA.explorerTx(explorerHashOf(flow));
+// ---------------------------------------------------------------- fitting a card into Discord's limits
 
-  let title = `${customTag ? `[${customTag}] ` : ''}🐋 Whale Move on ${flow.chain.toUpperCase()}`;
-  let color = 0x5865f2;
+interface Field { name: string; value: string; inline: boolean }
+/** One embed as Discord takes it. */
+export interface Embed {
+  author?: { name: string; url?: string };
+  title?: string;
+  url?: string;
+  color: number;
+  description?: string;
+  fields: Field[];
+  footer?: { text: string };
+  timestamp?: string;
+}
+/**
+ * A part of a card's text: its words, the separator before it, and what fits() may do to it: `role` names the parts it
+ * shortens (with `shorten`, to at most the length given) or drops, in TRIM_ORDER.
+ */
+interface Part { text: string; sep: string; role?: 'before' | 'abstract' | 'excerpt' | 'authors' | 'means'; shorten?: (max: number) => string }
+/** A card before it is fitted: its embed without a description, and the description's parts. */
+interface Card { embed: Omit<Embed, 'description'>; parts: Part[] }
+/**
+ * What fits() trims first, until the card is inside the limits: the "Before this" line shortened, the abstract, the
+ * excerpt, the authors, then the "Before this" line and the "what this means" line dropped; past all of them the
+ * description is cut at DISCORD_LIMITS.description less six characters, "…" last.
+ */
+const TRIM_ORDER: { role: NonNullable<Part['role']>; drop?: true }[] = [
+  { role: 'before' }, { role: 'abstract' }, { role: 'excerpt' }, { role: 'authors' }, { role: 'before', drop: true }, { role: 'means', drop: true },
+];
+/** A part shortened below this many characters is dropped instead. */
+const PART_MIN = 40;
 
-  const isToOsmosis =
-    (flow.chain === 'osmosis' && flow.kind === 'ibc_in') ||
-    (flow.chain === 'namada' && flow.kind === 'ibc_out');
+/** The characters Discord counts for one embed against DISCORD_LIMITS.total: title, description, footer, author and every field's name and value. */
+export const embedCount = (e: Partial<Embed>): number =>
+  (e.title?.length ?? 0) + (e.description?.length ?? 0) + (e.footer?.text.length ?? 0) + (e.author?.name.length ?? 0)
+  + (e.fields ?? []).reduce((n, f) => n + f.name.length + f.value.length, 0);
+/** The description: its shown parts, each after its separator; the "what this means" line sits right under "Before this", else after a blank line. */
+const joinParts = (parts: Part[]) => {
+  const shown = parts.filter((p) => p.text);
+  return shown.map((p, i) => (i ? (p.role === 'means' && shown[i - 1].role !== 'before' ? '\n\n' : p.sep) : '') + p.text).join('');
+};
 
-  switch (flow.kind) {
-    case 'buy':
-      title = `${customTag ? `[${customTag}] ` : ''}🟢 BUY on Osmosis: ${amountStr}`;
-      color = 0x57f287;
-      break;
-    case 'sell':
-      title = `${customTag ? `[${customTag}] ` : ''}🔴 SELL on Osmosis: ${amountStr}`;
-      color = 0xed4245;
-      break;
-    case 'ibc_in':
-    case 'ibc_out':
-      title = isToOsmosis
-        ? `${customTag ? `[${customTag}] ` : ''}🌉 IBC Bridge Namada → Osmosis: ${amountStr}`
-        : `${customTag ? `[${customTag}] ` : ''}🌉 IBC Bridge Osmosis → Namada: ${amountStr}`;
-      color = 0xfee75c;
-      break;
-    case 'shield':
-      title = `${customTag ? `[${customTag}] ` : ''}🛡️ MASP Shielded: ${amountStr}`;
-      color = 0x9b59b6;
-      break;
-    case 'unshield':
-      title = `${customTag ? `[${customTag}] ` : ''}🔓 MASP Unshielded: ${amountStr}`;
-      color = 0xe67e22;
-      break;
-    case 'bond':
-      title = `${customTag ? `[${customTag}] ` : ''}🥩 Staking Bond: ${amountStr}`;
-      color = 0x3498db;
-      break;
-    case 'withdraw':
-      title = `${customTag ? `[${customTag}] ` : ''}💸 Staking Withdrawal: ${amountStr}`;
-      color = 0xe74c3c;
-      break;
-    default:
-      title = `${customTag ? `[${customTag}] ` : ''}🐋 Flow [${flow.kind.toUpperCase()}]: ${amountStr}`;
+/**
+ * The card as one embed inside Discord's limits, in `room` characters of the message's DISCORD_LIMITS.total: each part
+ * with a limit of its own cut to it (title, author, footer, fields), then the description trimmed in TRIM_ORDER until
+ * the embed fits, then cut. A body over a limit is refused whole by Discord (sources/discord.ts DISCORD_INVALID_FORM_BODY)
+ * and the alert's claim is already taken, so the card is cut here instead.
+ */
+export function fits(card: Card, room: number = DISCORD_LIMITS.total): Embed {
+  const L = DISCORD_LIMITS;
+  const e: Embed = {
+    ...card.embed,
+    ...(card.embed.author ? { author: { ...card.embed.author, name: cutText(card.embed.author.name, L.author) } } : {}),
+    ...(card.embed.title != null ? { title: cutText(card.embed.title, L.title) } : {}),
+    ...(card.embed.footer ? { footer: { text: cutText(card.embed.footer.text, L.footer) } } : {}),
+    fields: card.embed.fields.slice(0, L.fields).map((f) => ({ ...f, name: cutText(f.name, L.fieldName), value: cutText(f.value, L.fieldValue) })),
+  };
+  const parts = card.parts.map((p) => ({ ...p }));
+  const over = () => {
+    const d = joinParts(parts).length;
+    return Math.max(embedCount(e) + d - room, d - (L.description - 6));
+  };
+  for (const step of TRIM_ORDER) {
+    for (const p of parts) {
+      const x = over();
+      if (x <= 0) break;
+      if (p.role !== step.role || !p.text) continue;
+      const max = p.text.length - x;
+      p.text = step.drop || !p.shorten || max < PART_MIN ? '' : p.shorten(max);
+    }
   }
+  let d = joinParts(parts);
+  const max = Math.min(L.description - 6, room - embedCount(e));
+  if (d.length > max) d = cutText(d, Math.max(0, max));
+  // fields last: only a message whose other embed left too little room gets here
+  while (e.fields.length && embedCount(e) + d.length > room) e.fields.pop();
+  return d ? { ...e, description: d } : e;
+}
 
-  const fields: { name: string; value: string; inline: boolean }[] = [
-    { name: 'Amount', value: amountStr, inline: true },
-    { name: 'Est. Value', value: valueStr, inline: true },
-    { name: 'Block Height', value: `#${flow.height.toLocaleString()}`, inline: true },
-  ];
+// ---------------------------------------------------------------- a move
 
-  // Addresses and labels are text outsiders chose (a bridge receiver, a wallet's tag): shown, never rendered as markdown.
-  const party = (addr: string, label: string | null | undefined) =>
-    `\`${codeSafe(addr.slice(0, 14))}...${codeSafe(addr.slice(-6))}\`${label ? ` (${plainMd(codeSafe(label))})` : ''}${chainOf(addr) ? '' : ' (not an address)'}`;
-  if (flow.from) fields.push({ name: 'From', value: party(flow.from, flow.fromLabel), inline: true });
-  if (flow.to) fields.push({ name: 'To', value: party(flow.to, flow.toLabel), inline: true });
-  // Owner decision 14: a move found late says so, with the time it happened (Discord renders <t:…:f> in each reader's
-  // time zone): one the Osmosis live stream missed and the catch-up search found later (meta.via 'catch-up search'),
-  // one the Namada live scan read well after its block because it was behind (meta.via 'late scan', live-hub.ts
+/** A settle coin and its amount ("113.59 allUSDC (counted at a dollar)", "375.7190 OSMO"), as the settle sentence on the site writes them (web/src/lib/settle.ts). */
+const coinWords = (c: SettledCoin) =>
+  `${fmtCoin(Math.abs(c.amount), c.rate === 'stable' ? 2 : 4)} ${c.symbol}${c.rate === 'stable' && c.symbol !== 'USDC' ? ' (counted at a dollar)' : ''}`;
+/** The rate a coin that is no dollar was valued at, and where it came from ("OSMO at $0.048443, this transaction's own rate"). */
+const rateWords = (c: SettledCoin) =>
+  `${c.symbol} at ${fmtUsdRule(c.usdEach)}, ${c.rate === 'tx' ? 'this transaction’s own rate' : `the Osmosis ${c.symbol} quote for that minute`}`;
+
+/**
+ * What the trader got or paid, with the NAM the settle price counts (fees in), so the three trade figures add up
+ * ("113.59 allUSDC (counted at a dollar) for 799,995 NAM given, fees in"), then the rate of each coin that is no dollar,
+ * then the gas, each on a line of its own.
+ */
+function settleField(s: Settle): Field {
+  const got = s.coins.filter((c) => c.amount > 0), paid = s.coins.filter((c) => c.amount < 0);
+  const nam = `${fmtNamRule(s.nam)} NAM`;
+  const words = (cs: SettledCoin[]) => listWords(cs.map(coinWords));
+  const trade = s.side === 'sell'
+    ? `${words(got)} for ${nam} given, fees in${paid.length ? `; paid ${words(paid)}` : ''}`
+    : `${words(paid)}, fees in, for ${nam}${got.length ? `; got ${words(got)}` : ''}`;
+  const rates = [...new Map(s.coins.filter((c) => c.rate !== 'stable').map((c) => [c.symbol, c] as const)).values()].map((c) => `\n${rateWords(c)}`).join('');
+  const gas = s.gasUsd != null ? `\n${s.side === 'sell' ? 'less' : 'plus'} ${fmtUsdRule(s.gasUsd)} of gas` : s.gasLeftOut ? '\ngas left out: no price for its coin that minute' : '';
+  return { name: s.side === 'sell' ? 'Received' : 'Paid', value: `${trade}${rates}${gas}`, inline: false };
+}
+
+/** "Worth $1,678" or "under $1". */
+const worthWords = (v: number) => (v >= 1 ? fmtUsdRule(v) : 'under $1');
+
+/**
+ * A run of earlier moves of one kind as one clause, newest first: "sold 49,491 NAM 5 min earlier", "sold 49,491,
+ * 49,491 and 99,221 NAM in the 14 min before".
+ */
+function runClauses(moves: PriorMove[], at: number, whose: string): string[] {
+  const out: string[] = [];
+  for (let i = 0; i < moves.length;) {
+    const m = moves[i];
+    let j = i + 1;
+    while (j < moves.length && moves[j].kind === m.kind && moves[j].chain === m.chain && moves[j].received === m.received) j++;
+    const run = moves.slice(i, j);
+    const amt = `${listWords(run.map((x) => fmtNamRule(x.amount)))} NAM`;
+    const words = pastWords(m, m.received, amt, run.length > 1);
+    // "the receiver received" says the receiver twice
+    const said = `${whose}${words}`.replace(/^the receiver received /, 'the receiver got ');
+    out.push(run.length === 1 ? `${said} ${ageWords(at - m.ts)} earlier` : `${said} in the ${ageWords(at - run[run.length - 1].ts)} before`);
+    i = j;
+  }
+  return out;
+}
+
+/**
+ * The embed of one move's alert (one card; see the section's head), from the move and what was read beside it
+ * (sources/discord-context.ts MoveContext). `late` marks an alert the LiveHub kept for a later alarm (PendingAlert).
+ * A move found late says so in the title and in its field (owner decision 14), with the time it happened; the embed's
+ * time is always the move's own.
+ */
+export function moveCard(flow: Flow, ctx: MoveContext = {}, late = false): Card {
+  const f = flow;
+  const otherCoin = isOtherCoin(f);
+  const bot = isBotFlow(f);
+  const via = f.meta?.via;
+  const foundLate = via === 'catch-up search' || via === 'late scan';
+  const { party: p0, other: o0 } = partiesOf(f);
+  const sides = sidesOf(f);
+  const person = pagePerson(p0);
+  const dest = bridgeDest(f.kind, f.chain);
+  const twoSided = dest != null || f.kind === 'transfer';
+  const txUrl = explorerTx(f.chain, explorerHashOf(f));
+  const how = priceHowOf(f);
+  const route = how === 'spot' ? priceRouteOf(f) ?? ctx.priceRoute ?? null : null;
+  const src = priceSourceWords(how, priceAtOf(f), route);
+  const trade = f.kind === 'buy' || f.kind === 'sell';
+  const settle = trade ? ctx.settle ?? null : null;
+  const P = sideWords(p0);
+
+  // ---- line 1: who, then the price with its source (plain words: a lock screen shows this line)
+  let who: string;
+  const validator = ctx.validatorName ? textSafe(cutText(ctx.validatorName, TEXT_MAX.validator)) : typeof f.meta?.validator === 'string' ? fmtAddr(f.meta.validator) : null;
+  const pools = f.poolId ? f.poolId.split(',').map((x) => x.trim()).filter(Boolean) : [];
+  switch (f.kind) {
+    case 'buy': who = `Bought by ${P}`; break;
+    case 'sell': who = `Sold by ${P}`; break;
+    case 'ibc_in': case 'ibc_out': {
+      const there = dest === 'osmosis' ? 'Osmosis' : 'Namada', here = dest === 'osmosis' ? 'Namada' : 'Osmosis';
+      who = `From ${crossingSide(sides.from, 'sender', here)} to ${crossingSide(sides.to, 'receiver', there)}`;
+      break;
+    }
+    case 'shield': who = `From ${P} into the shielded pool`; break;
+    case 'unshield': who = `To ${P}, from the shielded pool`; break;
+    case 'bond': who = `By ${P}${validator ? `, with validator ${validator}` : ''}`; break;
+    case 'unbond': who = `By ${P}${validator ? `, from validator ${validator}` : ''}`; break;
+    case 'withdraw': case 'pgf': who = `To ${P}`; break;
+    case 'rewards': who = `Claimed by ${P}`; break;
+    case 'lp_add': case 'lp_remove': who = `By ${P}${pools.length ? `, pool${pools.length > 1 ? 's' : ''} ${listWords(pools)}` : ''}`; break;
+    case 'transfer': case 'pos_balance': who = `From ${sideWords(sides.from)} to ${sideWords(sides.to)}`; break;
+    default: {
+      if (isIbcRefund(f)) { who = `Refunded to ${P}: a send to Namada that timed out`; break; }
+      const bought = Number(f.meta?.namBought), sold = Number(f.meta?.namSold);
+      if (bot && Number.isFinite(bought) && Number.isFinite(sold)) {
+        const net = bought - sold;
+        const netWords = fmtNamRule(Math.abs(net)) === '0' ? 'no NAM changed hands net' : `${fmtNamRule(Math.abs(net))} NAM ${net > 0 ? 'bought' : 'sold'} net`;
+        who = `By ${P}: bought ${fmtNamRule(bought)} and sold ${fmtNamRule(sold)} NAM in one transaction (${netWords})`;
+      } else who = `By ${P}`;
+    }
+  }
+  let value: string;
+  const quoteName = route != null ? 'the Osmosis route quote for that minute' : 'the Osmosis quote for that minute';
+  if (otherCoin) value = 'No dollar value is on record for this move.';
+  else if (settle) {
+    const q = how === 'spot' && f.priceUsd ? f.priceUsd : null;
+    const d = q ? (settle.usdPerNam / q - 1) * 100 : 0;
+    const cmp = !q ? '' : Math.abs(d) < 0.5 ? `, about ${quoteName} (${fmtUsdRule(q)})` : `, ${pct0(d)} ${d < 0 ? 'under' : 'over'} ${quoteName} (${fmtUsdRule(q)})`;
+    value = `Settled at ${fmtUsdRule(settle.usdPerNam)} a NAM, ${fmtUsdRule(settleUsd(settle))} in all${cmp}.`;
+  } else if (trade && how === 'execution' && f.priceUsd && f.valueUsd != null) {
+    value = `At ${fmtUsdRule(f.priceUsd)} a NAM, ${fmtUsdRule(f.valueUsd)} in all (${src.short}).`;
+  } else if (trade) {
+    value = f.priceUsd && f.valueUsd != null && how !== 'none'
+      ? `What it settled at is not on record; at ${fmtUsdRule(f.priceUsd)} a NAM (${src.short}) it is worth about ${worthWords(f.valueUsd)}.`
+      : 'No price is on record for this trade.';
+  } else if (f.valueUsd != null && f.priceUsd != null && how !== 'none') value = `Worth ${worthWords(f.valueUsd)} at ${fmtUsdRule(f.priceUsd)} a NAM (${src.short}).`;
+  else value = 'No price is on record for this move.';
+  const line1 = `${who}. ${value}`;
+
+  // ---- line 2: the links: the person's page on the site (both sides of a crossing or a transfer), the record on an explorer
+  const links: string[] = [];
+  if (person) links.push(personLink(person));
+  const otherPerson = twoSided ? pagePerson(o0) : null;
+  if (otherPerson && otherPerson.address !== person?.address) links.push(personLink(otherPerson));
+  links.push(`[Transaction on ${EXPLORER_NAME[f.chain] ?? 'an explorer'}](${txUrl})`);
+
+  // ---- line 3: before this, only what is on record
+  const whose = twoSided && person ? (person.address === f.to ? 'the receiver' : 'the sender') : 'this address';
+  const otherWhose = whose === 'the receiver' ? 'the sender' : 'the receiver';
+  const clauses: string[] = [];
+  if (person) {
+    const crossingIn = ctx.crossingIn ?? null;
+    if (crossingIn) clauses.push(`received ${fmtNamRule(crossingIn.amount)} NAM from Namada ${ageWords(f.ts - crossingIn.ts)} earlier`);
+    // The crossing named above is left out of the list, whichever of its two records the list holds: the Namada
+    // sending record is kept there and the Osmosis receiving record is the one read for crossingIn.
+    const own = (ctx.before ?? []).filter((m) => !(crossingIn && sameCrossing(m, crossingIn)));
+    clauses.push(...runClauses(own, f.ts, twoSided ? `${whose} ` : ''));
+  }
+  // the other side's moves, each move once: one between the two sides is already in the person's list
+  const listed = new Set((ctx.before ?? []).map((m) => m.id));
+  if (twoSided && otherPerson) clauses.push(...runClauses((ctx.otherBefore ?? []).filter((m) => !listed.has(m.id)), f.ts, `${person ? otherWhose : 'the other side'} `));
+  const t = ctx.trades30d;
+  if (t && (person || dest === 'osmosis')) {
+    const by = trade ? 'this address' : 'the receiver';
+    clauses.push(t.n === 0
+      ? `no ${t.side === 'sell' ? 'sale' : 'purchase'} by ${by} in the 30 days before`
+      : `${t.side === 'sell' ? 'sold' : 'bought'} ${fmtNamRule(t.nam)} NAM in ${t.n} trade${t.n === 1 ? '' : 's'} in the 30 days before${t.firstTs != null ? `, the first ${ageWords(f.ts - t.firstTs)} before this one` : ''}`);
+  }
+  const h = ctx.history;
+  if (h && person) {
+    const many = h.capped ? `more than ${HISTORY_COUNT_MAX.toLocaleString('en-US')}` : h.n.toLocaleString('en-US');
+    if (h.n === 0) clauses.push(`no earlier move by ${whose} on record`);
+    else if (!(ctx.before ?? []).length && !ctx.crossingIn) clauses.push(`no move by ${whose} in the 7 days before; ${many} earlier on record${h.last != null ? `, the latest <t:${unix(h.last)}:D>` : ''}`);
+    else clauses.push(`${many} move${h.n === 1 ? '' : 's'} by ${whose} on record before this${!h.capped && h.first != null ? `, the first <t:${unix(h.first)}:D>` : ''}`);
+  }
+  const before = (n: number) => (n ? `Before this: ${clauses.slice(0, n).join('; ')} (this site's records).` : '');
+
+  // ---- line 4: what the site's own page says such a move means, with its source
+  let means = '';
+  if (dest === 'osmosis' && ctx.onDeck && ctx.onDeck.bridgedIn > 0) {
+    means = `On deck at the receiver as of this post: ${fmtNamRule(ctx.onDeck.remaining)} NAM of ${fmtNamRule(ctx.onDeck.bridgedIn)} NAM bridged in over the last 7 days, not yet sold or sent back (this site's records).`;
+  } else if ((dest === 'namada' && f.to === I.masp) || f.kind === 'shield') means = 'Inside the shielded pool the holder and its later moves are not visible.';
+  else if (f.kind === 'unbond' && ctx.unlockAt) {
+    const u = ctx.unlockAt;
+    means = u.at == null ? `Spendable when the wait ends: ${u.note}.`
+      : u.source === 'estimate' ? `Spendable when the wait ends, around <t:${unix(u.at)}:D> (<t:${unix(u.at)}:R>; ${u.note}).`
+      : `Spendable when the wait ends, <t:${unix(u.at)}:f> (<t:${unix(u.at)}:R>; ${u.note}).`;
+  } else if (f.kind === 'bond' && ctx.wait) means = `Out of the spendable supply until unstaked; unstaking takes ${ctx.wait.epochs} epochs, about ${Math.round(ctx.wait.days)} days (${ctx.wait.note}).`;
+  else if (f.kind === 'withdraw') means = person ? 'Spendable now. What this address does with it next shows on its page.' : 'Spendable now.';
+
+  // ---- fields: the figures, each with its source
+  const fields: Field[] = [];
+  if (settle) {
+    // the two prices side by side, then what was paid or received across the card: its coins, rates and gas take lines
+    fields.push({ name: 'Settled at', value: `${fmtUsdRule(settle.usdPerNam)} a NAM`, inline: true });
+    if (f.priceUsd && how !== 'none' && how !== 'execution') fields.push({ name: how === 'spot' ? 'Quote that minute' : 'Price that minute', value: `${fmtUsdRule(f.priceUsd)} a NAM\n${capFirst(src.long)}`, inline: true });
+    fields.push(settleField(settle));
+  } else if (!otherCoin && f.valueUsd != null && f.priceUsd != null && how !== 'none' && !(trade && how === 'execution')) {
+    fields.push({ name: 'Worth', value: worthWords(f.valueUsd), inline: true });
+    fields.push({ name: how === 'spot' ? 'Quote that minute' : 'Price that minute', value: `${fmtUsdRule(f.priceUsd)} a NAM\n${capFirst(src.long)}`, inline: true });
+  }
+  // Owner decision 14: a move found late says so, with the time it happened (Discord shows <t:…:f> in each reader's
+  // zone): one the Osmosis live stream missed and the catch-up search found later (meta.via 'catch-up search'), one
+  // the Namada live scan read well after its block because it was behind (meta.via 'late scan', live-hub.ts
   // LATE_SCAN_MS), and one whose alert waited for a later alarm (`late`, live-hub.ts PendingAlert).
-  const via = (flow.meta as { via?: string } | undefined)?.via;
-  if (via === 'catch-up search' || via === 'late scan' || late) {
-    const t = Math.floor(flow.ts / 1000);
+  if (foundLate || late) {
+    const at = unix(f.ts);
     const why = via === 'late scan' ? 'The live scan was behind and read this move late' : via === 'catch-up search' ? 'The live feed missed this move' : 'This alert waited for a later run';
-    fields.push({ name: 'Found late', value: `${why}; it happened <t:${t}:f> (<t:${t}:R>).`, inline: false });
+    fields.push({ name: 'Found late', value: `${why}; it happened <t:${at}:f> (<t:${at}:R>).`, inline: false });
   }
-  if (flow.chain === 'osmosis' && flow.counterDenom && flow.counterAmount) {
-    fields.push({
-      name: 'Counter Asset',
-      value: `${flow.counterAmount.toFixed(2)} ${flow.counterDenom}`,
-      inline: true,
-    });
-  }
+
+  // ---- why this post reached the channel, above the title: the watchlist first (the more specific reason a
+  // subscriber gave), the subscriber's rule in their words at their size, or the operator channel's whale size
+  const rule = ctx.rule ? `${ctx.rule.title} · your rule at ${fmtNamRule(ctx.rule.thresholdNam)} NAM` : null;
+  const author = ctx.watched?.length
+    ? { name: `Watchlist: ${ctx.watched.map((w) => fmtAddr(w)).join(', ')}${rule ? ` · also ${rule}` : ''}`, url: `${ORIGIN}/settings#watchlist` }
+    : rule ? { name: rule, url: `${ORIGIN}/settings#rules` }
+    : ctx.whaleNam ? { name: `Large move · ${fmtNamRule(ctx.whaleNam)} NAM or more` }
+    : undefined;
 
   return {
-    username: 'Namada Whale Radar',
-    avatar_url: NAMADA_AVATAR,
-    embeds: [
-      {
-        title,
-        url: txUrl,
-        color,
-        description: `Tx: [${flow.txHash.slice(0, 16)}...](${txUrl}) on **${flow.chain.toUpperCase()}**`,
-        fields,
-        footer: {
-          text: `NamadaTrade • Deduplicated Cross-Chain Whale Monitor`,
-        },
-        timestamp: new Date(flow.ts || Date.now()).toISOString(),
-      },
+    embed: {
+      ...(author ? { author: { ...author, name: oneLine(author.name) } } : {}),
+      title: oneLine(`${moveTitle(f)}${foundLate ? ' · found late' : late ? ' · sent late' : ''}`),
+      url: person ? sitePage(person.address!) : txUrl,
+      color: HUE_HEX[kindInfo(tagOfFlow(f)).hue] ?? HUE_HEX.neutral,
+      fields,
+      footer: { text: `NamadaTrade · ${CHAIN_WORD[f.chain] ?? f.chain} record, block ${Number.isFinite(f.height) ? f.height.toLocaleString('en-US') : 'not known'}` },
+      timestamp: new Date(Number.isFinite(f.ts) ? f.ts : Date.now()).toISOString(),
+    },
+    parts: [
+      { text: line1, sep: '' },
+      { text: links.join(' · '), sep: '\n\n' },
+      { text: before(clauses.length), sep: '\n\n', role: 'before', shorten: (max) => { for (let n = clauses.length - 1; n > 0; n--) if (before(n).length <= max) return before(n); return ''; } },
+      { text: means, sep: '\n', role: 'means' },
     ],
+  };
+}
+
+/** One move's alert as Discord takes it: the sender and one card (moveCard), inside Discord's limits. */
+export function buildFlowDiscordBody(flow: Flow, ctx: MoveContext = {}, late = false) {
+  return { ...SENDER, embeds: [fits(moveCard(flow, ctx, late))] };
+}
+
+// ---------------------------------------------------------------- a forum post
+
+/** A new forum topic or reply: the topic in the title, the opening words as the line a lock screen shows, then who wrote it and when. */
+export function forumCard(post: ForumPost, categoryName?: string | null): Card {
+  const isNew = post.isNewTopic || post.postNumber === 1;
+  const topic = oneLine(cutText(String(post.topicTitle ?? ''), TEXT_MAX.title));
+  const url = safeHttpUrl(post.url);
+  const user = textSafe(cutText(String(post.username ?? ''), TEXT_MAX.username));
+  const by = post.displayName ? `${textSafe(cutText(post.displayName, TEXT_MAX.displayName))} (@${user})` : `@${user}`;
+  const at = Date.parse(post.createdAt);
+  const excerpt = post.excerpt ? textSafe(cutText(post.excerpt, TEXT_MAX.excerpt)) : '';
+  const tail = `By ${by}${Number.isFinite(at) ? ` · <t:${unix(at)}:R>` : ''}${url ? ` · [Read on forum.namada.net](${url})` : ''}`;
+  return {
+    embed: {
+      author: { name: `Forum · ${categoryName ? oneLine(cutText(categoryName, TEXT_MAX.category)) : 'forum.namada.net'}`, url: 'https://forum.namada.net' },
+      title: isNew ? `New topic: ${topic}` : `Reply ${post.postNumber} in: ${topic}`,
+      ...(url ? { url } : {}),
+      color: COLOUR.forum,
+      fields: [],
+      footer: { text: 'NamadaTrade · forum.namada.net' },
+      timestamp: new Date(Number.isFinite(at) ? at : Date.now()).toISOString(),
+    },
+    parts: [
+      { text: excerpt || (isNew ? 'A new topic.' : 'A new reply.'), sep: '', role: excerpt ? 'excerpt' : undefined, shorten: (max) => cutText(excerpt, max) },
+      { text: tail, sep: '\n\n' },
+    ],
+  };
+}
+
+// ---------------------------------------------------------------- a governance proposal
+
+/** What the governance alert adds to the proposal: the current epoch, the epoch length and how it was measured, and when the indexer was read. */
+export interface GovContext { nowEpoch?: number | null; epochSec?: number | null; epochNote?: string | null; readAt?: number }
+
+/**
+ * A proposal that is new or changed status: the outcome or the state in the title ("New proposal" only while it is
+ * open: a proposal first read already past voting is titled by its status), the votes with their shares as Supply
+ * shows them (Yes and No; Abstain has no share there), the type, authors and epochs with the current epoch, an
+ * estimate of the clock times ahead (late by up to one epoch: the current epoch began up to one epoch before the
+ * read), the abstract, and links: the discussion, the proposal on namada.valopers.com and, while it is open, the votes
+ * on the site (Supply lists only open proposals). The status and votes are as the indexer was read, and say so.
+ */
+export function govCard(p: GovernanceProposal, isNew: boolean, g: GovContext = {}): Card {
+  const readAt = g.readAt ?? Date.now();
+  const total = p.yayNam + p.nayNam + p.abstainNam;
+  const share = (n: number) => (total > 0 ? ` (${fmtPctRule((n / total) * 100, 1)})` : '');
+  const status = proposalStatusWords(p.status);
+  const open = proposalOpen(p.status);
+  const title = oneLine(cutText(String(p.title ?? ''), TEXT_MAX.title));
+  const head = open
+    ? isNew ? `New proposal ${p.id}` : /voting/i.test(p.status) ? `Voting opened on proposal ${p.id}` : `Proposal ${p.id}, voting not started`
+    : `Proposal ${p.id} ${status.charAt(0).toLowerCase()}${status.slice(1)}`;
+  const votes = total > 0
+    ? `${status}. Yes ${fmtNamRule(p.yayNam)} NAM${share(p.yayNam)}, no ${fmtNamRule(p.nayNam)} NAM${share(p.nayNam)}, abstain ${fmtNamRule(p.abstainNam)} NAM, of ${fmtNamRule(total)} NAM voted.`
+    : `${status}. No votes cast yet.`;
+  const ep = (n: number) => n.toLocaleString('en-US');
+  let window = `voting epochs ${ep(p.startEpoch)} to ${ep(p.endEpoch)}`;
+  if (g.nowEpoch != null) window += `, now epoch ${ep(g.nowEpoch)}`;
+  if (g.nowEpoch != null && g.epochSec && p.endEpoch > g.nowEpoch && open) {
+    const at = (e: number) => unix(readAt + (e - g.nowEpoch!) * g.epochSec! * 1000);
+    const est = `estimate, late by up to one epoch${g.epochNote ? `: ${g.epochNote}` : ''}`;
+    window += p.startEpoch > g.nowEpoch
+      ? ` · voting opens around <t:${at(p.startEpoch)}:D> and closes around <t:${at(p.endEpoch)}:D> (${est})`
+      : ` · voting closes around <t:${at(p.endEpoch)}:D> (${est})`;
+  }
+  const authors = p.authors ? textSafe(oneLine(p.authors)) : '';
+  const typeLine = (a: string) => `${proposalTypeWords(p.type)}${a ? ` by ${a}` : ''} · ${window}.`;
+  const own = safeHttpUrl(p.discussionsUrl);
+  const ownOk = own != null && own.length <= GOV_LINK_MAX;
+  const valopers = `https://namada.valopers.com/proposals/${p.id}`;
+  const links = [
+    ownOk ? `[Discussion on ${new URL(own!).host}](${own})` : null,
+    `[Proposal ${p.id} on namada.valopers.com](${valopers})`,
+    open ? `[Votes on NamadaTrade](${ORIGIN}/supply)` : null,
+  ].filter(Boolean).join(' · ');
+  const abstract = p.abstract ? textSafe(p.abstract) : '';
+  const quote = (max: number) => (abstract ? `> ${cutText(abstract, max)}` : '');
+  return {
+    embed: {
+      author: { name: 'Governance · indexer.namada.net', ...(open ? { url: `${ORIGIN}/supply` } : {}) },
+      title: `${head}: ${title}`,
+      url: ownOk ? own! : valopers,
+      color: COLOUR.governance,
+      fields: [
+        { name: 'Yes', value: `${fmtNamRule(p.yayNam)} NAM${share(p.yayNam)}`, inline: true },
+        { name: 'No', value: `${fmtNamRule(p.nayNam)} NAM${share(p.nayNam)}`, inline: true },
+        { name: 'Abstain', value: `${fmtNamRule(p.abstainNam)} NAM`, inline: true },
+      ],
+      footer: { text: `NamadaTrade · status and votes as read from indexer.namada.net${own && !ownOk ? ` · the proposal's own discussion link is ${own.length} characters long, too long to post here` : ''}` },
+      timestamp: new Date(readAt).toISOString(),
+    },
+    parts: [
+      { text: votes, sep: '' },
+      { text: typeLine(cutText(authors, TEXT_MAX.authors)), sep: '\n\n', role: 'authors', shorten: (max) => typeLine(cutText(authors, Math.max(0, Math.min(TEXT_MAX.authors, max - typeLine('').length)))) },
+      { text: quote(TEXT_MAX.abstract + 2), sep: '\n\n', role: 'abstract', shorten: (max) => quote(max - 2) },
+      { text: links, sep: '\n\n' },
+    ],
+  };
+}
+
+// ---------------------------------------------------------------- the Settings test message and the connection notice
+
+/** The rules, watchlist, forum and digest switches and quiet hours a channel is connected with, in the words Settings shows. */
+function settingsFields(u: StoredSettings): Field[] {
+  const p = u.notifications;
+  const rules = alertRules(thresholdsOf(p));
+  const isOn = (id: string) => !!p.rules[id as keyof typeof p.rules]?.on;
+  const on = rules.filter((r) => isOn(r.id)).map((r) => `${r.title}: ${r.condition}`);
+  const off = rules.filter((r) => !isOn(r.id)).map((r) => r.title);
+  const n = p.watchlistOn ? p.watchlist.length : 0;
+  const q = p.quietHoursUtc;
+  const hh = (x: number) => `${String(x).padStart(2, '0')}:00`;
+  return [
+    { name: 'Your rules', value: `${on.length ? on.join('\n') : 'No rule is on.'}${off.length ? `\nOff: ${off.join(', ')}` : ''}`, inline: false },
+    { name: 'Watchlist', value: n ? `${n} address${n === 1 ? '' : 'es'}` : 'off', inline: true },
+    { name: 'Forum and governance', value: p.forumAndGov ? 'on' : 'off', inline: true },
+    { name: 'Daily digest', value: p.dailyDigest ? 'on' : 'off', inline: true },
+    // a sentence, so not a third-width column (Discord draws an inline field as one)
+    { name: 'Quiet hours', value: q ? `${hh(q.start)} to ${hh(q.end)} UTC. A move made in these hours, or a forum post or proposal read in them, is not sent, then or later.` : 'none', inline: false },
+  ];
+}
+
+/** What every alert card holds, as the test message and the connection notice say it. */
+const CARD_WORDS = 'the amount and what happened in the title, who moved it with the names this site knows, the price with its source, and links to the mover’s page on NamadaTrade and to an explorer';
+
+/**
+ * The Settings test message: the rules as saved, what the cards will hold, and, as a second embed, the newest move on
+ * record that matches these rules, built as its alert would be (`example`). `null`: the search reached the oldest
+ * record and found none; undefined: it gave up before that, or could not be read (analytics.ts lastAlertBefore), which
+ * is not "none on record".
+ */
+/** What the test message shows as its example (testExample). */
+export type TestExample = { flow: Flow; ctx: MoveContext } | null | 'gave-up' | 'unread' | undefined;
+
+export function testBody(u: StoredSettings, example: TestExample, now = Date.now()) {
+  const anyRule = Object.values(u.notifications.rules).some((r) => r?.on);
+  const first = fits({
+    embed: {
+      title: 'Alerts will arrive here',
+      url: `${ORIGIN}/settings`,
+      color: COLOUR.test,
+      fields: settingsFields(u),
+      footer: { text: 'NamadaTrade · change these in Settings' },
+      timestamp: new Date(now).toISOString(),
+    },
+    parts: [{ text: `This channel is connected for ${fmtAddr(u.address)}. Each alert is one card${anyRule && example && typeof example === 'object' ? ' like the example below' : ''}: ${CARD_WORDS}.`, sep: '' }],
+  });
+  const embeds: Embed[] = [first];
+  const room = DISCORD_LIMITS.total - embedCount(first);
+  if (anyRule && example && typeof example === 'object') {
+    const card = moveCard(example.flow, example.ctx);
+    embeds.push(fits({ ...card, embed: { ...card.embed, author: { name: 'Example: the newest move on record that matches these rules', url: `${ORIGIN}/alerts` } } }, room));
+  } else if (anyRule && example !== undefined) {
+    const [title, text] = example === null
+      ? ['No move on record matches these rules yet', 'The first one will arrive as a card, the move in its title.']
+      : example === 'gave-up'
+      ? ['No example this time', 'None among the newest moves looked at matches these rules; the Alerts page keeps looking.']
+      : ['No example this time', 'The newest move that matches these rules could not be read just now; the Alerts page lists them.'];
+    embeds.push(fits({ embed: { title, color: COLOUR.test, fields: [], footer: { text: 'NamadaTrade' } }, parts: [{ text, sep: '' }] }, room));
+  }
+  return { ...SENDER, embeds };
+}
+
+/**
+ * The connection notice a save posts to a link it turns on (and the cron's sweep posts again to a channel on trial):
+ * what will arrive, the rules as saved. No example is read for it: it is posted inside the save's request.
+ */
+export function noticeBody(u: StoredSettings, now = Date.now()) {
+  return {
+    ...SENDER,
+    embeds: [fits({
+      embed: {
+        title: 'Discord channel connected',
+        url: `${ORIGIN}/settings`,
+        color: COLOUR.test,
+        fields: settingsFields(u),
+        footer: { text: 'NamadaTrade · change these in Settings' },
+        timestamp: new Date(now).toISOString(),
+      },
+      parts: [{ text: `Alerts for ${fmtAddr(u.address)} will arrive here, each as one card: ${CARD_WORDS}. A test message from Settings shows one, built from the newest move that matches your rules.`, sep: '' }],
+    })],
   };
 }
 
@@ -1177,7 +1797,6 @@ export interface PendingAlert { flow: Flow; at: number; n: number; claims: 'none
 export async function sendDiscordWhaleAlert(
   webhookUrl: string | undefined,
   flow: Flow,
-  usdPrice: number | null,
   db?: D1Database,
   systemThreshold = 10000,
   budget?: AlertBudget,
@@ -1187,9 +1806,18 @@ export async function sendDiscordWhaleAlert(
   // 1. The operator's channel, for NAM moves at or above the whale size (another coin's units are not NAM). Marked
   //    op: the site's own channel is served first and is never dropped for a shared fan-out window that a wallet's
   //    low thresholds could fill with subscriber posts; one per move, and only a real whale makes one. A part kept
-  //    from an earlier run holds subscribers only: the operator was posted when the move was first offered.
+  //    from an earlier run holds subscribers only: the operator was posted when the move was first offered. A bot
+  //    round trip and a rewards claim are not offered to it (owner's calls, 2026-10-23: the site leaves bot trades out
+  //    of every buy and sell figure, and a claim of staking rewards is no market event); a watcher still hears of them.
+  //    Each target's body is built once the move's context is read (step 2b); `why` holds what its card says above
+  //    the title.
   const op: Target[] = [];
-  if (!resume && webhookUrl && isNamWhale(flow, systemThreshold)) op.push({ url: webhookUrl, body: buildFlowDiscordBody(flow, usdPrice), op: true });
+  const why = new Map<Target, Pick<MoveContext, 'whaleNam' | 'rule' | 'watched'>>();
+  if (!resume && webhookUrl && operatorMove(flow, systemThreshold)) {
+    const t: Target = { url: webhookUrl, body: {}, op: true };
+    op.push(t);
+    why.set(t, { whaleNam: systemThreshold });
+  }
 
   // 2. Fan out per user: the same rules as the UI and the replay harness, with that user's thresholds (the rules
   //    are in NAM, so a move in another coin can match a watchlist only). One post per webhook, whoever shares it
@@ -1217,13 +1845,30 @@ export async function sendDiscordWhaleAlert(
     // hours cover the day would otherwise turn every resumed part into a day's wait recorded as not sent).
     if (inQuietHours(p)) { if (resume && !inQuietHours(p, flow.ts)) quietKeys.add(key); continue; }
     seen.add(url);
-    subs.push(userTarget(u, buildFlowDiscordBody(flow, usdPrice, watched ? 'WATCHLIST' : hits[0].ruleId.toUpperCase(), late), db));
+    const t = userTarget(u, {}, db);
+    subs.push(t);
+    // what the card says above its title: the watched addresses this move touches, and the first matching rule in the
+    // site's words at this subscriber's size (shared/alerts.ts alertRules)
+    const rule = hits.length ? alertRules(thresholdsOf(p)).find((r) => r.id === hits[0].ruleId) : undefined;
+    why.set(t, {
+      ...(watched ? { watched: p.watchlist.filter((w) => w === flow.from || w === flow.to) } : {}),
+      ...(rule ? { rule: { id: rule.id, title: rule.title, thresholdNam: rule.thresholdNam } } : {}),
+    });
   }
   // A channel another subscriber of the same link is posted to now is not kept for the quiet one.
   const quiet = [...quietKeys].filter((k) => !subs.some((t) => channelKey(t.url) === k));
   // Nothing to post and nothing to keep: no claim is taken. A read that failed under a dispatch that sends later keeps
   // the subscribers' part whole, for the next alarm's read.
   if (!op.length && !subs.length && !quiet.length && !(unread && budget?.defers)) return null;
+
+  // 2b. The move's context (sources/discord-context.ts: both sides' labels, a trade's settle price, what the person did
+  //     before, what the site's pages say such a move means), read once for every body of this move, and only when
+  //     something is posted now. It is read before any claim is taken and is bounded in time: a read that fails or
+  //     runs late gives a card with the move alone, so it can never cost the alert.
+  if (op.length || (subs.length && !(budget && spentOut(budget)) && !(unread && budget?.defers))) {
+    const read = await readMoveContext(db, flow);
+    for (const t of [...op, ...subs]) t.body = buildFlowDiscordBody(read.flow, { ...read.ctx, ...why.get(t) }, late);
+  }
 
   // 3. The claims, taken only for a part that will be posted, so a move that posts nothing holds no key another move
   //    needs. The first names the move itself (its flow id), never only its transaction: one transaction or Namada
@@ -1329,54 +1974,19 @@ async function sendForumGov(webhookUrl: string | undefined, body: Record<string,
 }
 
 /**
- * Send a deduplicated Discord notification for new Namada Forum topics or replies. With a run's `budget`
+ * Send a deduplicated Discord notification for new Namada Forum topics or replies (forumCard). With a run's `budget`
  * (alertBudget), the operator is posted at once and subscribers whose posts do not fit wait, unclaimed, for the next
- * run (sendForumGov).
+ * run (sendForumGov). `categoryName`: the topic's category, as the forum's topic list names it (cron.ts reads it from
+ * intel.topics).
  */
 export async function sendDiscordForumAlert(
   webhookUrl: string | undefined,
   post: ForumPost,
   db?: D1Database,
   budget?: AlertBudget,
+  categoryName?: string | null,
 ): Promise<'done' | 'waiting'> {
-  const isNewTopic = post.isNewTopic || post.postNumber === 1;
-  // Forum text is whatever its author wrote: shown as text (plainMd), so a reply cannot hide a link under other words.
-  const title = isNewTopic
-    ? `🏛️ New Namada Forum Topic: ${plainMd(post.topicTitle)}`
-    : `💬 New Forum Reply: ${plainMd(post.topicTitle)} (#${post.postNumber})`;
-
-  const authorDisplay = post.displayName
-    ? `${plainMd(post.displayName)} (@${plainMd(post.username)})`
-    : `@${plainMd(post.username)}`;
-
-  const body = {
-    username: 'Namada Forum & Governance Radar',
-    avatar_url: NAMADA_AVATAR,
-    embeds: [
-      {
-        title: title.slice(0, 250),
-        url: post.url,
-        color: isNewTopic ? 0xffff00 : 0x38bdf8,
-        description: post.excerpt
-          ? `> ${plainMd(post.excerpt)}\n\n[Read full post on forum.namada.net ↗](${post.url})`
-          : `[View discussion on forum.namada.net ↗](${post.url})`,
-        fields: [
-          { name: 'Author', value: authorDisplay, inline: true },
-          {
-            name: 'Activity Type',
-            value: isNewTopic ? 'New Thread (OP)' : `Reply #${post.postNumber}`,
-            inline: true,
-          },
-          { name: 'Topic ID', value: `#${post.topicId}`, inline: true },
-        ],
-        footer: {
-          text: 'NamadaTrade • Namada Discourse Forum Monitor',
-        },
-        timestamp: new Date(post.createdAt || Date.now()).toISOString(),
-      },
-    ],
-  };
-
+  const body = { ...SENDER, embeds: [fits(forumCard(post, categoryName))] };
   return sendForumGov(webhookUrl, body, `alert:forum:post:${post.id}`, `forum post ${post.id}`, db, budget);
 }
 
@@ -1390,8 +2000,9 @@ export async function sendDiscordForumAlert(
 export const GOV_LINK_MAX = 512;
 
 /**
- * Send a deduplicated Discord notification for Namada On-Chain Governance Proposals. With a run's `budget`, an alert
- * whose subscribers do not fit waits for the next run, its operator post sent at once (sendForumGov).
+ * Send a deduplicated Discord notification for a governance proposal that is new or changed status (govCard). With a
+ * run's `budget`, an alert whose subscribers do not fit waits for the next run, its operator post sent at once
+ * (sendForumGov). `g`: the current epoch, the measured epoch length and when the indexer was read (cron.ts).
  */
 export async function sendDiscordGovAlert(
   webhookUrl: string | undefined,
@@ -1399,68 +2010,186 @@ export async function sendDiscordGovAlert(
   isNew: boolean,
   db?: D1Database,
   budget?: AlertBudget,
+  g: GovContext = {},
 ): Promise<'done' | 'waiting'> {
-  // Proposal text is whatever its author submitted on chain: shown as text (plainMd).
-  const title = isNew
-    ? `🗳️ New On-Chain Proposal #${prop.id}: ${plainMd(prop.title)}`
-    : `⚖️ Proposal #${prop.id} Status → ${prop.status.toUpperCase()}: ${plainMd(prop.title)}`;
-
-  const color =
-    prop.status.toLowerCase().includes('pass')
-      ? 0x10b981
-      : prop.status.toLowerCase().includes('reject')
-      ? 0xf43f5e
-      : 0xa855f7;
-
-  const own = safeHttpUrl(prop.discussionsUrl);
-  const tooLong = own != null && own.length > GOV_LINK_MAX;
-  const propUrl = own && !tooLong ? own : `https://namada.valopers.com/proposals/${prop.id}`;
-  const linkNote = tooLong ? `\n\nThe proposal's own discussion link is ${own.length} characters long, too long to post here.` : '';
-
-  const body = {
-    username: 'Namada Forum & Governance Radar',
-    avatar_url: NAMADA_AVATAR,
-    embeds: [
-      {
-        title: title.slice(0, 250),
-        url: propUrl,
-        color,
-        description: (prop.abstract
-          ? `${plainMd(prop.abstract)}\n\n[View Discussion / Proposal ↗](${propUrl})`
-          : `[View Proposal #${prop.id} ↗](${propUrl})`) + linkNote,
-        fields: [
-          { name: 'Status', value: `\`${prop.status}\``, inline: true },
-          { name: 'Type', value: `\`${prop.type}\``, inline: true },
-          {
-            name: 'Voting Window',
-            value: `Epoch ${prop.startEpoch} → ${prop.endEpoch}`,
-            inline: true,
-          },
-          {
-            name: 'YAY Votes',
-            value: `${Math.round(prop.yayNam).toLocaleString()} NAM`,
-            inline: true,
-          },
-          {
-            name: 'NAY Votes',
-            value: `${Math.round(prop.nayNam).toLocaleString()} NAM`,
-            inline: true,
-          },
-          {
-            name: 'ABSTAIN',
-            value: `${Math.round(prop.abstainNam).toLocaleString()} NAM`,
-            inline: true,
-          },
-        ],
-        footer: {
-          text: 'NamadaTrade • On-Chain Governance Monitor',
-        },
-        timestamp: new Date().toISOString(),
-      },
-    ],
-  };
-
+  const body = { ...SENDER, embeds: [fits(govCard(prop, isNew, g))] };
   return sendForumGov(webhookUrl, body, `alert:gov:prop:${prop.id}:${prop.status}`, `proposal ${prop.id} ${prop.status}`, db, budget);
+}
+
+// ---------------------------------------------------------------- the daily and weekly digest
+
+/**
+ * One period's digest as the cron hands it to the dispatcher (worker/src/digest/deliver.ts builds it from the build
+ * of worker/src/digest/build.ts): the period's claim key and label, and the posts of each recipient, built only once
+ * the channels they go to are claimed.
+ * - `key`: alert:digest:daily:<UTC date> or alert:digest:weekly:<ISO week>; `what`: "digest 2026-10-23" or "weekly
+ *   digest 2026-W44", the label postAll and the health view show (never an address or a channel).
+ * - `maxPosts`: the most posts one recipient's digest takes (a second message carries the attention section, or the
+ *   recipient's own embed when the first message has no room for it), counted against the run's budget before any
+ *   claim.
+ * - `operator`: the operator's posts, given the digest's channels (the operator's among them), its subscribers and
+ *   the wallets past the watchlist cap.
+ * - `subscribers`: reads the watchlists of these wallets (bounded, after their claims) and gives each one's posts; a
+ *   read that fails gives every watchlist embed its "not read" line, never no digest.
+ */
+export interface DigestDelivery {
+  key: string;
+  what: string;
+  maxPosts: number;
+  operator(t: { channels: number; subscribers: number; watchCapWallets: number }): WebhookPost[];
+  subscribers(wallets: StoredSettings[]): Promise<{ postsOf: (u: StoredSettings) => WebhookPost[]; capped: number }>;
+}
+
+/**
+ * What one run did with a period's digest.
+ * - 'off': this Worker does not send alerts (SEND_ALERTS is not yes): nothing was claimed, read or posted.
+ * - 'done': every channel already has it (an earlier run, or another isolate, took them all), or no channel takes it
+ *   (`channels` 0: no operator channel and no subscriber with the switch on; the period's key is claimed so that
+ *   later runs do not build it again).
+ * - 'waiting': nothing could start this run (its posts, its window or Discord's limit on the site's address were
+ *   spent, or the claims could not be read); nothing was claimed, and the next run asks again.
+ * - 'sent': `channels` were claimed and posted to now (the operator's first, never cut), `reached` of them took the
+ *   first message; `left` channels wait for the next run (null: the subscribers' settings could not be read, so who
+ *   is left is not known), whose rebuilt digest goes to them; `first` when this run took the period's key.
+ */
+export type DigestOutcome =
+  | { state: 'off' }
+  | { state: 'done'; channels: number }
+  | { state: 'waiting'; left: number | null; unread?: boolean; paused?: boolean }
+  | { state: 'sent'; channels: number; reached: number; left: number | null; total: number; subscribers: number; first: boolean };
+
+/** The claim of one channel's digest under the period's key: the operator's, or a digest of the link (never the link). */
+const digestChannelKey = (key: string, t: Pick<Target, 'url' | 'op'>) => `${key}:${t.op ? 'op' : channelKey(t.url)}`;
+
+/**
+ * How many subscribers of a digest start this run, `per` posts each, after the operator's `opPosts` (which the
+ * budget never cuts), within the run's posts and the posts that fit before its deadline at Discord's pace. The first alert of a run takes as many as its posts allow, a later one as many as are left
+ * while the run's window is open and no earlier alert waits; those left wait for the next run, and every later alert
+ * of the run then waits too (the alerts a run sends are always the first ones offered, as admit keeps them).
+ */
+function admitDigest(budget: AlertBudget, opPosts: number, per: number, n: number): number {
+  const now = Date.now();
+  const limited = sitePause > now;
+  // A later alert of the run starts only within the run's window, as admit has it; the first is bounded by the deadline.
+  const shut = budget.closed || limited || (budget.started && now >= budget.until);
+  // The posts that fit before the run's deadline at Discord's pace (POST_PACE_MS a post, POST_CONCURRENCY at once),
+  // so a run claims only the channels it can post; one that does not fit after all is handed back (sendDiscordDigest).
+  const paced = budget.deadline == null || !Number.isFinite(budget.deadline) ? Infinity : Math.floor(Math.max(0, budget.deadline - now) / POST_PACE_MS) * POST_CONCURRENCY;
+  const room = Math.min(budget.posts, paced) - opPosts;
+  const k = shut ? 0 : Math.max(0, Math.min(n, Math.floor(room / Math.max(1, per))));
+  if (k < n) {
+    budget.waiting++;
+    budget.closed = true;
+    if (limited) budget.paused = true;
+  }
+  if (k > 0 || opPosts > 0) budget.started = true;
+  return k;
+}
+
+/**
+ * The period's own claim and the channel claims already taken under it (the range from `<key>` to `<key>;` of kv's
+ * primary key: the key itself and every `<key>:…`), or null when unread.
+ */
+async function digestClaims(db: D1Database, key: string): Promise<Set<string> | null> {
+  try {
+    const r = await db.prepare('SELECT key FROM kv WHERE key >= ? AND key < ?').bind(key, `${key};`).all<{ key: string }>();
+    return new Set((r.results ?? []).map((x) => x.key));
+  } catch (e) {
+    console.error('digest: its claims could not be read', e);
+    return null;
+  }
+}
+
+/**
+ * Sends one period's digest through the alerts' own path, under the run's budget (alertBudget): the operator's
+ * channel first and never cut, then every subscriber with the digest switch on (notifications.dailyDigest; a row
+ * saved before the switch existed reads as off), one post per link, the first-saved wallet's watchlist for a link
+ * two wallets saved. Quiet hours are not read: the switch says the digest is sent even in them.
+ *
+ * A digest is two messages a channel on most days, so with many subscribers it cannot go in one run under
+ * RUN_ALERT_POSTS. Each channel is claimed on its own under the period's key (`<key>:op`, `<key>:<link digest>`,
+ * claimEach), so the channels a run cannot take wait for the next, which builds the digest again for them and posts
+ * only to channels with no claim; no channel is ever posted the same period twice, and a channel's two messages go in
+ * one run. The period's key itself is claimed by the run that starts it: it is what "the digest of that day was sent"
+ * means to the next day's operator embed and to the cron's question whether a period is still open.
+ *
+ * Nothing is claimed by a Worker that does not send alerts (`off`), by a run that can start nothing (`waiting`), or
+ * before the claims taken so far are read. The watchlists are read after the claims, for the wallets claimed only.
+ * A run takes only the channels whose posts fit its count and, at Discord's pace, its deadline (admitDigest); a
+ * channel claimed that the window, the deadline, the count or a Retry-After pause still cuts is handed back by postAll
+ * and its claim given back (releaseClaims), so it waits for the next run instead of going without that day's digest.
+ */
+export async function sendDiscordDigest(webhookUrl: string | undefined, d: DigestDelivery, db: D1Database, budget: AlertBudget): Promise<DigestOutcome> {
+  if (!sending) return { state: 'off' };
+  const taken = await digestClaims(db, d.key);
+  if (!taken) {
+    budget.waiting++;
+    budget.closed = true;
+    return { state: 'waiting', left: null };
+  }
+  // A failed read of the settings is not an empty match: the operator is posted now and the subscribers wait.
+  const users = await getUsers(db, budget);
+  const seen = new Set<string>(webhookUrl ? [webhookUrl] : []);
+  const wallets: StoredSettings[] = [];
+  for (const u of users ?? []) {
+    const url = u.channels.discord.webhookUrl!;
+    if (!u.notifications.dailyDigest || seen.has(url)) continue;
+    seen.add(url);
+    wallets.push(u);
+  }
+  const op: Target | null = webhookUrl ? { url: webhookUrl, body: {}, op: true } : null;
+  const subs = wallets.map((u) => ({ t: userTarget(u, {}, db), u }));
+  const total = (op ? 1 : 0) + subs.length;
+  const opNow = op && !taken.has(digestChannelKey(d.key, op)) ? op : null;
+  const open = subs.filter((x) => !taken.has(digestChannelKey(d.key, x.t)));
+  const first = !taken.has(d.key);
+  if (!opNow && !open.length && users != null) {
+    // Every channel has it, or none takes it: a period with no channel is claimed, so no later run builds it again.
+    if (first) await claimEach(db, [d.key], Date.now());
+    return { state: 'done', channels: total };
+  }
+  // The subscribers in a different order each period (the label holds the date), so the ones a run cannot take are
+  // not always the same.
+  const k0 = startAt(d.what, open.length);
+  const order = [...open.slice(k0), ...open.slice(0, k0)];
+  const opPosts = opNow ? d.maxPosts : 0;
+  const k = users == null ? 0 : admitDigest(budget, opPosts, d.maxPosts, order.length);
+  if (users == null) {
+    budget.waiting++;
+    budget.closed = true;
+    budget.unread = true;
+    if (opNow) budget.started = true;
+  }
+  const go = order.slice(0, k);
+  const left = users == null ? null : order.length - k;
+  if (!opNow && !go.length) return { state: 'waiting', left, ...(users == null ? { unread: true } : {}), ...(budget.paused ? { paused: true } : {}) };
+  if (first) await claimEach(db, [d.key], Date.now());
+  const offered = [...(opNow ? [{ t: opNow, u: null as StoredSettings | null }] : []), ...go];
+  const won = await claimEach(db, offered.map((x) => digestChannelKey(d.key, x.t)), Date.now());
+  const send = offered.filter((x) => won.has(digestChannelKey(d.key, x.t)));
+  const mine = send.filter((x) => x.u).map((x) => x.u!);
+  const own = await d.subscribers(mine);
+  for (const x of send) {
+    const posts = x.u ? own.postsOf(x.u) : d.operator({ channels: total, subscribers: subs.length, watchCapWallets: own.capped });
+    if (!posts.length) continue;
+    x.t.body = posts[0].body;
+    x.t.files = posts[0].files;
+    x.t.more = posts.slice(1);
+  }
+  const targets = send.map((x) => x.t).filter((t) => Object.keys(t.body).length > 0);
+  const r = targets.length ? await postAll(targets, db, d.what, budget, true) : { reached: 0, left: [] as Target[] };
+  // A channel the run's window, deadline or posts cut, or that Discord paused, was claimed and not posted: its claim is
+  // given back so the next run posts it, and it is counted as waiting, not as not sent.
+  let back = 0;
+  if (r.left.length) {
+    back = await releaseClaims(db, r.left.map((t) => digestChannelKey(d.key, t)));
+    if (back < r.left.length) await noteNotSent(db, budget, r.left.length - back, `${d.what} (claims of channels not posted could not be given back)`);
+    budget.waiting++;
+    budget.closed = true;
+  }
+  return {
+    state: 'sent', channels: targets.length - r.left.length, reached: r.reached, left: left == null ? null : left + back, total, subscribers: subs.length, first,
+  };
 }
 
 /**
@@ -1544,13 +2273,44 @@ export async function testPostHeld(webhookUrl: string, db?: D1Database, proven =
 }
 
 /**
- * Send a test Discord webhook message to verify user's webhook configuration: 'held' when it is not posted
- * (testPostHeld, or no unit of the test posts' budget was left), else whether Discord took it (sendDiscordTestPost,
- * which also says whether the answer was invalid).
+ * The Settings test message to a user's link (sendDiscordTestPost, `what` 'test'): 'held' when it is not posted
+ * (testPostHeld, or no unit of the test posts' budget was left), else whether Discord took it.
  */
 export async function sendDiscordTestAlert(webhookUrl: string, u: StoredSettings, db?: D1Database, proven = false): Promise<boolean | 'held'> {
-  const r = await sendDiscordTestPost(webhookUrl, u, db, proven);
+  const r = await sendDiscordTestPost(webhookUrl, u, db, proven, false, 'test');
   return r === 'held' ? 'held' : r.ok;
+}
+
+/** The test message's example is read (testExample) within this long; past it the message says it could not be read. */
+export const TEST_EXAMPLE_MS = 4000;
+/**
+ * The test message's example: the newest move on record that matches the rules on (analytics.ts lastAlertBefore,
+ * which pages back at most 500 candidates), with its context, as its alert would be built. null when the search
+ * reached the oldest record and found none; 'gave-up' when it stopped before that; 'unread' when a read failed or ran
+ * past TEST_EXAMPLE_MS; undefined when no rule is on (the message then shows no example).
+ */
+export async function testExample(db: D1Database, u: StoredSettings, now = Date.now()): Promise<TestExample> {
+  if (!Object.values(u.notifications.rules).some((r) => r?.on)) return undefined;
+  const th = thresholdsOf(u.notifications);
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const work = (async (): Promise<TestExample> => {
+    const hit = await lastAlertBefore(db, now, th);
+    if (hit == null) return hit === null ? null : 'gave-up';
+    const row = await db.prepare(`${FLOW_SELECT} WHERE f.id = ?`).bind(hit.flowId).first<any>();
+    if (!row) return 'unread';
+    const read = await readMoveContext(db, rowToFlow(row), now);
+    const rule = alertRules(th).find((r) => r.id === hit.ruleId);
+    return { flow: read.flow, ctx: { ...read.ctx, ...(rule ? { rule: { id: rule.id, title: rule.title, thresholdNam: rule.thresholdNam } } : {}) } };
+  })().catch((e): TestExample => {
+    console.warn('alerts: the example of a test message could not be read:', e);
+    return 'unread';
+  });
+  const late = new Promise<TestExample>((resolve) => { timer = setTimeout(() => resolve('unread'), TEST_EXAMPLE_MS); });
+  try {
+    return await Promise.race([work, late]);
+  } finally {
+    if (timer) clearTimeout(timer);
+  }
 }
 
 /**
@@ -1565,18 +2325,22 @@ export async function sendDiscordTestAlert(webhookUrl: string, u: StoredSettings
 export interface TestPostAnswer { ok: boolean; status: number; invalid: boolean; blames: boolean; dead: boolean; over: boolean }
 
 /**
- * The test post itself, which is also the connection notice a save posts to a link it turns on (api.ts PUT
- * /api/me/settings): 'held' when it is not posted, else its answer (TestPostAnswer). The answer is counted against
+ * The post the Settings test sends (`what` 'test': testBody, the newest matching move as its example), which is also,
+ * as the connection notice (`what` 'notice': noticeBody), what a save posts to a link it turns on (api.ts PUT
+ * /api/me/settings) and the cron's sweep posts again to a channel on trial: 'held' when it is not posted, else its
+ * answer (TestPostAnswer). The answer is counted against
  * the link here as an alert's is, and an invalid answer keeps the unit the post took of the test posts' budget, never
  * the alerts' (kv `alerts.invalid`); a proven link takes no unit, and a fresh row's post goes once without one when
  * the budget is spent. A run that does not send alerts posts nothing and answers as no answer.
  */
-export async function sendDiscordTestPost(webhookUrl: string, u: StoredSettings, db?: D1Database, proven = false, fresh = false): Promise<'held' | TestPostAnswer> {
+export async function sendDiscordTestPost(webhookUrl: string, u: StoredSettings, db?: D1Database, proven = false, fresh = false, what: 'notice' | 'test' = 'notice'): Promise<'held' | TestPostAnswer> {
   if (!sending) {
     console.log('alerts: test post not sent (this run does not send alerts: SEND_ALERTS is not yes)');
     return { ok: false, status: 0, invalid: false, blames: false, dead: false, over: false };
   }
   if (await testPostHeld(webhookUrl, db, proven, fresh)) return 'held';
+  // The test message's example is read before a unit of the budget is taken, so a slow read holds none.
+  const body = what === 'test' ? testBody(u, db ? await testExample(db, u) : undefined) : noticeBody(u);
   const w = windowOf(Date.now());
   let unit = !(proven || hooks.get(webhookUrl)?.ok);
   let over = false;
@@ -1585,28 +2349,6 @@ export async function sendDiscordTestPost(webhookUrl: string, u: StoredSettings,
     unit = false;
     over = true;
   }
-  const p = u.notifications;
-  const on = Object.entries(p.rules).filter(([, r]) => r.on).map(([id, r]) => `${id} ≥ ${r.thresholdNam.toLocaleString()} NAM`);
-  const body = {
-    username: 'NamadaTrade',
-    avatar_url: NAMADA_AVATAR,
-    embeds: [
-      {
-        title: 'Discord channel connected',
-        url: `${SITE.origin}/settings`,
-        color: 0xffff00,
-        description: `Alerts for \`${u.address.slice(0, 12)}…${u.address.slice(-6)}\` will arrive here.`,
-        fields: [
-          { name: 'Rules on', value: on.length ? on.join('\n') : 'none', inline: false },
-          { name: 'Watchlist', value: p.watchlistOn && p.watchlist.length ? `${p.watchlist.length} address(es)` : 'off', inline: true },
-          { name: 'Forum & governance', value: p.forumAndGov ? 'on' : 'off', inline: true },
-          { name: 'Quiet hours (UTC)', value: p.quietHoursUtc ? `${p.quietHoursUtc.start}:00–${p.quietHoursUtc.end}:00` : 'none', inline: true },
-        ],
-        footer: { text: 'NamadaTrade · change these in Settings' },
-        timestamp: new Date().toISOString(),
-      },
-    ],
-  };
   let res: Response;
   const startedAt = notePost(webhookUrl);
   try { res = await postWebhook(webhookUrl, body); } catch (e) {
@@ -1618,6 +2360,44 @@ export async function sendDiscordTestPost(webhookUrl: string, u: StoredSettings,
   try { a = await answerOf(res); } finally { await releaseBody(res); }
   const counted = noteAnswer(webhookUrl, a, true, startedAt);
   if (unit && !a.invalid) await releaseTest(db, w);
+  return { ok: a.ok, status: a.status, invalid: a.invalid, blames: blamesLink(a, counted), dead: a.dead, over };
+}
+
+/**
+ * The digest's preview (api.ts POST /api/me/settings/test with { preview: 'digest' }): the posts a subscriber with
+ * this wallet's settings would get, as built now, under the test post's own rules: 'held' as testPostHeld and the test
+ * posts' budget decide, one unit of that budget for a link not proven here (kept when an answer is invalid, given back
+ * otherwise), and each answer counted against the link as an alert's is. The posts go in order, each only after the
+ * one before it was taken; files Discord refuses are dropped for the text alone, as a digest's are. The answer is the
+ * first post's that was not taken, or the last one's. No claim is taken and the digest's delivery record is not
+ * touched. A run that does not send alerts posts nothing and answers as no answer.
+ */
+export async function sendDiscordPreview(webhookUrl: string, posts: WebhookPost[], db?: D1Database, proven = false, fresh = false): Promise<'held' | TestPostAnswer> {
+  const none: TestPostAnswer = { ok: false, status: 0, invalid: false, blames: false, dead: false, over: false };
+  if (!sending) {
+    console.log('alerts: digest preview not sent (this run does not send alerts: SEND_ALERTS is not yes)');
+    return none;
+  }
+  if (!posts.length) return none;
+  if (await testPostHeld(webhookUrl, db, proven, fresh)) return 'held';
+  const w = windowOf(Date.now());
+  let unit = !(proven || hooks.get(webhookUrl)?.ok);
+  let over = false;
+  if (unit && !(await reserveTest(db, w))) {
+    if (!fresh) return 'held';
+    unit = false;
+    over = true;
+  }
+  let last: { a: Answer; counted: boolean } = { a: NO_ANSWER, counted: false };
+  let invalid = false;
+  for (const p of posts) {
+    last = await postOnce(webhookUrl, p.body, p.files, true);
+    if (p.files?.length && filesRefused(last.a)) last = await postOnce(webhookUrl, textOnly(p.body), undefined, true);
+    if (last.a.invalid) invalid = true;
+    if (!last.a.ok) break;
+  }
+  if (unit && !invalid) await releaseTest(db, w);
+  const { a, counted } = last;
   return { ok: a.ok, status: a.status, invalid: a.invalid, blames: blamesLink(a, counted), dead: a.dead, over };
 }
 

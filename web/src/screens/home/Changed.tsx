@@ -11,6 +11,7 @@ import { ageOutStamps, type Stamp } from '../../lib/prov';
 import { tagKindOf } from '../../lib/kinds';
 import { NBSP, fmtAddr, fmtAge, fmtAgo, fmtCount, fmtNamRule, fmtNamSigned, fmtUsdRule, labelNeedsAddr } from '../../lib/format';
 import { tagByline } from '../../../../shared/labels';
+import { partyPreposition } from '../../../../shared/flow-words';
 import { MOVES_MIN_NAM, MOVES_SHOWN, crossingWords, hitKind, hitPage, latestMoves, moveSign, partyOf, partyText, type Res } from './data';
 import { MoreLink, NoData, OldLine } from './bits';
 
@@ -173,7 +174,8 @@ function Move({ f, i, fresh, now, old }: { f: Flow; i: number; fresh: boolean; n
   const sign = moveSign(f);
   const where = crossingWords(f);
   const party = partyOf(f);
-  const toward = f.kind === 'unshield' || f.kind === 'withdraw' ? 'to ' : f.kind === 'shield' ? 'from ' : f.kind === 'unbond' || f.kind === 'bond' ? 'by ' : '';
+  // the word before the person, from the table a Discord alert's words come from (shared/flow-words.ts)
+  const toward = partyPreposition(f.kind);
   return (
     <MoveRow
       no={i + 1}

@@ -1,0 +1,229 @@
+{
+  "note": "Production answers of the digest's statements as wrangler d1 execute --json returned them on 2026-10-23 (the data map's survey, read at about 15:45 UTC) for the digest instant A = 2026-10-23T08:00:00Z, A24 = 2026-10-22T08:00:00Z, A7 = 2026-10-16T08:00:00Z. Metric instants are the stored rows at or before each instant. kv records whose value the survey read whole are given whole; bond.listing and balance.listing are the 07:38 and 07:52 listings as the listings table and the epoch series record them (the kv rows read at 15:45 held the 15:06 and 14:56 listings); intel.cache is the fields read (the 20 proposals, fetchedAt, indexerEpoch). Columns the survey's statements did not have (late, discussionsUrl, the fee read of other coins) are 0 or null and said so. Hashes and ids of the largest request were not captured and are empty strings. No wallet or user row was read.",
+  "instants": {
+    "supply.total_stake": { "now": { "ts": 1792742342769, "value": 267774764.266631 }, "24h": { "ts": 1792655942278, "value": 267307557.266631 }, "7d": null },
+    "supply.pos_bonded": { "now": { "ts": 1792742342769, "value": 341793716.357239 }, "24h": { "ts": 1792655942278, "value": 342513983.706558 }, "7d": { "ts": 1792137567420, "value": 341787796.323404 } },
+    "epoch": { "now": { "ts": 1792742342769, "value": 2696 }, "24h": { "ts": 1792655942278, "value": 2692 }, "7d": { "ts": 1792137567420, "value": 2668 } },
+    "price.usd": { "now": { "ts": 1792742342769, "value": 0.000873590633754392 }, "24h": { "ts": 1792655942278, "value": 0.000845573830047854 }, "7d": { "ts": 1792137567420, "value": 0.001015425133170758 }, "30d": null },
+    "supply.masp_shielded": { "now": { "ts": 1792742342769, "value": 49187665.00507 }, "24h": { "ts": 1792655942278, "value": 49087665.28007 }, "7d": { "ts": 1792137567420, "value": 50702670.756104 } },
+    "supply.ibc_escrow": { "now": { "ts": 1792742342769, "value": 20832856.303644 }, "24h": { "ts": 1792655942278, "value": 21190443.758458 }, "7d": { "ts": 1792137567420, "value": 20048602.411823 } },
+    "supply.osmosis": { "now": { "ts": 1792742342769, "value": 20831242.303644 }, "24h": { "ts": 1792655942278, "value": 21188829.758458 }, "7d": { "ts": 1792137567420, "value": 20046988.411823 } },
+    "supply.total": { "now": { "ts": 1792742342769, "value": 1147916525.090649 }, "24h": { "ts": 1792655942278, "value": 1147836762.293442 }, "7d": { "ts": 1792137567420, "value": 1147358343.344157 } },
+    "holders.namada": { "now": { "ts": 1792741923099, "value": 64825 }, "24h": { "ts": 1792654025087, "value": 64826 }, "7d": null },
+    "holders.osmosis": { "now": { "ts": 1792741802657, "value": 1313 }, "24h": { "ts": 1792655402216, "value": 1313 }, "7d": null },
+    "stake.withdrawable_nam": { "now": { "ts": 1792741122300, "value": 36859599.847648 }, "24h": { "ts": 1792655642703, "value": 38029599.847648 }, "7d": null },
+    "stake.unbonding_nam": { "now": { "ts": 1792741122300, "value": 181962.018281 }, "24h": { "ts": 1792655642703, "value": 151062.018281 }, "7d": null },
+    "stake.top10_pct": { "now": { "ts": 1792741122300, "value": 53.152634675145336 }, "24h": { "ts": 1792655642703, "value": 53.23679235186314 }, "7d": null },
+    "stake.validators": { "now": { "ts": 1792741122300, "value": 246 }, "24h": { "ts": 1792655642703, "value": 246 }, "7d": null },
+    "stake.stakers": { "now": { "ts": 1792741122300, "value": 19340 }, "24h": { "ts": 1792655642703, "value": 19342 }, "7d": null },
+    "price.swap_1h": { "now": { "ts": 1792731600000, "value": 0.0009165048816351421 }, "24h": { "ts": 1792609200000, "value": 0.0007796650176708223 }, "7d": { "ts": 1792090800000, "value": 0.0009914592575589881 } },
+    "price.swap_1h.n": { "at_1792731600000": { "ts": 1792731600000, "value": 1 } },
+    "dex.volume_24h_usd_osmosis": { "now": { "ts": 1792742304000, "value": 41.73517318478308 }, "24h": { "ts": 1792655910000, "value": 971.0074376896263 }, "7d": null },
+    "dex.liquidity_usd": { "now": { "ts": 1792742342769, "value": 1898 }, "24h": { "ts": 1792655942278, "value": 1825 } },
+    "holders.namada.top10_nam": { "24h": null, "7d": null },
+    "holders.osmosis.top10_nam": { "24h": null, "7d": null }
+  },
+  "firstTs": {
+    "supply.total_stake": 1792296002018, "price.usd": 1792037666692, "epoch": 1792037666692, "supply.ibc_escrow": 1792037666692,
+    "supply.masp_shielded": 1792037666692, "supply.osmosis": 1792037666692, "supply.pos_bonded": 1792037666692, "dex.liquidity_usd": 1792196742426,
+    "holders.namada": 1792533242232, "holders.osmosis": 1792533002871, "dex.volume_24h_usd_osmosis": 1792533305000,
+    "stake.top10_pct": 1792532822267, "stake.stakers": 1792532822267, "stake.validators": 1792532822267, "stake.unbonding_nam": 1792532822267, "stake.withdrawable_nam": 1792532822267
+  },
+  "firstTsNote": "stake.* rows are written per complete bond listing; the first complete listing (2026-10-20T21:47:02Z, 1792532822267) is the first row of stake.top10_pct, the listed_at of the oldest unbond_queue rows and the as_of of validator_daily's first day.",
+  "epochChanges": [
+    { "e": 2692, "first_ts": 1792639503349, "last_ts": 1792661104143 }, { "e": 2693, "first_ts": 1792661163490, "last_ts": 1792682722286 },
+    { "e": 2694, "first_ts": 1792682763737, "last_ts": 1792704302109 }, { "e": 2695, "first_ts": 1792704362315, "last_ts": 1792725806538 },
+    { "e": 2696, "first_ts": 1792726383586, "last_ts": 1792742342769 }
+  ],
+  "listings": [
+    { "at": 1792741923099, "kind": "balance", "height": 8384388, "provider": "5ElementsNodes" },
+    { "at": 1792741122300, "kind": "bond", "height": 8384271, "provider": "Papadritta" },
+    { "at": 1792655642703, "kind": "bond", "height": 8371811, "provider": "Papadritta" },
+    { "at": 1792654025087, "kind": "balance", "height": 8371574, "provider": "5ElementsNodes" }
+  ],
+  "kv": {
+    "bond.listing": { "value": { "at": 1792741122300, "completeAt": 1792741122300, "height": 8384271, "epoch": 2696, "provider": "Papadritta", "failedAt": null, "failures": 0 }, "updated_at": 1792741122300 },
+    "balance.listing": { "value": { "at": 1792741923099, "completeAt": 1792741923099, "height": 8384388, "provider": "5ElementsNodes", "failedAt": null, "failures": 0 }, "updated_at": 1792741923099 },
+    "chain.params": { "value": { "unbondingLength": 53, "pipelineLength": 2, "cubicSlashingWindowLength": 1, "minEpochSec": 21600, "epochSec": 21617.16293333333, "epochSecNote": "about 6.00 h an epoch, measured over the last 30 epochs", "genesisTime": 1733238000000, "apr": 0.108727385039, "fetchedAt": 1792750146318 }, "updated_at": 1792750146318 },
+    "holders.figures": { "value": { "namada": { "at": 1792767970336, "holders": 64825, "under1": 4263, "none": 59420, "top10": { "s": 274832001.624664, "at": 1792767413343 }, "listed": { "balance": 1792767413343, "bond": 1792767970336 } }, "osmosis": { "at": 1792769763265, "holders": 1314, "under1": 578, "top10": { "s": 10221302.566133, "at": 1792768802762 }, "rowsAt": 1792768802762 } }, "updated_at": 1792769763265 },
+    "osmosis.holders.pass": { "value": { "startedAt": 1792768802762, "key": null, "pages": 14, "holders": 1340, "sumBase": "20445025686231", "ticks": 1, "fails": 0, "spans": false, "spansHour": 497991, "completeAt": 1792768802762, "trustedAt": 1792768802762, "trustedStartedAt": 1792768802762, "lastPassMs": 0 }, "updated_at": 1792768821256 },
+    "unbond.queue.hash": { "value": { "hash": "d2a5ea38", "at": 1792753268952, "height": 8386039, "epoch": 2697 }, "updated_at": 1792753268952 },
+    "namada.cursor": { "value": "8388520", "updated_at": 1792770353357 },
+    "namada.head": { "value": { "height": 8388513, "at": 1792770306229, "read": 8388512 }, "updated_at": 1792770306229 },
+    "namada.bonds.live": { "value": { "decoded": 4, "failures": [], "firstHeight": 8387576, "lastHeight": 8388230, "lastAt": 1792768407656 }, "updated_at": 1792768407656 },
+    "namada.unbonds.live": { "value": { "decoded": 6, "failures": [], "lastHeight": 8385967, "lastAt": 1792752780825 }, "updated_at": 1792752780825 },
+    "osmosis.live": { "value": { "connected": true, "since": 1792770196601, "lastMsgAt": null, "height": 73054078 }, "updated_at": 1792770306828 },
+    "osmosis.cursor": { "value": { "height": 73054078, "at": 1792770232662, "added": 0 }, "updated_at": 1792770232662 },
+    "intel.cache": {
+      "value": {
+        "fetchedAt": 1792770069095, "indexerEpoch": 2698,
+        "proposals": [
+          { "id": 42, "status": "executedRejected", "type": "default", "startEpoch": 1827, "endEpoch": 1867, "activationEpoch": 1868, "title": "Signalling - Knowable is leaving Namada" },
+          { "id": 41, "status": "executedPassed", "type": "defaultWithWasm", "startEpoch": 1508, "endEpoch": 1520, "activationEpoch": 1521, "title": "Whitelist Osmosis and Cosmos Hub channels permissionlessly" },
+          { "id": 40, "status": "executedPassed", "type": "defaultWithWasm", "startEpoch": 1468, "endEpoch": 1488, "activationEpoch": 1489, "title": "Turn off PGF treasury inflation" },
+          { "id": 39, "status": "executedPassed", "type": "defaultWithWasm", "startEpoch": 1466, "endEpoch": 1478, "activationEpoch": 1479, "title": "Update tx_ibc.wasm for mainnet v201.0.7" },
+          { "id": 38, "status": "executedPassed", "type": "defaultWithWasm", "startEpoch": 1452, "endEpoch": 1464, "activationEpoch": 1465, "title": "Update two protocol parameters needed for IBC Eureka activat" },
+          { "id": 37, "status": "executedPassed", "type": "default", "startEpoch": 1429, "endEpoch": 1453, "activationEpoch": 1454, "title": "Signalling - Upgrade to v201.0.7 at Block 4514500" },
+          { "id": 36, "status": "executedPassed", "type": "defaultWithWasm", "startEpoch": 1364, "endEpoch": 1388, "activationEpoch": 1389, "title": "Adjust Shielded Set Rewards to Align with PMF Experiments." },
+          { "id": 35, "status": "executedPassed", "type": "defaultWithWasm", "startEpoch": 1324, "endEpoch": 1349, "activationEpoch": 1350, "title": "Whitelist tokens over the Osmosis IBC channel for Polaris in" },
+          { "id": 34, "status": "executedPassed", "type": "defaultWithWasm", "startEpoch": 1289, "endEpoch": 1309, "activationEpoch": 1310, "title": "Update two gas parameter values" },
+          { "id": 33, "status": "executedPassed", "type": "defaultWithWasm", "startEpoch": 1281, "endEpoch": 1312, "activationEpoch": 1313, "title": "Add USDN support to the MASP, whitelist USDN as a gas token," },
+          { "id": 32, "status": "executedPassed", "type": "defaultWithWasm", "startEpoch": 1154, "endEpoch": 1173, "activationEpoch": 1174, "title": "Update Shielded Inflation: MASP Gain Calibration & SSR Targe" },
+          { "id": 31, "status": "executedPassed", "type": "defaultWithWasm", "startEpoch": 1154, "endEpoch": 1173, "activationEpoch": 1174, "title": "Reduce staking inflation from 5% to 2.75%" },
+          { "id": 30, "status": "executedPassed", "type": "defaultWithWasm", "startEpoch": 1073, "endEpoch": 1097, "activationEpoch": 1098, "title": "Update tx_withdraw wasm on-chain" },
+          { "id": 29, "status": "executedPassed", "type": "pgfFunding", "startEpoch": 955, "endEpoch": 979, "activationEpoch": 980, "title": "cPGF - Namada Validator 1-Year Subsidy - 0.67% inflation" },
+          { "id": 28, "status": "executedPassed", "type": "defaultWithWasm", "startEpoch": 873, "endEpoch": 891, "activationEpoch": 892, "title": "Phase 4: enable shielding rewards" },
+          { "id": 27, "status": "executedPassed", "type": "defaultWithWasm", "startEpoch": 825, "endEpoch": 842, "activationEpoch": 843, "title": "Migrate shielded data ahead of shielded rewards (Phase 4)" },
+          { "id": 26, "status": "executedPassed", "type": "defaultWithWasm", "startEpoch": 783, "endEpoch": 795, "activationEpoch": 796, "title": "Phase 5 IBC transfers for NAM" },
+          { "id": 25, "status": "executedPassed", "type": "defaultWithWasm", "startEpoch": 753, "endEpoch": 765, "activationEpoch": 766, "title": "Begin Phase 5: enable internal NAM transfers within Namada" },
+          { "id": 24, "status": "executedPassed", "type": "defaultWithWasm", "startEpoch": 744, "endEpoch": 756, "activationEpoch": 757, "title": "Update the transfer tx in on-chain storage ahead of Phase 5" },
+          { "id": 23, "status": "executedPassed", "type": "defaultWithWasm", "startEpoch": 740, "endEpoch": 754, "activationEpoch": 755, "title": "Update the claim-rewards tx in on-chain storage ahead of Pha" }
+        ]
+      },
+      "updated_at": 1792770069095
+    },
+    "source.health": {
+      "value": {
+        "Discord alert delivery": { "ok": true, "at": 1792770066249, "note": "On: this Worker posts alerts, and no post not sent is on record." },
+        "Keplr Osmosis REST (holders)": { "ok": true, "at": 1792768811549, "latencyMs": 6010, "note": "1340 holders, adding up to the supply within 0.000%" },
+        "Keplr Osmosis REST (supply)": { "ok": true, "at": 1792770070596, "latencyMs": 1026 },
+        "Namada RPC (IBC escrow)": { "ok": true, "at": 1792770070370, "latencyMs": 800 },
+        "Namada RPC (MASP balance)": { "ok": true, "at": 1792770070596, "latencyMs": 1026 },
+        "Namada RPC (PGF balance)": { "ok": true, "at": 1792770070596, "latencyMs": 1026 },
+        "Namada RPC (PoS balance)": { "ok": true, "at": 1792770070152, "latencyMs": 582 },
+        "Namada RPC (balance listing)": { "ok": true, "at": 1792767413343, "latencyMs": 8711, "note": "90,806 balance keys at height 8,388,094 (9.0 MB from 5ElementsNodes): 64,372 addresses hold 646,912,892 NAM; 20 rows written" },
+        "Namada RPC (bond listing)": { "ok": true, "at": 1792767970336, "latencyMs": 7453, "note": "30,278 bond entries at height 8,388,176 (4.0 MB from Papadritta): 19,339 addresses stake 267,859,300 NAM (860,517 NAM of slashed bonds left out); 2 rows written" },
+        "Namada RPC (epoch)": { "ok": true, "at": 1792770070843, "latencyMs": 1273 },
+        "Namada RPC (live bond decode)": { "ok": true, "at": 1792768407656, "note": "4 bond request(s) decoded, last block with a bond key read: 8388230" },
+        "Namada RPC (live unbond decode)": { "ok": true, "at": 1792752780825, "note": "6 unbond request(s) decoded, last at block 8385967" },
+        "Namada RPC (minted supply)": { "ok": true, "at": 1792770069889, "latencyMs": 319 },
+        "Namada RPC (stake sample)": { "ok": true, "at": 1792770066249, "note": "24 of 24 sampled stakes match the bond listing to the base unit; 4 full passes so far" },
+        "Namada RPC (total stake)": { "ok": true, "at": 1792770070224, "latencyMs": 654 },
+        "Namada RPC (unbond withdraw times)": { "ok": true, "at": 1792767970336, "note": "75 unbonds of 100,000 NAM or more (31 addresses) at height 8,388,176" },
+        "Namada RPC 5ElementsNodes": { "ok": true, "at": 1792770066249, "note": "height 8388478" },
+        "Namada RPC Papadritta": { "ok": true, "at": 1792770066249, "note": "height 8388479" },
+        "Namada forum (latest posts)": { "ok": true, "at": 1792770069095, "latencyMs": 2561, "note": "25 latest posts read" },
+        "Namada indexer (indexer.namada.net)": { "ok": true, "at": 1792770069845, "latencyMs": 275 },
+        "Namada indexer (unbond withdraw times)": { "ok": true, "at": 1792503602444, "note": "1 of 1 addresses read" },
+        "Namada indexer (validator list)": { "ok": true, "at": 1792713603334, "latencyMs": 1915, "note": "252 validators" },
+        "Osmosis SQS (pools)": { "ok": true, "at": 1792770069570 },
+        "Osmosis SQS (price)": { "ok": true, "at": 1792770069570 },
+        "Osmosis data API (pairs)": { "ok": true, "at": 1792767600647, "note": "pool 3005: 168 hourly points" },
+        "Osmosis data API (summary)": { "ok": true, "at": 1792767600647, "note": "27 NAM pairs, updated 14:56 UTC" },
+        "Series (daily snapshot)": { "ok": true, "at": 1792717202626, "note": "Written for 2026-10-23: flow index" },
+        "cron": { "ok": true, "at": 1792769889392, "note": "Skipped: the previous run was still going." }
+      },
+      "updated_at": 1792770070843
+    }
+  },
+  "flows": {
+    "posByKind": [
+      { "kind": "bond", "n": 10, "nam": 373220, "largest": 50000, "first_ts": 1792656068070, "last_ts": 1792733528491, "late": 0 },
+      { "kind": "rewards", "n": 17, "nam": 3250.146476, "largest": 928.274047, "first_ts": 1792672369961, "last_ts": 1792733466022, "late": 0 },
+      { "kind": "unbond", "n": 2, "nam": 30900, "largest": 25100, "first_ts": 1792701219137, "last_ts": 1792714032064, "late": 0 },
+      { "kind": "withdraw", "n": 1, "nam": 1170000, "largest": 1170000, "first_ts": 1792678774775, "last_ts": 1792678774775, "late": 0 }
+    ],
+    "posByKind7d": [
+      { "kind": "bond", "n": 34, "nam": 713451.431704, "largest": 50000 }, { "kind": "rewards", "n": 61, "nam": 69931.033828, "largest": 45730.920161 },
+      { "kind": "unbond", "n": 8, "nam": 138528.468491, "largest": 100000 }, { "kind": "withdraw", "n": 6, "nam": 1195782.110187, "largest": 1170000 }
+    ],
+    "largestBond": [{ "id": "", "tx_hash": "", "ts": 1792672521237, "height": 8374275, "amount_num": 50000, "validator": "tnam1qx405kgvey8wwfcyt7rgsr4nvkrqsnztxs2kz7wv", "inner": null, "wrapper": null }],
+    "largestBondsTop3": [
+      { "kind": "bond", "ts": 1792672521237, "height": 8374275, "amount_num": 50000, "validator": "tnam1qx405kgvey8wwfcyt7rgsr4nvkrqsnztxs2kz7wv", "src": "namada-rpc" },
+      { "kind": "bond", "ts": 1792672521237, "height": 8374275, "amount_num": 50000, "validator": "tnam1qx64zytr93rjj23ztf32y2rnrxwlm9j6svyznxez", "src": "namada-rpc" },
+      { "kind": "bond", "ts": 1792672521237, "height": 8374275, "amount_num": 50000, "validator": "tnam1qy8470ge8g608l69t0qt0g6ulmxnsckr9s74ew4j", "src": "namada-rpc" }
+    ],
+    "posByValidator": [
+      { "validator": "tnam1qx405kgvey8wwfcyt7rgsr4nvkrqsnztxs2kz7wv", "kind": "bond", "n": 2, "nam": 100000 },
+      { "validator": "tnam1q8a2xwh072herrmlgf06gvrhna775sqjuufnxydn", "kind": "bond", "n": 1, "nam": 50000 },
+      { "validator": "tnam1q8d8ypu5j88qqvx89grct795uap82dtlqvjqjh3h", "kind": "bond", "n": 1, "nam": 50000 },
+      { "validator": "tnam1qx64zytr93rjj23ztf32y2rnrxwlm9j6svyznxez", "kind": "bond", "n": 1, "nam": 50000 },
+      { "validator": "tnam1qxd6n2pfj6jucqnx2tf3feuevkqmr266gg06yurm", "kind": "bond", "n": 1, "nam": 50000 },
+      { "validator": "tnam1qy8470ge8g608l69t0qt0g6ulmxnsckr9s74ew4j", "kind": "bond", "n": 1, "nam": 50000 },
+      { "validator": "tnam1q87f9g34lagl5e6y482fwtad7870rk4vzsqaq7mf", "kind": "unbond", "n": 1, "nam": 25100 },
+      { "validator": "tnam1q8wldcr49mhm92a69fmf847d8rn48e6gcql2s4ya", "kind": "bond", "n": 1, "nam": 23000 },
+      { "validator": "tnam1qy7fms2m4kpx5khvp4x7r3pr8e4xdqghpsrsd0pn", "kind": "unbond", "n": 1, "nam": 5800 },
+      { "validator": "tnam1qxzwta6uhcsv40a8l4g5t07q0ey50c9dlyt3s272", "kind": "bond", "n": 1, "nam": 213 },
+      { "validator": "tnam1qx4ztg0ca0tu2aw056ksuek5y58tmg454shk6svw", "kind": "bond", "n": 1, "nam": 7 }
+    ],
+    "tieBond": [{ "amount_num": 50000, "n": 7, "validators": 6 }],
+    "tieUnbond": [{ "amount_num": 25100, "n": 1, "validators": 1 }],
+    "withdrawnBetweenListings": [{ "nam": 1170000, "n": 1 }],
+    "trades": [{ "n": 9, "nam": 60537.859869, "usd": 53.90965357712074, "unpriced": 0, "traders": 4, "buy_nam": 29284.644236000004, "sell_nam": 31253.215633, "last_ts": 1792731737664, "how_execution": 1, "how_pool_1h": 0, "how_spot": 8, "how_swap_1h": 0, "how_unstated": 0 }],
+    "trusted": [{ "n": 1, "vwap": 0.0009165048816351421, "lo": 0.0009165048816351421, "hi": 0.0009165048816351421, "last_ts": 1792731715941 }],
+    "trustedLast": [
+      { "ts": 1792731715941, "kind": "sell", "amount_num": 9970.02, "counter_amount": 9.137572, "px": 0.0009165048816351421 },
+      { "ts": 1792612558544, "kind": "buy", "amount_num": 2581.291573, "counter_amount": 2.03163, "px": 0.0007870594787704751 },
+      { "ts": 1792610549265, "kind": "sell", "amount_num": 7526.124515, "counter_amount": 5.941405, "px": 0.0007894375103891035 }
+    ],
+    "bridgeOsmosis": [
+      { "kind": "ibc_in", "n": 1, "nam": 1454.202387, "largest": 1454.202387, "late": 0 },
+      { "kind": "ibc_out", "n": 5, "nam": 359041.657201, "largest": 259041.657201, "late": 0 }
+    ],
+    "bridgeNamada": [
+      { "kind": "ibc_in", "n": 5, "nam": 359041.657201, "largest": 259041.657201 },
+      { "kind": "ibc_out", "n": 1, "nam": 1454.202387, "largest": 1454.202387 }
+    ],
+    "refunds": [],
+    "maspInWithoutChainFilter": [
+      { "kind": "ibc_in", "n": 4, "nam": 100000 }, { "kind": "ibc_out", "n": 4, "nam": 100000 }, { "kind": "shield", "n": 2, "nam": 3 }
+    ],
+    "maspOut": [{ "kind": "unshield", "n": 4, "nam": 3.0341, "fee_nam": 0.2409 }],
+    "maspOtherCoinFees": [{ "n": 0, "fee_nam": null }],
+    "maspRows": [
+      { "kind": "ibc_in", "chain": "namada", "ts": 1792656464614, "height": 8371933, "amount_num": 20000, "channel": "channel-1", "seq": "8022" },
+      { "kind": "ibc_out", "chain": "osmosis", "ts": 1792656467815, "height": 72976591, "amount_num": 20000, "channel": "channel-98451", "seq": "8022" },
+      { "kind": "ibc_out", "chain": "osmosis", "ts": 1792656746252, "height": 72976789, "amount_num": 20000, "channel": "channel-98451", "seq": "8023" },
+      { "kind": "ibc_in", "chain": "namada", "ts": 1792656751177, "height": 8371975, "amount_num": 20000, "channel": "channel-1", "seq": "8023" },
+      { "kind": "ibc_out", "chain": "osmosis", "ts": 1792663864980, "height": 72981878, "amount_num": 29000, "channel": "channel-98451", "seq": "8024" },
+      { "kind": "ibc_in", "chain": "namada", "ts": 1792663875900, "height": 8373018, "amount_num": 29000, "channel": "channel-1", "seq": "8024" },
+      { "kind": "shield", "chain": "namada", "ts": 1792667620419, "height": 8373562, "amount_num": 2 },
+      { "kind": "shield", "chain": "namada", "ts": 1792668371328, "height": 8373671, "amount_num": 1 },
+      { "kind": "ibc_out", "chain": "osmosis", "ts": 1792701319370, "height": 73007801, "amount_num": 31000, "channel": "channel-98451", "seq": "8026" },
+      { "kind": "ibc_in", "chain": "namada", "ts": 1792701321191, "height": 8378468, "amount_num": 31000, "channel": "channel-1", "seq": "8026" }
+    ]
+  },
+  "queue": {
+    "first": 56,
+    "totals": { "epochs": 643, "nam": 37042581.865929, "n": 6044, "e_min": 56, "e_max": 2753 },
+    "matured_2693_2696": [{ "nam": 0, "n": 0 }],
+    "range_2697_2700": [],
+    "next_after_2700": [{ "withdraw_epoch": 2704, "nam": 37489.267473, "n": 2 }],
+    "rows": [
+      { "withdraw_epoch": 2688, "nam": 3000, "n": 7, "listed_at": 1792532822267, "height": 8353796 },
+      { "withdraw_epoch": 2704, "nam": 37489.267473, "n": 2, "listed_at": 1792532822267, "height": 8353796 }
+    ],
+    "termStructureNext": [
+      { "e": 2704, "nam": 37489.267473, "n": 2 }, { "e": 2708, "nam": 5784.366953, "n": 6 }, { "e": 2715, "nam": 159.915364, "n": 4 }, { "e": 2725, "nam": 100000, "n": 3 },
+      { "e": 2726, "nam": 1000, "n": 2 }, { "e": 2729, "nam": 611, "n": 1 }, { "e": 2731, "nam": 6017.468491, "n": 2 }, { "e": 2750, "nam": 5800, "n": 2 },
+      { "e": 2751, "nam": 25100, "n": 10 }, { "e": 2753, "nam": 1020, "n": 1 }
+    ]
+  },
+  "governance": { "claims24h": [], "claimsAll24h": { "n": 19, "first_at": 1792656467877, "last_at": 1792722880139 }, "claimKinds24h": [{ "prefix": "alert:flow:", "n": 14 }, { "prefix": "alert:ibc:", "n": 5 }] },
+  "validators": {
+    "days": [
+      { "day": "2026-10-20", "validators": 246, "stake": 267203785.784332, "delegators": 26794, "as_of": 1792532822267, "height": 8353796, "names_at": null },
+      { "day": "2026-10-21", "validators": 246, "stake": 267203785.784332, "delegators": 26794, "as_of": 1792542602246, "height": 8355232, "names_at": 1792540804635 },
+      { "day": "2026-10-22", "validators": 246, "stake": 267307557.266631, "delegators": 26796, "as_of": 1792628823324, "height": 8367878, "names_at": 1792627202776 },
+      { "day": "2026-10-23", "validators": 246, "stake": 267749664.266631, "delegators": 26798, "as_of": 1792714202705, "height": 8380347, "names_at": 1792713603334 }
+    ],
+    "moves": [
+      { "validator": "tnam1qx405kgvey8wwfcyt7rgsr4nvkrqsnztxs2kz7wv", "name": "PathrockNetwork", "state": "consensus", "s_today": 5478950.296712, "s_yday": 5378950.296712, "d": 100000, "d_today": 58, "d_yday": 57 },
+      { "validator": "tnam1q8a2xwh072herrmlgf06gvrhna775sqjuufnxydn", "name": "Stake&Relax 🦥", "state": "consensus", "s_today": 4444385.374145999, "s_yday": 4394385.374145999, "d": 50000, "d_today": 128, "d_yday": 128 },
+      { "validator": "tnam1q8d8ypu5j88qqvx89grct795uap82dtlqvjqjh3h", "name": "MELLIFERA", "state": "consensus", "s_today": 1559114.256165, "s_yday": 1509114.256165, "d": 50000, "d_today": 82, "d_yday": 81 },
+      { "validator": "tnam1q8hck7594xqw9dz35m8wwtgtvdxf4xn0mg908r8x", "name": "OriginStake", "state": "consensus", "s_today": 2469556.8313460005, "s_yday": 2419556.8313460005, "d": 50000, "d_today": 80, "d_yday": 79 },
+      { "validator": "tnam1q96m7kwchdgzjk7dpvxkq3dxwzjhyjcggyuua5xf", "name": "StakeUp", "state": "consensus", "s_today": 7013797.191028001, "s_yday": 6963797.191028001, "d": 50000, "d_today": 46, "d_yday": 45 },
+      { "validator": "tnam1qx64zytr93rjj23ztf32y2rnrxwlm9j6svyznxez", "name": "CroutonDigital", "state": "consensus", "s_today": 1688361.0335130007, "s_yday": 1638361.0335130007, "d": 50000, "d_today": 93, "d_yday": 93 }
+    ],
+    "sets": [{ "joined": 0, "left_": 0, "gross": 504213 }],
+    "states": []
+  },
+  "checks": [
+    { "key": "bonded_coverage", "status": "ok", "checked_at": 1792770066249 }, { "key": "bridge_records_paired", "status": "ok", "checked_at": 1792770066249 },
+    { "key": "ibc_conservation", "status": "ok", "checked_at": 1792770066249 }, { "key": "indexer_lag", "status": "ok", "checked_at": 1792770066249 },
+    { "key": "namada_index_lag", "status": "ok", "checked_at": 1792770066249 }, { "key": "osmosis_index", "status": "ok", "checked_at": 1792770066249 },
+    { "key": "price_vs_execution", "status": "ok", "checked_at": 1792770066249 }, { "key": "rpc_consensus", "status": "ok", "checked_at": 1792770066249 },
+    { "key": "stake_within_staking_account", "status": "ok", "checked_at": 1792770066249 }, { "key": "supply_cross_source", "status": "ok", "checked_at": 1792770066249 },
+    { "key": "supply_integrity", "status": "ok", "checked_at": 1792770066249 }
+  ]
+}

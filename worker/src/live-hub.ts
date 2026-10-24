@@ -14,6 +14,7 @@ import { runBatch, stmt, kvGet, kvGetJson, kvSet } from './db';
 import { admitSocket } from './ws-admit';
 import { fetchNamPools } from './sources/sqs';
 import { HubQuote, askQuoteService, storedQuoteReader } from './live-quote';
+import { priceRouteAt, stampPriceRoute } from './price-how';
 import { alarmBudget, configureAlerts, fanoutBudget, flushAlerts, isNamWhale, noteNotSent, offeredForAlerts, sendDiscordWhaleAlert, sendsAlerts, spentOut, FANOUT_DEADLINE_MS, UsersUnreadError, WEBHOOK_TIMEOUT_MS, type AlertBudget, type PendingAlert } from './sources/discord';
 import { fetchJson, FETCH_TEXT_MAX_BYTES, ReadBudgetError, ResponseTooLargeError, type ReadBudget } from './util';
 
@@ -304,6 +305,17 @@ export class LiveHub extends DurableObject<Env> {
    * when it is the hub's own answer from the quote service: the page shows a streamed price as live, and the cron's
    * stored minute reaches it through its own polls, labelled as stored.
    */
+  /**
+   * The NAM size of the route whose spot a quote the hub priced moves at was (price-how.ts stampPriceRoute): the hub's
+   * own ask says it; for a stored quote the cron's log of how it read the price does (undefined when it cannot be
+   * read, and nothing is marked).
+   */
+  private async routeOf(q: { at: number; stored: boolean; routeNam?: number | null } | null): Promise<number | null | undefined> {
+    if (!q) return null;
+    if (!q.stored && q.routeNam !== undefined) return q.routeNam;
+    return priceRouteAt(this.env.DB, q.at);
+  }
+
   private async refreshQuote() {
     const q = await this.quote.refresh(Date.now()).catch(() => null);
     const usd = q?.usd ?? null;
@@ -404,8 +416,10 @@ export class LiveHub extends DurableObject<Env> {
     if (norm.height > this.osmoHeight) this.osmoHeight = norm.height;
 
     // priced at the quote for now, its age checked here (a slow alarm tick can hold the last refresh for minutes)
-    const parsed = parseOsmosisTx(norm, { ...this.osmoCtx, priceUsd: this.quote.current(Date.now())?.usd ?? null });
+    const q = this.quote.current(Date.now());
+    const parsed = parseOsmosisTx(norm, { ...this.osmoCtx, priceUsd: q?.usd ?? null });
     if (!parsed.flows.length && !parsed.moves.length) return;
+    stampPriceRoute(parsed.flows, await this.routeOf(q && { at: q.at, stored: q.source === 'stored', routeNam: q.routeNam }));
 
     // Persist to D1, in one batch. A write that fails (a transient D1 error) is neither broadcast nor alerted, and it
     // stored none of the transaction's rows or, when the batch committed and its answer was lost, all of them: the
@@ -487,8 +501,9 @@ export class LiveHub extends DurableObject<Env> {
     for (const f of flows) {
       if (isNamWhale(f, threshold)) f.whale = true;
       if (offeredForAlerts(f, minNam)) {
-        // valued by the row's own price only: a move found late with no quote for its minute is never valued at today's
-        const left = await sendDiscordWhaleAlert(this.env.DISCORD_WEBHOOK_URL, f, null, this.env.DB, threshold, budget);
+        // valued by the row's own price only (the card never multiplies by a current quote): a move found late with no
+        // quote for its minute is never valued at today's
+        const left = await sendDiscordWhaleAlert(this.env.DISCORD_WEBHOOK_URL, f, this.env.DB, threshold, budget);
         if (left) await this.defer(left, budget);
       }
     }
@@ -601,7 +616,7 @@ export class LiveHub extends DurableObject<Env> {
             await this.dropPending(key, p);
             continue;
           }
-          const left = await sendDiscordWhaleAlert(undefined, p.flow, null, this.env.DB, undefined, budget, p);
+          const left = await sendDiscordWhaleAlert(undefined, p.flow, this.env.DB, undefined, budget, p);
           if (left) {
             // Written back only when it changed: a part found paused, or cut whole by the budget, is the same part,
             // and writing it at every alarm would be a storage write per part per alarm for nothing.
@@ -940,9 +955,12 @@ export class LiveHub extends DurableObject<Env> {
       // The quote for the block's own minute (the scan may be behind). One that cannot be read holds the block for the
       // next tick, as a block that cannot be fetched does (inside the try below it would be skipped as not scanned).
       let priceUsd: number | null = null;
+      let route: number | null | undefined = null;
       if (blk.events && blk.events.length > 0) {
         try {
-          priceUsd = await this.quote.at(blk.ts, Date.now());
+          const q = await this.quote.quoteFor(blk.ts, Date.now());
+          priceUsd = q?.usd ?? null;
+          route = await this.routeOf(q);
         } catch (e) {
           console.error(`Namada block ${h}: its minute's stored quote could not be read; retrying next tick:`, e);
           break;
@@ -984,6 +1002,8 @@ export class LiveHub extends DurableObject<Env> {
             const now = Date.now();
             // A block read well after its time (the scan was behind): its moves are found late, and say so.
             if (now - blk.ts > LATE_SCAN_MS) for (const f of parsed.flows) f.meta = { ...(f.meta ?? {}), via: 'late scan' };
+            // Priced at a quote that was a route's spot: the moves say which route (price-how.ts stampPriceRoute).
+            stampPriceRoute(parsed.flows, route);
             // Each link right before its own flow (db.ts stmt.linkOnce: counted only while that flow is not stored),
             // the pairs first, so runBatch's batches of 80 never part a link from its flow: a block read again (a
             // cursor moved back) or written again after a failed batch counts each link once.
@@ -1300,13 +1320,17 @@ export class LiveHub extends DurableObject<Env> {
       // A transaction found late is priced at its own minute's quote, never the current one; one whose quote could not
       // be read is left for the next search, as one without a block time is.
       let priceUsd: number | null;
+      let route: number | null | undefined;
       try {
-        priceUsd = await this.quote.at(times.get(h)!, Date.now());
+        const q = await this.quote.quoteFor(times.get(h)!, Date.now());
+        priceUsd = q?.usd ?? null;
+        route = await this.routeOf(q);
       } catch {
         complete = false;
         continue;
       }
       const parsed = parseOsmosisTx(normFromTxSearch(t, times.get(h)!), { ...this.osmoCtx, priceUsd });
+      stampPriceRoute(parsed.flows, route);
       // Written below, or the search ends here (a write that throws ends it before the cursor is written).
       unwritten.delete(hash);
       if (!parsed.flows.length && !parsed.moves.length) continue;

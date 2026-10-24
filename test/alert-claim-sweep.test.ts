@@ -107,7 +107,7 @@ describe('the alert-claim sweep reads the expired claims only', () => {
       id: 'osmosis:SWEEPTX:recv:0', chain: 'osmosis', kind: 'ibc_in', txHash: 'SWEEPTX', amount: 20000, from: 'tnam1sender', to: 'osmo1receiver',
       ts: Date.now(), height: 1, priceUsd: null, valueUsd: null, meta: { channel: NAM.osmoChannel, packetSequence: '991' },
     };
-    await sendDiscordWhaleAlert(HOOK, crossing, null, db as any, 10000);
+    await sendDiscordWhaleAlert(HOOK, crossing, db as any, 10000);
     const claimed = alertKeys(db);
     expect(claimed).toHaveLength(2);
     expect(claimed[0]).toBe('alert:flow:osmosis:SWEEPTX:recv:0');

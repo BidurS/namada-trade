@@ -323,11 +323,11 @@ describe('the readers name the route', () => {
     sqs();
     const q = new HubQuote(askQuoteService, async () => null);
     const t = Date.now();
-    expect(await q.refresh(t)).toEqual({ usd: SPOT, at: t, source: 'live', priceSource: 'Osmosis SQS route spot, 1,000 NAM', priceNote: routeNote(ROUTE_HOW) });
+    expect(await q.refresh(t)).toEqual({ usd: SPOT, at: t, source: 'live', priceSource: 'Osmosis SQS route spot, 1,000 NAM', priceNote: routeNote(ROUTE_HOW), routeNam: 1000 });
     expect(await q.at(t - 1000, t)).toBe(SPOT);
     // the list path streams its own name, with no note
     sqs({ list: listWithNam('0.000921') });
-    expect(await askQuoteService()).toEqual({ usd: 0.000921, priceSource: 'Osmosis SQS' });
+    expect(await askQuoteService()).toEqual({ usd: 0.000921, priceSource: 'Osmosis SQS', routeNam: null });
     // neither path: no answer, so the hub falls back to the stored minute
     sqs({ route: '{}' });
     expect(await askQuoteService()).toBeNull();

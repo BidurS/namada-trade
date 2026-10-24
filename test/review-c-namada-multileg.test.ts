@@ -65,7 +65,7 @@ describe('a NAM event with several legs is one flow per leg', () => {
     await saveSettings(db as any, KEY, watcher('tnam1qwatcherv' + 'q'.repeat(31), 'https://discord.com/api/webhooks/42/u2', 'C'));
     const p = parse(ev('A4'.repeat(32), [['O', '10000000000']], [['C', '1000000009'], ...B.map((b): L => [b, '999999999'])]));
     // LiveHub.alertFlows on Namada: every flow of 10 NAM or more is offered
-    for (const f of p.flows) await sendDiscordWhaleAlert('https://discord.com/api/webhooks/40/op', f, null, db as any, 10000);
+    for (const f of p.flows) await sendDiscordWhaleAlert('https://discord.com/api/webhooks/40/op', f, db as any, 10000);
     expect(calls.filter((u) => u.endsWith('/40/op'))).toHaveLength(0);
     expect(calls.filter((u) => u.endsWith('/41/u1'))).toHaveLength(1);
     expect(calls.filter((u) => u.endsWith('/42/u2'))).toHaveLength(1);

@@ -1,0 +1,27 @@
+[
+  {
+    "results": [
+      {
+        "before_ts": 1792768995067
+      }
+    ],
+    "success": true,
+    "meta": {
+      "served_by": "v3-prod",
+      "served_by_region": "WNAM",
+      "served_by_colo": "SJC",
+      "served_by_primary": true,
+      "timings": {
+        "sql_duration_ms": 0.1754
+      },
+      "duration": 0.1754,
+      "changes": 0,
+      "last_row_id": 132948,
+      "changed_db": false,
+      "size_after": 178679808,
+      "rows_read": 1,
+      "rows_written": 0,
+      "total_attempts": 1
+    }
+  }
+]

@@ -103,7 +103,7 @@ describe('Security review (2026-10-22), the LiveHub\'s post count', () => {
     // A budget used outside the hub (no pending list): what the count cuts is recorded as not sent.
     const budget = fanoutBudget();
     await settle((async () => {
-      for (const f of unshieldFlows('POSTS', K)) await sendDiscordWhaleAlert(undefined, f, null, db as any, 10000, budget);
+      for (const f of unshieldFlows('POSTS', K)) await sendDiscordWhaleAlert(undefined, f, db as any, 10000, budget);
       await (discord as any).flushAlerts?.(db, budget);
     })());
     expect(posts.length).toBeLessThanOrEqual(POSTS_MAX);

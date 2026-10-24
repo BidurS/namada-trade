@@ -47,7 +47,7 @@ describe('Security review (2026-10-22), late alerts: the catch-up search and the
       const url = String(u);
       if (url.includes('discord.com')) {
         const body = JSON.parse(String(init?.body));
-        posts.push({ url, tx: String(body.embeds[0].description).slice(0, 16), late: body.embeds[0].fields.find((f: any) => f.name === 'Found late')?.value ?? null });
+        posts.push({ url, tx: String(/\/tx\/(\w+)\)/.exec(String(body.embeds[0].description))?.[1] ?? ''), late: body.embeds[0].fields.find((f: any) => f.name === 'Found late')?.value ?? null });
         vi.setSystemTime(Date.now() + 50);
         return new Response(null, { status: 204 });
       }

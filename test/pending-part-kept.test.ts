@@ -65,7 +65,7 @@ describe('Security review (2026-10-22), a kept alert and the moment it is offere
     // An alarm whose count is spent: the move's subscribers wait whole for the next alarm.
     const spent = alarmBudget(Date.now() + 142_000, true);
     spent.posts = 0;
-    const part = await sendDiscordWhaleAlert(undefined, move(1), null, db as any, 10000, spent);
+    const part = await sendDiscordWhaleAlert(undefined, move(1), db as any, 10000, spent);
     await flushAlerts(db as any, spent);
     expect(part).toMatchObject({ n: 1, claims: 'none' });
     expect(posts).toHaveLength(0);
@@ -103,7 +103,7 @@ describe('Security review (2026-10-22), a kept alert and the moment it is offere
     // 21:50: the move is offered outside the quiet hours, in an alarm whose count is spent, so the post waits.
     const spent = alarmBudget(Date.now() + 142_000, true);
     spent.posts = 0;
-    const part = await sendDiscordWhaleAlert(undefined, move(10), null, db as any, 10000, spent);
+    const part = await sendDiscordWhaleAlert(undefined, move(10), db as any, 10000, spent);
     await flushAlerts(db as any, spent);
     expect(part).toMatchObject({ n: 1, claims: 'none' });
     const storage = memStorage();
@@ -196,7 +196,7 @@ describe('Security review (2026-10-22), a kept alert and the moment it is offere
     const posts = discord();
     const spent = alarmBudget(Date.now() + 142_000, true);
     spent.posts = 0;
-    const part = await sendDiscordWhaleAlert(undefined, move(5), null, db as any, 10000, spent);
+    const part = await sendDiscordWhaleAlert(undefined, move(5), db as any, 10000, spent);
     await flushAlerts(db as any, spent);
     const storage = memStorage();
     await storage.put(`${PENDING_PREFIX}${String(part!.at).padStart(14, '0')}:0000`, part);
@@ -239,14 +239,14 @@ describe('Security review (2026-10-22), a kept alert and the moment it is offere
     const posts = discord();
     // Offered directly: the all-day channel is in quiet hours, so it is not posted and not kept; the other is posted.
     const direct = alarmBudget(Date.now() + 142_000, true);
-    expect(await sendDiscordWhaleAlert(undefined, move(21, Date.now()), null, db as any, 10000, direct)).toBeNull();
+    expect(await sendDiscordWhaleAlert(undefined, move(21, Date.now()), db as any, 10000, direct)).toBeNull();
     await flushAlerts(db as any, direct);
     expect(posts).toEqual([OTHER]);
     posts.length = 0;
     // Another move offered in an alarm whose count is spent: the other watcher's post waits, so the part is kept whole.
     const spent = alarmBudget(Date.now() + 142_000, true);
     spent.posts = 0;
-    const part = await sendDiscordWhaleAlert(undefined, move(22, Date.now()), null, db as any, 10000, spent);
+    const part = await sendDiscordWhaleAlert(undefined, move(22, Date.now()), db as any, 10000, spent);
     await flushAlerts(db as any, spent);
     expect(part).toMatchObject({ n: 1, claims: 'none' });
     const storage = memStorage();

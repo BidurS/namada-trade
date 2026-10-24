@@ -31,7 +31,9 @@ export interface Flow {
   valueUsd?: number | null;
   /** May carry `tsSource` ('block' | 'extrapolated' | 'interpolated'), `priceSource`
    *  ('execution' | 'swap_1h' | 'spot' | 'pool_1h' | 'unknown'; 'pool_1h' with `priceAt`, the hour of the stored
-   *  price.pool_1h close it is, and `repaired`, the day of the repair that set it), `arb`, `trader`, `source`, and `textCut`: the whole length of
+   *  price.pool_1h close it is, and `repaired`, the day of the repair that set it; 'spot' with `priceRoute`, the NAM size of
+   *  the route whose spot the quote was when the price list gave NAM none, worker/src/price-how.ts stampPriceRoute), `via`
+   *  ('catch-up search' | 'late scan': the move was found late), `arb`, `trader`, `source`, and `textCut`: the whole length of
    *  each sender's text the row keeps only the start of (`memo`, `from`, `to`; worker/src/util.ts boundFlowText). */
   meta?: Record<string, unknown> | null;
   fromLabel?: string | null;
@@ -1031,6 +1033,11 @@ export interface NotificationPrefs {
   watchlist: string[];
   watchlistOn: boolean;
   forumAndGov: boolean;
+  /**
+   * The daily digest at 08:00 UTC (and the weekly on Mondays), sent even in quiet hours; off by default. A row saved
+   * before the switch existed has no such field and reads as off.
+   */
+  dailyDigest?: boolean;
   /** UTC hours [start, end) during which nothing is sent; null = always */
   quietHoursUtc: { start: number; end: number } | null;
 }

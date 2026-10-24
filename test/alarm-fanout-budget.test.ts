@@ -206,14 +206,14 @@ describe('Security review (2026-10-22), alert fan-out budget: one budget across 
     // A stream message's window opened in the past: every subscriber post is already past it.
     const window = fanoutBudget();
     window.opened = Date.now() - windowFor(N) - 1000;
-    await settle(sendDiscordWhaleAlert(operator, whale('OP1'), null, db as any, 10000, window));
+    await settle(sendDiscordWhaleAlert(operator, whale('OP1'), db as any, 10000, window));
     await flushAlerts(db as any, window);
     expect(discord.filter((u) => u === operator)).toHaveLength(1); // operator heard, window spent or not
     expect(discord.filter((u) => u.includes('/api/webhooks/1'))).toHaveLength(0); // every subscriber post skipped
     expect(skipped(db).total).toBe(N); // and recorded for the health view
     // An alarm whose deadline has passed: the same.
     const late = alarmBudget(Date.now() - 1);
-    await settle(sendDiscordWhaleAlert(operator, whale('OP2'), null, db as any, 10000, late));
+    await settle(sendDiscordWhaleAlert(operator, whale('OP2'), db as any, 10000, late));
     await flushAlerts(db as any, late);
     expect(discord.filter((u) => u === operator)).toHaveLength(2);
     expect(discord.filter((u) => u.includes('/api/webhooks/1'))).toHaveLength(0);

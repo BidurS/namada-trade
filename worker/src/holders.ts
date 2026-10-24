@@ -631,8 +631,24 @@ export async function refreshHolderFigures(db: D1Database, now: number, parts: {
     db.prepare(put).bind(HOLDER_FIGURES_KV, JSON.stringify(out), now),
     ...(counts ? [db.prepare(put).bind(HOLDER_COUNTS_KV, JSON.stringify(counts), now)] : []),
     db.prepare(put).bind(HOLDER_MARKS_KV, JSON.stringify(marks), now),
+    ...top10History(db, { namada: parts.namada ? namada : null, osmosis: parts.osmosis ? osmosis : null }),
   ]);
   return out;
+}
+
+/** The metrics keys of the ten largest holders' NAM, one row per recomputed part at the sum's own time (TOP10_HISTORY). */
+export const TOP10_HISTORY_KEYS = { namada: 'holders.namada.top10_nam', osmosis: 'holders.osmosis.top10_nam' } as const;
+/**
+ * The ten largest holders' NAM as a series, so the digest can say what their share was a day before (holders.figures
+ * is one row, overwritten): a metrics row for each part recomputed now, at the time the sum is as of (its `at`, the
+ * oldest of the ten's readings), written in the figures' own batch. A part with no sum or no time writes nothing.
+ */
+export function top10History(db: D1Database, parts: { namada: ChainFigures | null; osmosis: ChainFigures | null }): D1PreparedStatement[] {
+  const put = 'INSERT OR REPLACE INTO metrics (ts, key, value) VALUES (?, ?, ?)';
+  return (['namada', 'osmosis'] as const).flatMap((chain) => {
+    const t = parts[chain]?.top10;
+    return t && t.s != null && Number.isFinite(t.s) && t.at != null && Number.isFinite(t.at) ? [db.prepare(put).bind(t.at, TOP10_HISTORY_KEYS[chain], t.s)] : [];
+  });
 }
 
 /** The stored figures (one kv row), or null (none, unreadable, or written by the build before migration 0008). */

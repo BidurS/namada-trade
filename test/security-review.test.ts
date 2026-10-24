@@ -432,19 +432,26 @@ describe('B1/C6: Discord posts name no one, render no hidden link, and fan out w
     const body = JSON.parse((f.mock.calls[0] as any)[1].body);
     expect(body.allowed_mentions).toEqual({ parse: [] });
     expect(body.embeds[0].description).not.toContain('](https://evil');
-    expect(body.embeds[0].description).toContain('[Read full post on forum.namada.net ↗](https://forum.namada.net/t/t/1/2)');
+    expect(body.embeds[0].description).toContain('[Read on forum.namada.net](https://forum.namada.net/t/t/1/2)');
     expect(body.embeds[0].title).not.toContain('](https://evil');
-    expect(body.embeds[0].fields[0].value).not.toContain('](https://evil');
+    expect(JSON.stringify(body.embeds[0])).not.toContain('](https://evil');
     expect(plainMd('a [b](c) d')).toBe('a [b] (c) d');
   });
-  it('a free-text bridge receiver stays inside its code span and is marked as not an address', () => {
-    const body = buildFlowDiscordBody({ ...sell(1), kind: 'ibc_out', to: '`**FAKE**` [a](http://e.v)@everyone', toLabel: 'tag [x](http://e.v)' } as Flow, 0.001);
-    const to = body.embeds[0].fields.find((x: any) => x.name === 'To')!.value as string;
-    expect(to.split('`').length - 1).toBe(2);
-    expect(to).toContain('(not an address)');
-    expect(to).not.toContain('](http');
-    const from = body.embeds[0].fields.find((x: any) => x.name === 'From')!.value as string;
-    expect(from).not.toContain('(not an address)');
+  it('a free-text bridge receiver stays inside its code span, is marked as not an address, and is never a link', () => {
+    for (const to of ['`**FAKE**` [a](http://e.v)@everyone', '[a](http://e.v)', 'http://e.v/aaaa']) {
+      const body = buildFlowDiscordBody({ ...sell(1), kind: 'ibc_out', to, toLabel: 'tag [x](http://e.v)' } as Flow, {});
+      const e = body.embeds[0];
+      const line1 = String(e.description).split('\n')[0];
+      expect(line1.split('`').length - 1).toBe(2);
+      expect(line1).toContain('(not an address)');
+      expect(line1).not.toContain('](http');
+      // the sender is the bridge's own account, which stands for the other end: named as such, not as free text
+      expect(line1).toMatch(/^From a sender on Osmosis this record does not name to `/);
+      // no page on the site and no title link for text that is not an address: the record on an explorer stands
+      expect(e.url).toBe('https://www.mintscan.io/osmosis/tx/SR1');
+      expect(JSON.stringify(e)).not.toContain('activity?addr=');
+      expect(JSON.stringify(e)).not.toMatch(/\]\(http:\/\/e\.v/);
+    }
   });
   it('one post per webhook however many users share it; the claim is made before any post', async () => {
     const calls: string[] = [];
@@ -454,7 +461,7 @@ describe('B1/C6: Discord posts name no one, render no hidden link, and fan out w
     const url = 'https://discord.com/api/webhooks/1/shared';
     for (let i = 0; i < 3; i++) await saveSettings(db as any, KEY, user(`tnam1qshare${i}${'q'.repeat(33)}`, url));
     await saveSettings(db as any, KEY, user(`tnam1qalone${'q'.repeat(34)}`, 'https://discord.com/api/webhooks/2/alone'));
-    await sendDiscordWhaleAlert(undefined, sell(1), null, db as any, 10000);
+    await sendDiscordWhaleAlert(undefined, sell(1), db as any, 10000);
     expect(calls.filter((u) => u === url)).toHaveLength(1);
     expect(calls).toHaveLength(2);
     expect(db.raw.prepare("SELECT COUNT(*) n FROM kv WHERE key = 'alert:flow:osmosis:SR1:0'").get().n).toBe(1);
@@ -468,9 +475,9 @@ describe('B1/C6: Discord posts name no one, render no hidden link, and fan out w
     configureAlerts(KEY);
     const url = 'https://discord.com/api/webhooks/3/gone';
     await saveSettings(db as any, KEY, user(`tnam1qgone${'q'.repeat(35)}`, url));
-    for (let n = 10; n < 10 + BACKOFF_AFTER; n++) await sendDiscordWhaleAlert(undefined, sell(n), null, db as any, 10000);
+    for (let n = 10; n < 10 + BACKOFF_AFTER; n++) await sendDiscordWhaleAlert(undefined, sell(n), db as any, 10000);
     expect(calls).toHaveLength(BACKOFF_AFTER);
-    await sendDiscordWhaleAlert(undefined, sell(99), null, db as any, 10000);
+    await sendDiscordWhaleAlert(undefined, sell(99), db as any, 10000);
     expect(calls).toHaveLength(BACKOFF_AFTER);
     const skipped = JSON.parse(db.raw.prepare("SELECT value FROM kv WHERE key = 'alerts.skipped'").get().value);
     expect(skipped.total).toBe(1);

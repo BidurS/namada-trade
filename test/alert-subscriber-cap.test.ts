@@ -64,7 +64,7 @@ describe('rows with Discord off never take a subscriber\'s place', () => {
     expect(await addresses(db)).toEqual([VICTIM]);
     await sendDiscordForumAlert(OP, post(9001), db as any);
     expect(calls).toEqual([OP, VICTIM_URL]);
-    await sendDiscordWhaleAlert(undefined, sell(1), null, db as any, 10000);
+    await sendDiscordWhaleAlert(undefined, sell(1), db as any, 10000);
     expect(calls).toContain(VICTIM_URL);
     expect(skipped(db)).toBeNull();
     // Only the subscriber's row is in the index the count and the read use.
@@ -86,7 +86,7 @@ describe('the cap is counted by the save that turns Discord on', () => {
     expect(read.users).toHaveLength(DELIVERABLE_MAX);
     expect(read.users[0].address).toBe(VICTIM);
     expect(read.unserved).toBe(0);
-    await sendDiscordWhaleAlert(undefined, sell(2), null, db as any, 10000);
+    await sendDiscordWhaleAlert(undefined, sell(2), db as any, 10000);
     expect(calls).toContain(VICTIM_URL);
   });
 
