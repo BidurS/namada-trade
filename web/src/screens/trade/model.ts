@@ -5,6 +5,7 @@
 import type { Overview, PoolInfo, PriceQuote, Provenance, QuoteCurveResponse, SlippageCurvePoint } from '../../../../shared/types';
 import type { Stamp } from '../../lib/prov';
 import { fmtNamRule } from '../../lib/format';
+import { poolSides } from '../../../../shared/pool-sides';
 
 export type Side = 'sell' | 'buy';
 
@@ -183,8 +184,14 @@ export function pairName(p: { pair: string; counterSymbol?: string | null }): st
 export const POOL_ROW_SHARE = 0.005;
 export const POOL_ROW_MAX = 12;
 
-export function splitPools<T extends { liquidityUsd: number | null }>(list: T[]): { shown: T[]; rest: T[]; total: number } {
-  const sorted = [...list].sort((a, b) => (b.liquidityUsd || 0) - (a.liquidityUsd || 0));
+/**
+ * The pools by depth: those above the share line get a row (`shown`), the rest are summed in one line (`rest`), and a
+ * pool holding only one side (`oneSided`, shared/pool-sides.ts) gets a row of its own that says what it holds, since
+ * its listed depth ($0: the router counts no NAM) would hide it in the summed line.
+ */
+export function splitPools<T extends { liquidityUsd: number | null; namReserve: number | null; counterReserve: number | null }>(list: T[]): { shown: T[]; rest: T[]; oneSided: T[]; total: number } {
+  const oneSided = list.filter((p) => { const s = poolSides(p); return s === 'nam' || s === 'coin'; }).sort((a, b) => (b.namReserve || 0) - (a.namReserve || 0));
+  const sorted = list.filter((p) => !oneSided.includes(p)).sort((a, b) => (b.liquidityUsd || 0) - (a.liquidityUsd || 0));
   const total = sorted.reduce((a, p) => a + (fin(p.liquidityUsd) ? p.liquidityUsd : 0), 0);
   const shown: T[] = [];
   const rest: T[] = [];
@@ -192,7 +199,7 @@ export function splitPools<T extends { liquidityUsd: number | null }>(list: T[])
     if (shown.length < POOL_ROW_MAX && (shown.length === 0 || (total > 0 && (p.liquidityUsd || 0) / total >= POOL_ROW_SHARE))) shown.push(p);
     else rest.push(p);
   }
-  return { shown, rest, total };
+  return { shown, rest, oneSided, total };
 }
 
 /** How a safe-size figure was made (shared/types.ts SafeClipInfo['how']). */

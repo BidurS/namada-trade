@@ -42,12 +42,13 @@ const osmoUser = wallet(7), osmoSigner = wallet(9);
 /** A 32-byte osmo1 address with its last character changed: the checksum fails. */
 const badChecksum = CL_3005.slice(0, -1) + (CL_3005.endsWith('r') ? 'q' : 'r');
 /** The pools a wrong answer adds: a Namada holder, the foundation's genesis address, a tagged wallet, an Osmosis wallet, a broken address. */
+// each holds a little NAM: a pool empty on both sides is not listed at all (shared/pool-sides.ts), and these are about the address
 const wrongPools = [
   { type: 0, chain_model: { id: 9001, address: tn(5) }, balances: [{ denom: NAM.osmoDenom, amount: '1' }] },
-  { type: 0, chain_model: { id: 9002, address: tn(10) }, balances: [] },
-  { type: 0, chain_model: { id: 9003, address: tn(20) }, balances: [] },
-  { type: 3, chain_model: { pool_id: 9004, contract_address: osmoUser }, balances: [] },
-  { type: 2, chain_model: { id: 9005, address: badChecksum }, balances: [] },
+  { type: 0, chain_model: { id: 9002, address: tn(10) }, balances: [{ denom: NAM.osmoDenom, amount: '1' }] },
+  { type: 0, chain_model: { id: 9003, address: tn(20) }, balances: [{ denom: NAM.osmoDenom, amount: '1' }] },
+  { type: 3, chain_model: { pool_id: 9004, contract_address: osmoUser }, balances: [{ denom: NAM.osmoDenom, amount: '1' }] },
+  { type: 2, chain_model: { id: 9005, address: badChecksum }, balances: [{ denom: NAM.osmoDenom, amount: '1' }] },
 ];
 
 /** 60 Namada holders of 1,000 to 60,000 NAM, the foundation's genesis label on tn(10), two backers, a wallet's own tag on tn(20). */

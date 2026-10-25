@@ -22,6 +22,7 @@ import { saveSettings, defaultPrefs, DELIVERABLE_MAX, type StoredSettings } from
 import { runCron, FORUM_POSTS_HEALTH, TICK_LOCK_MS } from '../worker/src/cron';
 import { BALANCE_LISTING_SRC } from '../worker/src/holders';
 import type { ForumPost, GovernanceProposal } from '../shared/types';
+import { digestKey } from '../worker/src/digest/message';
 
 afterEach(() => { vi.useRealTimers(); vi.unstubAllGlobals(); });
 
@@ -205,6 +206,9 @@ async function seededTick(tag: string, users: number, base: number, prop: number
   insert(db, 'kv', [
     { key: 'forum.last_post_id', value: String(base), updated_at: NOW - 60000 },
     { key: 'gov.state', value: JSON.stringify({ [prop]: 'pending' }), updated_at: NOW - 60000 },
+    // this tick is about forum and governance alerts: the day's (and a Monday's week's) digest counts as sent, so a
+    // run after 08:00 UTC posts no digest beside them
+    ...(['daily', 'weekly'] as const).flatMap((k) => [digestKey(NOW, k), `${digestKey(NOW, k)}:op`]).map((key) => ({ key, value: '1', updated_at: NOW - 60000 })),
   ]);
   return { db, env: { DB: db, KEPLR_KEY: 'k', SETTINGS_KEY: KEY, DISCORD_WEBHOOK_URL: OP, SEND_ALERTS: 'yes' } as any };
 }

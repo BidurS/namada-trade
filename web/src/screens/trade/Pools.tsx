@@ -15,6 +15,7 @@ import { PairsList } from '../../ui/PairsList';
 import { NBSP, fmtAgo, fmtCount, fmtNamRule, fmtPctRule, fmtUsdWhole } from '../../lib/format';
 import type { Depth } from './model';
 import { pairName, splitPools } from './model';
+import { oneSidedWords, poolSides } from '../../../../shared/pool-sides';
 import type { HistoryLoad } from './data';
 
 export interface PoolsProps {
@@ -29,7 +30,7 @@ export interface PoolsProps {
 /** The pairs answer as rows: the pools above the share line (at most POOL_ROW_MAX), the rest folded into one row. */
 function PairsBody({ r, osmosisLine }: { r: PairsResponse; osmosisLine: ReactNode }) {
   const now = useUiNow();
-  const { shown, rest, total } = splitPools<PairRow>(r.pairs);
+  const { shown, rest, oneSided, total } = splitPools<PairRow>(r.pairs);
   const stamp: Stamp = { ...r.prov, plain: 'Osmosis pools' };
   const osmoStamp: Stamp = { ...r.osmosisProv, plain: 'Osmosis app data' };
   const hereProv = r.pairs.find((p) => p.here24h.value)?.here24h.prov ?? r.pairs[0]?.here24h.prov ?? null;
@@ -61,7 +62,7 @@ function PairsBody({ r, osmosisLine }: { r: PairsResponse; osmosisLine: ReactNod
         ) : null}.
       </p>
       {osmosisLine}
-      <PairsList pairs={shown} rest={rest} totalUsd={total} pairName={pairName} label="Pools that trade NAM" />
+      <PairsList pairs={shown} rest={rest} oneSided={oneSided} totalUsd={total} pairName={pairName} label="Pools that trade NAM" />
       <SourceLine items={items} label="Where the pool figures come from" />
     </ProvScope>
   );
@@ -90,7 +91,7 @@ export function Pools({ rewound, pools, pairs, depth, overview }: PoolsProps) {
   if (!rewound && pairs?.data && pairs.data.pairs.length) {
     body = <PairsBody r={pairs.data} osmosisLine={osmosisLine} />;
   } else if (list.length) {
-    const { shown, rest, total } = splitPools(list);
+    const { shown, rest, oneSided, total } = splitPools(list);
     const top = shown[0]?.liquidityUsd || 0;
     const restUsd = rest.reduce((a, p) => a + (p.liquidityUsd || 0), 0);
     const restMax = rest.reduce((a, p) => Math.max(a, p.liquidityUsd || 0), 0);
@@ -121,6 +122,21 @@ export function Pools({ rewound, pools, pairs, depth, overview }: PoolsProps) {
               bar={top > 0 ? p.liquidityUsd / top : null}
             />
           ))}
+          {oneSided.map((p) => {
+            const one = oneSidedWords(poolSides(p), p.counterSymbol && p.counterSymbol !== 'UNKNOWN' && !p.counterSymbol.startsWith('ibc/') ? p.counterSymbol : null)!;
+            return (
+              <PoolRow
+                key={`${p.id}-${p.address}`}
+                pair={pairName(p)}
+                sub={<><span className="mono">{p.id ? `#${p.id}` : 'no id'} · {p.type}</span> · {one.line}</>}
+                depth={one.depth}
+                share={null}
+                nam={<Num v={p.namReserve} fmt={fmtNamRule} unit="NAM" showReason={false} />}
+                fee={<Num v={Number.isFinite(p.spreadFactor) ? p.spreadFactor * 100 : null} fmt={(n) => fmtPctRule(n)} unit="fee" showReason={false} />}
+                bar={null}
+              />
+            );
+          })}
           {rest.length ? (
             <PoolRestRow end={<><Num v={restUsd} fmt={fmtUsdWhole} /> together, none above <Num v={restMax} fmt={fmtUsdWhole} /></>}>
               <Num as="b" v={rest.length} fmt={fmtCount} /> more {rest.length === 1 ? 'pool' : 'pools'}

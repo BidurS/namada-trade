@@ -35,6 +35,7 @@ import { tradeValue } from '../../shared/settle';
 import { OSMOSIS, INTERNAL_LABELS } from './config';
 import { OSMOSIS_DATA_SOURCE } from './sources/osmosis-data';
 import { JOB_WINDOW_MS, OSMOSIS_SUMMARY_STALE_MS } from './series';
+import { poolHoldsSomething } from '../../shared/pool-sides';
 
 const H = 3_600_000, D = 86_400_000, MIN = 60_000;
 type DB = Env['DB'];
@@ -684,7 +685,9 @@ export async function readPairs(db: DB, now: number, live: { pools: PoolInfo[]; 
       osmosis, here24h: { value: null, prov: NO_LEGS }, createdAt: null,
     };
   });
-  pairs.sort((a, b) => (b.liquidityUsd ?? -1) - (a.liquidityUsd ?? -1) || Number(a.poolId) - Number(b.poolId));
+  // a pool empty on both sides (in the live answer or the stored hour) holds nothing to trade and is not listed
+  const listed = pairs.filter(poolHoldsSomething);
+  listed.sort((a, b) => (b.liquidityUsd ?? -1) - (a.liquidityUsd ?? -1) || Number(a.poolId) - Number(b.poolId));
   const storedAt = stored.map((r) => finite(r.at)).filter((x): x is number => x != null);
   const prov: Provenance = routed ? { source: ROUTER_SOURCE, at: live.at, status: 'live' }
     : storedAt.length ? { source: `${ROUTER_SOURCE} (stored)`, at: Math.max(...storedAt), status: 'stale', note: `The Osmosis router did not answer; depth and reserves as read at ${fmtDayTime(Math.max(...storedAt))}.` }
@@ -692,9 +695,9 @@ export async function readPairs(db: DB, now: number, live: { pools: PoolInfo[]; 
   const osAt = stored.map((r) => finite(r.osmosis_at)).filter((x): x is number => x != null);
   const osmosisProv: Provenance = osAt.length ? provAt(OSMOSIS_DATA_SOURCE, Math.max(...osAt), now, osmoMaxAge)
     : { source: OSMOSIS_DATA_SOURCE, at: null, status: 'missing', note: stored.length ? 'The Osmosis app\'s pair summary was not read in the newest hour stored.' : 'The Osmosis app\'s pool figures have not been stored yet.' };
-  const known = pairs.map((p) => p.osmosis.value);
+  const known = listed.map((p) => p.osmosis.value);
   return {
-    asOf: now, pairs, prov, osmosisProv,
+    asOf: now, pairs: listed, prov, osmosisProv,
     osmosisTotals: { volume24hUsd: sumKnown(known.map((v) => v?.volume24hUsd ?? null)), volume7dUsd: sumKnown(known.map((v) => v?.volume7dUsd ?? null)), liquidityUsd: sumKnown(known.map((v) => v?.liquidityUsd ?? null)) },
   };
 }

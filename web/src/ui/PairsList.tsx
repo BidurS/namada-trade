@@ -11,12 +11,15 @@
 import type { PairRow, Provenance } from '../../../shared/types';
 import { fmtCount, fmtDayMonthYear, fmtNamRule, fmtPctRule, fmtUsdWhole } from '../lib/format';
 import { Num } from './Num';
+import { oneSidedWords, poolSides } from '../../../shared/pool-sides';
 
 export interface PairsListProps {
   /** the pools to list as rows, deepest first */
   pairs: PairRow[];
   /** the pools folded into the closing row */
   rest: PairRow[];
+  /** the pools holding only one side: a row each, saying what they hold instead of a depth (shared/pool-sides.ts) */
+  oneSided?: PairRow[];
   /** total depth over every pool (the share's denominator) */
   totalUsd: number;
   /** what the pair is called in words ("NAM / USDC") */
@@ -40,8 +43,8 @@ function columnNote(rows: PairRow[], pick: (p: PairRow) => { value: unknown; pro
 
 const miss = (p: Provenance): Provenance => ({ ...p, status: 'missing' });
 
-export function PairsList({ pairs, rest, totalUsd, pairName, label }: PairsListProps) {
-  const all = [...pairs, ...rest];
+export function PairsList({ pairs, rest, oneSided = [], totalUsd, pairName, label }: PairsListProps) {
+  const all = [...pairs, ...oneSided, ...rest];
   const osmoNote = columnNote(pairs, (p) => p.osmosis);
   const hereNote = columnNote(pairs, (p) => p.here24h);
   const top = pairs[0]?.liquidityUsd ?? 0;
@@ -58,7 +61,7 @@ export function PairsList({ pairs, rest, totalUsd, pairName, label }: PairsListP
           {hereNote ? <li><span data-num="" data-status="none">—</span> Trades here per pool: {hereNote}</li> : null}
         </ul>
       ) : null}
-      <div className="pa" role="table" aria-label={label} aria-rowcount={pairs.length + (rest.length ? 2 : 1)} data-pairs={all.length}>
+      <div className="pa" role="table" aria-label={label} aria-rowcount={pairs.length + oneSided.length + (rest.length ? 2 : 1)} data-pairs={all.length}>
         <div className="pa__head" role="row">
           <span role="columnheader">Pool</span>
           <span role="columnheader" className="r">Depth</span>
@@ -69,24 +72,26 @@ export function PairsList({ pairs, rest, totalUsd, pairName, label }: PairsListP
           <span role="columnheader" className="r">NAM inside</span>
           <span role="columnheader" className="r">Fee</span>
         </div>
-        {pairs.map((p) => {
+        {[...pairs, ...oneSided].map((p) => {
           const o = p.osmosis.value;
           const here = p.here24h.value;
-          const bar = top > 0 && fin(p.liquidityUsd) ? p.liquidityUsd / top : null;
+          const one = oneSidedWords(poolSides(p), p.counterSymbol);
+          const bar = !one && top > 0 && fin(p.liquidityUsd) ? p.liquidityUsd / top : null;
           return (
-            <div key={p.poolId} className="pa__row" role="row" data-pool={p.poolId}>
+            <div key={p.poolId} className={`pa__row${one ? ' pa__row--one' : ''}`} role="row" data-pool={p.poolId}>
               <span className="pa__id" role="cell">
                 <span className="pa__pair">{pairName(p)}</span>
                 <span className="pa__sub">
                   <span className="mono">#{p.poolId}</span>
                   {p.type ? <> · {p.type}</> : null}
                   {fin(p.createdAt) ? <> · since <span data-num="">{fmtDayMonthYear(p.createdAt)}</span></> : null}
+                  {one ? <> · {one.line}</> : null}
                 </span>
               </span>
               <span className="pa__liq" role="cell">
-                {fin(p.liquidityUsd) ? <Num v={p.liquidityUsd} fmt={fmtUsdWhole} /> : <Num v={null} prov={{ source: 'Osmosis SQS pools', at: null, status: 'missing', note: 'the router did not list this pool' }} />}
+                {one ? one.depth : fin(p.liquidityUsd) ? <Num v={p.liquidityUsd} fmt={fmtUsdWhole} /> : <Num v={null} prov={{ source: 'Osmosis SQS pools', at: null, status: 'missing', note: 'the router did not list this pool' }} />}
               </span>
-              <span className="pa__share" role="cell"><Num v={share(p)} fmt={(n) => fmtPctRule(n, 1)} unit="of all depth" showReason={false} /></span>
+              <span className="pa__share" role="cell">{one ? null : <Num v={share(p)} fmt={(n) => fmtPctRule(n, 1)} unit="of all depth" showReason={false} />}</span>
               <span className="pa__o24" role="cell">
                 <span className="pa__w">Osmosis 24 h </span>
                 {o ? <Num v={o.volume24hUsd} fmt={fmtUsdWhole} showReason={false} /> : <Num v={null} prov={miss(p.osmosis.prov)} showReason={!osmoNote} />}

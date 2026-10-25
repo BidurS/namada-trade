@@ -1,4 +1,5 @@
 import { OSMOSIS, NAM } from '../config';
+import { poolHoldsSomething } from '../../../shared/pool-sides';
 import { fetchJson, toNam, HttpError, sleep, isPoolAccount } from '../util';
 import type { PoolInfo, PriceQuote, Provenance, QuoteCurveResponse, SafeClipInfo, SlippageCurvePoint } from '../../../shared/types';
 import { SIZE_SLICE_JUMP_FROM_ZERO_PCT, SIZE_SLICE_JUMP_MIN_PCT, SIZE_SLICE_JUMP_RATIO } from '../../../shared/size-table';
@@ -231,8 +232,10 @@ export async function fetchNamPools(): Promise<{ pools: PoolInfo[]; at: number; 
       });
     }
 
-    pools.sort((a, b) => b.liquidityUsd - a.liquidityUsd);
-    return refused ? { pools, at, refused } : { pools, at };
+    // a pool empty on both sides holds nothing to trade: it is left out of the list, the pool count and the labels
+    const held = pools.filter(poolHoldsSomething);
+    held.sort((a, b) => b.liquidityUsd - a.liquidityUsd);
+    return refused ? { pools: held, at, refused } : { pools: held, at };
   } catch (e) {
     return { pools: [], at, error: quoteErrorText(classify(e)) };
   }

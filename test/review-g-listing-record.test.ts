@@ -136,7 +136,7 @@ describe('an indexer totalSupply that is not a whole number', () => {
 describe('an SQS pool whose liquidity_cap does not parse', () => {
   it('no longer fails the metrics batch: the figure is left out, the pools row says which, the tick and the bond listing go on', async () => {
     const db = await listed();
-    const pools = (cap: string) => (u: string) => (u.includes('sqs.osmosis.zone/pools') ? json([{ chain_model: { id: '3005', address: 'osmo1m459jtgn77tz8cffvthq5jh0erswxu9872mjd9qde546mslc6udq85we5r' }, type: 1, balances: [], liquidity_cap: cap }]) : undefined);
+    const pools = (cap: string) => (u: string) => (u.includes('sqs.osmosis.zone/pools') ? json([{ chain_model: { id: '3005', address: 'osmo1m459jtgn77tz8cffvthq5jh0erswxu9872mjd9qde546mslc6udq85we5r' }, type: 1, balances: [{ denom: 'ibc/C7110DEC66869DAE9BE9C3C60F4B5313B16A2204AE020C3B0527DD6B322386A3', amount: '1000000' }], liquidity_cap: cap }]) : undefined);
     const { calls } = network({ answer: pools('n/a') });
     await virtualTick(env(db), PLAIN + 41 * MIN);
     await virtualTick(env(db), PLAIN + 42 * MIN);
@@ -303,7 +303,7 @@ describe('a failed tick whose first read of the listing record failed too', () =
 describe('the Osmosis SQS (pools) row with a refused pool address and a figure that does not parse', () => {
   it('says both in one row', async () => {
     const db = seeded();
-    network({ answer: (u: string) => (u.includes('sqs.osmosis.zone/pools') ? json([{ chain_model: { id: '3005', address: 'tnam1qr4wemkpjfycn7ts7297e8qecg2t6pf2vq2wulsa' }, type: 1, balances: [], liquidity_cap: 'n/a' }]) : undefined) });
+    network({ answer: (u: string) => (u.includes('sqs.osmosis.zone/pools') ? json([{ chain_model: { id: '3005', address: 'tnam1qr4wemkpjfycn7ts7297e8qecg2t6pf2vq2wulsa' }, type: 1, balances: [{ denom: 'ibc/C7110DEC66869DAE9BE9C3C60F4B5313B16A2204AE020C3B0527DD6B322386A3', amount: '1000000' }], liquidity_cap: 'n/a' }]) : undefined) });
     await virtualTick(env(db), PLAIN);
     const row = healthOf(db)['Osmosis SQS (pools)'];
     expect(row.ok).toBe(false);
