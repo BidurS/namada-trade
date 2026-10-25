@@ -95,8 +95,8 @@ export interface NamPrice {
  * The NAM quote in USD, and in the same answer OSMO's (`osmoUsd`, stored each minute as price.osmo_usd so a trade
  * paid in OSMO with no OSMO/USDC swap of its own can be valued at its minute: shared/settle.ts) and the other quoted
  * coins'. When the price list answers but gives NAM no price (it has since 16:36 UTC on 23 Oct 2026, after the 21 Oct
- * sell-off left NAM's pools holding little besides NAM; the service gives no reason), the NAM price is the spot price of the route
- * the router quotes for selling ROUTE_REF_NAM NAM for allUSDC, the coin the list prices in; the coins keep the list's
+ * sell-off left NAM's pools holding little besides NAM; the service gives no reason), the NAM price is the spot price of
+ * the reference pool, from the quote for selling ROUTE_REF_NAM NAM in that pool alone (routeSpotUrl); the coins keep the list's
  * prices. A list that does not answer at all is not followed by the router: the service is then not answering. With a
  * `budget` (a visitor's quote), the router call spends one call of it.
  */
@@ -138,9 +138,15 @@ export function priceSourceName(how: NamPriceHow | null | undefined): string {
   return how?.how === 'route' ? `${SOURCE} route spot, ${how.refNam.toLocaleString('en-US')} NAM` : SOURCE;
 }
 
-/** The router quote fetchNamPrice asks when the price list gives no NAM price: ROUTE_REF_NAM NAM for allUSDC. */
+/**
+ * The quote fetchNamPrice asks when the price list gives no NAM price: ROUTE_REF_NAM NAM sold in the reference pool
+ * alone (OSMOSIS.refPoolId, NAM/Noble USDC), whose answer's spot is that pool's own price. The router's own choice of
+ * route for a sale of that size moved off pool 3005 at 15:06 UTC on 25 Oct 2026 (to pools 3368 and 3009 and on), which
+ * left the site without a price for an hour; a quote in the one pool does not depend on the router's choice. Noble
+ * USDC and allUSDC both have 6 decimals and count one for one in dollars, so the spot is USD per NAM as before.
+ */
 export const routeSpotUrl = () =>
-  `${OSMOSIS.sqs}/router/quote?tokenIn=${BigInt(ROUTE_REF_NAM) * 10n ** BigInt(NAM.decimals)}${encodeURIComponent(NAM.osmoDenom)}&tokenOutDenom=${encodeURIComponent(OSMOSIS.allUsdc)}`;
+  `${OSMOSIS.sqs}/router/custom-direct-quote?tokenIn=${BigInt(ROUTE_REF_NAM) * 10n ** BigInt(NAM.decimals)}${encodeURIComponent(NAM.osmoDenom)}&tokenOutDenom=${encodeURIComponent(OSMOSIS.usdcDenom)}&poolID=${OSMOSIS.refPoolId}`;
 
 /** The allUSDC transmuter (Noble USDC to allUSDC one for one, no fee): the router's last hop from pool 3005 to allUSDC. */
 export const ALLUSDC_TRANSMUTER_POOL = '3497';
@@ -155,10 +161,10 @@ const isPriceRoute = (r: RoutePool[]) => r.length > 0 && r[0].id === OSMOSIS.ref
 
 const LIST_GIVES_NO_NAM = 'The Osmosis quote service\'s price list gives NAM no price';
 /** The price row's note when the router's answer has no spot price above zero. */
-export const routeNoSpotText = () => `${LIST_GIVES_NO_NAM}, and its router's quote for selling ${ROUTE_REF_NAM.toLocaleString('en-US')} NAM gave no spot price.`;
+export const routeNoSpotText = () => `${LIST_GIVES_NO_NAM}, and its quote for selling ${ROUTE_REF_NAM.toLocaleString('en-US')} NAM in pool ${OSMOSIS.refPoolId} gave no spot price.`;
 /** The price row's note when the router's answer went through a pool other than the reference pool and the transmuter. */
 export const routeOtherPoolsText = (ids: string[]) =>
-  `${LIST_GIVES_NO_NAM}, and its router's quote for selling ${ROUTE_REF_NAM.toLocaleString('en-US')} NAM went through ${ids.length ? `pool${ids.length > 1 ? 's' : ''} ${ids.join(', ')}` : 'no pool'} instead of pool ${OSMOSIS.refPoolId} alone, so no price is taken from it.`;
+  `${LIST_GIVES_NO_NAM}, and its quote for selling ${ROUTE_REF_NAM.toLocaleString('en-US')} NAM in pool ${OSMOSIS.refPoolId} came back through ${ids.length ? `pool${ids.length > 1 ? 's' : ''} ${ids.join(', ')}` : 'no pool'} instead, so no price is taken from it.`;
 
 /**
  * The NAM price in a router answer: its in_base_out_quote_spot_price, in allUSDC base units per NAM base unit, which

@@ -1,6 +1,6 @@
 // How the NAM quote (metrics price.usd) was read, kept where the readers can say it. The quote service's price list
 // gave NAM no price from 16:36 UTC on 23 Oct 2026 (after the 21 Oct sell-off left NAM's pools holding little besides
-// NAM; the service gives no reason), and sources/sqs.ts fetchNamPrice then reads the spot price of the route its router quotes for
+// NAM; the service gives no reason), and sources/sqs.ts fetchNamPrice then reads the spot price of pool 3005 alone, quoted for
 // ROUTE_REF_NAM NAM. The cron keeps each change of the way it read the price in one kv row, price.how, written only
 // when the way changes: the overview names the stored price's source and its route from it, as does a visitor's
 // quote, whose spot is the stored minute.
@@ -71,8 +71,8 @@ export function routeNote(how: Extract<NamPriceHow, { how: 'route' }>, figuresAt
   const path = routes.length ? `: ${routes.join('; and ')}` : '';
   const asOf = past ? ` (liquidity as read at ${utc(figuresAt)})` : '';
   return past
-    ? `The Osmosis quote service's price list gave NAM no price, so the price is the spot price of the route its router quoted for selling ${how.refNam.toLocaleString('en-US')} NAM${path}${asOf}. The service counts no NAM in a pool's liquidity, as it gives NAM no price.`
-    : `The Osmosis quote service's price list gives NAM no price, so the price is the spot price of the route its router quotes for selling ${how.refNam.toLocaleString('en-US')} NAM${path}. The service counts no NAM in a pool's liquidity, as it gives NAM no price.`;
+    ? `The Osmosis quote service's price list gave NAM no price, so the price is the spot price of the pool it quoted for selling ${how.refNam.toLocaleString('en-US')} NAM${path}${asOf}. The service counts no NAM in a pool's liquidity, as it gives NAM no price.`
+    : `The Osmosis quote service's price list gives NAM no price, so the price is the spot price of the pool it quotes for selling ${how.refNam.toLocaleString('en-US')} NAM${path}. The service counts no NAM in a pool's liquidity, as it gives NAM no price.`;
 }
 
 /** The health row of the NAM quote: ok when either way gave a price; the route says how, a failure why. */

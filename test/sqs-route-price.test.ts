@@ -28,9 +28,11 @@ const LIST_NO_NAM = fixture('sqs_prices_no_nam.json');
 const ROUTE = (n: number) => fixture(`sqs_route_nam_${n}.json`);
 /** in_base_out_quote_spot_price of the 1,000 NAM answer */
 const SPOT = 0.000903440360921879;
+/** The quote in pool 3005 alone, as SQS answered it at 16:14 UTC on 25 Oct (test/fixtures/sqs_direct_3005_nam_1000.json). */
+const DIRECT = readFileSync(new URL('./fixtures/sqs_direct_3005_nam_1000.json', import.meta.url), 'utf8');
 
 /**
- * The quote service: `list` answers /tokens/prices, `route` answers /router/quote (a body, or a status to refuse
+ * The quote service: `list` answers /tokens/prices, `route` answers the quote in pool 3005 (a body, or a status to refuse
  * with), '[]' for the pool list. Returns the URLs asked.
  */
 function sqs(opts: { list?: string | number; route?: string | number } = {}) {
@@ -40,7 +42,7 @@ function sqs(opts: { list?: string | number; route?: string | number } = {}) {
     asked.push(url);
     const answer = (v: string | number | undefined) => (typeof v === 'number' ? new Response('refused', { status: v }) : new Response(v ?? '{}', { status: 200, headers: { 'content-type': 'application/json' } }));
     if (url.includes('/tokens/prices')) return answer(opts.list ?? LIST_NO_NAM);
-    if (url.includes('/router/quote')) return answer(opts.route ?? ROUTE(1000));
+    if (url.includes('/router/custom-direct-quote') || url.includes('/router/quote')) return answer(opts.route ?? ROUTE(1000));
     if (url.includes('/pools')) return answer('[]');
     return new Response('not found', { status: 404 });
   }));
@@ -88,10 +90,10 @@ describe('fetchNamPrice when the price list gives NAM no price', () => {
     expect(r.osmoUsd).toBeCloseTo(0.047995208978719417, 15);
     expect(Object.keys(r.coinUsd!).sort()).toEqual(['ATOM', 'ETH', 'KYVE', 'OSMO', 'TIA']);
     expect(r.coinUsd!.ATOM).toBeCloseTo(1.689013500289676, 12);
-    // one list read, then one router quote: 1,000 NAM (1e9 base units) for allUSDC, the coin the list prices in
+    // one list read, then one quote: 1,000 NAM (1e9 base units) sold in pool 3005 alone, for its Noble USDC
     expect(asked).toHaveLength(2);
     expect(asked[1]).toBe(routeSpotUrl());
-    expect(asked[1]).toBe(`${OSMOSIS.sqs}/router/quote?tokenIn=1000000000${encodeURIComponent(NAM.osmoDenom)}&tokenOutDenom=${encodeURIComponent(OSMOSIS.allUsdc)}`);
+    expect(asked[1]).toBe(`${OSMOSIS.sqs}/router/custom-direct-quote?tokenIn=1000000000${encodeURIComponent(NAM.osmoDenom)}&tokenOutDenom=${encodeURIComponent(OSMOSIS.usdcDenom)}&poolID=3005`);
   });
 
   it('the list path is unchanged: a NAM price in the list is the price, and the router is not asked', async () => {
@@ -129,7 +131,7 @@ describe('fetchNamPrice when the price list gives NAM no price', () => {
     const r = await p;
     expect(r.usd).toBeNull();
     expect(r.error).toBe(quoteErrorText('busy'));
-    expect(asked.filter((u) => u.includes('/router/quote'))).toHaveLength(3); // sqsGet's three tries
+    expect(asked.filter((u) => u.includes('/router/custom-direct-quote'))).toHaveLength(3); // sqsGet's three tries
     sqs({ route: 500 });
     const q = fetchNamPrice();
     await vi.runAllTimersAsync();
@@ -153,13 +155,21 @@ describe('fetchNamPrice when the price list gives NAM no price', () => {
     }
   });
 
+  it('the quote in pool 3005 alone, as SQS answers it, is taken: its one route is the pool itself', async () => {
+    sqs({ route: DIRECT });
+    const r = await fetchNamPrice();
+    expect(r.usd).toBeCloseTo(0.000970156293556628, 15);
+    expect(r.how).toEqual({ how: 'route', refNam: 1000, routes: [[{ id: '3005', liquidityUsd: 178 }]], liquidityUsd: 178 });
+  });
+
   it('a route through any pool but 3005 and the transmuter gives no price: the 1 NAM and 100 NAM answers SQS gave', async () => {
+    // (the quote now asks pool 3005 alone, so an answer through other pools would be the service's mistake; it is refused the same way)
     sqs({ route: ROUTE(1) });
     const one = await fetchNamPrice();
     expect(one.usd).toBeNull();
     expect(one.how).toBeUndefined();
     expect(one.error).toBe(routeOtherPoolsText(['3009', '3515']));
-    expect(one.error).toBe('The Osmosis quote service\'s price list gives NAM no price, and its router\'s quote for selling 1,000 NAM went through pools 3009, 3515 instead of pool 3005 alone, so no price is taken from it.');
+    expect(one.error).toBe('The Osmosis quote service\'s price list gives NAM no price, and its quote for selling 1,000 NAM in pool 3005 came back through pools 3009, 3515 instead, so no price is taken from it.');
     sqs({ route: ROUTE(100) });
     const hundred = await fetchNamPrice();
     expect(hundred.usd).toBeNull();
@@ -197,11 +207,11 @@ describe('the provenance of a route price', () => {
     const live = livePriceProv({ at, how: ROUTE_HOW });
     expect(live).toEqual({
       source: 'Osmosis SQS route spot, 1,000 NAM', at, status: 'live',
-      note: 'The Osmosis quote service\'s price list gives NAM no price, so the price is the spot price of the route its router quotes for selling 1,000 NAM: pool 3005 ($165 besides its NAM), then pool 3497 ($2,346,179). The service counts no NAM in a pool\'s liquidity, as it gives NAM no price.',
+      note: 'The Osmosis quote service\'s price list gives NAM no price, so the price is the spot price of the pool it quotes for selling 1,000 NAM: pool 3005 ($165 besides its NAM), then pool 3497 ($2,346,179). The service counts no NAM in a pool\'s liquidity, as it gives NAM no price.',
     });
     expect(livePriceProv({ at, how: { how: 'list' } })).toEqual({ source: 'Osmosis SQS', at, status: 'live' });
     const stored = storedPriceNote({ ...ROUTE_HOW, since: Date.UTC(2026, 9, 23, 16, 37) })!;
-    expect(stored).toBe('The Osmosis quote service\'s price list gave NAM no price, so the price is the spot price of the route its router quoted for selling 1,000 NAM: pool 3005 ($165 besides its NAM), then pool 3497 ($2,346,179) (liquidity as read at 2026-10-23 16:37 UTC). The service counts no NAM in a pool\'s liquidity, as it gives NAM no price.');
+    expect(stored).toBe('The Osmosis quote service\'s price list gave NAM no price, so the price is the spot price of the pool it quoted for selling 1,000 NAM: pool 3005 ($165 besides its NAM), then pool 3497 ($2,346,179) (liquidity as read at 2026-10-23 16:37 UTC). The service counts no NAM in a pool\'s liquidity, as it gives NAM no price.');
     expect(storedPriceNote({ how: 'list', since: at })).toBeUndefined();
     const split = routeNote({ how: 'route', refNam: 1000, routes: [[{ id: '3005', liquidityUsd: 165 }, { id: '3497', liquidityUsd: 2346179 }], [{ id: '3009', liquidityUsd: 17 }, { id: '3576', liquidityUsd: 4.2 }]], liquidityUsd: 4.2 });
     expect(split).toContain('selling 1,000 NAM: pool 3005 ($165 besides its NAM), then pool 3497 ($2,346,179); and pool 3009 ($17 besides its NAM), then pool 3576 ($4.20).');

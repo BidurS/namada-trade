@@ -764,7 +764,7 @@ describe('D: an `at` the routes answer live is the live copy, under no replay bu
     }
     // the price list, the router's 1,000 NAM quote (the list gives NAM no price: sources/sqs.ts fetchNamPrice) and the pools
     expect(asked).toHaveLength(3);
-    expect(asked.filter((s) => s.includes('/router/quote'))).toHaveLength(1);
+    expect(asked.filter((s) => s.includes('/router/custom-direct-quote'))).toHaveLength(1);
     expect([...e.store.keys()]).toEqual(['https://namada.trade/api/overview']);
     expect(limiter.limit).not.toHaveBeenCalled();
     // a time in the past is a rewound read: its own copy, under the replay budget, and no quote-service call
