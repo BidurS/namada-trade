@@ -105,7 +105,8 @@ describe('the live hub keeps the Namada scan on time when an Osmosis node hangs'
     const s = await setup({ publicnode: 'answers', keplrMs: 0, txsFor: (q, page) => (q.includes('token_swapped') && page === 1 ? one : []) });
     s.db.raw.prepare('UPDATE kv SET value = ? WHERE key = ?').run(String(H - 3), 'namada.cursor');
     await alarmOnce(s.hub);
-    expect(s.log.filter((u) => u.includes('api.keplr.app'))).toEqual([]);
+    // The search asked Keplr nothing (the stream's socket is opened with a fetch upgrade: not a search read).
+    expect(s.log.filter((u) => u.includes('api.keplr.app') && !u.endsWith('/websocket'))).toEqual([]);
     expect(s.log.filter((u) => u.includes('publicnode')).length).toBe(6); // /status, four searches, one /block
     expect(JSON.parse(kv(s.db, 'osmosis.cursor')).height).toBe(OSMO_HEAD);
     expect(kv(s.db, 'namada.cursor')).toBe(String(H));

@@ -16,7 +16,7 @@ afterEach(() => { vi.useRealTimers(); vi.unstubAllGlobals(); });
 
 const json = (o: unknown, status = 200) => new Response(JSON.stringify(o), { status, headers: { 'content-type': 'application/json' } });
 const osmo = (page: number, i: number) => bech32.encode('osmo', bech32.toWords(Uint8Array.from({ length: 20 }, (_, k) => (k === 0 ? page : k === 1 ? i : k === 2 ? 0xa5 : (page * 7 + i * 13 + k) & 0xff))));
-const KEPLR = OSMOSIS.keplrRest('k');
+const KEPLR = OSMOSIS.keplrRest;
 const PUBLIC = OSMOSIS.publicRest;
 const balanceOf = (u: string) => { const m = /\/cosmos\/bank\/v1beta1\/balances\/([^/?]+)\/by_denom\?denom=/.exec(u); return m ? decodeURIComponent(m[1]) : null; };
 const answer = (amount: bigint | string, denom: string = NAM.osmoDenom) => json({ balance: { denom, amount: String(amount) } });

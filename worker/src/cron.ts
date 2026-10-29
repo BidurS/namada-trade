@@ -9,7 +9,7 @@ import { fetchIntelChecked } from './sources/intel';
 import { sendTelegramForum, sendTelegramGov, telegramRun, TG_CRON_MS, TG_CRON_SENDS } from './sources/telegram';
 import { sendDiscordForumAlert, sendDiscordGovAlert, sendsAlerts, alertBudget, flushAlerts, sweepNoticeChannels, RUN_ALERT_POSTS, RUN_ALERT_WINDOW_MS, type GovContext } from './sources/discord';
 import { NAM, NAMADA, OSMOSIS } from './config';
-import { fetchJson, toNam, isRealAddress, FETCH_TEXT_MAX_BYTES } from './util';
+import { fetchJson, toNam, isRealAddress, FETCH_TEXT_MAX_BYTES, publicNote, redact, registerSecrets } from './util';
 import type { IntelResponse, SourceHealth } from '../../shared/types';
 import type { Stmt } from './db';
 import { sweepAuth } from './auth';
@@ -223,7 +223,11 @@ async function syncIntelAndAlerts(env: Env, health: SourceHealth[]) {
   }
 }
 
-/** Time a source call; record ok/latency/note instead of letting a failure become a silent zero. */
+/**
+ * Time a source call; record ok/latency/note instead of letting a failure become a silent zero. The note is served
+ * (/api/overview, /api/integrity), so it says what failed in words safe to publish (publicNote); what the upstream
+ * answered, and where it was asked, goes to the logs only.
+ */
 async function probe<T>(health: SourceHealth[], name: string, fn: () => Promise<T>): Promise<T | null> {
   const t0 = Date.now();
   try {
@@ -231,7 +235,8 @@ async function probe<T>(health: SourceHealth[], name: string, fn: () => Promise<
     health.push({ name, ok: true, at: Date.now(), latencyMs: Date.now() - t0 });
     return v;
   } catch (e) {
-    health.push({ name, ok: false, at: Date.now(), latencyMs: Date.now() - t0, note: String(e).slice(0, 160) });
+    console.error(`source ${name} failed: ${redact(String(e))}`);
+    health.push({ name, ok: false, at: Date.now(), latencyMs: Date.now() - t0, note: publicNote(String(e)).slice(0, 160) });
     return null;
   }
 }
@@ -1504,6 +1509,7 @@ export async function bondedCoverageCheck(db: D1Database, now: number, stakeNam:
 }
 
 export async function runCron(env: Env) {
+  registerSecrets(env.KEPLR_KEY);
   const now = Date.now();
   const health: SourceHealth[] = [];
   const alertsOff = alertDeliveryOff(env, now);

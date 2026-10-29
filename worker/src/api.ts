@@ -17,7 +17,7 @@ import { forgetTelegramUsers, sendFollowing, sendsTelegram, tgSend, testMessages
 import { createLinkCode, handleUpdate, revokeLinkCode, secretMatches, WEBHOOK_MAX_BYTES } from './telegram-bot';
 import { fmtAddr } from '../../shared/format';
 import { stmt, TAGS_PER_AUTHOR, TAGS_PER_DAY, kvGet, kvSet, kvGetJson } from './db';
-import { toNam, chainOf } from './util';
+import { toNam, chainOf, publicNote } from './util';
 import { OSMOSIS, INTERNAL_LABELS } from './config';
 import {
   flowsFilterFromQuery, flowsFilterError, flowsMode, flowsPageSql, flowsRowsSql, flowsCountSql, flowsLastSql, flowOrder, afterPosition,
@@ -54,6 +54,14 @@ export const CHECK_STALE_MS = 15 * 60_000;
 export const checkOf = (r: any, now: number): Check => ({
   key: r.key, status: now - Number(r.checked_at) > CHECK_STALE_MS ? 'stale' : r.status, title: r.title, detail: safeParseJson(r.detail), checkedAt: r.checked_at,
 });
+
+/**
+ * The stored source health as an answer may carry it: each note in words safe to publish (util.ts publicNote), so a
+ * note stored before probe() wrote them that way, or by a writer that does not, never serves an upstream's answer, a
+ * URL or a key.
+ */
+export const publicSources = (health: Record<string, SourceHealth> | null | undefined): SourceHealth[] =>
+  Object.values(health ?? {}).map((h) => (h.note ? { ...h, note: publicNote(h.note) } : h));
 
 export const app = new Hono<{ Bindings: Env }>();
 
@@ -273,7 +281,7 @@ app.get('/api/overview', async (c) => {
       osmosisProv: holderFiguresProv(top10Osmo?.at, holderCounts?.osmosis_at, now),
     },
     checks,
-    sources: Object.values(health ?? {}).sort((a, b) => a.name.localeCompare(b.name)),
+    sources: publicSources(health).sort((a, b) => a.name.localeCompare(b.name)),
   };
   return c.json(overview);
 });
@@ -1800,7 +1808,7 @@ app.get('/api/integrity', async (c) => {
   const rows = await c.env.DB.prepare('SELECT * FROM checks ORDER BY checked_at DESC').all<any>().catch(() => ({ results: [] }));
   const checks: Check[] = (rows.results || []).map((r: any) => checkOf(r, Date.now()));
   const health = (await kvGetJson<Record<string, SourceHealth>>(c.env.DB, 'source.health')) ?? {};
-  return c.json({ checks, sources: Object.values(health), at: Date.now() });
+  return c.json({ checks, sources: publicSources(health), at: Date.now() });
 });
 
 // No HTTP trigger for the cron: it ran the whole tick for anyone who asked (hundreds of node and Keplr requests,

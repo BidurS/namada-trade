@@ -33,17 +33,54 @@ export interface Env {
 }
 
 export class HttpError extends Error {
-  /** The URL with any key redacted: the whole error may be logged or serialised, not only its message. */
+  /** The URL without its query, any secret masked: the whole error may be logged or serialised, not only its message. */
   readonly url: string;
   constructor(public status: number, url: string, body: string) {
-    super(`HTTP ${status} for ${redact(url)}: ${body.slice(0, 200)}`);
-    this.url = redact(url);
+    super(`HTTP ${status} for ${urlForLog(url)}: ${redact(body.slice(0, 200))}`);
+    this.url = urlForLog(url);
   }
 }
 
-/** Never leak the Keplr key into logs or API responses. */
+/** The secrets' values redact() masks wherever they appear, as given and URL-encoded (registerSecrets). */
+const SECRETS = new Set<string>();
+
+/**
+ * Masks `values` (the Keplr key) in everything redact() is applied to from now on, by the value itself: a key of any
+ * form is masked, not only one that looks like Keplr's. Each entry point registers its env's (index.ts, the
+ * LiveHub's constructor). A value under 8 characters (unset, or a test's placeholder) is not taken: masking it would
+ * garble every message.
+ */
+export function registerSecrets(...values: (string | undefined)[]) {
+  for (const v of values) if (v && v.length >= 8) { SECRETS.add(v); SECRETS.add(encodeURIComponent(v)); }
+}
+
+/**
+ * Never leak a secret into logs or API responses: every registered value is masked, and anything shaped like a
+ * Keplr key too (a second guard, for a run that registered none, as scripts/ do).
+ */
 export function redact(s: string): string {
-  return s.replace(/keplr_[A-Za-z0-9_-]+/g, 'keplr_***');
+  let out = s;
+  for (const v of SECRETS) if (out.includes(v)) out = out.split(v).join('***');
+  return out.replace(/keplr_[A-Za-z0-9_-]+/g, 'keplr_***');
+}
+
+/** A URL as an error message or a log line may carry it: without its query or fragment, every secret masked. */
+export function urlForLog(url: string): string {
+  const i = url.search(/[?#]/);
+  return redact(i < 0 ? url : url.slice(0, i));
+}
+
+/**
+ * An error as an API answer may say it (a health note, served by /api/overview and /api/integrity): what failed,
+ * never what an upstream sent or where it was asked. An HTTP error becomes "upstream unavailable (HTTP 502)", a
+ * parse error that quotes the answer says only that it was not JSON, and any URL left becomes "upstream"; the rest,
+ * the worker's own words, stays, every secret masked. The details are for the logs (cron.ts probe).
+ */
+export function publicNote(s: string): string {
+  return redact(s)
+    .replace(/HTTP (\d{3}) for [\s\S]*$/, 'upstream unavailable (HTTP $1)')
+    .replace(/(?:SyntaxError: )?Unexpected token[\s\S]*$/, 'upstream sent an answer that is not JSON')
+    .replace(/\b(?:https?|wss?):\/\/\S+/g, 'upstream');
 }
 
 /**
@@ -76,12 +113,12 @@ export class ReadBudgetError extends Error {}
  */
 async function cappedBytes(res: Response, maxBytes: number, url: string, budget?: ReadBudget): Promise<Uint8Array> {
   const limit = budget ? Math.max(0, Math.min(maxBytes, budget.left)) : maxBytes;
-  const spent = (what: string) => new ReadBudgetError(`response ${what}: past the ${mbOf(limit)} left of its reads' budget, for ${redact(url)}`);
+  const spent = (what: string) => new ReadBudgetError(`response ${what}: past the ${mbOf(limit)} left of its reads' budget, for ${urlForLog(url)}`);
   const cl = Number(res.headers.get('content-length'));
   if (Number.isFinite(cl) && cl > limit) {
     await res.body?.cancel().catch(() => {});
     throw cl > maxBytes
-      ? new ResponseTooLargeError(`response too large (${mbOf(cl)} announced, ${mbOf(maxBytes)} allowed) for ${redact(url)}`)
+      ? new ResponseTooLargeError(`response too large (${mbOf(cl)} announced, ${mbOf(maxBytes)} allowed) for ${urlForLog(url)}`)
       : spent(`of ${mbOf(cl)} announced`);
   }
   if (!res.body) return new Uint8Array(0);
@@ -94,7 +131,7 @@ async function cappedBytes(res: Response, maxBytes: number, url: string, budget?
     bytes += value.length;
     if (bytes > limit) {
       await reader.cancel().catch(() => {});
-      throw limit < maxBytes ? spent(`over ${mbOf(limit)}`) : new ResponseTooLargeError(`response too large (over ${mbOf(maxBytes)}) for ${redact(url)}`);
+      throw limit < maxBytes ? spent(`over ${mbOf(limit)}`) : new ResponseTooLargeError(`response too large (over ${mbOf(maxBytes)}) for ${urlForLog(url)}`);
     }
     parts.push(value);
   }
@@ -146,8 +183,8 @@ export async function fetchJson<T = any>(
   let lastErr: unknown;
   for (let attempt = 0; attempt <= retries; attempt++) {
     // A caller's deadline (`signal`) ends the request and every retry, as the per-attempt timeout ends one attempt.
-    if (signal?.aborted) throw new Error(`deadline passed before ${redact(url)}`);
-    if (budget && budget.left <= 0) throw new ReadBudgetError(`no bytes left of its reads' budget for ${redact(url)}`);
+    if (signal?.aborted) throw new Error(`deadline passed before ${urlForLog(url)}`);
+    if (budget && budget.left <= 0) throw new ReadBudgetError(`no bytes left of its reads' budget for ${urlForLog(url)}`);
     const ctrl = new AbortController();
     const timer = setTimeout(() => ctrl.abort('timeout'), timeoutMs);
     const onAbort = () => ctrl.abort('deadline');
@@ -178,7 +215,7 @@ export async function fetchJson<T = any>(
     if (signal?.aborted) break;
     if (attempt < retries) await sleep(300 * 2 ** attempt);
   }
-  throw lastErr instanceof Error ? new Error(redact(lastErr.message)) : new Error(`fetch failed: ${redact(url)}`);
+  throw lastErr instanceof Error ? new Error(redact(lastErr.message)) : new Error(`fetch failed: ${urlForLog(url)}`);
 }
 
 /** A body read that ended early: how much arrived, of how much (the Content-Length, when sent), in how long. */
@@ -216,7 +253,7 @@ export async function fetchText(
   opts: { timeoutMs?: number; maxBytes?: number; init?: RequestInit; signal?: AbortSignal } = {},
 ): Promise<{ text: string; bytes: number; total: number | null; ms: number; firstByteMs: number }> {
   const { timeoutMs = 15000, maxBytes = FETCH_TEXT_MAX_BYTES, init, signal } = opts;
-  if (signal?.aborted) throw new Error(`deadline passed before ${redact(url)}`);
+  if (signal?.aborted) throw new Error(`deadline passed before ${urlForLog(url)}`);
   const t0 = Date.now();
   const ctrl = new AbortController();
   const timer = setTimeout(() => ctrl.abort('timeout'), timeoutMs);

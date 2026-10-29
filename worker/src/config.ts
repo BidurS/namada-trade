@@ -24,10 +24,14 @@ const OSMO_COIN = {
 
 export const OSMOSIS = {
   chainId: 'osmosis-1',
-  /** Keplr infra; the key is appended at runtime from the KEPLR_KEY secret */
-  keplrRpc: (key: string) => `https://api.keplr.app/rpc/osmosis/${key}`,
-  keplrRest: (key: string) => `https://api.keplr.app/rest/osmosis/${key}`,
-  keplrWs: (key: string) => `wss://api.keplr.app/rpc/osmosis/${key}/websocket`,
+  /**
+   * Keplr infra. The key (the KEPLR_KEY secret) goes in the X-API-Key header (keplrHeaders), never in these URLs: a
+   * URL is what an error message, a log line or a health note carries. The socket is opened with a fetch upgrade
+   * (live-hub.ts ensureOsmosisWs), the only way a Worker can send it a header, so its URL is https.
+   */
+  keplrRpc: 'https://api.keplr.app/rpc/osmosis',
+  keplrRest: 'https://api.keplr.app/rest/osmosis',
+  keplrWs: 'https://api.keplr.app/rpc/osmosis/websocket',
   sqs: 'https://sqs.osmosis.zone',
   /** Public Osmosis RPC for the catch-up search (tx_search by event, newest first; no height ranges there) */
   publicRpc: 'https://osmosis-rpc.publicnode.com',
@@ -122,3 +126,6 @@ export const INTERNAL_LABELS: Record<string, { label: string; category: string }
 };
 
 export const UA = 'NamadaTrade/1.0 (+cloudflare-worker)';
+
+/** The headers that carry the Keplr key (OSMOSIS.keplrRpc / keplrRest / keplrWs), which Keplr reads as the URL's key segment. */
+export const keplrHeaders = (key: string): Record<string, string> => ({ 'X-API-Key': key });

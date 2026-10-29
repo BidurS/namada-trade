@@ -1,7 +1,7 @@
 import { DurableObject } from 'cloudflare:workers';
 import type { Env } from './util';
 import type { LiveMessage, Flow } from '../../shared/types';
-import { OSMOSIS, NAM, NAMADA } from './config';
+import { OSMOSIS, NAM, NAMADA, keplrHeaders } from './config';
 import { normFromWs, normFromTxSearch, osmoAssets, parseOsmosisTx, type OsmoCtx, type OsmoParsed } from './parse/osmosis';
 import { parseNamadaBlock } from './parse/namada';
 import { blockHasUnbond, parseNamadaUnbonds } from './parse/namada-unbond';
@@ -17,7 +17,7 @@ import { HubQuote, askQuoteService, storedQuoteReader } from './live-quote';
 import { priceRouteAt, stampPriceRoute } from './price-how';
 import { sendTelegramMove, telegramRun, TG_LIVE_MS, TG_LIVE_SENDS } from './sources/telegram';
 import { alarmBudget, configureAlerts, fanoutBudget, flushAlerts, isNamWhale, noteNotSent, offeredForAlerts, sendDiscordWhaleAlert, sendsAlerts, spentOut, FANOUT_DEADLINE_MS, UsersUnreadError, WEBHOOK_TIMEOUT_MS, type AlertBudget, type PendingAlert } from './sources/discord';
-import { fetchJson, FETCH_TEXT_MAX_BYTES, ReadBudgetError, ResponseTooLargeError, type ReadBudget } from './util';
+import { fetchJson, redact, registerSecrets, FETCH_TEXT_MAX_BYTES, ReadBudgetError, ResponseTooLargeError, type ReadBudget } from './util';
 
 /** Moves found late (by the catch-up search, or by a Namada scan that was behind) alert only when they happened within this window. */
 export const LATE_ALERT_MAX_AGE_MS = 24 * 3600_000;
@@ -274,6 +274,7 @@ export class LiveHub extends DurableObject<Env> {
   constructor(ctx: DurableObjectState, env: Env) {
     super(ctx, env);
     configureAlerts(env.SETTINGS_KEY, sendsAlerts(env));
+    registerSecrets(env.KEPLR_KEY);
     // the cron's own read (the price list, else the route's spot), with the source name and note that say which
     this.quote = new HubQuote(askQuoteService, storedQuoteReader(env.DB));
     this.ctx.blockConcurrencyWhile(async () => {
@@ -330,69 +331,80 @@ export class LiveHub extends DurableObject<Env> {
   private ensureOsmosisWs() {
     if (this.osmoWs || this.isConnectingOsmo || !this.env.KEPLR_KEY) return;
     this.isConnectingOsmo = true;
-
-    try {
-      const wsUrl = OSMOSIS.keplrWs(this.env.KEPLR_KEY);
-      const ws = new WebSocket(wsUrl);
-      // A connection that neither opens nor fails within this long is closed (its close listener reconnects), so a
-      // half-open handshake can never leave `isConnectingOsmo` set for good.
-      let opened = false;
-      const pending = setTimeout(() => { if (!opened) { try { ws.close(); } catch {} } }, 20_000);
-
-      ws.addEventListener('open', () => {
-        opened = true;
-        clearTimeout(pending);
-        this.osmoWs = ws;
-        this.isConnectingOsmo = false;
-        console.log('Connected to Osmosis WebSocket');
-
-        this.osmoSince = Date.now();
-        // A reconnect may have missed transactions: the next alarm runs the catch-up search.
-        this.needSweep = true;
-        // Subscriptions
-        const queries = OSMOSIS_QUERIES.map((q) => `tm.event='Tx' AND ${q}`);
-
-        queries.forEach((q, i) => {
-          ws.send(
-            JSON.stringify({
-              jsonrpc: '2.0',
-              method: 'subscribe',
-              id: i + 1,
-              params: { query: q },
-            }),
-          );
-        });
-
-        this.broadcastStatus();
-      });
-
-      ws.addEventListener('message', async (event) => {
-        try {
-          const msg = JSON.parse(event.data as string);
-          await this.handleOsmosisMessage(msg);
-        } catch (e) {
-          console.error('Error handling Osmosis WS message:', e);
-        }
-      });
-
-      ws.addEventListener('close', () => {
-        clearTimeout(pending);
-        this.osmoWs = null;
-        this.isConnectingOsmo = false;
-        this.osmoSince = null;
-        this.needSweep = true;
-        // Reconnect in 5 seconds
-        setTimeout(() => this.ensureOsmosisWs(), 5000);
-      });
-
-      ws.addEventListener('error', (err) => {
-        console.error('Osmosis WS error:', err);
-        ws.close();
-      });
-    } catch (e) {
+    // The key goes in a header (keplrHeaders), never in the URL, and only a fetch upgrade can send a WebSocket one.
+    // A handshake that neither opens nor fails within this long is abandoned (and retried), so a half-open one can
+    // never leave `isConnectingOsmo` set for good.
+    const ctrl = new AbortController();
+    const pending = setTimeout(() => ctrl.abort('timeout'), 20_000);
+    const retry = (why: unknown) => {
+      clearTimeout(pending);
+      console.error(`Osmosis WS not opened: ${redact(String(why))}`);
       this.isConnectingOsmo = false;
       setTimeout(() => this.ensureOsmosisWs(), 5000);
+    };
+    let res: Promise<Response>;
+    try {
+      res = fetch(OSMOSIS.keplrWs, { headers: { Upgrade: 'websocket', ...keplrHeaders(this.env.KEPLR_KEY) }, signal: ctrl.signal });
+    } catch (e) {
+      retry(e);
+      return;
     }
+    res.then((r) => {
+      const ws = r.webSocket;
+      if (!ws) { r.body?.cancel().catch(() => {}); retry(`HTTP ${r.status}, not a WebSocket`); return; }
+      clearTimeout(pending);
+      ws.accept();
+      this.openedOsmosisWs(ws);
+    }, retry);
+  }
+
+  /** The Osmosis socket, accepted: its listeners (a close reconnects in 5 s), then its subscriptions. */
+  private openedOsmosisWs(ws: WebSocket) {
+    this.osmoWs = ws;
+    this.isConnectingOsmo = false;
+    console.log('Connected to Osmosis WebSocket');
+
+    ws.addEventListener('message', async (event) => {
+      try {
+        const msg = JSON.parse(event.data as string);
+        await this.handleOsmosisMessage(msg);
+      } catch (e) {
+        console.error('Error handling Osmosis WS message:', e);
+      }
+    });
+
+    ws.addEventListener('close', () => {
+      this.osmoWs = null;
+      this.isConnectingOsmo = false;
+      this.osmoSince = null;
+      this.needSweep = true;
+      // Reconnect in 5 seconds
+      setTimeout(() => this.ensureOsmosisWs(), 5000);
+    });
+
+    ws.addEventListener('error', (err) => {
+      console.error('Osmosis WS error:', err);
+      ws.close();
+    });
+
+    this.osmoSince = Date.now();
+    // A reconnect may have missed transactions: the next alarm runs the catch-up search.
+    this.needSweep = true;
+    // Subscriptions
+    const queries = OSMOSIS_QUERIES.map((q) => `tm.event='Tx' AND ${q}`);
+
+    queries.forEach((q, i) => {
+      ws.send(
+        JSON.stringify({
+          jsonrpc: '2.0',
+          method: 'subscribe',
+          id: i + 1,
+          params: { query: q },
+        }),
+      );
+    });
+
+    this.broadcastStatus();
   }
 
   private async handleOsmosisMessage(msg: any) {
@@ -1134,7 +1146,9 @@ export class LiveHub extends DurableObject<Env> {
   }
 
   private async sweepOsmosisWith(signal: AbortSignal | undefined, prev: OsmosisCursor | null, alerts: AlertBudget) {
-    const rpcs = [{ provider: 'publicnode', url: OSMOSIS.publicRpc }, ...(this.env.KEPLR_KEY ? [{ provider: 'keplr', url: OSMOSIS.keplrRpc(this.env.KEPLR_KEY) }] : [])];
+    const rpcs = [{ provider: 'publicnode', url: OSMOSIS.publicRpc }, ...(this.env.KEPLR_KEY ? [{ provider: 'keplr', url: OSMOSIS.keplrRpc }] : [])];
+    // Keplr's key travels in a header, never in the URL an error message carries.
+    const initOf = (provider: string): RequestInit | undefined => (provider === 'keplr' ? { headers: keplrHeaders(this.env.KEPLR_KEY) } : undefined);
     // A node that failed a read of this search is asked last for the rest of it: one that accepts requests and never
     // answers would otherwise cost every read its 25 s before the other is asked.
     const breaker = new RpcBreaker();
@@ -1147,7 +1161,7 @@ export class LiveHub extends DurableObject<Env> {
       let last: unknown, tooLarge: unknown, overBudget: unknown, large = 0;
       for (const r of breaker.order(rpcs)) {
         if (signal?.aborted) break;
-        try { return await fetchJson<any>(`${r.url}${path}`, { timeoutMs: 25000, retries: 0, maxBytes: FETCH_TEXT_MAX_BYTES, signal, budget }); } catch (e) {
+        try { return await fetchJson<any>(`${r.url}${path}`, { timeoutMs: 25000, retries: 0, maxBytes: FETCH_TEXT_MAX_BYTES, signal, budget, init: initOf(r.provider) }); } catch (e) {
           // Past the budget's bytes left, as past the cap: the next node's answer of the same page may be smaller (one
           // node can pad its answers), so it is asked; the read fails only when every node's answer is too large.
           if (e instanceof ReadBudgetError) { overBudget = e; large++; continue; }

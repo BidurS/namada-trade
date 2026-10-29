@@ -1,4 +1,4 @@
-import { OSMOSIS, NAM } from '../config';
+import { OSMOSIS, NAM, keplrHeaders } from '../config';
 import { fetchJson, toNam, isRealAddress, FETCH_TEXT_MAX_BYTES } from '../util';
 
 export interface HolderItem {
@@ -72,7 +72,8 @@ export interface HolderListRead { holders: HolderItem[]; complete: boolean; capp
  * `nextKey`, the key the next read starts from.
  */
 export async function fetchOsmosisHolderList(keplrKey: string, pages = OSMOSIS_HOLDER_PAGES, opts: HolderListOpts = {}): Promise<HolderListRead> {
-  const rest = OSMOSIS.keplrRest(keplrKey);
+  const rest = OSMOSIS.keplrRest;
+  const headers = keplrHeaders(keplrKey);
   const denom = encodeURIComponent(NAM.osmoDenom);
   let nextKey: string | null = opts.from ?? null;
   let complete = false;
@@ -95,7 +96,7 @@ export async function fetchOsmosisHolderList(keplrKey: string, pages = OSMOSIS_H
     }`;
     let pageRes: any;
     try {
-      pageRes = await fetchJson(pageUrl, { timeoutMs: opts.timeoutMs ?? 25000, retries: opts.retries ?? 2, signal: opts.signal });
+      pageRes = await fetchJson(pageUrl, { timeoutMs: opts.timeoutMs ?? 25000, retries: opts.retries ?? 2, signal: opts.signal, init: { headers } });
     } catch (e) {
       if (opts.resume && read > 0 && opts.signal?.aborted) return paused();
       throw e;
@@ -124,12 +125,12 @@ function sorted(holders: HolderItem[]): HolderItem[] {
 
 /** The bank's supply of NAM on Osmosis, in base units (exact, for the holder-list check). */
 export async function fetchOsmosisSupplyBase(keplrKey: string, opts: KeplrOpts = {}): Promise<bigint> {
-  const rest = OSMOSIS.keplrRest(keplrKey);
   const denom = encodeURIComponent(NAM.osmoDenom);
-  const res = await fetchJson(`${rest}/cosmos/bank/v1beta1/supply/by_denom?denom=${denom}`, {
+  const res = await fetchJson(`${OSMOSIS.keplrRest}/cosmos/bank/v1beta1/supply/by_denom?denom=${denom}`, {
     timeoutMs: opts.timeoutMs ?? 15000,
     retries: opts.retries ?? 2,
     signal: opts.signal,
+    init: { headers: keplrHeaders(keplrKey) },
   });
   const amt = res?.amount?.amount;
   if (typeof amt !== 'string' || !/^\d+$/.test(amt)) throw new Error('supply answer without an amount');
@@ -155,7 +156,7 @@ export interface OsmosisBalanceRead { base: bigint; src: typeof KEPLR_REST_SRC |
 export async function fetchOsmosisBalanceBase(keplrKey: string, address: string, opts: KeplrOpts = {}): Promise<OsmosisBalanceRead> {
   const path = `/cosmos/bank/v1beta1/balances/${encodeURIComponent(address)}/by_denom?denom=${encodeURIComponent(NAM.osmoDenom)}`;
   try {
-    return { base: await balanceAnswer(`${OSMOSIS.keplrRest(keplrKey)}${path}`, opts), src: KEPLR_REST_SRC };
+    return { base: await balanceAnswer(`${OSMOSIS.keplrRest}${path}`, opts, keplrHeaders(keplrKey)), src: KEPLR_REST_SRC };
   } catch (e) {
     if (opts.signal?.aborted) throw e;
   }
@@ -165,9 +166,9 @@ export async function fetchOsmosisBalanceBase(keplrKey: string, address: string,
     throw new Error("neither Keplr's REST nor Osmosis's public REST gave the bank's balance by address");
   }
 }
-/** The amount of one bank balances by_denom answer at `url`, in base units; throws on an answer that is not the bank's. */
-async function balanceAnswer(url: string, opts: KeplrOpts): Promise<bigint> {
-  const res = await fetchJson(url, { timeoutMs: opts.timeoutMs ?? 15000, retries: opts.retries ?? 2, signal: opts.signal });
+/** The amount of one bank balances by_denom answer at `url` (asked with `headers`), in base units; throws on an answer that is not the bank's. */
+async function balanceAnswer(url: string, opts: KeplrOpts, headers?: Record<string, string>): Promise<bigint> {
+  const res = await fetchJson(url, { timeoutMs: opts.timeoutMs ?? 15000, retries: opts.retries ?? 2, signal: opts.signal, ...(headers ? { init: { headers } } : {}) });
   const b = res?.balance;
   if (!b || typeof b !== 'object' || b.denom !== NAM.osmoDenom || typeof b.amount !== 'string' || !OWNER_AMOUNT.test(b.amount)) {
     throw new Error('balance answer without the denom asked for and a whole-number amount');
@@ -180,8 +181,7 @@ export async function fetchOsmosisSupply(keplrKey: string): Promise<number> {
 }
 
 export async function fetchOsmosisStatus(keplrKey: string) {
-  const rpc = OSMOSIS.keplrRpc(keplrKey);
-  const res = await fetchJson(`${rpc}/status`, { timeoutMs: 10000, retries: 1 });
+  const res = await fetchJson(`${OSMOSIS.keplrRpc}/status`, { timeoutMs: 10000, retries: 1, init: { headers: keplrHeaders(keplrKey) } });
   const s = res.result?.sync_info;
   return {
     height: Number(s?.latest_block_height || 0),
@@ -197,11 +197,10 @@ export async function searchOsmosisTxs(
   perPage = 50,
   orderBy = 'desc',
 ) {
-  const rpc = OSMOSIS.keplrRpc(keplrKey);
   const q = encodeURIComponent(`"${query}"`);
-  const url = `${rpc}/tx_search?query=${q}&page=${page}&per_page=${perPage}&order_by="${orderBy}"`;
+  const url = `${OSMOSIS.keplrRpc}/tx_search?query=${q}&page=${page}&per_page=${perPage}&order_by="${orderBy}"`;
   // A page of 50 was 1.7 MB on 2026-10-22, close to fetchJson's default cap: it may be as large as a listing.
-  const res = await fetchJson(url, { timeoutMs: 30000, retries: 2, maxBytes: FETCH_TEXT_MAX_BYTES });
+  const res = await fetchJson(url, { timeoutMs: 30000, retries: 2, maxBytes: FETCH_TEXT_MAX_BYTES, init: { headers: keplrHeaders(keplrKey) } });
   return {
     total: Number(res.result?.total_count || 0),
     txs: res.result?.txs || [],

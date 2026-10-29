@@ -1,7 +1,7 @@
 import { app } from './api';
 import { LiveHub } from './live-hub';
 import { runCron } from './cron';
-import type { Env } from './util';
+import { registerSecrets, type Env } from './util';
 import { configureAlerts, sendsAlerts } from './sources/discord';
 import { seoHtml, robotsTxt, sitemapXml, llmsTxt, classifyPath } from './seo';
 import { redirectLocation } from '../../shared/routes';
@@ -46,6 +46,7 @@ export { LiveHub };
 export default {
   async fetch(request: Request, env: Env, ctx: ExecutionContext): Promise<Response> {
     configureAlerts(env.SETTINGS_KEY, sendsAlerts(env));
+    registerSecrets(env.KEPLR_KEY);
     const url = new URL(request.url);
 
     // Canonical origin: https://namada.trade (worker/src/hosts.ts). Plain http, www and the workers.dev origin are
@@ -125,6 +126,7 @@ export default {
 
   async scheduled(event: ScheduledEvent, env: Env, ctx: ExecutionContext): Promise<void> {
     configureAlerts(env.SETTINGS_KEY, sendsAlerts(env));
+    registerSecrets(env.KEPLR_KEY);
     ctx.waitUntil(runCron(env));
   },
 };
