@@ -90,14 +90,20 @@ export function cardText(card: Card, now = Date.now()): string {
 const pct = (s: string) => encodeURIComponent(s).replace(/[!*'()]/g, (c) => `%${c.charCodeAt(0).toString(16).toUpperCase()}`);
 const b64 = (b: ArrayBuffer) => btoa(String.fromCharCode(...new Uint8Array(b)));
 
-/** The Authorization header of a JSON POST to `url` (a JSON body is not part of the signature). */
+/**
+ * The Authorization header of a request to `url`: its query parameters are signed with the oauth ones, the URL
+ * without them; a JSON or multipart body is not part of the signature.
+ */
 export async function oauthHeader(env: Required<Omit<XEnv, 'DB'>>, method: string, url: string, nonce = crypto.randomUUID().replace(/-/g, ''), ts = Math.floor(Date.now() / 1000)): Promise<string> {
   const o: Record<string, string> = {
     oauth_consumer_key: env.X_API_KEY, oauth_nonce: nonce, oauth_signature_method: 'HMAC-SHA1',
     oauth_timestamp: String(ts), oauth_token: env.X_ACCESS_TOKEN, oauth_version: '1.0',
   };
-  const params = Object.keys(o).sort().map((k) => `${pct(k)}=${pct(o[k])}`).join('&');
-  const base = `${method.toUpperCase()}&${pct(url)}&${pct(params)}`;
+  const u = new URL(url);
+  const signed: [string, string][] = [...Object.entries(o), ...u.searchParams.entries()].map(([k, v]) => [pct(k), pct(v)]);
+  signed.sort(([a, x], [b, y]) => (a < b ? -1 : a > b ? 1 : x < y ? -1 : x > y ? 1 : 0));
+  const params = signed.map(([k, v]) => `${k}=${v}`).join('&');
+  const base = `${method.toUpperCase()}&${pct(`${u.origin}${u.pathname}`)}&${pct(params)}`;
   const key = await crypto.subtle.importKey('raw', new TextEncoder().encode(`${pct(env.X_API_SECRET)}&${pct(env.X_ACCESS_SECRET)}`), { name: 'HMAC', hash: 'SHA-1' }, false, ['sign']);
   o.oauth_signature = b64(await crypto.subtle.sign('HMAC', key, new TextEncoder().encode(base)));
   return 'OAuth ' + Object.keys(o).sort().map((k) => `${pct(k)}="${pct(o[k])}"`).join(', ');
@@ -265,4 +271,81 @@ export async function recapChart(db: D1Database, now: number): Promise<Uint8Arra
   const shaped = shapePriceChart(await readChartRows(db, ctx), ctx);
   if (isNotRead(shaped)) return null;
   return (await toPng(priceChart(shaped.input))).png;
+}
+
+// ---------------------------------------------------------------- reposting @namada
+
+/** The account whose posts are reposted (owner, 2026-10-29): Namada's own. */
+export const REPOST_HANDLE = 'namada';
+/** How often the cron's tick looks for its new posts (each look that finds none costs nothing: reads are billed per post). */
+export const REPOST_EVERY_MIN = 10;
+/** The most reposts a UTC day, apart from X_DAILY_MAX. */
+export const REPOST_DAILY_MAX = 10;
+
+/** A signed GET; its JSON, or null. */
+async function xGet(env: XEnv, url: string): Promise<{ status: number; j: any }> {
+  try {
+    const res = await fetch(url, { headers: { authorization: await oauthHeader(env as Required<Omit<XEnv, 'DB'>>, 'GET', url) }, signal: AbortSignal.timeout(X_TIMEOUT_MS) });
+    return { status: res.status, j: await res.json().catch(() => null) };
+  } catch {
+    return { status: 0, j: null };
+  }
+}
+
+/** The posting account's id: the number an OAuth 1.0a access token starts with ("<user id>-…"). */
+export const ownId = (env: XEnv) => /^(\d+)-/.exec(env.X_ACCESS_TOKEN ?? '')?.[1] ?? null;
+
+/**
+ * The cron's tick, every REPOST_EVERY_MIN minutes: reposts @namada's new posts (not its replies or its own reposts),
+ * oldest first, each once (`alert:x:repost:<post id>`), at most REPOST_DAILY_MAX a day. The first look only records
+ * where its posts stand (kv `x.repost.since`), so nothing older than the feature is reposted; the account's id is
+ * looked up once (kv `x.repost.id`). A repost X refuses as already made counts as made.
+ */
+export async function repostNamada(env: XEnv, now = Date.now()): Promise<number> {
+  if (!postsOnX(env) || Math.floor(now / 60_000) % REPOST_EVERY_MIN !== 0) return 0;
+  const me = ownId(env);
+  if (!me) return 0;
+  let id = (await env.DB.prepare("SELECT value FROM kv WHERE key = 'x.repost.id'").first<{ value: string }>().catch(() => null))?.value;
+  if (!id) {
+    const u = await xGet(env, `https://api.x.com/2/users/by/username/${REPOST_HANDLE}`);
+    id = u.j?.data?.id;
+    if (!id) { console.error(`x: @${REPOST_HANDLE} not looked up (${u.status})`); return 0; }
+    await kvSet(env.DB, 'x.repost.id', id);
+  }
+  const since = (await env.DB.prepare("SELECT value FROM kv WHERE key = 'x.repost.since'").first<{ value: string }>().catch(() => null))?.value;
+  const q = new URLSearchParams({ exclude: 'replies,retweets', max_results: since ? '10' : '5' });
+  if (since) q.set('since_id', since);
+  const r = await xGet(env, `https://api.x.com/2/users/${id}/tweets?${q}`);
+  if (r.status !== 200) { if (r.status) console.error(`x: @${REPOST_HANDLE}'s posts not read (${r.status})`); return 0; }
+  const posts: { id: string }[] = Array.isArray(r.j?.data) ? r.j.data : [];
+  const newest = typeof r.j?.meta?.newest_id === 'string' ? r.j.meta.newest_id : posts[0]?.id;
+  if (!since) { if (newest) await kvSet(env.DB, 'x.repost.since', newest); return 0; }
+  let n = 0;
+  // the newest post handled before any that must wait (the day's reposts spent, X not answering)
+  let done: string | null = since;
+  let waited = false;
+  for (const p of [...posts].reverse()) {
+    if (!/^\d+$/.test(p.id) || !(await claimDiscordAlert(env.DB, [`alert:x:repost:${p.id}`]))) { done = p.id; continue; }
+    const d = await env.DB.prepare(
+      `INSERT INTO kv (key, value, updated_at) VALUES (?1, '1', ?2)
+       ON CONFLICT(key) DO UPDATE SET value = CAST(CAST(kv.value AS INTEGER) + 1 AS TEXT), updated_at = ?2 WHERE CAST(kv.value AS INTEGER) < ${REPOST_DAILY_MAX}`,
+    ).bind(`alert:x:repostday:${day(now)}`, now).run();
+    if (!Number(d.meta?.changes ?? 0)) { await releaseClaims(env.DB, [`alert:x:repost:${p.id}`]); waited = true; break; }
+    const url = `https://api.x.com/2/users/${me}/retweets`;
+    let a: { status: number; j: any };
+    try {
+      const res = await fetch(url, { method: 'POST', headers: { authorization: await oauthHeader(env as Required<Omit<XEnv, 'DB'>>, 'POST', url), 'content-type': 'application/json' }, body: JSON.stringify({ tweet_id: p.id }), signal: AbortSignal.timeout(X_TIMEOUT_MS) });
+      a = { status: res.status, j: await res.json().catch(() => null) };
+    } catch { a = { status: 0, j: null }; }
+    if (a.j?.data?.retweeted === true || a.status === 200) n++;
+    else {
+      console.error(`x: @${REPOST_HANDLE}'s post ${p.id} not reposted (${a.status})`);
+      if (a.status === 0 || a.status >= 500 || a.status === 429) { await releaseClaims(env.DB, [`alert:x:repost:${p.id}`]); waited = true; break; }
+    }
+    done = p.id;
+  }
+  // the next look starts after the newest post handled; one that must wait (its claim given back) is read again
+  const next = waited ? done : newest;
+  if (next && next !== since) await kvSet(env.DB, 'x.repost.since', next);
+  return n;
 }

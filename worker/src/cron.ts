@@ -7,7 +7,7 @@ import { QUOTE_KEYS } from '../../shared/settle';
 import { namBalance, namTotalSupply, namTotalStake, namadaEpoch, namadaStatusAll, delegationsAt, answeringRpcs, listingHeads, QUICK, RpcBreaker, allNamBalances, allBonds, ListingTooLargeError, LISTING_MAX_VALUE_BYTES, type BalanceListing, type BondListing, type ReadOpts, type Rpc } from './sources/namada';
 import { fetchIntelChecked } from './sources/intel';
 import { sendTelegramForum, sendTelegramGov, telegramRun, TG_CRON_MS, TG_CRON_SENDS } from './sources/telegram';
-import { postForumOnX, postGovOnX, postRecapOnX } from './sources/x';
+import { postForumOnX, postGovOnX, postRecapOnX, repostNamada } from './sources/x';
 import { sendDiscordForumAlert, sendDiscordGovAlert, sendsAlerts, alertBudget, flushAlerts, sweepNoticeChannels, RUN_ALERT_POSTS, RUN_ALERT_WINDOW_MS, type GovContext } from './sources/discord';
 import { NAM, NAMADA, OSMOSIS } from './config';
 import { fetchJson, toNam, isRealAddress, FETCH_TEXT_MAX_BYTES } from './util';
@@ -221,6 +221,7 @@ async function syncIntelAndAlerts(env: Env, health: SourceHealth[]) {
     }
     // The day's recap on X, once, from 13:00 UTC (sources/x.ts), read from the overview the site answers (imported
     // here, not at the top: api.ts imports this module).
+    await repostNamada(env).catch((e) => console.error('x: reposts', e));
     await postRecapOnX(env, async () => {
       const { app } = await import('./api');
       const r = await app.request('/api/overview', {}, env);

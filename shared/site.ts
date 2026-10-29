@@ -12,6 +12,8 @@ export const SITE = {
   /** One sentence on every route (footer and the server-rendered page). */
   /** The public repository (owner decision 4, published 2026-10-20, MIT licence). */
   repo: 'https://github.com/BidurS/namada-trade',
+  /** The site's X account (owner, 2026-10-29), linked from the footer; it posts the site's own alerts (worker/src/sources/x.ts). */
+  x: 'https://x.com/namadatrade',
   /** "Buy me a coffee": the maker's shielded payment address (owner, 2026-10-20). A shielded address does not
    *  reveal who owns it or what it holds; senders stay private when they pay from a shielded account. */
   donateShielded: 'znam13nhljeczcggkq4jqfn64mzdsp8d56wgt6t33ja5chzdfqjxnhghwrm2a6hs7tph5uffsj2rv379',
