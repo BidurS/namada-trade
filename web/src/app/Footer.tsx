@@ -3,7 +3,8 @@
 // links: How we know (Sources sheet), Settings, API, then the explainer pages under the names they
 // carry everywhere else (shared/routes.ts labels: Questions, Guides, Staking, Holders, NAM on Osmosis, How NAM
 // trading works; the same set as EXPLAINER_ROUTES, seo-requirements "New pages": link from the footer).
-// Then "Source code": the public repository (owner decision 4, SITE.repo), opening in a new tab.
+// Then "Source code": the public repository (owner decision 4, SITE.repo), and "X", the site's account (SITE.x),
+// each opening in a new tab.
 import { ROUTES, SITE, type RouteId } from '../../../shared/routes';
 import { Mark, Wordmark } from '../ui/Wordmark';
 import { fmtAgo, fmtUtcLong } from '../lib/format';
@@ -74,6 +75,9 @@ export function Footer() {
           ))}
           <li>
             <a href={SITE.repo} target="_blank" rel="noopener noreferrer" title="NamadaTrade on GitHub (MIT licence), opens in a new tab">Source code</a>
+          </li>
+          <li>
+            <a href={SITE.x} target="_blank" rel="noopener noreferrer me" title="@namadatrade on X: big moves, votes and a daily recap; opens in a new tab">X</a>
           </li>
         </ul>
       </div>

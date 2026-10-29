@@ -1,6 +1,6 @@
 // Posts on X (@ the owner's account), automatically: the moves the site's own channel hears of (operatorMove: 10,000
 // NAM and up, no bot round trips or rewards claims), new and changed governance proposals, new forum topics and
-// replies, and a daily recap at 13:00 UTC (owner's choice, 2026-10-29).
+// replies, and a daily recap at 13:00 UTC with the daily digest's price chart (owner's choices, 2026-10-29).
 //
 // X's API is paid per call (https://docs.x.com/x-api/getting-started/pricing: $0.015 a post, $0.20 a post with a
 // link, checked 2026-10-29), so only the recap carries a link; an alert names the move, its figures and their source
@@ -20,6 +20,8 @@ import { kvSet } from '../db';
 import { readMoveContext } from './discord-context';
 import { alertsOn, claimDiscordAlert, crossingOf, fits, forumCard, govCard, moveCard, operatorMove, releaseClaims, type Card, type GovContext } from './discord';
 import { mdToPlain } from './telegram';
+import { CHART_MINUTE_BOUND_MS, readChartRows, shapePriceChart, type ChartContext } from '../digest/charts/read';
+import { isNotRead, priceChart, toPng } from '../digest/charts/charts';
 
 export interface XEnv { DB: D1Database; X_API_KEY?: string; X_API_SECRET?: string; X_ACCESS_TOKEN?: string; X_ACCESS_SECRET?: string }
 
@@ -88,14 +90,20 @@ export function cardText(card: Card, now = Date.now()): string {
 const pct = (s: string) => encodeURIComponent(s).replace(/[!*'()]/g, (c) => `%${c.charCodeAt(0).toString(16).toUpperCase()}`);
 const b64 = (b: ArrayBuffer) => btoa(String.fromCharCode(...new Uint8Array(b)));
 
-/** The Authorization header of a JSON POST to `url` (a JSON body is not part of the signature). */
+/**
+ * The Authorization header of a request to `url`: its query parameters are signed with the oauth ones, the URL
+ * without them; a JSON or multipart body is not part of the signature.
+ */
 export async function oauthHeader(env: Required<Omit<XEnv, 'DB'>>, method: string, url: string, nonce = crypto.randomUUID().replace(/-/g, ''), ts = Math.floor(Date.now() / 1000)): Promise<string> {
   const o: Record<string, string> = {
     oauth_consumer_key: env.X_API_KEY, oauth_nonce: nonce, oauth_signature_method: 'HMAC-SHA1',
     oauth_timestamp: String(ts), oauth_token: env.X_ACCESS_TOKEN, oauth_version: '1.0',
   };
-  const params = Object.keys(o).sort().map((k) => `${pct(k)}=${pct(o[k])}`).join('&');
-  const base = `${method.toUpperCase()}&${pct(url)}&${pct(params)}`;
+  const u = new URL(url);
+  const signed: [string, string][] = [...Object.entries(o), ...u.searchParams.entries()].map(([k, v]) => [pct(k), pct(v)]);
+  signed.sort(([a, x], [b, y]) => (a < b ? -1 : a > b ? 1 : x < y ? -1 : x > y ? 1 : 0));
+  const params = signed.map(([k, v]) => `${k}=${v}`).join('&');
+  const base = `${method.toUpperCase()}&${pct(`${u.origin}${u.pathname}`)}&${pct(params)}`;
   const key = await crypto.subtle.importKey('raw', new TextEncoder().encode(`${pct(env.X_API_SECRET)}&${pct(env.X_ACCESS_SECRET)}`), { name: 'HMAC', hash: 'SHA-1' }, false, ['sign']);
   o.oauth_signature = b64(await crypto.subtle.sign('HMAC', key, new TextEncoder().encode(base)));
   return 'OAuth ' + Object.keys(o).sort().map((k) => `${pct(k)}="${pct(o[k])}"`).join(', ');
@@ -106,14 +114,40 @@ export async function oauthHeader(env: Required<Omit<XEnv, 'DB'>>, method: strin
 /** X's answer to one post: its status, and its id when taken. Never logged with the keys. */
 export interface XAnswer { ok: boolean; status: number; id?: string; detail?: string }
 
-export async function xPost(env: XEnv, text: string): Promise<XAnswer> {
+export async function xPost(env: XEnv, text: string, mediaIds: string[] = []): Promise<XAnswer> {
   try {
     const auth = await oauthHeader(env as Required<Omit<XEnv, 'DB'>>, 'POST', POST_URL);
-    const res = await fetch(POST_URL, { method: 'POST', headers: { authorization: auth, 'content-type': 'application/json' }, body: JSON.stringify({ text }), signal: AbortSignal.timeout(X_TIMEOUT_MS) });
+    const body = { text, ...(mediaIds.length ? { media: { media_ids: mediaIds } } : {}) };
+    const res = await fetch(POST_URL, { method: 'POST', headers: { authorization: auth, 'content-type': 'application/json' }, body: JSON.stringify(body), signal: AbortSignal.timeout(X_TIMEOUT_MS) });
     const j = (await res.json().catch(() => null)) as any;
     return { ok: res.ok && !!j?.data?.id, status: res.status, id: j?.data?.id, detail: typeof j?.detail === 'string' ? j.detail.slice(0, 200) : typeof j?.title === 'string' ? j.title : undefined };
   } catch {
     return { ok: false, status: 0 };
+  }
+}
+
+const UPLOAD_URL = 'https://api.x.com/2/media/upload';
+/** A picture upload may take longer than a post. */
+export const X_UPLOAD_TIMEOUT_MS = 15_000;
+/**
+ * Uploads a PNG for a post (POST /2/media/upload, multipart: `media` and media_category tweet_image; the form's fields
+ * are not part of an OAuth 1.0a signature): its media id, or null when X did not take it (the post then goes without).
+ */
+export async function xUpload(env: XEnv, png: Uint8Array): Promise<string | null> {
+  try {
+    const form = new FormData();
+    form.append('media_category', 'tweet_image');
+    form.append('media', new Blob([png], { type: 'image/png' }), 'chart.png');
+    const auth = await oauthHeader(env as Required<Omit<XEnv, 'DB'>>, 'POST', UPLOAD_URL);
+    const res = await fetch(UPLOAD_URL, { method: 'POST', headers: { authorization: auth }, body: form, signal: AbortSignal.timeout(X_UPLOAD_TIMEOUT_MS) });
+    const j = (await res.json().catch(() => null)) as any;
+    const id = j?.data?.id ?? j?.media_id_string;
+    if (res.ok && typeof id === 'string') return id;
+    console.error(`x: the picture was not taken (${res.status}${j?.detail ? `: ${String(j.detail).slice(0, 200)}` : ''})`);
+    return null;
+  } catch (e) {
+    console.error('x: the picture was not uploaded', e);
+    return null;
   }
 }
 
@@ -136,7 +170,7 @@ const giveBackDaily = (db: D1Database, now: number) =>
  * Posts `text` under claim `key` and one of the day's posts. Never throws. The claim and the day's post are given back
  * when X gave no answer, a 5xx or a 429; a refusal keeps them, and is recorded.
  */
-export async function postOnce(env: XEnv, key: string, text: () => Promise<string> | string, what: string): Promise<'posted' | 'claimed' | 'full' | 'failed'> {
+export async function postOnce(env: XEnv, key: string, text: () => Promise<string> | string, what: string, picture?: () => Promise<Uint8Array | null>): Promise<'posted' | 'claimed' | 'full' | 'failed'> {
   try {
     if (!postsOnX(env)) return 'failed';
     if (!(await claimDiscordAlert(env.DB, [key]))) return 'claimed';
@@ -150,7 +184,10 @@ export async function postOnce(env: XEnv, key: string, text: () => Promise<strin
       await giveBackDaily(env.DB, now);
       return 'failed';
     }
-    const a = await xPost(env, body);
+    // a picture that cannot be drawn or uploaded never costs the post: it goes as text
+    const png = picture ? await picture().catch((e) => { console.error(`x: ${what}: the picture was not drawn`, e); return null; }) : null;
+    const media = png ? await xUpload(env, png) : null;
+    const a = await xPost(env, body, media ? [media] : []);
     await kvSet(env.DB, 'x.last', JSON.stringify({ at: now, what, status: a.status, ok: a.ok, ...(a.detail ? { detail: a.detail } : {}) })).catch(() => {});
     if (a.ok) return 'posted';
     console.error(`x: ${what} not posted (${a.status}${a.detail ? `: ${a.detail}` : ''})`);
@@ -213,7 +250,102 @@ export function recapText(o: RecapFigures, now = Date.now()): string {
  * The cron's tick: from X_RECAP_HOUR_UTC, the day's recap once (claimed by date), read from the overview the site
  * answers. A tick before that hour, or after the day's recap, does nothing.
  */
-export async function postRecapOnX(env: XEnv, overview: () => Promise<RecapFigures>, now = Date.now()): Promise<void> {
+export async function postRecapOnX(env: XEnv, overview: () => Promise<RecapFigures>, now = Date.now(), picture: () => Promise<Uint8Array | null> = () => recapChart(env.DB, now)): Promise<void> {
   if (!postsOnX(env) || new Date(now).getUTCHours() < X_RECAP_HOUR_UTC) return;
-  await postOnce(env, `alert:x:recap:${day(now)}`, async () => recapText(await overview(), now), `recap ${day(now)}`);
+  await postOnce(env, `alert:x:recap:${day(now)}`, async () => recapText(await overview(), now), `recap ${day(now)}`, picture);
+}
+
+/**
+ * The recap's picture: the daily digest's price chart (digest/charts: the hourly quote and the executed hourly price
+ * over its days to `now`), drawn from the same rows by the same code. Null when the price was not read in that window.
+ */
+export async function recapChart(db: D1Database, now: number): Promise<Uint8Array | null> {
+  const last = await db.prepare("SELECT MAX(ts) ts FROM metrics WHERE key = 'price.usd'").first<{ ts: number | null }>().catch(() => null);
+  const at = last?.ts != null ? Number(last.ts) : null;
+  const ctx: ChartContext = {
+    now, kind: 'daily',
+    clock: { eNow: null, epochAt: null, startedAt: null, errorMs: null, epochMs: null, paramsAt: null },
+    listing: null, stakeNow: null,
+    quoteNow: at != null ? { at, live: now - at <= CHART_MINUTE_BOUND_MS } : null,
+  };
+  const shaped = shapePriceChart(await readChartRows(db, ctx), ctx);
+  if (isNotRead(shaped)) return null;
+  return (await toPng(priceChart(shaped.input))).png;
+}
+
+// ---------------------------------------------------------------- reposting @namada
+
+/** The account whose posts are reposted (owner, 2026-10-29): Namada's own. */
+export const REPOST_HANDLE = 'namada';
+/** How often the cron's tick looks for its new posts (each look that finds none costs nothing: reads are billed per post). */
+export const REPOST_EVERY_MIN = 10;
+/** The most reposts a UTC day, apart from X_DAILY_MAX. */
+export const REPOST_DAILY_MAX = 10;
+
+/** A signed GET; its JSON, or null. */
+async function xGet(env: XEnv, url: string): Promise<{ status: number; j: any }> {
+  try {
+    const res = await fetch(url, { headers: { authorization: await oauthHeader(env as Required<Omit<XEnv, 'DB'>>, 'GET', url) }, signal: AbortSignal.timeout(X_TIMEOUT_MS) });
+    return { status: res.status, j: await res.json().catch(() => null) };
+  } catch {
+    return { status: 0, j: null };
+  }
+}
+
+/** The posting account's id: the number an OAuth 1.0a access token starts with ("<user id>-…"). */
+export const ownId = (env: XEnv) => /^(\d+)-/.exec(env.X_ACCESS_TOKEN ?? '')?.[1] ?? null;
+
+/**
+ * The cron's tick, every REPOST_EVERY_MIN minutes: reposts @namada's new posts (not its replies or its own reposts),
+ * oldest first, each once (`alert:x:repost:<post id>`), at most REPOST_DAILY_MAX a day. The first look only records
+ * where its posts stand (kv `x.repost.since`), so nothing older than the feature is reposted; the account's id is
+ * looked up once (kv `x.repost.id`). A repost X refuses as already made counts as made.
+ */
+export async function repostNamada(env: XEnv, now = Date.now()): Promise<number> {
+  if (!postsOnX(env) || Math.floor(now / 60_000) % REPOST_EVERY_MIN !== 0) return 0;
+  const me = ownId(env);
+  if (!me) return 0;
+  let id = (await env.DB.prepare("SELECT value FROM kv WHERE key = 'x.repost.id'").first<{ value: string }>().catch(() => null))?.value;
+  if (!id) {
+    const u = await xGet(env, `https://api.x.com/2/users/by/username/${REPOST_HANDLE}`);
+    id = u.j?.data?.id;
+    if (!id) { console.error(`x: @${REPOST_HANDLE} not looked up (${u.status})`); return 0; }
+    await kvSet(env.DB, 'x.repost.id', id);
+  }
+  const since = (await env.DB.prepare("SELECT value FROM kv WHERE key = 'x.repost.since'").first<{ value: string }>().catch(() => null))?.value;
+  const q = new URLSearchParams({ exclude: 'replies,retweets', max_results: since ? '10' : '5' });
+  if (since) q.set('since_id', since);
+  const r = await xGet(env, `https://api.x.com/2/users/${id}/tweets?${q}`);
+  if (r.status !== 200) { if (r.status) console.error(`x: @${REPOST_HANDLE}'s posts not read (${r.status})`); return 0; }
+  const posts: { id: string }[] = Array.isArray(r.j?.data) ? r.j.data : [];
+  const newest = typeof r.j?.meta?.newest_id === 'string' ? r.j.meta.newest_id : posts[0]?.id;
+  if (!since) { if (newest) await kvSet(env.DB, 'x.repost.since', newest); return 0; }
+  let n = 0;
+  // the newest post handled before any that must wait (the day's reposts spent, X not answering)
+  let done: string | null = since;
+  let waited = false;
+  for (const p of [...posts].reverse()) {
+    if (!/^\d+$/.test(p.id) || !(await claimDiscordAlert(env.DB, [`alert:x:repost:${p.id}`]))) { done = p.id; continue; }
+    const d = await env.DB.prepare(
+      `INSERT INTO kv (key, value, updated_at) VALUES (?1, '1', ?2)
+       ON CONFLICT(key) DO UPDATE SET value = CAST(CAST(kv.value AS INTEGER) + 1 AS TEXT), updated_at = ?2 WHERE CAST(kv.value AS INTEGER) < ${REPOST_DAILY_MAX}`,
+    ).bind(`alert:x:repostday:${day(now)}`, now).run();
+    if (!Number(d.meta?.changes ?? 0)) { await releaseClaims(env.DB, [`alert:x:repost:${p.id}`]); waited = true; break; }
+    const url = `https://api.x.com/2/users/${me}/retweets`;
+    let a: { status: number; j: any };
+    try {
+      const res = await fetch(url, { method: 'POST', headers: { authorization: await oauthHeader(env as Required<Omit<XEnv, 'DB'>>, 'POST', url), 'content-type': 'application/json' }, body: JSON.stringify({ tweet_id: p.id }), signal: AbortSignal.timeout(X_TIMEOUT_MS) });
+      a = { status: res.status, j: await res.json().catch(() => null) };
+    } catch { a = { status: 0, j: null }; }
+    if (a.j?.data?.retweeted === true || a.status === 200) n++;
+    else {
+      console.error(`x: @${REPOST_HANDLE}'s post ${p.id} not reposted (${a.status})`);
+      if (a.status === 0 || a.status >= 500 || a.status === 429) { await releaseClaims(env.DB, [`alert:x:repost:${p.id}`]); waited = true; break; }
+    }
+    done = p.id;
+  }
+  // the next look starts after the newest post handled; one that must wait (its claim given back) is read again
+  const next = waited ? done : newest;
+  if (next && next !== since) await kvSet(env.DB, 'x.repost.since', next);
+  return n;
 }
