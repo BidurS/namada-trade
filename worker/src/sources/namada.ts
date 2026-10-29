@@ -1,7 +1,9 @@
 import { NAM, NAMADA } from '../config';
-import { decodeU256LE, decodeU64LE, fetchJson, fetchText, withFailover, ReadCutError, FETCH_TEXT_MAX_BYTES } from '../util';
+import { decodeU256LE, decodeU64LE, fetchJson, fetchText, withFailover, ReadCutError, FETCH_TEXT_MAX_BYTES, base64Bytes } from '../util';
 import { bech32m } from '@scure/base';
 import type { NamadaBlock } from '../parse/namada';
+// The base64 decoder lives in util.ts (the depth module reads the chain node's answers with it too); callers of this file keep their import.
+export { base64Bytes };
 
 export type Rpc = { provider: string; url: string };
 const RPCS: readonly Rpc[] = NAMADA.rpcs;
@@ -533,25 +535,6 @@ export async function delegationsAt(owner: string, epoch: number, opts: ReadOpts
 // the read starts with the tick and has LISTING_TIMEOUT_MS a node (35 s; measured 2026-10-20: 3.5 s at best,
 // 28 s and 45 s at worst), and a read that does not land backs off and is reported (cron.ts listingDue,
 // listingOverdue).
-
-const B64 = new Int16Array(256).fill(-1);
-for (let i = 0; i < 64; i++) B64['ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/'.charCodeAt(i)] = i;
-
-/** base64 → bytes straight into a Uint8Array (atob on a 12 MB answer would first build an 18 MB UTF-16 string). */
-export function base64Bytes(s: string): Uint8Array {
-  let n = s.length;
-  while (n > 0 && s.charCodeAt(n - 1) === 61) n--; // '=' padding
-  const out = new Uint8Array(Math.floor((n * 3) / 4));
-  let acc = 0, bits = 0, o = 0;
-  for (let i = 0; i < n; i++) {
-    const v = B64[s.charCodeAt(i)];
-    if (v < 0) throw new Error(`base64: bad character at ${i}`);
-    acc = (acc << 6) | v;
-    bits += 6;
-    if (bits >= 8) { bits -= 8; out[o++] = (acc >> bits) & 0xff; }
-  }
-  return o === out.length ? out : out.subarray(0, o);
-}
 
 /** The raw 21-byte form (bech32m payload) of a tnam address: [discriminant, 20 bytes]. */
 function rawAddress(addr: string): Uint8Array {

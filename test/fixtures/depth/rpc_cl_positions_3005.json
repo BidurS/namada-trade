@@ -1,0 +1,489 @@
+// 2026-10-29T02:17:50.748Z abci_query /osmosis.concentratedliquidity.v1beta1.Query/PositionById for each id in the pool-position index (store prefix 0x09|3005) via https://osmosis-rpc.publicnode.com; owner addresses anonymized
+// 19 reads, 7299 value bytes, NaN ms in all
+[
+ {
+  "position_id": "14599704",
+  "address": "osmo1…9l27",
+  "pool_id": "3005",
+  "lower_tick": "-108000000",
+  "upper_tick": "342000000",
+  "join_time_unix": 1750447757,
+  "liquidity": "5000000000000000000100000000",
+  "asset0": {
+   "denom": "ibc/C7110DEC66869DAE9BE9C3C60F4B5313B16A2204AE020C3B0527DD6B322386A3",
+   "amount": "156566168643"
+  },
+  "asset1": {
+   "denom": "ibc/498A0751C798A0D9A389AA3691123DADA57DAA4FE165D5C75894505B876BA6E4",
+   "amount": "159671898"
+  },
+  "claimable_spread_rewards": [
+   {
+    "denom": "ibc/498A0751C798A0D9A389AA3691123DADA57DAA4FE165D5C75894505B876BA6E4",
+    "amount": "73447195"
+   },
+   {
+    "denom": "ibc/C7110DEC66869DAE9BE9C3C60F4B5313B16A2204AE020C3B0527DD6B322386A3",
+    "amount": "31276677181"
+   }
+  ],
+  "claimable_incentives": [],
+  "height": "73426639"
+ },
+ {
+  "position_id": "14697764",
+  "address": "osmo1…ggch",
+  "pool_id": "3005",
+  "lower_tick": "-9000000",
+  "upper_tick": "-6000000",
+  "join_time_unix": 1750860239,
+  "liquidity": "6324555320336758690000000000",
+  "asset0": {
+   "denom": "ibc/C7110DEC66869DAE9BE9C3C60F4B5313B16A2204AE020C3B0527DD6B322386A3",
+   "amount": "10000000000"
+  },
+  "asset1": {
+   "denom": "ibc/498A0751C798A0D9A389AA3691123DADA57DAA4FE165D5C75894505B876BA6E4",
+   "amount": "0"
+  },
+  "claimable_spread_rewards": [],
+  "claimable_incentives": [],
+  "height": "73426639"
+ },
+ {
+  "position_id": "14929388",
+  "address": "osmo1…fpst",
+  "pool_id": "3005",
+  "lower_tick": "-16227300",
+  "upper_tick": "-13293700",
+  "join_time_unix": 1752456824,
+  "liquidity": "3839190885203148825233411542",
+  "asset0": {
+   "denom": "ibc/C7110DEC66869DAE9BE9C3C60F4B5313B16A2204AE020C3B0527DD6B322386A3",
+   "amount": "6984506562"
+  },
+  "asset1": {
+   "denom": "ibc/498A0751C798A0D9A389AA3691123DADA57DAA4FE165D5C75894505B876BA6E4",
+   "amount": "0"
+  },
+  "claimable_spread_rewards": [],
+  "claimable_incentives": [],
+  "height": "73426639"
+ },
+ {
+  "position_id": "15090317",
+  "address": "osmo1…sacw",
+  "pool_id": "3005",
+  "lower_tick": "-108000000",
+  "upper_tick": "342000000",
+  "join_time_unix": 1762496624,
+  "liquidity": "69118449895769695595682858",
+  "asset0": {
+   "denom": "ibc/C7110DEC66869DAE9BE9C3C60F4B5313B16A2204AE020C3B0527DD6B322386A3",
+   "amount": "2164322177"
+  },
+  "asset1": {
+   "denom": "ibc/498A0751C798A0D9A389AA3691123DADA57DAA4FE165D5C75894505B876BA6E4",
+   "amount": "2207255"
+  },
+  "claimable_spread_rewards": [
+   {
+    "denom": "ibc/498A0751C798A0D9A389AA3691123DADA57DAA4FE165D5C75894505B876BA6E4",
+    "amount": "4411"
+   },
+   {
+    "denom": "ibc/C7110DEC66869DAE9BE9C3C60F4B5313B16A2204AE020C3B0527DD6B322386A3",
+    "amount": "5368628"
+   }
+  ],
+  "claimable_incentives": [],
+  "height": "73426639"
+ },
+ {
+  "position_id": "15134207",
+  "address": "osmo1…z0ns",
+  "pool_id": "3005",
+  "lower_tick": "-20557500",
+  "upper_tick": "-17795400",
+  "join_time_unix": 1764367923,
+  "liquidity": "233711743496929647031313391",
+  "asset0": {
+   "denom": "ibc/C7110DEC66869DAE9BE9C3C60F4B5313B16A2204AE020C3B0527DD6B322386A3",
+   "amount": "579666430"
+  },
+  "asset1": {
+   "denom": "ibc/498A0751C798A0D9A389AA3691123DADA57DAA4FE165D5C75894505B876BA6E4",
+   "amount": "0"
+  },
+  "claimable_spread_rewards": [
+   {
+    "denom": "ibc/498A0751C798A0D9A389AA3691123DADA57DAA4FE165D5C75894505B876BA6E4",
+    "amount": "18501"
+   },
+   {
+    "denom": "ibc/C7110DEC66869DAE9BE9C3C60F4B5313B16A2204AE020C3B0527DD6B322386A3",
+    "amount": "2301840"
+   }
+  ],
+  "claimable_incentives": [],
+  "height": "73426639"
+ },
+ {
+  "position_id": "15137840",
+  "address": "osmo1…k6xhawvrm4ymmxj64slusdwn",
+  "pool_id": "3005",
+  "lower_tick": "-107999800",
+  "upper_tick": "342000000",
+  "join_time_unix": 1764687488,
+  "liquidity": "791828248061629556",
+  "asset0": {
+   "denom": "ibc/C7110DEC66869DAE9BE9C3C60F4B5313B16A2204AE020C3B0527DD6B322386A3",
+   "amount": "25"
+  },
+  "asset1": {
+   "denom": "ibc/498A0751C798A0D9A389AA3691123DADA57DAA4FE165D5C75894505B876BA6E4",
+   "amount": "1"
+  },
+  "claimable_spread_rewards": [
+   {
+    "denom": "ibc/C7110DEC66869DAE9BE9C3C60F4B5313B16A2204AE020C3B0527DD6B322386A3",
+    "amount": "4"
+   }
+  ],
+  "claimable_incentives": [],
+  "height": "73426640"
+ },
+ {
+  "position_id": "15137841",
+  "address": "osmo1…k6xhawvrm4ymmxj64slusdwn",
+  "pool_id": "3005",
+  "lower_tick": "-25274400",
+  "upper_tick": "-17296500",
+  "join_time_unix": 1764687488,
+  "liquidity": "24774656968817682586",
+  "asset0": {
+   "denom": "ibc/C7110DEC66869DAE9BE9C3C60F4B5313B16A2204AE020C3B0527DD6B322386A3",
+   "amount": "285"
+  },
+  "asset1": {
+   "denom": "ibc/498A0751C798A0D9A389AA3691123DADA57DAA4FE165D5C75894505B876BA6E4",
+   "amount": "0"
+  },
+  "claimable_spread_rewards": [
+   {
+    "denom": "ibc/C7110DEC66869DAE9BE9C3C60F4B5313B16A2204AE020C3B0527DD6B322386A3",
+    "amount": "15"
+   }
+  ],
+  "claimable_incentives": [],
+  "height": "73426640"
+ },
+ {
+  "position_id": "15137842",
+  "address": "osmo1…k6xhawvrm4ymmxj64slusdwn",
+  "pool_id": "3005",
+  "lower_tick": "-21186100",
+  "upper_tick": "-15933700",
+  "join_time_unix": 1764687488,
+  "liquidity": "129229295822120382308",
+  "asset0": {
+   "denom": "ibc/C7110DEC66869DAE9BE9C3C60F4B5313B16A2204AE020C3B0527DD6B322386A3",
+   "amount": "828"
+  },
+  "asset1": {
+   "denom": "ibc/498A0751C798A0D9A389AA3691123DADA57DAA4FE165D5C75894505B876BA6E4",
+   "amount": "0"
+  },
+  "claimable_spread_rewards": [
+   {
+    "denom": "ibc/C7110DEC66869DAE9BE9C3C60F4B5313B16A2204AE020C3B0527DD6B322386A3",
+    "amount": "5"
+   }
+  ],
+  "claimable_incentives": [],
+  "height": "73426640"
+ },
+ {
+  "position_id": "15148276",
+  "address": "osmo1…9hv2",
+  "pool_id": "3005",
+  "lower_tick": "-6500000",
+  "upper_tick": "-6445100",
+  "join_time_unix": 1765495741,
+  "liquidity": "4713230770013015664259787277008",
+  "asset0": {
+   "denom": "ibc/C7110DEC66869DAE9BE9C3C60F4B5313B16A2204AE020C3B0527DD6B322386A3",
+   "amount": "61757000000"
+  },
+  "asset1": {
+   "denom": "ibc/498A0751C798A0D9A389AA3691123DADA57DAA4FE165D5C75894505B876BA6E4",
+   "amount": "0"
+  },
+  "claimable_spread_rewards": [],
+  "claimable_incentives": [],
+  "height": "73426640"
+ },
+ {
+  "position_id": "15288737",
+  "address": "osmo1…9hv2",
+  "pool_id": "3005",
+  "lower_tick": "-20000000",
+  "upper_tick": "-11528500",
+  "join_time_unix": 1773586220,
+  "liquidity": "47276628265519988194051795172",
+  "asset0": {
+   "denom": "ibc/C7110DEC66869DAE9BE9C3C60F4B5313B16A2204AE020C3B0527DD6B322386A3",
+   "amount": "355609999998"
+  },
+  "asset1": {
+   "denom": "ibc/498A0751C798A0D9A389AA3691123DADA57DAA4FE165D5C75894505B876BA6E4",
+   "amount": "0"
+  },
+  "claimable_spread_rewards": [],
+  "claimable_incentives": [],
+  "height": "73426640"
+ },
+ {
+  "position_id": "15330948",
+  "address": "osmo1…srkwc2qvjazfjq7k6q86567t",
+  "pool_id": "3005",
+  "lower_tick": "-107999800",
+  "upper_tick": "342000000",
+  "join_time_unix": 1775740587,
+  "liquidity": "695513289848783784842548",
+  "asset0": {
+   "denom": "ibc/C7110DEC66869DAE9BE9C3C60F4B5313B16A2204AE020C3B0527DD6B322386A3",
+   "amount": "21778771"
+  },
+  "asset1": {
+   "denom": "ibc/498A0751C798A0D9A389AA3691123DADA57DAA4FE165D5C75894505B876BA6E4",
+   "amount": "22211"
+  },
+  "claimable_spread_rewards": [
+   {
+    "denom": "ibc/498A0751C798A0D9A389AA3691123DADA57DAA4FE165D5C75894505B876BA6E4",
+    "amount": "1338"
+   },
+   {
+    "denom": "ibc/C7110DEC66869DAE9BE9C3C60F4B5313B16A2204AE020C3B0527DD6B322386A3",
+    "amount": "1890106"
+   }
+  ],
+  "claimable_incentives": [],
+  "height": "73426640"
+ },
+ {
+  "position_id": "15330949",
+  "address": "osmo1…srkwc2qvjazfjq7k6q86567t",
+  "pool_id": "3005",
+  "lower_tick": "-34816000",
+  "upper_tick": "-26635000",
+  "join_time_unix": 1775740587,
+  "liquidity": "21761535984388186510813336",
+  "asset0": {
+   "denom": "ibc/C7110DEC66869DAE9BE9C3C60F4B5313B16A2204AE020C3B0527DD6B322386A3",
+   "amount": "92413315"
+  },
+  "asset1": {
+   "denom": "ibc/498A0751C798A0D9A389AA3691123DADA57DAA4FE165D5C75894505B876BA6E4",
+   "amount": "373364"
+  },
+  "claimable_spread_rewards": [
+   {
+    "denom": "ibc/498A0751C798A0D9A389AA3691123DADA57DAA4FE165D5C75894505B876BA6E4",
+    "amount": "35228"
+   },
+   {
+    "denom": "ibc/C7110DEC66869DAE9BE9C3C60F4B5313B16A2204AE020C3B0527DD6B322386A3",
+    "amount": "51078542"
+   }
+  ],
+  "claimable_incentives": [],
+  "height": "73426640"
+ },
+ {
+  "position_id": "15330950",
+  "address": "osmo1…srkwc2qvjazfjq7k6q86567t",
+  "pool_id": "3005",
+  "lower_tick": "-31539900",
+  "upper_tick": "-25543000",
+  "join_time_unix": 1775740587,
+  "liquidity": "591069600072030281380919064",
+  "asset0": {
+   "denom": "ibc/C7110DEC66869DAE9BE9C3C60F4B5313B16A2204AE020C3B0527DD6B322386A3",
+   "amount": "6583914014"
+  },
+  "asset1": {
+   "denom": "ibc/498A0751C798A0D9A389AA3691123DADA57DAA4FE165D5C75894505B876BA6E4",
+   "amount": "5064594"
+  },
+  "claimable_spread_rewards": [
+   {
+    "denom": "ibc/498A0751C798A0D9A389AA3691123DADA57DAA4FE165D5C75894505B876BA6E4",
+    "amount": "941716"
+   },
+   {
+    "denom": "ibc/C7110DEC66869DAE9BE9C3C60F4B5313B16A2204AE020C3B0527DD6B322386A3",
+    "amount": "1068023568"
+   }
+  ],
+  "claimable_incentives": [],
+  "height": "73426640"
+ },
+ {
+  "position_id": "15392963",
+  "address": "osmo1…dk30",
+  "pool_id": "3005",
+  "lower_tick": "-28500000",
+  "upper_tick": "-26650000",
+  "join_time_unix": 1777510899,
+  "liquidity": "6353092755962217234850521312",
+  "asset0": {
+   "denom": "ibc/C7110DEC66869DAE9BE9C3C60F4B5313B16A2204AE020C3B0527DD6B322386A3",
+   "amount": "26026594582"
+  },
+  "asset1": {
+   "denom": "ibc/498A0751C798A0D9A389AA3691123DADA57DAA4FE165D5C75894505B876BA6E4",
+   "amount": "17665537"
+  },
+  "claimable_spread_rewards": [
+   {
+    "denom": "ibc/498A0751C798A0D9A389AA3691123DADA57DAA4FE165D5C75894505B876BA6E4",
+    "amount": "3544062"
+   },
+   {
+    "denom": "ibc/C7110DEC66869DAE9BE9C3C60F4B5313B16A2204AE020C3B0527DD6B322386A3",
+    "amount": "3474027122"
+   }
+  ],
+  "claimable_incentives": [],
+  "height": "73426641"
+ },
+ {
+  "position_id": "15485367",
+  "address": "osmo1…sprw",
+  "pool_id": "3005",
+  "lower_tick": "-31830000",
+  "upper_tick": "-31821000",
+  "join_time_unix": 1785446097,
+  "liquidity": "6148544135613424111632758863",
+  "asset0": {
+   "denom": "ibc/C7110DEC66869DAE9BE9C3C60F4B5313B16A2204AE020C3B0527DD6B322386A3",
+   "amount": "0"
+  },
+  "asset1": {
+   "denom": "ibc/498A0751C798A0D9A389AA3691123DADA57DAA4FE165D5C75894505B876BA6E4",
+   "amount": "121633"
+  },
+  "claimable_spread_rewards": [
+   {
+    "denom": "ibc/498A0751C798A0D9A389AA3691123DADA57DAA4FE165D5C75894505B876BA6E4",
+    "amount": "2721"
+   },
+   {
+    "denom": "ibc/C7110DEC66869DAE9BE9C3C60F4B5313B16A2204AE020C3B0527DD6B322386A3",
+    "amount": "5263390"
+   }
+  ],
+  "claimable_incentives": [],
+  "height": "73426641"
+ },
+ {
+  "position_id": "15487890",
+  "address": "osmo1…9hv2",
+  "pool_id": "3005",
+  "lower_tick": "-32188800",
+  "upper_tick": "-28480000",
+  "join_time_unix": 1785977910,
+  "liquidity": "165115979240997224927809952",
+  "asset0": {
+   "denom": "ibc/C7110DEC66869DAE9BE9C3C60F4B5313B16A2204AE020C3B0527DD6B322386A3",
+   "amount": "0"
+  },
+  "asset1": {
+   "denom": "ibc/498A0751C798A0D9A389AA3691123DADA57DAA4FE165D5C75894505B876BA6E4",
+   "amount": "1197849"
+  },
+  "claimable_spread_rewards": [
+   {
+    "denom": "ibc/498A0751C798A0D9A389AA3691123DADA57DAA4FE165D5C75894505B876BA6E4",
+    "amount": "389"
+   },
+   {
+    "denom": "ibc/C7110DEC66869DAE9BE9C3C60F4B5313B16A2204AE020C3B0527DD6B322386A3",
+    "amount": "31044"
+   }
+  ],
+  "claimable_incentives": [],
+  "height": "73426641"
+ },
+ {
+  "position_id": "15519075",
+  "address": "osmo1…9hv2",
+  "pool_id": "3005",
+  "lower_tick": "-31200000",
+  "upper_tick": "-26903000",
+  "join_time_unix": 1790743436,
+  "liquidity": "146800128218284883843661004",
+  "asset0": {
+   "denom": "ibc/C7110DEC66869DAE9BE9C3C60F4B5313B16A2204AE020C3B0527DD6B322386A3",
+   "amount": "164548234"
+  },
+  "asset1": {
+   "denom": "ibc/498A0751C798A0D9A389AA3691123DADA57DAA4FE165D5C75894505B876BA6E4",
+   "amount": "1152703"
+  },
+  "claimable_spread_rewards": [
+   {
+    "denom": "ibc/498A0751C798A0D9A389AA3691123DADA57DAA4FE165D5C75894505B876BA6E4",
+    "amount": "2354"
+   },
+   {
+    "denom": "ibc/C7110DEC66869DAE9BE9C3C60F4B5313B16A2204AE020C3B0527DD6B322386A3",
+    "amount": "1260364"
+   }
+  ],
+  "claimable_incentives": [],
+  "height": "73426641"
+ },
+ {
+  "position_id": "15533064",
+  "address": "osmo1…vpvh",
+  "pool_id": "3005",
+  "lower_tick": "-26900000",
+  "upper_tick": "-26700000",
+  "join_time_unix": 1793184249,
+  "liquidity": "31041444864271535361738517935",
+  "asset0": {
+   "denom": "ibc/C7110DEC66869DAE9BE9C3C60F4B5313B16A2204AE020C3B0527DD6B322386A3",
+   "amount": "75000000000"
+  },
+  "asset1": {
+   "denom": "ibc/498A0751C798A0D9A389AA3691123DADA57DAA4FE165D5C75894505B876BA6E4",
+   "amount": "0"
+  },
+  "claimable_spread_rewards": [],
+  "claimable_incentives": [],
+  "height": "73426642"
+ },
+ {
+  "position_id": "15533065",
+  "address": "osmo1…vpvh",
+  "pool_id": "3005",
+  "lower_tick": "-26700000",
+  "upper_tick": "-26300000",
+  "join_time_unix": 1793184276,
+  "liquidity": "14361843101989674642041066442",
+  "asset0": {
+   "denom": "ibc/C7110DEC66869DAE9BE9C3C60F4B5313B16A2204AE020C3B0527DD6B322386A3",
+   "amount": "50000000000"
+  },
+  "asset1": {
+   "denom": "ibc/498A0751C798A0D9A389AA3691123DADA57DAA4FE165D5C75894505B876BA6E4",
+   "amount": "0"
+  },
+  "claimable_spread_rewards": [],
+  "claimable_incentives": [],
+  "height": "73426642"
+ }
+]

@@ -1,0 +1,6 @@
+# reads.tsv of the depth research (2026-10-29 02:17 UTC): the chain node's abci_query reads, with the request bytes in each URL's data= parameter
+2026-10-29T02:17:20.919Z	rpc_pm_pool_3005	200 code=0	846B (value 512B)	447ms	https://osmosis-rpc.publicnode.com/abci_query?path=%22%2Fosmosis.poolmanager.v1beta1.Query%2FPool%22&data=0x08bd17
+2026-10-29T02:17:21.704Z	rpc_store_subspace_poolpos_3005	200 code=0	808B (value 475B)	118ms	https://osmosis-rpc.publicnode.com/abci_query?path=%22%2Fstore%2Fconcentratedliquidity%2Fsubspace%22&data=0x090000000000000bbd
+2026-10-29T02:17:48.082Z	rpc_cl_position_14599704	200 code=0	770B (value 455B)	252ms	https://osmosis-rpc.publicnode.com/abci_query?path=%22%2Fosmosis.concentratedliquidity.v1beta1.Query%2FPositionById%22&data=0x08988cfb06
+2026-10-29T02:17:49.718Z	rpc_cl_position_15392963	200 code=0	770B (value 456B)	122ms	https://osmosis-rpc.publicnode.com/abci_query?path=%22%2Fosmosis.concentratedliquidity.v1beta1.Query%2FPositionById%22&data=0x08c3c1ab07
+2026-10-29T02:17:50.868Z	rpc_store_subspace_ticks_3005	200 code=0	9364B (value 6893B)	119ms	https://osmosis-rpc.publicnode.com/abci_query?path=%22%2Fstore%2Fconcentratedliquidity%2Fsubspace%22&data=0x010000000000000bbd

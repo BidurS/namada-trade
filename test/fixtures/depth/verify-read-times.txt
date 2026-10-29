@@ -1,0 +1,3 @@
+// read 2026-10-29T02:55:26Z GET https://osmosis-rest.publicnode.com/osmosis/poolmanager/v1beta1/pools/3005 (verify-pool3005-now.json)
+// read 2026-10-29T02:57:24Z GET https://osmosis-rest.publicnode.com/osmosis/poolmanager/v1beta1/pools/3009 (verify-pool3009-now.json)
+// read 2026-10-29T02:57:24Z GET https://osmosis-rest.publicnode.com/osmosis/poolmanager/v1beta1/pools/3368 (verify-pool3368-now.json)

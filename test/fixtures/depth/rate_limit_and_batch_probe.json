@@ -1,0 +1,171 @@
+// 2026-10-29T02:21:28.642Z
+{
+ "publicnode_rest": {
+  "url": "https://osmosis-rest.publicnode.com/osmosis/concentratedliquidity/v1beta1/liquidity_per_tick_range?pool_id=3005",
+  "parallel_requests": 30,
+  "wall_ms": 909,
+  "status_counts": {
+   "200": 30
+  },
+  "headers_seen": {
+   "cf-cache-status": "DYNAMIC",
+   "cf-ray": "a51eb4ddad46cf1f-SJC",
+   "server": "cloudflare"
+  }
+ },
+ "publicnode_rpc": {
+  "url": "https://osmosis-rpc.publicnode.com/abci_query?path=%22%2Fosmosis.poolmanager.v1beta1.Query%2FPool%22&data=0x08bd17",
+  "parallel_requests": 30,
+  "wall_ms": 1002,
+  "status_counts": {
+   "200": 30
+  },
+  "headers_seen": {
+   "cf-cache-status": "DYNAMIC",
+   "cf-ray": "a51eb4e32fbbba62-SJC",
+   "server": "cloudflare"
+  }
+ },
+ "sqs": {
+  "url": "https://sqs.osmosis.zone/pools/canonical-orderbook?base=ibc/C7110DEC66869DAE9BE9C3C60F4B5313B16A2204AE020C3B0527DD6B322386A3&quote=ibc/498A0751C798A0D9A389AA3691123DADA57DAA4FE165D5C75894505B876BA6E4",
+  "parallel_requests": 30,
+  "wall_ms": 1409,
+  "status_counts": {
+   "200": 27,
+   "429": 3
+  },
+  "headers_seen": {}
+ },
+ "lcd_osmosis_zone": {
+  "url": "https://lcd.osmosis.zone/osmosis/concentratedliquidity/v1beta1/liquidity_per_tick_range?pool_id=3005",
+  "parallel_requests": 30,
+  "wall_ms": 1465,
+  "status_counts": {
+   "200": 27,
+   "429": 3
+  },
+  "headers_seen": {
+   "x-server-time": "1793240486"
+  }
+ },
+ "jsonrpc_batch": {
+  "status": 200,
+  "bytes": 2159,
+  "ms": 164,
+  "answers": [
+   {
+    "id": 1,
+    "code": 0,
+    "height": "73426894",
+    "value_bytes": 512
+   },
+   {
+    "id": 2,
+    "code": 0,
+    "height": "73426894",
+    "value_bytes": 294
+   },
+   {
+    "id": 3,
+    "code": 0,
+    "height": "73426894",
+    "value_bytes": 447
+   }
+  ]
+ },
+ "heights": {
+  "latest": 73426893,
+  "earliest_block_height": 68229727,
+  "latest_block_time": "2026-10-29T02:21:25.851881408Z",
+  "probes": [
+   {
+    "height": 73425893,
+    "blocks_back": 1000,
+    "code": 18,
+    "log": "failed to load state at height 73425893; version mismatch on immutable IAVL tree; version does not exist. Version has ei",
+    "value_bytes": 0,
+    "ms": 126
+   },
+   {
+    "height": 73326893,
+    "blocks_back": 100000,
+    "code": 18,
+    "log": "failed to load state at height 73326893; no commit info found (latest height: 73426894): invalid request",
+    "value_bytes": 0,
+    "ms": 119
+   },
+   {
+    "height": 72426893,
+    "blocks_back": 1000000,
+    "code": 18,
+    "log": "failed to load state at height 72426893; version mismatch on immutable IAVL tree; version does not exist. Version has ei",
+    "value_bytes": 0,
+    "ms": 123
+   },
+   {
+    "height": 68426893,
+    "blocks_back": 5000000,
+    "code": 18,
+    "log": "failed to load state at height 68426893; version mismatch on immutable IAVL tree; version does not exist. Version has ei",
+    "value_bytes": 0,
+    "ms": 117
+   }
+  ]
+ }
+}
+// recent-height probe
+{
+ "at": "2026-10-29T02:22:05.805Z",
+ "latest": 73426936,
+ "out": [
+  {
+   "back": 1,
+   "height": 73426935,
+   "code": 0,
+   "ok": true,
+   "log": ""
+  },
+  {
+   "back": 2,
+   "height": 73426934,
+   "code": 0,
+   "ok": true,
+   "log": ""
+  },
+  {
+   "back": 5,
+   "height": 73426931,
+   "code": 0,
+   "ok": true,
+   "log": ""
+  },
+  {
+   "back": 10,
+   "height": 73426926,
+   "code": 0,
+   "ok": true,
+   "log": ""
+  },
+  {
+   "back": 50,
+   "height": 73426886,
+   "code": 0,
+   "ok": true,
+   "log": ""
+  },
+  {
+   "back": 100,
+   "height": 73426836,
+   "code": 0,
+   "ok": true,
+   "log": ""
+  },
+  {
+   "back": 500,
+   "height": 73426436,
+   "code": 18,
+   "ok": false,
+   "log": "failed to load state at height 73426436; version mismatch on"
+  }
+ ]
+}

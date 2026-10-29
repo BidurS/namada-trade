@@ -1,0 +1,33 @@
+// 2026-10-29T02:13:19.199Z GET https://lcd.osmosis.zone/osmosis/gamm/v1beta1/pools/3398
+// status 200 bytes 616 ms 644 content-encoding null ratelimit 
+{
+ "pool": {
+  "@type": "/osmosis.gamm.poolmodels.stableswap.v1beta1.Pool",
+  "address": "osmo13dwjjmyuzscw2kf4hz55gehea53kd6hmc9xnttquxnhykf0r86yqxexuae",
+  "id": "3398",
+  "pool_params": {
+   "swap_fee": "0.010000000000000000",
+   "exit_fee": "0.000000000000000000"
+  },
+  "future_pool_governor": "24h",
+  "total_shares": {
+   "denom": "gamm/pool/3398",
+   "amount": "12538490878177841"
+  },
+  "pool_liquidity": [
+   {
+    "denom": "ibc/498A0751C798A0D9A389AA3691123DADA57DAA4FE165D5C75894505B876BA6E4",
+    "amount": "3340"
+   },
+   {
+    "denom": "ibc/C7110DEC66869DAE9BE9C3C60F4B5313B16A2204AE020C3B0527DD6B322386A3",
+    "amount": "3761574"
+   }
+  ],
+  "scaling_factors": [
+   "1",
+   "1"
+  ],
+  "scaling_factor_controller": ""
+ }
+}

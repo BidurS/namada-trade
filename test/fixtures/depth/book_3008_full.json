@@ -1,0 +1,815 @@
+// 2026-10-29T02:15:39.566Z-02:15:43.912Z book3008.mjs of the depth research: 36 smart-contract queries of the order book contract of pool 3008 through https://osmosis-rest.publicnode.com/cosmwasm/wasm/v1/contract/{contract}/smart/ (all_ticks in two pages of 300, then orders_by_tick for each of the 34 live ticks), status 200 each, 163,262 B and 4.8 s in all (samples/book_3008_reads.tsv of the research has every read).
+{
+ "read_at": "2026-10-29T02:15:43.912Z",
+ "host": "https://osmosis-rest.publicnode.com",
+ "contract": "osmo1cf6jdap430ugk6c27cdm5stqkq7z3rkgfl5ps5nnw3d5409sw3vql4364c",
+ "ticks_total": 373,
+ "ticks_with_liquidity": 34,
+ "sides": {
+  "bid": {
+   "orders": 4,
+   "owners": 2,
+   "ticks": 3,
+   "remaining_base_units": "174700606"
+  },
+  "ask": {
+   "orders": 39,
+   "owners": 8,
+   "ticks": 31,
+   "remaining_base_units": "810665411525"
+  }
+ },
+ "owners_total": 9,
+ "live_ticks": [
+  {
+   "tick_id": -36000000,
+   "price": 0.0001,
+   "bid_liq": "25000000",
+   "ask_liq": "0",
+   "bid_swapped": "0",
+   "ask_swapped": "0"
+  },
+  {
+   "tick_id": -35000000,
+   "price": 0.0002,
+   "bid_liq": "124990000",
+   "ask_liq": "0",
+   "bid_swapped": "0",
+   "ask_swapped": "0"
+  },
+  {
+   "tick_id": -33500000,
+   "price": 0.00035,
+   "bid_liq": "24710606",
+   "ask_liq": "0",
+   "bid_swapped": "318090000",
+   "ask_swapped": "0"
+  },
+  {
+   "tick_id": -26750000,
+   "price": 0.00125,
+   "bid_liq": "0",
+   "ask_liq": "200000000000",
+   "bid_swapped": "182080000",
+   "ask_swapped": "229808000000"
+  },
+  {
+   "tick_id": -26400000,
+   "price": 0.0016,
+   "bid_liq": "0",
+   "ask_liq": "50000000000",
+   "bid_swapped": "200000000",
+   "ask_swapped": "142228000000"
+  },
+  {
+   "tick_id": -26000000,
+   "price": 0.002,
+   "bid_liq": "0",
+   "ask_liq": "50000000000",
+   "bid_swapped": "819450000",
+   "ask_swapped": "183683221000"
+  },
+  {
+   "tick_id": -25800000,
+   "price": 0.0022,
+   "bid_liq": "0",
+   "ask_liq": "10556000000",
+   "bid_swapped": "22000000",
+   "ask_swapped": "0"
+  },
+  {
+   "tick_id": -25600000,
+   "price": 0.0024,
+   "bid_liq": "0",
+   "ask_liq": "50000000000",
+   "bid_swapped": "162634055",
+   "ask_swapped": "0"
+  },
+  {
+   "tick_id": -25500000,
+   "price": 0.0025,
+   "bid_liq": "0",
+   "ask_liq": "48479440084",
+   "bid_swapped": "704580000",
+   "ask_swapped": "78033924000"
+  },
+  {
+   "tick_id": -25200000,
+   "price": 0.0028,
+   "bid_liq": "0",
+   "ask_liq": "49995000000",
+   "bid_swapped": "199995387",
+   "ask_swapped": "0"
+  },
+  {
+   "tick_id": -24800000,
+   "price": 0.0032,
+   "bid_liq": "0",
+   "ask_liq": "50000000000",
+   "bid_swapped": "0",
+   "ask_swapped": "0"
+  },
+  {
+   "tick_id": -24000000,
+   "price": 0.004,
+   "bid_liq": "0",
+   "ask_liq": "10000000000",
+   "bid_swapped": "0",
+   "ask_swapped": "681080000000"
+  },
+  {
+   "tick_id": -21376000,
+   "price": 0.006624,
+   "bid_liq": "0",
+   "ask_liq": "16289251208",
+   "bid_swapped": "0",
+   "ask_swapped": "0"
+  },
+  {
+   "tick_id": -18000000,
+   "price": 0.01,
+   "bid_liq": "0",
+   "ask_liq": "6967088185",
+   "bid_swapped": "102000000",
+   "ask_swapped": "2009644503700"
+  },
+  {
+   "tick_id": -17500000,
+   "price": 0.015,
+   "bid_liq": "0",
+   "ask_liq": "4938815860",
+   "bid_swapped": "0",
+   "ask_swapped": "0"
+  },
+  {
+   "tick_id": -15500000,
+   "price": 0.035,
+   "bid_liq": "0",
+   "ask_liq": "44346336",
+   "bid_swapped": "0",
+   "ask_swapped": "0"
+  },
+  {
+   "tick_id": -14000000,
+   "price": 0.05,
+   "bid_liq": "0",
+   "ask_liq": "86298804108",
+   "bid_swapped": "0",
+   "ask_swapped": "0"
+  },
+  {
+   "tick_id": -9000000,
+   "price": 0.1,
+   "bid_liq": "0",
+   "ask_liq": "49995000000",
+   "bid_swapped": "0",
+   "ask_swapped": "0"
+  },
+  {
+   "tick_id": -7500000,
+   "price": 0.25,
+   "bid_liq": "0",
+   "ask_liq": "50000000000",
+   "bid_swapped": "0",
+   "ask_swapped": "0"
+  },
+  {
+   "tick_id": -5000000,
+   "price": 0.5,
+   "bid_liq": "0",
+   "ask_liq": "10652000000",
+   "bid_swapped": "0",
+   "ask_swapped": "0"
+  },
+  {
+   "tick_id": -3917000,
+   "price": 0.6083,
+   "bid_liq": "0",
+   "ask_liq": "7548000000",
+   "bid_swapped": "0",
+   "ask_swapped": "0"
+  },
+  {
+   "tick_id": -3215000,
+   "price": 0.6785,
+   "bid_liq": "0",
+   "ask_liq": "932792926",
+   "bid_swapped": "0",
+   "ask_swapped": "0"
+  },
+  {
+   "tick_id": -3177000,
+   "price": 0.6823,
+   "bid_liq": "0",
+   "ask_liq": "494610000",
+   "bid_swapped": "0",
+   "ask_swapped": "0"
+  },
+  {
+   "tick_id": -2043000,
+   "price": 0.7957,
+   "bid_liq": "0",
+   "ask_liq": "1413000000",
+   "bid_swapped": "0",
+   "ask_swapped": "0"
+  },
+  {
+   "tick_id": -1870000,
+   "price": 0.813,
+   "bid_liq": "0",
+   "ask_liq": "615006151",
+   "bid_swapped": "0",
+   "ask_swapped": "0"
+  },
+  {
+   "tick_id": -1424000,
+   "price": 0.8576,
+   "bid_liq": "0",
+   "ask_liq": "1970000000",
+   "bid_swapped": "0",
+   "ask_swapped": "0"
+  },
+  {
+   "tick_id": 0,
+   "price": 1,
+   "bid_liq": "0",
+   "ask_liq": "648000000",
+   "bid_swapped": "0",
+   "ask_swapped": "0"
+  },
+  {
+   "tick_id": 200000,
+   "price": 1.2,
+   "bid_liq": "0",
+   "ask_liq": "7854000000",
+   "bid_swapped": "0",
+   "ask_swapped": "0"
+  },
+  {
+   "tick_id": 500000,
+   "price": 1.5,
+   "bid_liq": "0",
+   "ask_liq": "22170800000",
+   "bid_swapped": "0",
+   "ask_swapped": "0"
+  },
+  {
+   "tick_id": 1000000,
+   "price": 2,
+   "bid_liq": "0",
+   "ask_liq": "10000000000",
+   "bid_swapped": "0",
+   "ask_swapped": "0"
+  },
+  {
+   "tick_id": 2000000,
+   "price": 3,
+   "bid_liq": "0",
+   "ask_liq": "1561206667",
+   "bid_swapped": "0",
+   "ask_swapped": "0"
+  },
+  {
+   "tick_id": 7900000,
+   "price": 8.9,
+   "bid_liq": "0",
+   "ask_liq": "1242250000",
+   "bid_swapped": "0",
+   "ask_swapped": "0"
+  },
+  {
+   "tick_id": 9000000,
+   "price": 10,
+   "bid_liq": "0",
+   "ask_liq": "5000000000",
+   "bid_swapped": "0",
+   "ask_swapped": "0"
+  },
+  {
+   "tick_id": 18500000,
+   "price": 150,
+   "bid_liq": "0",
+   "ask_liq": "5000000000",
+   "bid_swapped": "0",
+   "ask_swapped": "0"
+  }
+ ],
+ "orders": [
+  {
+   "tick_id": -36000000,
+   "price_usdc_per_nam": 0.0001,
+   "side": "bid",
+   "order_id": 996,
+   "owner": "owner#1",
+   "quantity": "25000000",
+   "placed_quantity": "25000000",
+   "placed_at_ns": "1793028216842887999",
+   "etas": "220000000",
+   "claim_bounty": "0.0001"
+  },
+  {
+   "tick_id": -35000000,
+   "price_usdc_per_nam": 0.0002,
+   "side": "bid",
+   "order_id": 995,
+   "owner": "owner#1",
+   "quantity": "25000000",
+   "placed_quantity": "25000000",
+   "placed_at_ns": "1793028206050626391",
+   "etas": "273570000",
+   "claim_bounty": "0.0001"
+  },
+  {
+   "tick_id": -35000000,
+   "price_usdc_per_nam": 0.0002,
+   "side": "bid",
+   "order_id": 999,
+   "owner": "owner#2",
+   "quantity": "99990000",
+   "placed_quantity": "99990000",
+   "placed_at_ns": "1793206948076371190",
+   "etas": "298570000",
+   "claim_bounty": "0.0001"
+  },
+  {
+   "tick_id": -33500000,
+   "price_usdc_per_nam": 0.00035,
+   "side": "bid",
+   "order_id": 998,
+   "owner": "owner#1",
+   "quantity": "24710606",
+   "placed_quantity": "24710606",
+   "placed_at_ns": "1793165284411301013",
+   "etas": "318090000",
+   "claim_bounty": "0.0001"
+  },
+  {
+   "tick_id": -26750000,
+   "price_usdc_per_nam": 0.00125,
+   "side": "ask",
+   "order_id": 993,
+   "owner": "owner#2",
+   "quantity": "200000000000",
+   "placed_quantity": "200000000000",
+   "placed_at_ns": "1792612199527074537",
+   "etas": "329808000000",
+   "claim_bounty": "0.0001"
+  },
+  {
+   "tick_id": -26400000,
+   "price_usdc_per_nam": 0.0016,
+   "side": "ask",
+   "order_id": 923,
+   "owner": "owner#3",
+   "quantity": "50000000000",
+   "placed_quantity": "50000000000",
+   "placed_at_ns": "1781930302279584711",
+   "etas": "142228000000",
+   "claim_bounty": "0.0001"
+  },
+  {
+   "tick_id": -26000000,
+   "price_usdc_per_nam": 0.002,
+   "side": "ask",
+   "order_id": 908,
+   "owner": "owner#3",
+   "quantity": "50000000000",
+   "placed_quantity": "50000000000",
+   "placed_at_ns": "1781149361386606605",
+   "etas": "207863000000",
+   "claim_bounty": "0.0001"
+  },
+  {
+   "tick_id": -25800000,
+   "price_usdc_per_nam": 0.0022,
+   "side": "ask",
+   "order_id": 896,
+   "owner": "owner#4",
+   "quantity": "10556000000",
+   "placed_quantity": "10556000000",
+   "placed_at_ns": "1780922281864435692",
+   "etas": "0",
+   "claim_bounty": "0.0001"
+  },
+  {
+   "tick_id": -25600000,
+   "price_usdc_per_nam": 0.0024,
+   "side": "ask",
+   "order_id": 897,
+   "owner": "owner#3",
+   "quantity": "50000000000",
+   "placed_quantity": "50000000000",
+   "placed_at_ns": "1780981074806115614",
+   "etas": "40008333334",
+   "claim_bounty": "0.0001"
+  },
+  {
+   "tick_id": -25500000,
+   "price_usdc_per_nam": 0.0025,
+   "side": "ask",
+   "order_id": 887,
+   "owner": "owner#3",
+   "quantity": "40479440084",
+   "placed_quantity": "40479440084",
+   "placed_at_ns": "1780029830130297321",
+   "etas": "78108000000",
+   "claim_bounty": "0.0001"
+  },
+  {
+   "tick_id": -25500000,
+   "price_usdc_per_nam": 0.0025,
+   "side": "ask",
+   "order_id": 893,
+   "owner": "owner#4",
+   "quantity": "8000000000",
+   "placed_quantity": "8000000000",
+   "placed_at_ns": "1780429628682249924",
+   "etas": "118587440084",
+   "claim_bounty": "0.0001"
+  },
+  {
+   "tick_id": -25200000,
+   "price_usdc_per_nam": 0.0028,
+   "side": "ask",
+   "order_id": 898,
+   "owner": "owner#3",
+   "quantity": "49995000000",
+   "placed_quantity": "49995000000",
+   "placed_at_ns": "1780981149747854174",
+   "etas": "0",
+   "claim_bounty": "0.0001"
+  },
+  {
+   "tick_id": -24800000,
+   "price_usdc_per_nam": 0.0032,
+   "side": "ask",
+   "order_id": 895,
+   "owner": "owner#3",
+   "quantity": "50000000000",
+   "placed_quantity": "50000000000",
+   "placed_at_ns": "1780472731814566329",
+   "etas": "0",
+   "claim_bounty": "0.0001"
+  },
+  {
+   "tick_id": -24000000,
+   "price_usdc_per_nam": 0.004,
+   "side": "ask",
+   "order_id": 507,
+   "owner": "owner#3",
+   "quantity": "10000000000",
+   "placed_quantity": "10000000000",
+   "placed_at_ns": "1770646566820234357",
+   "etas": "681080000000",
+   "claim_bounty": "0.0001"
+  },
+  {
+   "tick_id": -21376000,
+   "price_usdc_per_nam": 0.006624,
+   "side": "ask",
+   "order_id": 456,
+   "owner": "owner#5",
+   "quantity": "16289251208",
+   "placed_quantity": "16289251208",
+   "placed_at_ns": "1769313503533039550",
+   "etas": "0",
+   "claim_bounty": "0.0001"
+  },
+  {
+   "tick_id": -18000000,
+   "price_usdc_per_nam": 0.01,
+   "side": "ask",
+   "order_id": 994,
+   "owner": "owner#3",
+   "quantity": "6967088185",
+   "placed_quantity": "6967088185",
+   "placed_at_ns": "1792612668593939271",
+   "etas": "2292844331857",
+   "claim_bounty": "0.0001"
+  },
+  {
+   "tick_id": -17500000,
+   "price_usdc_per_nam": 0.015,
+   "side": "ask",
+   "order_id": 734,
+   "owner": "owner#6",
+   "quantity": "4938815860",
+   "placed_quantity": "4938815860",
+   "placed_at_ns": "1774344834082089448",
+   "etas": "300000000",
+   "claim_bounty": "0.0001"
+  },
+  {
+   "tick_id": -15500000,
+   "price_usdc_per_nam": 0.035,
+   "side": "ask",
+   "order_id": 63,
+   "owner": "owner#7",
+   "quantity": "44346336",
+   "placed_quantity": "44346336",
+   "placed_at_ns": "1751978044725350941",
+   "etas": "0",
+   "claim_bounty": "0.0001"
+  },
+  {
+   "tick_id": -14000000,
+   "price_usdc_per_nam": 0.05,
+   "side": "ask",
+   "order_id": 592,
+   "owner": "owner#3",
+   "quantity": "86298804108",
+   "placed_quantity": "86298804108",
+   "placed_at_ns": "1773379217636284535",
+   "etas": "40000000",
+   "claim_bounty": "0.0001"
+  },
+  {
+   "tick_id": -9000000,
+   "price_usdc_per_nam": 0.1,
+   "side": "ask",
+   "order_id": 955,
+   "owner": "owner#3",
+   "quantity": "49995000000",
+   "placed_quantity": "49995000000",
+   "placed_at_ns": "1783573837263748126",
+   "etas": "2411800000",
+   "claim_bounty": "0.0001"
+  },
+  {
+   "tick_id": -7500000,
+   "price_usdc_per_nam": 0.25,
+   "side": "ask",
+   "order_id": 738,
+   "owner": "owner#8",
+   "quantity": "50000000000",
+   "placed_quantity": "50000000000",
+   "placed_at_ns": "1774364182546324631",
+   "etas": "0",
+   "claim_bounty": "0.0001"
+  },
+  {
+   "tick_id": -5000000,
+   "price_usdc_per_nam": 0.5,
+   "side": "ask",
+   "order_id": 320,
+   "owner": "owner#9",
+   "quantity": "10000000000",
+   "placed_quantity": "10000000000",
+   "placed_at_ns": "1768741450455832032",
+   "etas": "9896369923",
+   "claim_bounty": "0.0001"
+  },
+  {
+   "tick_id": -5000000,
+   "price_usdc_per_nam": 0.5,
+   "side": "ask",
+   "order_id": 422,
+   "owner": "owner#9",
+   "quantity": "652000000",
+   "placed_quantity": "652000000",
+   "placed_at_ns": "1769018433513033395",
+   "etas": "19896369923",
+   "claim_bounty": "0.0001"
+  },
+  {
+   "tick_id": -3917000,
+   "price_usdc_per_nam": 0.6083,
+   "side": "ask",
+   "order_id": 331,
+   "owner": "owner#9",
+   "quantity": "7548000000",
+   "placed_quantity": "7548000000",
+   "placed_at_ns": "1768802466288558855",
+   "etas": "0",
+   "claim_bounty": "0.0001"
+  },
+  {
+   "tick_id": -3215000,
+   "price_usdc_per_nam": 0.6785,
+   "side": "ask",
+   "order_id": 857,
+   "owner": "owner#9",
+   "quantity": "932792926",
+   "placed_quantity": "932792926",
+   "placed_at_ns": "1779250231205364535",
+   "etas": "0",
+   "claim_bounty": "0.0001"
+  },
+  {
+   "tick_id": -3177000,
+   "price_usdc_per_nam": 0.6823,
+   "side": "ask",
+   "order_id": 233,
+   "owner": "owner#9",
+   "quantity": "494610000",
+   "placed_quantity": "494610000",
+   "placed_at_ns": "1764812506956946195",
+   "etas": "0",
+   "claim_bounty": "0.0001"
+  },
+  {
+   "tick_id": -2043000,
+   "price_usdc_per_nam": 0.7957,
+   "side": "ask",
+   "order_id": 130,
+   "owner": "owner#9",
+   "quantity": "1413000000",
+   "placed_quantity": "1413000000",
+   "placed_at_ns": "1759771478835867872",
+   "etas": "0",
+   "claim_bounty": "0.0001"
+  },
+  {
+   "tick_id": -1870000,
+   "price_usdc_per_nam": 0.813,
+   "side": "ask",
+   "order_id": 112,
+   "owner": "owner#9",
+   "quantity": "615006151",
+   "placed_quantity": "615006151",
+   "placed_at_ns": "1756356626310239483",
+   "etas": "0",
+   "claim_bounty": "0.0001"
+  },
+  {
+   "tick_id": -1424000,
+   "price_usdc_per_nam": 0.8576,
+   "side": "ask",
+   "order_id": 131,
+   "owner": "owner#9",
+   "quantity": "1970000000",
+   "placed_quantity": "1970000000",
+   "placed_at_ns": "1760023860235788626",
+   "etas": "0",
+   "claim_bounty": "0.0001"
+  },
+  {
+   "tick_id": 0,
+   "price_usdc_per_nam": 1,
+   "side": "ask",
+   "order_id": 140,
+   "owner": "owner#9",
+   "quantity": "221000000",
+   "placed_quantity": "221000000",
+   "placed_at_ns": "1760367613743918310",
+   "etas": "0",
+   "claim_bounty": "0.0001"
+  },
+  {
+   "tick_id": 0,
+   "price_usdc_per_nam": 1,
+   "side": "ask",
+   "order_id": 151,
+   "owner": "owner#9",
+   "quantity": "427000000",
+   "placed_quantity": "427000000",
+   "placed_at_ns": "1761053790091929937",
+   "etas": "221000000",
+   "claim_bounty": "0.0001"
+  },
+  {
+   "tick_id": 200000,
+   "price_usdc_per_nam": 1.2,
+   "side": "ask",
+   "order_id": 335,
+   "owner": "owner#9",
+   "quantity": "7854000000",
+   "placed_quantity": "7854000000",
+   "placed_at_ns": "1768832829241784460",
+   "etas": "0",
+   "claim_bounty": "0.0001"
+  },
+  {
+   "tick_id": 500000,
+   "price_usdc_per_nam": 1.5,
+   "side": "ask",
+   "order_id": 132,
+   "owner": "owner#9",
+   "quantity": "3000000000",
+   "placed_quantity": "3000000000",
+   "placed_at_ns": "1760023892381891605",
+   "etas": "5000000000",
+   "claim_bounty": "0.0001"
+  },
+  {
+   "tick_id": 500000,
+   "price_usdc_per_nam": 1.5,
+   "side": "ask",
+   "order_id": 133,
+   "owner": "owner#9",
+   "quantity": "965700000",
+   "placed_quantity": "965700000",
+   "placed_at_ns": "1760093916828394328",
+   "etas": "8000000000",
+   "claim_bounty": "0.0001"
+  },
+  {
+   "tick_id": 500000,
+   "price_usdc_per_nam": 1.5,
+   "side": "ask",
+   "order_id": 137,
+   "owner": "owner#9",
+   "quantity": "205100000",
+   "placed_quantity": "205100000",
+   "placed_at_ns": "1760331881909489010",
+   "etas": "8965700000",
+   "claim_bounty": "0.0001"
+  },
+  {
+   "tick_id": 500000,
+   "price_usdc_per_nam": 1.5,
+   "side": "ask",
+   "order_id": 148,
+   "owner": "owner#9",
+   "quantity": "3000000000",
+   "placed_quantity": "3000000000",
+   "placed_at_ns": "1760891513360902522",
+   "etas": "9170800000",
+   "claim_bounty": "0.0001"
+  },
+  {
+   "tick_id": 500000,
+   "price_usdc_per_nam": 1.5,
+   "side": "ask",
+   "order_id": 172,
+   "owner": "owner#9",
+   "quantity": "5000000000",
+   "placed_quantity": "5000000000",
+   "placed_at_ns": "1762274361948296102",
+   "etas": "12170800000",
+   "claim_bounty": "0.0001"
+  },
+  {
+   "tick_id": 500000,
+   "price_usdc_per_nam": 1.5,
+   "side": "ask",
+   "order_id": 321,
+   "owner": "owner#9",
+   "quantity": "10000000000",
+   "placed_quantity": "10000000000",
+   "placed_at_ns": "1768741550841501525",
+   "etas": "17170800000",
+   "claim_bounty": "0.0001"
+  },
+  {
+   "tick_id": 1000000,
+   "price_usdc_per_nam": 2,
+   "side": "ask",
+   "order_id": 332,
+   "owner": "owner#9",
+   "quantity": "10000000000",
+   "placed_quantity": "10000000000",
+   "placed_at_ns": "1768802503622048726",
+   "etas": "0",
+   "claim_bounty": "0.0001"
+  },
+  {
+   "tick_id": 2000000,
+   "price_usdc_per_nam": 3,
+   "side": "ask",
+   "order_id": 234,
+   "owner": "owner#9",
+   "quantity": "1561206667",
+   "placed_quantity": "1561206667",
+   "placed_at_ns": "1764941370993270130",
+   "etas": "0",
+   "claim_bounty": "0.0001"
+  },
+  {
+   "tick_id": 7900000,
+   "price_usdc_per_nam": 8.9,
+   "side": "ask",
+   "order_id": 253,
+   "owner": "owner#9",
+   "quantity": "1242250000",
+   "placed_quantity": "1242250000",
+   "placed_at_ns": "1766554469649534845",
+   "etas": "0",
+   "claim_bounty": "0.0001"
+  },
+  {
+   "tick_id": 9000000,
+   "price_usdc_per_nam": 10,
+   "side": "ask",
+   "order_id": 173,
+   "owner": "owner#9",
+   "quantity": "5000000000",
+   "placed_quantity": "5000000000",
+   "placed_at_ns": "1762274508720484359",
+   "etas": "0",
+   "claim_bounty": "0.0001"
+  },
+  {
+   "tick_id": 18500000,
+   "price_usdc_per_nam": 150,
+   "side": "ask",
+   "order_id": 174,
+   "owner": "owner#9",
+   "quantity": "5000000000",
+   "placed_quantity": "5000000000",
+   "placed_at_ns": "1762274544872650929",
+   "etas": "0",
+   "claim_bounty": "0.0001"
+  }
+ ]
+}

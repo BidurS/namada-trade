@@ -1,0 +1,225 @@
+// 2026-10-29T02:59:41Z-02:59:48Z verify-router.mjs of the depth research: a full prototype snapshot, then in the same minute the quote service's router quote and pool 3005's custom-direct quote for selling 1,000 / 10,000 / 100,000 NAM and the REST gateway's single-pool swap estimate at each size (heights 73,429,548-549); each read's url, at, status and height are inside the file.
+{
+ "snapshotAt": "2026-10-29T02:59:41.000Z",
+ "snapshotFinishedAt": "2026-10-29T02:59:47.466Z",
+ "refHeight": 73429543,
+ "refSpotUsd": 0.001019868458722253,
+ "poolReadHeight": 73429549,
+ "poolReadAt": "2026-10-29T02:59:48.443Z",
+ "rows": [
+  {
+   "sellNam": 1000,
+   "prototypeAggregateUsdc": 1.014940713783082,
+   "prototypeAggregateSplit": [
+    {
+     "id": "3005",
+     "nam": 948.204,
+     "usd": 0.961673
+    },
+    {
+     "id": "3439",
+     "nam": 50.7676,
+     "usd": 0.0515576
+    },
+    {
+     "id": "3398",
+     "nam": 1.02801,
+     "usd": 0.00171055
+    }
+   ],
+   "routerUsdc": 1.014173,
+   "routerRoute": "3005 + 3439",
+   "routerAt": "2026-10-29T02:59:45.890Z",
+   "aggVsRouterPct": 0.07569850341924145,
+   "prototype3005OnlyUsdc": 1.0141603372469616,
+   "direct3005Usdc": 1.01416,
+   "direct3005At": "2026-10-29T02:59:47.466Z",
+   "direct3005Status": 200,
+   "chainEstimate3005Usdc": 1.01416,
+   "chainEstimateHeight": 73429548,
+   "chainEstimateAt": "2026-10-29T02:59:47.673Z",
+   "only3005VsDirectPct": 0.00003325382205154881,
+   "only3005VsChainPct": 0.00003325382205154881
+  },
+  {
+   "sellNam": 10000,
+   "prototypeAggregateUsdc": 9.92467744041228,
+   "prototypeAggregateSplit": [
+    {
+     "id": "3005",
+     "nam": 8996.57,
+     "usd": 8.93755
+    },
+    {
+     "id": "3439",
+     "nam": 333.092,
+     "usd": 0.33134
+    },
+    {
+     "id": "3368",
+     "nam": 246.149,
+     "usd": 0.239199
+    },
+    {
+     "id": "3402",
+     "nam": 228.114,
+     "usd": 0.224293
+    }
+   ],
+   "routerUsdc": 9.909129,
+   "routerRoute": "3005",
+   "routerAt": "2026-10-29T02:59:46.565Z",
+   "aggVsRouterPct": 0.1569102633771413,
+   "prototype3005OnlyUsdc": 9.909129170057497,
+   "direct3005Usdc": 9.909129,
+   "direct3005At": "2026-10-29T02:59:47.795Z",
+   "direct3005Status": 200,
+   "chainEstimate3005Usdc": 9.909129,
+   "chainEstimateHeight": 73429548,
+   "chainEstimateAt": "2026-10-29T02:59:48.002Z",
+   "only3005VsDirectPct": 0.0000017161699839007838,
+   "only3005VsChainPct": 0.0000017161699839007838
+  },
+  {
+   "sellNam": 100000,
+   "prototypeAggregateUsdc": 85.2045087094408,
+   "prototypeAggregateSplit": [
+    {
+     "id": "3005",
+     "nam": 59696,
+     "usd": 51.5514
+    },
+    {
+     "id": "3368",
+     "nam": 27270.2,
+     "usd": 22.9021
+    },
+    {
+     "id": "3402",
+     "nam": 3610.57,
+     "usd": 2.98185
+    },
+    {
+     "id": "3009",
+     "nam": 3546.12,
+     "usd": 2.90528
+    }
+   ],
+   "routerUsdc": 82.797671,
+   "routerRoute": "3005 + 3368→1464",
+   "routerAt": "2026-10-29T02:59:47.227Z",
+   "aggVsRouterPct": 2.906890592901834,
+   "prototype3005OnlyUsdc": 74.97702403022738,
+   "direct3005Usdc": 74.977024,
+   "direct3005At": "2026-10-29T02:59:48.118Z",
+   "direct3005Status": 200,
+   "chainEstimate3005Usdc": 74.977024,
+   "chainEstimateHeight": 73429549,
+   "chainEstimateAt": "2026-10-29T02:59:48.334Z",
+   "only3005VsDirectPct": 4.031552869321331e-8,
+   "only3005VsChainPct": 4.031552869321331e-8
+  }
+ ],
+ "routerRaw": [
+  {
+   "sellNam": 1000,
+   "usdcOut": 1.014173,
+   "route": "3005 + 3439",
+   "priceImpact": -0.005654595874885891,
+   "at": "2026-10-29T02:59:45.890Z",
+   "url": "https://sqs.osmosis.zone/router/quote?tokenIn=1000000000ibc/C7110DEC66869DAE9BE9C3C60F4B5313B16A2204AE020C3B0527DD6B322386A3&tokenOutDenom=ibc/498A0751C798A0D9A389AA3691123DADA57DAA4FE165D5C75894505B876BA6E4&humanDenoms=false"
+  },
+  {
+   "sellNam": 10000,
+   "usdcOut": 9.909129,
+   "route": "3005",
+   "priceImpact": -0.02741888297288988,
+   "at": "2026-10-29T02:59:46.565Z",
+   "url": "https://sqs.osmosis.zone/router/quote?tokenIn=10000000000ibc/C7110DEC66869DAE9BE9C3C60F4B5313B16A2204AE020C3B0527DD6B322386A3&tokenOutDenom=ibc/498A0751C798A0D9A389AA3691123DADA57DAA4FE165D5C75894505B876BA6E4&humanDenoms=false"
+  },
+  {
+   "sellNam": 100000,
+   "usdcOut": 82.797671,
+   "route": "3005 + 3368→1464",
+   "priceImpact": -0.18159115883098637,
+   "at": "2026-10-29T02:59:47.227Z",
+   "url": "https://sqs.osmosis.zone/router/quote?tokenIn=100000000000ibc/C7110DEC66869DAE9BE9C3C60F4B5313B16A2204AE020C3B0527DD6B322386A3&tokenOutDenom=ibc/498A0751C798A0D9A389AA3691123DADA57DAA4FE165D5C75894505B876BA6E4&humanDenoms=false"
+  }
+ ],
+ "directRaw": [
+  {
+   "url": "https://sqs.osmosis.zone/router/custom-direct-quote?tokenIn=1000000000ibc%2FC7110DEC66869DAE9BE9C3C60F4B5313B16A2204AE020C3B0527DD6B322386A3&tokenOutDenom=ibc%2F498A0751C798A0D9A389AA3691123DADA57DAA4FE165D5C75894505B876BA6E4&poolID=3005",
+   "at": "2026-10-29T02:59:47.466Z",
+   "status": 200,
+   "amount_out": "1014160",
+   "price_impact": "-0.004601851843675024",
+   "effective_fee": "0.001000000000000000"
+  },
+  {
+   "url": "https://sqs.osmosis.zone/router/custom-direct-quote?tokenIn=10000000000ibc%2FC7110DEC66869DAE9BE9C3C60F4B5313B16A2204AE020C3B0527DD6B322386A3&tokenOutDenom=ibc%2F498A0751C798A0D9A389AA3691123DADA57DAA4FE165D5C75894505B876BA6E4&poolID=3005",
+   "at": "2026-10-29T02:59:47.795Z",
+   "status": 200,
+   "amount_out": "9909129",
+   "price_impact": "-0.027418882972889879",
+   "effective_fee": "0.001000000000000000"
+  },
+  {
+   "url": "https://sqs.osmosis.zone/router/custom-direct-quote?tokenIn=100000000000ibc%2FC7110DEC66869DAE9BE9C3C60F4B5313B16A2204AE020C3B0527DD6B322386A3&tokenOutDenom=ibc%2F498A0751C798A0D9A389AA3691123DADA57DAA4FE165D5C75894505B876BA6E4&poolID=3005",
+   "at": "2026-10-29T02:59:48.118Z",
+   "status": 200,
+   "amount_out": "74977024",
+   "price_impact": "-0.264100429479841739",
+   "effective_fee": "0.001000000000000000"
+  }
+ ],
+ "estimateRaw": [
+  {
+   "url": "https://osmosis-rest.publicnode.com/osmosis/poolmanager/v1beta1/3005/estimate/single_pool_swap_exact_amount_in?pool_id=3005&token_in=1000000000ibc%2FC7110DEC66869DAE9BE9C3C60F4B5313B16A2204AE020C3B0527DD6B322386A3&token_out_denom=ibc%2F498A0751C798A0D9A389AA3691123DADA57DAA4FE165D5C75894505B876BA6E4",
+   "at": "2026-10-29T02:59:47.673Z",
+   "status": 200,
+   "height": 73429548,
+   "token_out_amount": "1014160"
+  },
+  {
+   "url": "https://osmosis-rest.publicnode.com/osmosis/poolmanager/v1beta1/3005/estimate/single_pool_swap_exact_amount_in?pool_id=3005&token_in=10000000000ibc%2FC7110DEC66869DAE9BE9C3C60F4B5313B16A2204AE020C3B0527DD6B322386A3&token_out_denom=ibc%2F498A0751C798A0D9A389AA3691123DADA57DAA4FE165D5C75894505B876BA6E4",
+   "at": "2026-10-29T02:59:48.002Z",
+   "status": 200,
+   "height": 73429548,
+   "token_out_amount": "9909129"
+  },
+  {
+   "url": "https://osmosis-rest.publicnode.com/osmosis/poolmanager/v1beta1/3005/estimate/single_pool_swap_exact_amount_in?pool_id=3005&token_in=100000000000ibc%2FC7110DEC66869DAE9BE9C3C60F4B5313B16A2204AE020C3B0527DD6B322386A3&token_out_denom=ibc%2F498A0751C798A0D9A389AA3691123DADA57DAA4FE165D5C75894505B876BA6E4",
+   "at": "2026-10-29T02:59:48.334Z",
+   "status": 200,
+   "height": 73429549,
+   "token_out_amount": "74977024"
+  }
+ ],
+ "cost": {
+  "wallMs": 6440,
+  "reads": 80,
+  "bytes": 249731,
+  "sumMs": 15643,
+  "hosts": {
+   "sqs.osmosis.zone": {
+    "reads": 5,
+    "bytes": 39708,
+    "ms": 3044,
+    "errors": 0
+   },
+   "osmosis-rest.publicnode.com": {
+    "reads": 70,
+    "bytes": 181266,
+    "ms": 11847,
+    "errors": 0
+   },
+   "osmosis-rpc.publicnode.com": {
+    "reads": 5,
+    "bytes": 28757,
+    "ms": 752,
+    "errors": 0
+   }
+  }
+ },
+ "notes": []
+}

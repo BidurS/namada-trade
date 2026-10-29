@@ -1,0 +1,196 @@
+// 2026-10-29T02:17:50.868Z https://osmosis-rpc.publicnode.com/abci_query?path=%22%2Fstore%2Fconcentratedliquidity%2Fsubspace%22&data=0x010000000000000bbd
+// height 73426642; TickInfo decoded: liquidity_gross, liquidity_net (18-decimal fixed strings)
+[
+ {
+  "key_hex": "010000000000000bbd05fffffffff9900d00",
+  "tick_key_hex": "fffffffff9900d00",
+  "liquidity_gross": "5069118449895769695695682858",
+  "liquidity_net": "5069118449895769695695682858"
+ },
+ {
+  "key_hex": "010000000000000bbd05fffffffff9900dc8",
+  "tick_key_hex": "fffffffff9900dc8",
+  "liquidity_gross": "695514081677031846472104",
+  "liquidity_net": "695514081677031846472104"
+ },
+ {
+  "key_hex": "010000000000000bbd05fffffffffdecc000",
+  "tick_key_hex": "fffffffffdecc000",
+  "liquidity_gross": "21761535984388186510813336",
+  "liquidity_net": "21761535984388186510813336"
+ },
+ {
+  "key_hex": "010000000000000bbd05fffffffffe14d680",
+  "tick_key_hex": "fffffffffe14d680",
+  "liquidity_gross": "165115979240997224927809952",
+  "liquidity_net": "165115979240997224927809952"
+ },
+ {
+  "key_hex": "010000000000000bbd05fffffffffe1a5010",
+  "tick_key_hex": "fffffffffe1a5010",
+  "liquidity_gross": "6148544135613424111632758863",
+  "liquidity_net": "6148544135613424111632758863"
+ },
+ {
+  "key_hex": "010000000000000bbd05fffffffffe1a7338",
+  "tick_key_hex": "fffffffffe1a7338",
+  "liquidity_gross": "6148544135613424111632758863",
+  "liquidity_net": "-6148544135613424111632758863"
+ },
+ {
+  "key_hex": "010000000000000bbd05fffffffffe1ebd44",
+  "tick_key_hex": "fffffffffe1ebd44",
+  "liquidity_gross": "591069600072030281380919064",
+  "liquidity_net": "591069600072030281380919064"
+ },
+ {
+  "key_hex": "010000000000000bbd05fffffffffe23ed00",
+  "tick_key_hex": "fffffffffe23ed00",
+  "liquidity_gross": "146800128218284883843661004",
+  "liquidity_net": "146800128218284883843661004"
+ },
+ {
+  "key_hex": "010000000000000bbd05fffffffffe4d1fe0",
+  "tick_key_hex": "fffffffffe4d1fe0",
+  "liquidity_gross": "6353092755962217234850521312",
+  "liquidity_net": "6353092755962217234850521312"
+ },
+ {
+  "key_hex": "010000000000000bbd05fffffffffe4d6e00",
+  "tick_key_hex": "fffffffffe4d6e00",
+  "liquidity_gross": "165115979240997224927809952",
+  "liquidity_net": "-165115979240997224927809952"
+ },
+ {
+  "key_hex": "010000000000000bbd05fffffffffe657e28",
+  "tick_key_hex": "fffffffffe657e28",
+  "liquidity_gross": "146800128218284883843661004",
+  "liquidity_net": "-146800128218284883843661004"
+ },
+ {
+  "key_hex": "010000000000000bbd05fffffffffe6589e0",
+  "tick_key_hex": "fffffffffe6589e0",
+  "liquidity_gross": "31041444864271535361738517935",
+  "liquidity_net": "31041444864271535361738517935"
+ },
+ {
+  "key_hex": "010000000000000bbd05fffffffffe689720",
+  "tick_key_hex": "fffffffffe689720",
+  "liquidity_gross": "45403287966261210003779584377",
+  "liquidity_net": "-16679601762281860719697451493"
+ },
+ {
+  "key_hex": "010000000000000bbd05fffffffffe695a70",
+  "tick_key_hex": "fffffffffe695a70",
+  "liquidity_gross": "6353092755962217234850521312",
+  "liquidity_net": "-6353092755962217234850521312"
+ },
+ {
+  "key_hex": "010000000000000bbd05fffffffffe699508",
+  "tick_key_hex": "fffffffffe699508",
+  "liquidity_gross": "21761535984388186510813336",
+  "liquidity_net": "-21761535984388186510813336"
+ },
+ {
+  "key_hex": "010000000000000bbd05fffffffffe6eb1a0",
+  "tick_key_hex": "fffffffffe6eb1a0",
+  "liquidity_gross": "14361843101989674642041066442",
+  "liquidity_net": "-14361843101989674642041066442"
+ },
+ {
+  "key_hex": "010000000000000bbd05fffffffffe7a3ea8",
+  "tick_key_hex": "fffffffffe7a3ea8",
+  "liquidity_gross": "591069600072030281380919064",
+  "liquidity_net": "-591069600072030281380919064"
+ },
+ {
+  "key_hex": "010000000000000bbd05fffffffffe7e57e0",
+  "tick_key_hex": "fffffffffe7e57e0",
+  "liquidity_gross": "24774656968817682586",
+  "liquidity_net": "24774656968817682586"
+ },
+ {
+  "key_hex": "010000000000000bbd05fffffffffebcb9cc",
+  "tick_key_hex": "fffffffffebcb9cc",
+  "liquidity_gross": "129229295822120382308",
+  "liquidity_net": "129229295822120382308"
+ },
+ {
+  "key_hex": "010000000000000bbd05fffffffffec65144",
+  "tick_key_hex": "fffffffffec65144",
+  "liquidity_gross": "233711743496929647031313391",
+  "liquidity_net": "233711743496929647031313391"
+ },
+ {
+  "key_hex": "010000000000000bbd05fffffffffeced300",
+  "tick_key_hex": "fffffffffeced300",
+  "liquidity_gross": "47276628265519988194051795172",
+  "liquidity_net": "47276628265519988194051795172"
+ },
+ {
+  "key_hex": "010000000000000bbd05fffffffffef076b8",
+  "tick_key_hex": "fffffffffef076b8",
+  "liquidity_gross": "233711743496929647031313391",
+  "liquidity_net": "-233711743496929647031313391"
+ },
+ {
+  "key_hex": "010000000000000bbd05fffffffffef8138c",
+  "tick_key_hex": "fffffffffef8138c",
+  "liquidity_gross": "24774656968817682586",
+  "liquidity_net": "-24774656968817682586"
+ },
+ {
+  "key_hex": "010000000000000bbd05ffffffffff08641c",
+  "tick_key_hex": "ffffffffff08641c",
+  "liquidity_gross": "3839190885203148825233411542",
+  "liquidity_net": "3839190885203148825233411542"
+ },
+ {
+  "key_hex": "010000000000000bbd05ffffffffff0cdefc",
+  "tick_key_hex": "ffffffffff0cdefc",
+  "liquidity_gross": "129229295822120382308",
+  "liquidity_net": "-129229295822120382308"
+ },
+ {
+  "key_hex": "010000000000000bbd05ffffffffff35277c",
+  "tick_key_hex": "ffffffffff35277c",
+  "liquidity_gross": "3839190885203148825233411542",
+  "liquidity_net": "-3839190885203148825233411542"
+ },
+ {
+  "key_hex": "010000000000000bbd05ffffffffff5016cc",
+  "tick_key_hex": "ffffffffff5016cc",
+  "liquidity_gross": "47276628265519988194051795172",
+  "liquidity_net": "-47276628265519988194051795172"
+ },
+ {
+  "key_hex": "010000000000000bbd05ffffffffff76abc0",
+  "tick_key_hex": "ffffffffff76abc0",
+  "liquidity_gross": "6324555320336758690000000000",
+  "liquidity_net": "6324555320336758690000000000"
+ },
+ {
+  "key_hex": "010000000000000bbd05ffffffffff9cd160",
+  "tick_key_hex": "ffffffffff9cd160",
+  "liquidity_gross": "4713230770013015664259787277008",
+  "liquidity_net": "4713230770013015664259787277008"
+ },
+ {
+  "key_hex": "010000000000000bbd05ffffffffff9da7d4",
+  "tick_key_hex": "ffffffffff9da7d4",
+  "liquidity_gross": "4713230770013015664259787277008",
+  "liquidity_net": "-4713230770013015664259787277008"
+ },
+ {
+  "key_hex": "010000000000000bbd05ffffffffffa47280",
+  "tick_key_hex": "ffffffffffa47280",
+  "liquidity_gross": "6324555320336758690000000000",
+  "liquidity_net": "-6324555320336758690000000000"
+ },
+ {
+  "key_hex": "010000000000000bbd060000000014628180",
+  "tick_key_hex": "0000000014628180",
+  "liquidity_gross": "5069813963977446727542154962",
+  "liquidity_net": "-5069813963977446727542154962"
+ }
+]

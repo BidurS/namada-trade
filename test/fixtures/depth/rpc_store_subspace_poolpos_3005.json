@@ -1,0 +1,80 @@
+// 2026-10-29T02:17:21.704Z https://osmosis-rpc.publicnode.com/abci_query?path=%22%2Fstore%2Fconcentratedliquidity%2Fsubspace%22&data=0x090000000000000bbd
+// height 73426609
+[
+ {
+  "key_hex": "090000000000000bbd7c0000000000dec618",
+  "value_hex": "01"
+ },
+ {
+  "key_hex": "090000000000000bbd7c0000000000e04524",
+  "value_hex": "01"
+ },
+ {
+  "key_hex": "090000000000000bbd7c0000000000e3cdec",
+  "value_hex": "01"
+ },
+ {
+  "key_hex": "090000000000000bbd7c0000000000e6428d",
+  "value_hex": "01"
+ },
+ {
+  "key_hex": "090000000000000bbd7c0000000000e6edff",
+  "value_hex": "01"
+ },
+ {
+  "key_hex": "090000000000000bbd7c0000000000e6fc30",
+  "value_hex": "01"
+ },
+ {
+  "key_hex": "090000000000000bbd7c0000000000e6fc31",
+  "value_hex": "01"
+ },
+ {
+  "key_hex": "090000000000000bbd7c0000000000e6fc32",
+  "value_hex": "01"
+ },
+ {
+  "key_hex": "090000000000000bbd7c0000000000e724f4",
+  "value_hex": "01"
+ },
+ {
+  "key_hex": "090000000000000bbd7c0000000000e949a1",
+  "value_hex": "01"
+ },
+ {
+  "key_hex": "090000000000000bbd7c0000000000e9ee84",
+  "value_hex": "01"
+ },
+ {
+  "key_hex": "090000000000000bbd7c0000000000e9ee85",
+  "value_hex": "01"
+ },
+ {
+  "key_hex": "090000000000000bbd7c0000000000e9ee86",
+  "value_hex": "01"
+ },
+ {
+  "key_hex": "090000000000000bbd7c0000000000eae0c3",
+  "value_hex": "01"
+ },
+ {
+  "key_hex": "090000000000000bbd7c0000000000ec49b7",
+  "value_hex": "01"
+ },
+ {
+  "key_hex": "090000000000000bbd7c0000000000ec5392",
+  "value_hex": "01"
+ },
+ {
+  "key_hex": "090000000000000bbd7c0000000000eccd63",
+  "value_hex": "01"
+ },
+ {
+  "key_hex": "090000000000000bbd7c0000000000ed0408",
+  "value_hex": "01"
+ },
+ {
+  "key_hex": "090000000000000bbd7c0000000000ed0409",
+  "value_hex": "01"
+ }
+]

@@ -1,0 +1,991 @@
+// 2026-10-29T03:01:39Z the depth research's export of the 20 newest stored Osmosis trades (buys and sells of 28 Oct 2026, 03:34-15:14 UTC) with their swap hops, from the site's own database read with SELECT only; the traders' addresses were dropped before saving.
+[
+ {
+  "hash": "0FF2D1235991",
+  "height": 73381348,
+  "index": 0,
+  "ts_utc": "2026-10-28T15:14:48Z",
+  "kind": "sell",
+  "nam": 9946.068,
+  "pool_id": "3005,3368",
+  "price_usd_quote": 0.001064138200351261,
+  "settle": {
+   "nam": -10000,
+   "coins": {
+    "allUSDC": 10.34082
+   },
+   "gas": {
+    "allUSDC": 0.005743
+   }
+  },
+  "hops": [
+   {
+    "pool": "3005",
+    "in": 8973018000,
+    "inDenom": "NAM",
+    "out": 9324491,
+    "outDenom": "USDC"
+   },
+   {
+    "pool": "3497",
+    "in": 9324491,
+    "inDenom": "USDC",
+    "out": 9324491,
+    "outDenom": "factory/osmo147h"
+   },
+   {
+    "pool": "3368",
+    "in": 973050000,
+    "inDenom": "NAM",
+    "out": 19411559,
+    "outDenom": "OSMO"
+   },
+   {
+    "pool": "3499",
+    "in": 19217754,
+    "inDenom": "OSMO",
+    "out": 1016329,
+    "outDenom": "factory/osmo147h"
+   },
+   {
+    "pool": "1464",
+    "in": 7999200,
+    "inDenom": "OSMO",
+    "out": 423381,
+    "outDenom": "USDC"
+   },
+   {
+    "pool": "3005",
+    "in": 422535,
+    "inDenom": "USDC",
+    "out": 415924121,
+    "outDenom": "NAM"
+   },
+   {
+    "pool": "3368",
+    "in": 405526018,
+    "inDenom": "NAM",
+    "out": 8025883,
+    "outDenom": "OSMO"
+   }
+  ]
+ },
+ {
+  "hash": "FADE44066C4F",
+  "height": 73379239,
+  "index": 0,
+  "ts_utc": "2026-10-28T14:43:32Z",
+  "kind": "sell",
+  "nam": 398.8008,
+  "pool_id": "3005",
+  "price_usd_quote": 0.0010652736905241915,
+  "settle": {
+   "nam": -400,
+   "coins": {
+    "OSMO": 8.075368
+   },
+   "gas": {
+    "OSMO": 0.116537
+   },
+   "rates": {
+    "OSMO": 0.05255054630327683
+   }
+  },
+  "hops": [
+   {
+    "pool": "3005",
+    "in": 398800800,
+    "inDenom": "NAM",
+    "out": 424832,
+    "outDenom": "USDC"
+   },
+   {
+    "pool": "1464",
+    "in": 424365,
+    "inDenom": "USDC",
+    "out": 8075368,
+    "outDenom": "OSMO"
+   }
+  ]
+ },
+ {
+  "hash": "6A870D640E1D",
+  "height": 73379031,
+  "index": 0,
+  "ts_utc": "2026-10-28T14:40:27Z",
+  "kind": "buy",
+  "nam": 150129.938973,
+  "pool_id": "3008,3005,3368",
+  "price_usd_quote": 0.000919364469864624,
+  "settle": {
+   "nam": 150129.938973,
+   "coins": {
+    "allUSDC": -150
+   },
+   "gas": {
+    "OSMO": 0.132735
+   }
+  },
+  "hops": [
+   {
+    "pool": "3497",
+    "in": 90000000,
+    "inDenom": "factory/osmo147h",
+    "out": 90000000,
+    "outDenom": "USDC"
+   },
+   {
+    "pool": "3008",
+    "in": 89910000,
+    "inDenom": "USDC",
+    "out": 89910000000,
+    "outDenom": "NAM"
+   },
+   {
+    "pool": "3497",
+    "in": 45000000,
+    "inDenom": "factory/osmo147h",
+    "out": 45000000,
+    "outDenom": "USDC"
+   },
+   {
+    "pool": "3005",
+    "in": 44865090,
+    "inDenom": "USDC",
+    "out": 45861416258,
+    "outDenom": "NAM"
+   },
+   {
+    "pool": "3499",
+    "in": 14962515,
+    "inDenom": "factory/osmo147h",
+    "out": 282931167,
+    "outDenom": "OSMO"
+   },
+   {
+    "pool": "3368",
+    "in": 273651025,
+    "inDenom": "OSMO",
+    "out": 14358522715,
+    "outDenom": "NAM"
+   }
+  ]
+ },
+ {
+  "hash": "C69D6DD03C5A",
+  "height": 73378980,
+  "index": 0,
+  "ts_utc": "2026-10-28T14:39:40Z",
+  "kind": "buy",
+  "nam": 10861.211982,
+  "pool_id": "3005",
+  "price_usd_quote": 0.0009179472803332676,
+  "settle": {
+   "nam": 10861.211982,
+   "coins": {
+    "allUSDC": -10
+   },
+   "gas": {
+    "OSMO": 0.046196
+   }
+  },
+  "hops": [
+   {
+    "pool": "3497",
+    "in": 10000000,
+    "inDenom": "factory/osmo147h",
+    "out": 10000000,
+    "outDenom": "USDC"
+   },
+   {
+    "pool": "3005",
+    "in": 9970020,
+    "inDenom": "USDC",
+    "out": 10861211982,
+    "outDenom": "NAM"
+   }
+  ]
+ },
+ {
+  "hash": "337CB7773007",
+  "height": 73378969,
+  "index": 0,
+  "ts_utc": "2026-10-28T14:39:30Z",
+  "kind": "buy",
+  "nam": 10894.800397,
+  "pool_id": "3005",
+  "price_usd_quote": 0.0009151172703214784,
+  "settle": {
+   "nam": 10894.800397,
+   "coins": {
+    "allUSDC": -10
+   },
+   "gas": {
+    "OSMO": 0.046196
+   }
+  },
+  "hops": [
+   {
+    "pool": "3497",
+    "in": 10000000,
+    "inDenom": "factory/osmo147h",
+    "out": 10000000,
+    "outDenom": "USDC"
+   },
+   {
+    "pool": "3005",
+    "in": 9970020,
+    "inDenom": "USDC",
+    "out": 10894800397,
+    "outDenom": "NAM"
+   }
+  ]
+ },
+ {
+  "hash": "E3DD92EFD7FA",
+  "height": 73378960,
+  "index": 0,
+  "ts_utc": "2026-10-28T14:39:23Z",
+  "kind": "buy",
+  "nam": 10928.544861,
+  "pool_id": "3005",
+  "price_usd_quote": 0.0009122916295635454,
+  "settle": {
+   "nam": 10928.544861,
+   "coins": {
+    "allUSDC": -10
+   },
+   "gas": {
+    "OSMO": 0.046192
+   }
+  },
+  "hops": [
+   {
+    "pool": "3497",
+    "in": 10000000,
+    "inDenom": "factory/osmo147h",
+    "out": 10000000,
+    "outDenom": "USDC"
+   },
+   {
+    "pool": "3005",
+    "in": 9970020,
+    "inDenom": "USDC",
+    "out": 10928544861,
+    "outDenom": "NAM"
+   }
+  ]
+ },
+ {
+  "hash": "341A6D566495",
+  "height": 73378952,
+  "index": 0,
+  "ts_utc": "2026-10-28T14:39:16Z",
+  "kind": "buy",
+  "nam": 10962.446344,
+  "pool_id": "3005",
+  "price_usd_quote": 0.0009094703579057262,
+  "settle": {
+   "nam": 10962.446344,
+   "coins": {
+    "allUSDC": -10
+   },
+   "gas": {
+    "OSMO": 0.046192
+   }
+  },
+  "hops": [
+   {
+    "pool": "3497",
+    "in": 10000000,
+    "inDenom": "factory/osmo147h",
+    "out": 10000000,
+    "outDenom": "USDC"
+   },
+   {
+    "pool": "3005",
+    "in": 9970020,
+    "inDenom": "USDC",
+    "out": 10962446344,
+    "outDenom": "NAM"
+   }
+  ]
+ },
+ {
+  "hash": "B82AC30BC4A0",
+  "height": 73378943,
+  "index": 0,
+  "ts_utc": "2026-10-28T14:39:08Z",
+  "kind": "buy",
+  "nam": 10996.505821,
+  "pool_id": "3005",
+  "price_usd_quote": 0.0009066534554058324,
+  "settle": {
+   "nam": 10996.505821,
+   "coins": {
+    "allUSDC": -10
+   },
+   "gas": {
+    "OSMO": 0.046188
+   }
+  },
+  "hops": [
+   {
+    "pool": "3497",
+    "in": 10000000,
+    "inDenom": "factory/osmo147h",
+    "out": 10000000,
+    "outDenom": "USDC"
+   },
+   {
+    "pool": "3005",
+    "in": 9970020,
+    "inDenom": "USDC",
+    "out": 10996505821,
+    "outDenom": "NAM"
+   }
+  ]
+ },
+ {
+  "hash": "8E01CB3BA86F",
+  "height": 73378933,
+  "index": 0,
+  "ts_utc": "2026-10-28T14:38:58Z",
+  "kind": "buy",
+  "nam": 11030.724275,
+  "pool_id": "3005",
+  "price_usd_quote": 0.0009038409220866868,
+  "settle": {
+   "nam": 11030.724275,
+   "coins": {
+    "allUSDC": -10
+   },
+   "gas": {
+    "OSMO": 0.046188
+   }
+  },
+  "hops": [
+   {
+    "pool": "3497",
+    "in": 10000000,
+    "inDenom": "factory/osmo147h",
+    "out": 10000000,
+    "outDenom": "USDC"
+   },
+   {
+    "pool": "3005",
+    "in": 9970020,
+    "inDenom": "USDC",
+    "out": 11030724275,
+    "outDenom": "NAM"
+   }
+  ]
+ },
+ {
+  "hash": "1097B1F90508",
+  "height": 73375378,
+  "index": 0,
+  "ts_utc": "2026-10-28T13:46:41Z",
+  "kind": "sell",
+  "nam": 9946.068,
+  "pool_id": "3005,3368,3009",
+  "price_usd_quote": 0.000934877488187923,
+  "settle": {
+   "nam": -10000,
+   "coins": {
+    "allUSDC": 9.114837
+   },
+   "gas": {
+    "allUSDC": 0.007695
+   }
+  },
+  "hops": [
+   {
+    "pool": "3005",
+    "in": 7976016000,
+    "inDenom": "NAM",
+    "out": 7310259,
+    "outDenom": "USDC"
+   },
+   {
+    "pool": "3497",
+    "in": 7310259,
+    "inDenom": "USDC",
+    "out": 7310259,
+    "outDenom": "factory/osmo147h"
+   },
+   {
+    "pool": "3368",
+    "in": 973050000,
+    "inDenom": "NAM",
+    "out": 17353983,
+    "outDenom": "OSMO"
+   },
+   {
+    "pool": "3499",
+    "in": 17180721,
+    "inDenom": "OSMO",
+    "out": 904713,
+    "outDenom": "factory/osmo147h"
+   },
+   {
+    "pool": "3009",
+    "in": 997002000,
+    "inDenom": "NAM",
+    "out": 17126212,
+    "outDenom": "OSMO"
+   },
+   {
+    "pool": "3513",
+    "in": 16987504,
+    "inDenom": "OSMO",
+    "out": 899865,
+    "outDenom": "factory/osmo147h"
+   },
+   {
+    "pool": "1464",
+    "in": 14998500,
+    "inDenom": "OSMO",
+    "out": 791995,
+    "outDenom": "USDC"
+   },
+   {
+    "pool": "3005",
+    "in": 790412,
+    "inDenom": "USDC",
+    "out": 877758722,
+    "outDenom": "NAM"
+   },
+   {
+    "pool": "3368",
+    "in": 855814754,
+    "inDenom": "NAM",
+    "out": 15111926,
+    "outDenom": "OSMO"
+   }
+  ]
+ },
+ {
+  "hash": "2C574CD641A3",
+  "height": 73372277,
+  "index": 0,
+  "ts_utc": "2026-10-28T13:00:56Z",
+  "kind": "sell",
+  "nam": 997.002,
+  "pool_id": "3005",
+  "price_usd_quote": 0.000935000130390912,
+  "settle": {
+   "nam": -1000,
+   "coins": {},
+   "unknown": [
+    "ibc/1CDF9C7D073DD59ED06F15DB08CC0901F2A24759BE70463570E8896F9A444ADF"
+   ],
+   "gas": {
+    "OSMO": 0.043823
+   }
+  },
+  "hops": [
+   {
+    "pool": "3005",
+    "in": 997002000,
+    "inDenom": "NAM",
+    "out": 932197,
+    "outDenom": "USDC"
+   },
+   {
+    "pool": "2477",
+    "in": 931264,
+    "inDenom": "USDC",
+    "out": 19608775430721886887,
+    "outDenom": "ibc/1CDF9C7D073D"
+   }
+  ]
+ },
+ {
+  "hash": "9C07F76614B2",
+  "height": 73372116,
+  "index": 0,
+  "ts_utc": "2026-10-28T12:58:34Z",
+  "kind": "sell",
+  "nam": 1994.004,
+  "pool_id": "3005",
+  "price_usd_quote": 0.0009420643087977757,
+  "settle": {
+   "nam": -2000,
+   "coins": {
+    "OSMO": 35.489197
+   },
+   "gas": {
+    "OSMO": 0.0466
+   },
+   "rates": {
+    "OSMO": 0.052872822115417266
+   }
+  },
+  "hops": [
+   {
+    "pool": "3005",
+    "in": 1994004000,
+    "inDenom": "NAM",
+    "out": 1878480,
+    "outDenom": "USDC"
+   },
+   {
+    "pool": "1464",
+    "in": 1876414,
+    "inDenom": "USDC",
+    "out": 35489197,
+    "outDenom": "OSMO"
+   },
+   {
+    "pool": "1",
+    "in": 1000000,
+    "inDenom": "ibc/27394FB092D2",
+    "out": 30924729,
+    "outDenom": "OSMO"
+   },
+   {
+    "pool": "1464",
+    "in": 30921637,
+    "inDenom": "OSMO",
+    "out": 1635003,
+    "outDenom": "USDC"
+   },
+   {
+    "pool": "1251",
+    "in": 1631733,
+    "inDenom": "USDC",
+    "out": 1000627,
+    "outDenom": "ibc/27394FB092D2"
+   }
+  ]
+ },
+ {
+  "hash": "3D6DAF8E46A2",
+  "height": 73371954,
+  "index": 0,
+  "ts_utc": "2026-10-28T12:56:11Z",
+  "kind": "sell",
+  "nam": 4985.01,
+  "pool_id": "3005",
+  "price_usd_quote": 0.0009588825298244136,
+  "settle": {
+   "nam": -5000,
+   "coins": {
+    "OSMO": 90.309194
+   },
+   "gas": {
+    "OSMO": 0.0466
+   },
+   "rates": {
+    "OSMO": 0.05287148283041923
+   }
+  },
+  "hops": [
+   {
+    "pool": "3005",
+    "in": 4985010000,
+    "inDenom": "NAM",
+    "out": 4780039,
+    "outDenom": "USDC"
+   },
+   {
+    "pool": "1464",
+    "in": 4774781,
+    "inDenom": "USDC",
+    "out": 90309194,
+    "outDenom": "OSMO"
+   },
+   {
+    "pool": "1",
+    "in": 2000000,
+    "inDenom": "ibc/27394FB092D2",
+    "out": 61851583,
+    "outDenom": "OSMO"
+   },
+   {
+    "pool": "1464",
+    "in": 61845398,
+    "inDenom": "OSMO",
+    "out": 3270976,
+    "outDenom": "USDC"
+   },
+   {
+    "pool": "1251",
+    "in": 3264435,
+    "inDenom": "USDC",
+    "out": 2002088,
+    "outDenom": "ibc/27394FB092D2"
+   }
+  ]
+ },
+ {
+  "hash": "944B93AC7684",
+  "height": 73371757,
+  "index": 0,
+  "ts_utc": "2026-10-28T12:53:13Z",
+  "kind": "sell",
+  "nam": 1994.004,
+  "pool_id": "3005",
+  "price_usd_quote": 0.0009760883127616595,
+  "settle": {
+   "nam": -2000,
+   "coins": {
+    "OSMO": 36.798072
+   },
+   "gas": {
+    "OSMO": 0.0466
+   },
+   "rates": {
+    "OSMO": 0.05283382781576165
+   }
+  },
+  "hops": [
+   {
+    "pool": "3005",
+    "in": 1994004000,
+    "inDenom": "NAM",
+    "out": 1946324,
+    "outDenom": "USDC"
+   },
+   {
+    "pool": "1464",
+    "in": 1944183,
+    "inDenom": "USDC",
+    "out": 36798072,
+    "outDenom": "OSMO"
+   },
+   {
+    "pool": "1",
+    "in": 1000000,
+    "inDenom": "ibc/27394FB092D2",
+    "out": 30927676,
+    "outDenom": "OSMO"
+   },
+   {
+    "pool": "1464",
+    "in": 30924584,
+    "inDenom": "OSMO",
+    "out": 1633979,
+    "outDenom": "USDC"
+   },
+   {
+    "pool": "1251",
+    "in": 1630712,
+    "inDenom": "USDC",
+    "out": 1000240,
+    "outDenom": "ibc/27394FB092D2"
+   }
+  ]
+ },
+ {
+  "hash": "1CA8380EC97F",
+  "height": 73349880,
+  "index": 0,
+  "ts_utc": "2026-10-28T07:29:07Z",
+  "kind": "buy",
+  "nam": 8189.045747,
+  "pool_id": "3005,3368",
+  "price_usd_quote": 0.000951774428764141,
+  "settle": {
+   "nam": 8189.045747,
+   "coins": {
+    "ATOM": -4.9
+   },
+   "gas": {
+    "ATOM": 0.003935
+   },
+   "rates": {
+    "ATOM": 1.6348103749267482
+   }
+  },
+  "hops": [
+   {
+    "pool": "1251",
+    "in": 3904336,
+    "inDenom": "ibc/27394FB092D2",
+    "out": 6382849,
+    "outDenom": "USDC"
+   },
+   {
+    "pool": "3005",
+    "in": 6363714,
+    "inDenom": "USDC",
+    "out": 6574832368,
+    "outDenom": "NAM"
+   },
+   {
+    "pool": "1135",
+    "in": 976084,
+    "inDenom": "ibc/27394FB092D2",
+    "out": 29661692,
+    "outDenom": "OSMO"
+   },
+   {
+    "pool": "3368",
+    "in": 28688789,
+    "inDenom": "OSMO",
+    "out": 1614213379,
+    "outDenom": "NAM"
+   },
+   {
+    "pool": "1464",
+    "in": 7999200,
+    "inDenom": "OSMO",
+    "out": 431289,
+    "outDenom": "USDC"
+   },
+   {
+    "pool": "1251",
+    "in": 430427,
+    "inDenom": "USDC",
+    "out": 263321,
+    "outDenom": "ibc/27394FB092D2"
+   },
+   {
+    "pool": "1",
+    "in": 263321,
+    "inDenom": "ibc/27394FB092D2",
+    "out": 8000867,
+    "outDenom": "OSMO"
+   }
+  ]
+ },
+ {
+  "hash": "016520FDE0F1",
+  "height": 73349740,
+  "index": 0,
+  "ts_utc": "2026-10-28T07:27:02Z",
+  "kind": "buy",
+  "nam": 1713.343997,
+  "pool_id": "3005",
+  "price_usd_quote": 0.0009476631679586758,
+  "settle": {
+   "nam": 1713.343997,
+   "coins": {
+    "ATOM": -1
+   },
+   "gas": {
+    "ATOM": 0.002243
+   },
+   "rates": {
+    "ATOM": 1.6350888149043579
+   }
+  },
+  "hops": [
+   {
+    "pool": "1251",
+    "in": 996004,
+    "inDenom": "ibc/27394FB092D2",
+    "out": 1628555,
+    "outDenom": "USDC"
+   },
+   {
+    "pool": "3005",
+    "in": 1623673,
+    "inDenom": "USDC",
+    "out": 1713343997,
+    "outDenom": "NAM"
+   }
+  ]
+ },
+ {
+  "hash": "A097129E272C",
+  "height": 73344266,
+  "index": 0,
+  "ts_utc": "2026-10-28T06:05:53Z",
+  "kind": "sell",
+  "nam": 9970.02,
+  "pool_id": "3005",
+  "price_usd_quote": 0.0009649759980421302,
+  "settle": {
+   "nam": -10000,
+   "coins": {
+    "USDC": 9.62083
+   },
+   "gas": {
+    "OSMO": 0.034754
+   }
+  },
+  "hops": [
+   {
+    "pool": "3005",
+    "in": 9970020000,
+    "inDenom": "NAM",
+    "out": 9620830,
+    "outDenom": "USDC"
+   }
+  ]
+ },
+ {
+  "hash": "F3451320CCA3",
+  "height": 73336222,
+  "index": 1,
+  "ts_utc": "2026-10-28T04:07:08Z",
+  "kind": "buy",
+  "nam": 9990.977971,
+  "pool_id": "3008,3005",
+  "price_usd_quote": 0.000959433846621801,
+  "settle": {
+   "nam": 9990.977971,
+   "coins": {
+    "allUSDC": -10
+   },
+   "gas": {
+    "OSMO": 0.088644
+   }
+  },
+  "hops": [
+   {
+    "pool": "3497",
+    "in": 9000000,
+    "inDenom": "factory/osmo147h",
+    "out": 9000000,
+    "outDenom": "USDC"
+   },
+   {
+    "pool": "3008",
+    "in": 8991000,
+    "inDenom": "USDC",
+    "out": 8991000000,
+    "outDenom": "NAM"
+   },
+   {
+    "pool": "3497",
+    "in": 1000000,
+    "inDenom": "factory/osmo147h",
+    "out": 1000000,
+    "outDenom": "USDC"
+   },
+   {
+    "pool": "3005",
+    "in": 997002,
+    "inDenom": "USDC",
+    "out": 999977971,
+    "outDenom": "NAM"
+   }
+  ]
+ },
+ {
+  "hash": "B80F3C6E3D0A",
+  "height": 73336206,
+  "index": 0,
+  "ts_utc": "2026-10-28T04:06:54Z",
+  "kind": "buy",
+  "nam": 10155.796796999999,
+  "pool_id": "3005,3368",
+  "price_usd_quote": 0.000959433846621801,
+  "settle": {
+   "nam": 10155.796797,
+   "coins": {
+    "allUSDC": -10
+   },
+   "gas": {
+    "OSMO": 0.083924
+   },
+   "rates": {
+    "OSMO": 0.055717520850237436
+   }
+  },
+  "hops": [
+   {
+    "pool": "3497",
+    "in": 8000000,
+    "inDenom": "factory/osmo147h",
+    "out": 8000000,
+    "outDenom": "USDC"
+   },
+   {
+    "pool": "3005",
+    "in": 7976016,
+    "inDenom": "USDC",
+    "out": 8141173733,
+    "outDenom": "NAM"
+   },
+   {
+    "pool": "3499",
+    "in": 1995002,
+    "inDenom": "factory/osmo147h",
+    "out": 35815693,
+    "outDenom": "OSMO"
+   },
+   {
+    "pool": "3368",
+    "in": 34640938,
+    "inDenom": "OSMO",
+    "out": 2014623064,
+    "outDenom": "NAM"
+   },
+   {
+    "pool": "3368",
+    "in": 5850000,
+    "inDenom": "OSMO",
+    "out": 335958429,
+    "outDenom": "NAM"
+   },
+   {
+    "pool": "3005",
+    "in": 335286513,
+    "inDenom": "NAM",
+    "out": 335136,
+    "outDenom": "USDC"
+   },
+   {
+    "pool": "1464",
+    "in": 335103,
+    "inDenom": "USDC",
+    "out": 6014320,
+    "outDenom": "OSMO"
+   }
+  ]
+ },
+ {
+  "hash": "844EE4C8A2E3",
+  "height": 73334017,
+  "index": 0,
+  "ts_utc": "2026-10-28T03:34:42Z",
+  "kind": "buy",
+  "nam": 10439.678676,
+  "pool_id": "3005,3368",
+  "price_usd_quote": 0.000893401878593278,
+  "settle": {
+   "nam": 10439.678676,
+   "coins": {
+    "allUSDC": -10
+   },
+   "gas": {
+    "OSMO": 0.090292
+   }
+  },
+  "hops": [
+   {
+    "pool": "3497",
+    "in": 7000000,
+    "inDenom": "factory/osmo147h",
+    "out": 7000000,
+    "outDenom": "USDC"
+   },
+   {
+    "pool": "3005",
+    "in": 6979014,
+    "inDenom": "USDC",
+    "out": 7331048563,
+    "outDenom": "NAM"
+   },
+   {
+    "pool": "3499",
+    "in": 2992503,
+    "inDenom": "factory/osmo147h",
+    "out": 53780547,
+    "outDenom": "OSMO"
+   },
+   {
+    "pool": "3368",
+    "in": 52016545,
+    "inDenom": "OSMO",
+    "out": 3108630113,
+    "outDenom": "NAM"
+   }
+  ]
+ }
+]

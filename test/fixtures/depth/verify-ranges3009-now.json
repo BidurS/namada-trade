@@ -1,0 +1,2 @@
+// 2026-10-29T02:57:25Z GET https://osmosis-rest.publicnode.com/osmosis/concentratedliquidity/v1beta1/liquidity_per_tick_range?pool_id=3009 (status 200, the minute of verify-pool3009-now.json).
+{"liquidity":[{"liquidity_amount":"2505626593.299568257527713402","lower_tick":"-108000000","upper_tick":"342000000"}],"bucket_index":"0"}

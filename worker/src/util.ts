@@ -354,6 +354,40 @@ export function namFromCoins(s: string | undefined | null): number {
     .reduce((a, c) => a + toNam(c.amount), 0);
 }
 
+const B64 = new Int16Array(256).fill(-1);
+for (let i = 0; i < 64; i++) B64['ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/'.charCodeAt(i)] = i;
+const B64_CHARS = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/';
+
+/** base64 → bytes straight into a Uint8Array (atob on a 12 MB answer would first build an 18 MB UTF-16 string). */
+export function base64Bytes(s: string): Uint8Array {
+  let n = s.length;
+  while (n > 0 && s.charCodeAt(n - 1) === 61) n--; // '=' padding
+  const out = new Uint8Array(Math.floor((n * 3) / 4));
+  let acc = 0, bits = 0, o = 0;
+  for (let i = 0; i < n; i++) {
+    const v = B64[s.charCodeAt(i)];
+    if (v < 0) throw new Error(`base64: bad character at ${i}`);
+    acc = (acc << 6) | v;
+    bits += 6;
+    if (bits >= 8) { bits -= 8; out[o++] = (acc >> bits) & 0xff; }
+  }
+  return o === out.length ? out : out.subarray(0, o);
+}
+/** bytes → base64 (padded), three bytes at a time; never String.fromCharCode(...bytes), whose argument list has a limit a store answer can pass. */
+export function bytesToBase64(b: Uint8Array): string {
+  const parts: string[] = [];
+  let i = 0;
+  for (; i + 2 < b.length; i += 3) {
+    const n = (b[i] << 16) | (b[i + 1] << 8) | b[i + 2];
+    parts.push(B64_CHARS[n >> 18] + B64_CHARS[(n >> 12) & 63] + B64_CHARS[(n >> 6) & 63] + B64_CHARS[n & 63]);
+  }
+  if (i < b.length) {
+    const n = (b[i] << 16) | ((i + 1 < b.length ? b[i + 1] : 0) << 8);
+    parts.push(B64_CHARS[n >> 18] + B64_CHARS[(n >> 12) & 63] + (i + 1 < b.length ? B64_CHARS[(n >> 6) & 63] : '=') + '=');
+  }
+  return parts.join('');
+}
+
 /** Decode a little-endian U256 (Namada Amount, borsh) from base64 */
 export function decodeU256LE(b64: string | null | undefined): bigint {
   if (!b64) return 0n;

@@ -1,0 +1,1851 @@
+// 2026-10-29T03:05:46Z verify-proto-walk.mjs of the depth research (the "at" field inside): no read of its own. The prototype's own curve walked at the rebuilt state before each hop (verify-replay.json) and the aggregate for the two routed sells, against the chain's tokens_out and the trader's settle.
+{
+ "at": "2026-10-29T03:05:46.113Z",
+ "hopRows": [
+  {
+   "pool": "3005",
+   "height": 73411153,
+   "hash": "019214B5C74D",
+   "direction": "buy NAM",
+   "tokens_in": 263834,
+   "in_denom": "ibc/498A07",
+   "actual_out": 258868985,
+   "proto_out": 258869697,
+   "proto_diff_pct": 0.00027487205775944545,
+   "own_math_diff_pct": 0.00027487205134785745,
+   "d1": null
+  },
+  {
+   "pool": "3005",
+   "height": 73381348,
+   "hash": "419EB8AB7527",
+   "direction": "buy NAM",
+   "tokens_in": 283928,
+   "in_denom": "ibc/498A07",
+   "actual_out": 278977414,
+   "proto_out": 278978391,
+   "proto_diff_pct": 0.00035005286926903523,
+   "own_math_diff_pct": 0.00035005286622221023,
+   "d1": null
+  },
+  {
+   "pool": "3005",
+   "height": 73381348,
+   "hash": "0FF2D1235991",
+   "direction": "buy NAM",
+   "tokens_in": 422535,
+   "in_denom": "ibc/498A07",
+   "actual_out": 415924121,
+   "proto_out": 415924876,
+   "proto_diff_pct": 0.00018156375134470437,
+   "own_math_diff_pct": 0.00018156374277743682,
+   "d1": {
+    "kind": "sell",
+    "nam": 9946.068,
+    "pool_id": "3005,3368"
+   }
+  },
+  {
+   "pool": "3005",
+   "height": 73381348,
+   "hash": "0FF2D1235991",
+   "direction": "sell NAM",
+   "tokens_in": 8973018000,
+   "in_denom": "NAM",
+   "actual_out": 9324491,
+   "proto_out": 9324491,
+   "proto_diff_pct": 0.000004579050449926569,
+   "own_math_diff_pct": 0.000004579050226061251,
+   "d1": {
+    "kind": "sell",
+    "nam": 9946.068,
+    "pool_id": "3005,3368"
+   }
+  },
+  {
+   "pool": "3005",
+   "height": 73379239,
+   "hash": "FADE44066C4F",
+   "direction": "sell NAM",
+   "tokens_in": 398800800,
+   "in_denom": "NAM",
+   "actual_out": 424832,
+   "proto_out": 424833,
+   "proto_diff_pct": 0.00019422137325086908,
+   "own_math_diff_pct": 0.00019422136096372124,
+   "d1": {
+    "kind": "sell",
+    "nam": 398.8008,
+    "pool_id": "3005"
+   }
+  },
+  {
+   "pool": "3005",
+   "height": 73379034,
+   "hash": "C3F235F78AFA",
+   "direction": "sell NAM",
+   "tokens_in": 281566286,
+   "in_denom": "NAM",
+   "actual_out": 300493,
+   "proto_out": 300493,
+   "proto_diff_pct": 0.000060730053519364446,
+   "own_math_diff_pct": 0.00006073003157226011,
+   "d1": null
+  },
+  {
+   "pool": "3005",
+   "height": 73379033,
+   "hash": "30F06427306E",
+   "direction": "sell NAM",
+   "tokens_in": 93445407,
+   "in_denom": "NAM",
+   "actual_out": 99827,
+   "proto_out": 99827,
+   "proto_diff_pct": 0.00016142956267284347,
+   "own_math_diff_pct": 0.00016142950934588756,
+   "d1": null
+  },
+  {
+   "pool": "3005",
+   "height": 73379033,
+   "hash": "52AC348649CA",
+   "direction": "sell NAM",
+   "tokens_in": 585833391,
+   "in_denom": "NAM",
+   "actual_out": 626984,
+   "proto_out": 626985,
+   "proto_diff_pct": 0.00012141879592864058,
+   "own_math_diff_pct": 0.00012141878787364223,
+   "d1": null
+  },
+  {
+   "pool": "3005",
+   "height": 73379032,
+   "hash": "3611450165BE",
+   "direction": "sell NAM",
+   "tokens_in": 739081784,
+   "in_denom": "NAM",
+   "actual_out": 793820,
+   "proto_out": 793820,
+   "proto_diff_pct": 0.000007111855215846674,
+   "own_math_diff_pct": 0.000007111850757197651,
+   "d1": null
+  },
+  {
+   "pool": "3005",
+   "height": 73379032,
+   "hash": "2860D1780011",
+   "direction": "sell NAM",
+   "tokens_in": 1833368819,
+   "in_denom": "NAM",
+   "actual_out": 1982861,
+   "proto_out": 1982861,
+   "proto_diff_pct": 0.0000049379767164126065,
+   "own_math_diff_pct": 0.000004937976831125778,
+   "d1": null
+  },
+  {
+   "pool": "3005",
+   "height": 73379031,
+   "hash": "0FDF9A0F24BA",
+   "direction": "sell NAM",
+   "tokens_in": 523015951,
+   "in_denom": "NAM",
+   "actual_out": 569274,
+   "proto_out": 569275,
+   "proto_diff_pct": 0.00012974359167028382,
+   "own_math_diff_pct": 0.0001297435838909827,
+   "d1": null
+  },
+  {
+   "pool": "3005",
+   "height": 73379031,
+   "hash": "6A870D640E1D",
+   "direction": "buy NAM",
+   "tokens_in": 44865090,
+   "in_denom": "ibc/498A07",
+   "actual_out": 45861416258,
+   "proto_out": 45861417699,
+   "proto_diff_pct": 0.000003143108062708677,
+   "own_math_diff_pct": 0.0000031431093117764273,
+   "d1": {
+    "kind": "buy",
+    "nam": 150129.938973,
+    "pool_id": "3008,3005,3368"
+   }
+  },
+  {
+   "pool": "3005",
+   "height": 73378980,
+   "hash": "C69D6DD03C5A",
+   "direction": "buy NAM",
+   "tokens_in": 9970020,
+   "in_denom": "ibc/498A07",
+   "actual_out": 10861211982,
+   "proto_out": 10861211994,
+   "proto_diff_pct": 1.1464644789072054e-7,
+   "own_math_diff_pct": 1.1464658533823419e-7,
+   "d1": {
+    "kind": "buy",
+    "nam": 10861.211982,
+    "pool_id": "3005"
+   }
+  },
+  {
+   "pool": "3005",
+   "height": 73378969,
+   "hash": "337CB7773007",
+   "direction": "buy NAM",
+   "tokens_in": 9970020,
+   "in_denom": "ibc/498A07",
+   "actual_out": 10894800397,
+   "proto_out": 10894800409,
+   "proto_diff_pct": 1.1119518639191028e-7,
+   "own_math_diff_pct": 1.1119731801048127e-7,
+   "d1": {
+    "kind": "buy",
+    "nam": 10894.800397,
+    "pool_id": "3005"
+   }
+  },
+  {
+   "pool": "3005",
+   "height": 73378960,
+   "hash": "E3DD92EFD7FA",
+   "direction": "buy NAM",
+   "tokens_in": 9970020,
+   "in_denom": "ibc/498A07",
+   "actual_out": 10928544861,
+   "proto_out": 10928544874,
+   "proto_diff_pct": 1.177721697942502e-7,
+   "own_math_diff_pct": 1.1776492910847702e-7,
+   "d1": {
+    "kind": "buy",
+    "nam": 10928.544861,
+    "pool_id": "3005"
+   }
+  },
+  {
+   "pool": "3005",
+   "height": 73378952,
+   "hash": "341A6D566495",
+   "direction": "buy NAM",
+   "tokens_in": 9970020,
+   "in_denom": "ibc/498A07",
+   "actual_out": 10962446344,
+   "proto_out": 10962446357,
+   "proto_diff_pct": 1.1753160666927442e-7,
+   "own_math_diff_pct": 1.1753809071375906e-7,
+   "d1": {
+    "kind": "buy",
+    "nam": 10962.446344,
+    "pool_id": "3005"
+   }
+  },
+  {
+   "pool": "3005",
+   "height": 73378943,
+   "hash": "B82AC30BC4A0",
+   "direction": "buy NAM",
+   "tokens_in": 9970020,
+   "in_denom": "ibc/498A07",
+   "actual_out": 10996505821,
+   "proto_out": 10996505834,
+   "proto_diff_pct": 1.1684109235687856e-7,
+   "own_math_diff_pct": 1.16829741198636e-7,
+   "d1": {
+    "kind": "buy",
+    "nam": 10996.505821,
+    "pool_id": "3005"
+   }
+  },
+  {
+   "pool": "3005",
+   "height": 73378933,
+   "hash": "8E01CB3BA86F",
+   "direction": "buy NAM",
+   "tokens_in": 9970020,
+   "in_denom": "ibc/498A07",
+   "actual_out": 11030724275,
+   "proto_out": 11030724288,
+   "proto_diff_pct": 1.1816692069288592e-7,
+   "own_math_diff_pct": 1.1816048616192408e-7,
+   "d1": {
+    "kind": "buy",
+    "nam": 11030.724275,
+    "pool_id": "3005"
+   }
+  },
+  {
+   "pool": "3005",
+   "height": 73375378,
+   "hash": "1097B1F90508",
+   "direction": "buy NAM",
+   "tokens_in": 790412,
+   "in_denom": "ibc/498A07",
+   "actual_out": 877758722,
+   "proto_out": 877759826,
+   "proto_diff_pct": 0.00012573820149519577,
+   "own_math_diff_pct": 0.0001257381978604719,
+   "d1": {
+    "kind": "sell",
+    "nam": 9946.068,
+    "pool_id": "3005,3368,3009"
+   }
+  },
+  {
+   "pool": "3005",
+   "height": 73375378,
+   "hash": "1097B1F90508",
+   "direction": "sell NAM",
+   "tokens_in": 7976016000,
+   "in_denom": "NAM",
+   "actual_out": 7310259,
+   "proto_out": 7310259,
+   "proto_diff_pct": 0.000004505893191897314,
+   "own_math_diff_pct": 0.0000045058928121445065,
+   "d1": {
+    "kind": "sell",
+    "nam": 9946.068,
+    "pool_id": "3005,3368,3009"
+   }
+  },
+  {
+   "pool": "3005",
+   "height": 73372982,
+   "hash": "D4759AA5B200",
+   "direction": "buy NAM",
+   "tokens_in": 210082,
+   "in_denom": "ibc/498A07",
+   "actual_out": 224842878,
+   "proto_out": 224842887,
+   "proto_diff_pct": 0.0000038160915538654194,
+   "own_math_diff_pct": 0.000003816098834377105,
+   "d1": null
+  },
+  {
+   "pool": "3005",
+   "height": 73372277,
+   "hash": "4D125CF72F58",
+   "direction": "buy NAM",
+   "tokens_in": 231097,
+   "in_denom": "ibc/498A07",
+   "actual_out": 247627613,
+   "proto_out": 247627744,
+   "proto_diff_pct": 0.0000529859459863502,
+   "own_math_diff_pct": 0.000052985940618105955,
+   "d1": null
+  },
+  {
+   "pool": "3005",
+   "height": 73372277,
+   "hash": "2C574CD641A3",
+   "direction": "sell NAM",
+   "tokens_in": 997002000,
+   "in_denom": "NAM",
+   "actual_out": 932197,
+   "proto_out": 932198,
+   "proto_diff_pct": 0.00010486185240132784,
+   "own_math_diff_pct": 0.00010486184729610814,
+   "d1": {
+    "kind": "sell",
+    "nam": 997.002,
+    "pool_id": "3005"
+   }
+  },
+  {
+   "pool": "3005",
+   "height": 73372116,
+   "hash": "9C07F76614B2",
+   "direction": "sell NAM",
+   "tokens_in": 1994004000,
+   "in_denom": "NAM",
+   "actual_out": 1878480,
+   "proto_out": 1878481,
+   "proto_diff_pct": 0.00003713338105892916,
+   "own_math_diff_pct": 0.000037133379842509515,
+   "d1": {
+    "kind": "sell",
+    "nam": 1994.004,
+    "pool_id": "3005"
+   }
+  },
+  {
+   "pool": "3005",
+   "height": 73371954,
+   "hash": "3D6DAF8E46A2",
+   "direction": "sell NAM",
+   "tokens_in": 4985010000,
+   "in_denom": "NAM",
+   "actual_out": 4780039,
+   "proto_out": 4780039,
+   "proto_diff_pct": 5.808064473811214e-7,
+   "own_math_diff_pct": 5.808049981340738e-7,
+   "d1": {
+    "kind": "sell",
+    "nam": 4985.01,
+    "pool_id": "3005"
+   }
+  },
+  {
+   "pool": "3005",
+   "height": 73371757,
+   "hash": "944B93AC7684",
+   "direction": "sell NAM",
+   "tokens_in": 1994004000,
+   "in_denom": "NAM",
+   "actual_out": 1946324,
+   "proto_out": 1946324,
+   "proto_diff_pct": 0.000009745062445887243,
+   "own_math_diff_pct": 0.000009745059474768088,
+   "d1": {
+    "kind": "sell",
+    "nam": 1994.004,
+    "pool_id": "3005"
+   }
+  },
+  {
+   "pool": "3005",
+   "height": 73359998,
+   "hash": "E5BB97C3C581",
+   "direction": "sell NAM",
+   "tokens_in": 250574485,
+   "in_denom": "NAM",
+   "actual_out": 245995,
+   "proto_out": 245995,
+   "proto_diff_pct": 0.00010193367900868111,
+   "own_math_diff_pct": 0.00010193363915799243,
+   "d1": null
+  },
+  {
+   "pool": "3005",
+   "height": 73359595,
+   "hash": "40182C3151AC",
+   "direction": "sell NAM",
+   "tokens_in": 70836045,
+   "in_denom": "NAM",
+   "actual_out": 69599,
+   "proto_out": 69599,
+   "proto_diff_pct": 0.00005070452901989597,
+   "own_math_diff_pct": 0.0000507044787147574,
+   "d1": null
+  },
+  {
+   "pool": "3005",
+   "height": 73350298,
+   "hash": "120C5D1E2BCC",
+   "direction": "sell NAM",
+   "tokens_in": 308461192,
+   "in_denom": "NAM",
+   "actual_out": 303370,
+   "proto_out": 303371,
+   "proto_diff_pct": 0.00018944628412675968,
+   "own_math_diff_pct": 0.00018944628271469163,
+   "d1": null
+  },
+  {
+   "pool": "3005",
+   "height": 73349880,
+   "hash": "1CA8380EC97F",
+   "direction": "buy NAM",
+   "tokens_in": 6363714,
+   "in_denom": "ibc/498A07",
+   "actual_out": 6574832368,
+   "proto_out": 6574833397,
+   "proto_diff_pct": 0.000015656074126013664,
+   "own_math_diff_pct": 0.000015656073784623523,
+   "d1": {
+    "kind": "buy",
+    "nam": 8189.045747,
+    "pool_id": "3005,3368"
+   }
+  },
+  {
+   "pool": "3005",
+   "height": 73349740,
+   "hash": "016520FDE0F1",
+   "direction": "buy NAM",
+   "tokens_in": 1623673,
+   "in_denom": "ibc/498A07",
+   "actual_out": 1713343997,
+   "proto_out": 1713344922,
+   "proto_diff_pct": 0.00005399641920256215,
+   "own_math_diff_pct": 0.00005399641710045872,
+   "d1": {
+    "kind": "buy",
+    "nam": 1713.343997,
+    "pool_id": "3005"
+   }
+  },
+  {
+   "pool": "3005",
+   "height": 73344266,
+   "hash": "A097129E272C",
+   "direction": "sell NAM",
+   "tokens_in": 9970020000,
+   "in_denom": "NAM",
+   "actual_out": 9620830,
+   "proto_out": 9620830,
+   "proto_diff_pct": -0.0000019101293102785633,
+   "own_math_diff_pct": -0.000001910129767092323,
+   "d1": {
+    "kind": "sell",
+    "nam": 9970.02,
+    "pool_id": "3005"
+   }
+  },
+  {
+   "pool": "3005",
+   "height": 73342647,
+   "hash": "E0F6163E2460",
+   "direction": "sell NAM",
+   "tokens_in": 907157024,
+   "in_denom": "NAM",
+   "actual_out": 899735,
+   "proto_out": 899735,
+   "proto_diff_pct": 0.00002065330007017252,
+   "own_math_diff_pct": 0.000020653299209266786,
+   "d1": null
+  },
+  {
+   "pool": "3005",
+   "height": 73342170,
+   "hash": "AB41128823D5",
+   "direction": "sell NAM",
+   "tokens_in": 464113680,
+   "in_denom": "NAM",
+   "actual_out": 461952,
+   "proto_out": 461952,
+   "proto_diff_pct": 0.000046410828713483454,
+   "own_math_diff_pct": 0.00004641082656057244,
+   "d1": null
+  },
+  {
+   "pool": "3005",
+   "height": 73342116,
+   "hash": "064E510D5718",
+   "direction": "sell NAM",
+   "tokens_in": 293695848,
+   "in_denom": "NAM",
+   "actual_out": 292902,
+   "proto_out": 292903,
+   "proto_diff_pct": 0.00017928190929605847,
+   "own_math_diff_pct": 0.00017928187851571633,
+   "d1": null
+  },
+  {
+   "pool": "3005",
+   "height": 73336223,
+   "hash": "22477276F063",
+   "direction": "sell NAM",
+   "tokens_in": 299668384,
+   "in_denom": "NAM",
+   "actual_out": 299319,
+   "proto_out": 299319,
+   "proto_diff_pct": 0.00004951494516625132,
+   "own_math_diff_pct": 0.00004951491670213761,
+   "d1": null
+  },
+  {
+   "pool": "3005",
+   "height": 73336222,
+   "hash": "F3451320CCA3",
+   "direction": "buy NAM",
+   "tokens_in": 997002,
+   "in_denom": "ibc/498A07",
+   "actual_out": 999977971,
+   "proto_out": 999977998,
+   "proto_diff_pct": 0.000002674680321668177,
+   "own_math_diff_pct": 0.000002674676330813682,
+   "d1": {
+    "kind": "buy",
+    "nam": 9990.977971,
+    "pool_id": "3008,3005"
+   }
+  },
+  {
+   "pool": "3005",
+   "height": 73336208,
+   "hash": "C27144AEFF1D",
+   "direction": "sell NAM",
+   "tokens_in": 184042582,
+   "in_denom": "NAM",
+   "actual_out": 183107,
+   "proto_out": 183107,
+   "proto_diff_pct": 0.00006619757322301467,
+   "own_math_diff_pct": 0.00006619752025856163,
+   "d1": null
+  },
+  {
+   "pool": "3005",
+   "height": 73336206,
+   "hash": "D5BB22057B69",
+   "direction": "sell NAM",
+   "tokens_in": 245771873,
+   "in_denom": "NAM",
+   "actual_out": 244795,
+   "proto_out": 244795,
+   "proto_diff_pct": 0.0000027665816082489414,
+   "own_math_diff_pct": 0.000002766568285789981,
+   "d1": null
+  },
+  {
+   "pool": "3005",
+   "height": 73336206,
+   "hash": "A4B39E363A61",
+   "direction": "sell NAM",
+   "tokens_in": 390883709,
+   "in_denom": "NAM",
+   "actual_out": 389973,
+   "proto_out": 389973,
+   "proto_diff_pct": 0.000012798750148590443,
+   "own_math_diff_pct": 0.000012798750230641007,
+   "d1": null
+  },
+  {
+   "pool": "3005",
+   "height": 73336206,
+   "hash": "B80F3C6E3D0A",
+   "direction": "sell NAM",
+   "tokens_in": 335286513,
+   "in_denom": "NAM",
+   "actual_out": 335136,
+   "proto_out": 335136,
+   "proto_diff_pct": 0.00001226219803474038,
+   "own_math_diff_pct": 0.000012262188449423437,
+   "d1": {
+    "kind": "buy",
+    "nam": 10155.796796999999,
+    "pool_id": "3005,3368"
+   }
+  },
+  {
+   "pool": "3005",
+   "height": 73336206,
+   "hash": "B80F3C6E3D0A",
+   "direction": "buy NAM",
+   "tokens_in": 7976016,
+   "in_denom": "ibc/498A07",
+   "actual_out": 8141173733,
+   "proto_out": 8141173952,
+   "proto_diff_pct": 0.0000026867759572724026,
+   "own_math_diff_pct": 0.000002686775799859339,
+   "d1": {
+    "kind": "buy",
+    "nam": 10155.796796999999,
+    "pool_id": "3005,3368"
+   }
+  },
+  {
+   "pool": "3005",
+   "height": 73334022,
+   "hash": "66B3FCC4EC5D",
+   "direction": "sell NAM",
+   "tokens_in": 90405752,
+   "in_denom": "NAM",
+   "actual_out": 86758,
+   "proto_out": 86758,
+   "proto_diff_pct": 0.0003209106427481956,
+   "own_math_diff_pct": 0.00032091070734782256,
+   "d1": null
+  },
+  {
+   "pool": "3005",
+   "height": 73334020,
+   "hash": "64C421ACDCBE",
+   "direction": "sell NAM",
+   "tokens_in": 323516411,
+   "in_denom": "NAM",
+   "actual_out": 310791,
+   "proto_out": 310791,
+   "proto_diff_pct": 0.000010318148180310516,
+   "own_math_diff_pct": 0.000010318156973752866,
+   "d1": null
+  },
+  {
+   "pool": "3005",
+   "height": 73334019,
+   "hash": "37D5D0E07BAC",
+   "direction": "sell NAM",
+   "tokens_in": 397897887,
+   "in_denom": "NAM",
+   "actual_out": 382949,
+   "proto_out": 382949,
+   "proto_diff_pct": 0.00008472199921616408,
+   "own_math_diff_pct": 0.00008472198961887261,
+   "d1": null
+  },
+  {
+   "pool": "3005",
+   "height": 73334017,
+   "hash": "FD62B40CD209",
+   "direction": "sell NAM",
+   "tokens_in": 463977804,
+   "in_denom": "NAM",
+   "actual_out": 447528,
+   "proto_out": 447528,
+   "proto_diff_pct": 0.00009520205725976894,
+   "own_math_diff_pct": 0.0000952020539294345,
+   "d1": null
+  },
+  {
+   "pool": "3005",
+   "height": 73334017,
+   "hash": "15D0F278B4EC",
+   "direction": "sell NAM",
+   "tokens_in": 559014730,
+   "in_denom": "NAM",
+   "actual_out": 540605,
+   "proto_out": 540605,
+   "proto_diff_pct": 0.00000768505876713732,
+   "own_math_diff_pct": 0.000007685055480206348,
+   "d1": null
+  },
+  {
+   "pool": "3005",
+   "height": 73334017,
+   "hash": "844EE4C8A2E3",
+   "direction": "buy NAM",
+   "tokens_in": 6979014,
+   "in_denom": "ibc/498A07",
+   "actual_out": 7331048563,
+   "proto_out": 7331049422,
+   "proto_diff_pct": 0.000011720652159930012,
+   "own_math_diff_pct": 0.000011720652458843627,
+   "d1": {
+    "kind": "buy",
+    "nam": 10439.678676,
+    "pool_id": "3005,3368"
+   }
+  },
+  {
+   "pool": "3005",
+   "height": 73334008,
+   "hash": "FB992DE90DF8",
+   "direction": "sell NAM",
+   "tokens_in": 422713407,
+   "in_denom": "NAM",
+   "actual_out": 397060,
+   "proto_out": 397061,
+   "proto_diff_pct": 0.00015991232040768466,
+   "own_math_diff_pct": 0.00015991230336477694,
+   "d1": null
+  },
+  {
+   "pool": "3005",
+   "height": 73334008,
+   "hash": "137B97FEEB4B",
+   "direction": "sell NAM",
+   "tokens_in": 59133445,
+   "in_denom": "NAM",
+   "actual_out": 55590,
+   "proto_out": 55590,
+   "proto_diff_pct": 0.00024016438093799053,
+   "own_math_diff_pct": 0.00024016434143388224,
+   "d1": null
+  },
+  {
+   "pool": "3005",
+   "height": 73334008,
+   "hash": "137B97FEEB4B",
+   "direction": "buy NAM",
+   "tokens_in": 7976016,
+   "in_denom": "ibc/498A07",
+   "actual_out": 8607034034,
+   "proto_out": 8607034215,
+   "proto_diff_pct": 0.000002108373298170818,
+   "own_math_diff_pct": 0.0000021083736472319073,
+   "d1": null
+  },
+  {
+   "pool": "3009",
+   "height": 73381348,
+   "hash": "419EB8AB7527",
+   "direction": "sell NAM",
+   "tokens_in": 278141040,
+   "in_denom": "NAM",
+   "actual_out": 5477714,
+   "proto_out": 5477715,
+   "proto_diff_pct": 0.0000133983513617153,
+   "own_math_diff_pct": 0.000013398350269213837,
+   "d1": null
+  },
+  {
+   "pool": "3009",
+   "height": 73379034,
+   "hash": "C3F235F78AFA",
+   "direction": "buy NAM",
+   "tokens_in": 5560526,
+   "in_denom": "uosmo",
+   "actual_out": 282412960,
+   "proto_out": 282412965,
+   "proto_diff_pct": 0.000001756607459491022,
+   "own_math_diff_pct": 0.0000017566069939030444,
+   "d1": null
+  },
+  {
+   "pool": "3009",
+   "height": 73379031,
+   "hash": "4E621584C8E1",
+   "direction": "buy NAM",
+   "tokens_in": 22906385,
+   "in_denom": "uosmo",
+   "actual_out": 1265007103,
+   "proto_out": 1265007123,
+   "proto_diff_pct": 0.000001570410423923363,
+   "own_math_diff_pct": 0.0000015704102425753568,
+   "d1": null
+  },
+  {
+   "pool": "3009",
+   "height": 73375378,
+   "hash": "D8E786AAFEEC",
+   "direction": "buy NAM",
+   "tokens_in": 5965290,
+   "in_denom": "uosmo",
+   "actual_out": 359161539,
+   "proto_out": 359161556,
+   "proto_diff_pct": 0.000004777201523253893,
+   "own_math_diff_pct": 0.000004777201146432756,
+   "d1": null
+  },
+  {
+   "pool": "3009",
+   "height": 73375378,
+   "hash": "1097B1F90508",
+   "direction": "sell NAM",
+   "tokens_in": 997002000,
+   "in_denom": "NAM",
+   "actual_out": 17126212,
+   "proto_out": 17126212,
+   "proto_diff_pct": 9.76592939849752e-7,
+   "own_math_diff_pct": 9.765928325037205e-7,
+   "d1": {
+    "kind": "sell",
+    "nam": 9946.068,
+    "pool_id": "3005,3368,3009"
+   }
+  },
+  {
+   "pool": "3009",
+   "height": 73359596,
+   "hash": "7C43EC240299",
+   "direction": "sell NAM",
+   "tokens_in": 110971088,
+   "in_denom": "NAM",
+   "actual_out": 2020303,
+   "proto_out": 2020304,
+   "proto_diff_pct": 0.00004450581754245064,
+   "own_math_diff_pct": 0.00004450581538930311,
+   "d1": null
+  },
+  {
+   "pool": "3009",
+   "height": 73350298,
+   "hash": "120C5D1E2BCC",
+   "direction": "buy NAM",
+   "tokens_in": 5573261,
+   "in_denom": "uosmo",
+   "actual_out": 309388739,
+   "proto_out": 309388788,
+   "proto_diff_pct": 0.00001593736138616464,
+   "own_math_diff_pct": 0.000015937361015871572,
+   "d1": null
+  },
+  {
+   "pool": "3009",
+   "height": 73336223,
+   "hash": "22477276F063",
+   "direction": "buy NAM",
+   "tokens_in": 5241707,
+   "in_denom": "uosmo",
+   "actual_out": 300569491,
+   "proto_out": 300569550,
+   "proto_diff_pct": 0.000019596438582958342,
+   "own_math_diff_pct": 0.000019596436973275503,
+   "d1": null
+  },
+  {
+   "pool": "3009",
+   "height": 73334017,
+   "hash": "FD62B40CD209",
+   "direction": "buy NAM",
+   "tokens_in": 7798440,
+   "in_denom": "uosmo",
+   "actual_out": 465372992,
+   "proto_out": 465373015,
+   "proto_diff_pct": 0.000004925407925959746,
+   "own_math_diff_pct": 0.000004925407554317766,
+   "d1": null
+  },
+  {
+   "pool": "3368",
+   "height": 73381348,
+   "hash": "0FF2D1235991",
+   "direction": "sell NAM",
+   "tokens_in": 405526018,
+   "in_denom": "NAM",
+   "actual_out": 8025883,
+   "proto_out": 8018014,
+   "proto_diff_pct": -0.09804818574679075,
+   "own_math_diff_pct": -0.09804818574427365,
+   "d1": {
+    "kind": "sell",
+    "nam": 9946.068,
+    "pool_id": "3005,3368"
+   }
+  },
+  {
+   "pool": "3368",
+   "height": 73381348,
+   "hash": "0FF2D1235991",
+   "direction": "sell NAM",
+   "tokens_in": 973050000,
+   "in_denom": "NAM",
+   "actual_out": 19411559,
+   "proto_out": 19392451,
+   "proto_diff_pct": -0.09843728081755376,
+   "own_math_diff_pct": -0.09843728081891072,
+   "d1": {
+    "kind": "sell",
+    "nam": 9946.068,
+    "pool_id": "3005,3368"
+   }
+  },
+  {
+   "pool": "3368",
+   "height": 73379031,
+   "hash": "4E621584C8E1",
+   "direction": "sell NAM",
+   "tokens_in": 1314121063,
+   "in_denom": "NAM",
+   "actual_out": 26565316,
+   "proto_out": 26538991,
+   "proto_diff_pct": -0.09909425846927888,
+   "own_math_diff_pct": -0.09909425847024012,
+   "d1": null
+  },
+  {
+   "pool": "3368",
+   "height": 73379031,
+   "hash": "4E621584C8E1",
+   "direction": "sell NAM",
+   "tokens_in": 1230915161,
+   "in_denom": "NAM",
+   "actual_out": 25255269,
+   "proto_out": 25230056,
+   "proto_diff_pct": -0.09983120043074445,
+   "own_math_diff_pct": -0.09983120042997612,
+   "d1": null
+  },
+  {
+   "pool": "3368",
+   "height": 73379031,
+   "hash": "6A870D640E1D",
+   "direction": "buy NAM",
+   "tokens_in": 273651025,
+   "in_denom": "uosmo",
+   "actual_out": 14358522715,
+   "proto_out": 14373531001,
+   "proto_diff_pct": 0.10452527819997393,
+   "own_math_diff_pct": 0.10452527820009339,
+   "d1": {
+    "kind": "buy",
+    "nam": 150129.938973,
+    "pool_id": "3008,3005,3368"
+   }
+  },
+  {
+   "pool": "3368",
+   "height": 73375378,
+   "hash": "1097B1F90508",
+   "direction": "sell NAM",
+   "tokens_in": 855814754,
+   "in_denom": "NAM",
+   "actual_out": 15111926,
+   "proto_out": 15095470,
+   "proto_diff_pct": -0.1088909979224506,
+   "own_math_diff_pct": -0.10889099792949966,
+   "d1": {
+    "kind": "sell",
+    "nam": 9946.068,
+    "pool_id": "3005,3368,3009"
+   }
+  },
+  {
+   "pool": "3368",
+   "height": 73375378,
+   "hash": "1097B1F90508",
+   "direction": "sell NAM",
+   "tokens_in": 973050000,
+   "in_denom": "NAM",
+   "actual_out": 17353983,
+   "proto_out": 17334992,
+   "proto_diff_pct": -0.10943298562822168,
+   "own_math_diff_pct": -0.10943298562852795,
+   "d1": {
+    "kind": "sell",
+    "nam": 9946.068,
+    "pool_id": "3005,3368,3009"
+   }
+  },
+  {
+   "pool": "3368",
+   "height": 73349880,
+   "hash": "1CA8380EC97F",
+   "direction": "buy NAM",
+   "tokens_in": 28688789,
+   "in_denom": "uosmo",
+   "actual_out": 1614213379,
+   "proto_out": 1615994424,
+   "proto_diff_pct": 0.11033515024958529,
+   "own_math_diff_pct": 0.11033515024858352,
+   "d1": {
+    "kind": "buy",
+    "nam": 8189.045747,
+    "pool_id": "3005,3368"
+   }
+  },
+  {
+   "pool": "3368",
+   "height": 73342647,
+   "hash": "E0F6163E2460",
+   "direction": "buy NAM",
+   "tokens_in": 15950755,
+   "in_denom": "uosmo",
+   "actual_out": 909884858,
+   "proto_out": 910895699,
+   "proto_diff_pct": 0.11109548593415397,
+   "own_math_diff_pct": 0.11109548593065217,
+   "d1": null
+  },
+  {
+   "pool": "3368",
+   "height": 73336206,
+   "hash": "B80F3C6E3D0A",
+   "direction": "buy NAM",
+   "tokens_in": 5850000,
+   "in_denom": "uosmo",
+   "actual_out": 335958429,
+   "proto_out": 336332908,
+   "proto_diff_pct": 0.11146579740157758,
+   "own_math_diff_pct": 0.11146579739972258,
+   "d1": {
+    "kind": "buy",
+    "nam": 10155.796796999999,
+    "pool_id": "3005,3368"
+   }
+  },
+  {
+   "pool": "3368",
+   "height": 73336206,
+   "hash": "B80F3C6E3D0A",
+   "direction": "buy NAM",
+   "tokens_in": 34640938,
+   "in_denom": "uosmo",
+   "actual_out": 2014623064,
+   "proto_out": 2016882930,
+   "proto_diff_pct": 0.11217316346046058,
+   "own_math_diff_pct": 0.11217316345990735,
+   "d1": {
+    "kind": "buy",
+    "nam": 10155.796796999999,
+    "pool_id": "3005,3368"
+   }
+  },
+  {
+   "pool": "3368",
+   "height": 73334017,
+   "hash": "844EE4C8A2E3",
+   "direction": "buy NAM",
+   "tokens_in": 52016545,
+   "in_denom": "uosmo",
+   "actual_out": 3108630113,
+   "proto_out": 3112165079,
+   "proto_diff_pct": 0.11371458942290857,
+   "own_math_diff_pct": 0.1137145894215659,
+   "d1": {
+    "kind": "buy",
+    "nam": 10439.678676,
+    "pool_id": "3005,3368"
+   }
+  },
+  {
+   "pool": "3368",
+   "height": 73334008,
+   "hash": "137B97FEEB4B",
+   "direction": "buy NAM",
+   "tokens_in": 975000,
+   "in_denom": "uosmo",
+   "actual_out": 59251948,
+   "proto_out": 59319890,
+   "proto_diff_pct": 0.11466643781790076,
+   "own_math_diff_pct": 0.11466643776257589,
+   "d1": null
+  },
+  {
+   "pool": "3368",
+   "height": 73334008,
+   "hash": "137B97FEEB4B",
+   "direction": "buy NAM",
+   "tokens_in": 34679949,
+   "in_denom": "uosmo",
+   "actual_out": 2131749632,
+   "proto_out": 2134208107,
+   "proto_diff_pct": 0.1153266313695056,
+   "own_math_diff_pct": 0.11532663136738566,
+   "d1": null
+  }
+ ],
+ "tradeRows": [
+  {
+   "ts": "2026-10-28T15:14:48Z",
+   "height": 73381348,
+   "hash": "0FF2D1235991",
+   "kind": "sell",
+   "pool_id": "3005,3368",
+   "legs": [
+    {
+     "pool": "3005",
+     "gross_in": 9000000000,
+     "actual_out": 9324491,
+     "proto_out": 9324491.426973147,
+     "diff_pct": 0.000004579050449926569,
+     "out_denom": "ibc/498A07"
+    },
+    {
+     "pool": "3368",
+     "gross_in": 416757636.2982375,
+     "actual_out": 8025883,
+     "proto_out": 8018013.76732834,
+     "diff_pct": -0.09804818574679075,
+     "out_denom": "uosmo"
+    },
+    {
+     "pool": "3368",
+     "gross_in": 1000000000,
+     "actual_out": 19411559,
+     "proto_out": 19392450.789156105,
+     "diff_pct": -0.09843728081755376,
+     "out_denom": "uosmo"
+    }
+   ],
+   "osmoUsdFromTx": 0.05288490007729311,
+   "predicted": 10.77409110611501,
+   "actual": 10.775517378546525,
+   "unit": "USD (OSMO legs at this tx's own OSMO→USDC hop)",
+   "diff_pct": -0.013236231555380229,
+   "settle_coin": [
+    "allUSDC",
+    10.34082
+   ],
+   "settle_nam": -10000,
+   "d1_amount_num": 9946.068,
+   "quote_minute_price": 0.001064138200351261,
+   "spot_before_3005": 0.0010641381864352312
+  },
+  {
+   "ts": "2026-10-28T14:43:32Z",
+   "height": 73379239,
+   "hash": "FADE44066C4F",
+   "kind": "sell",
+   "pool_id": "3005",
+   "legs": [
+    {
+     "pool": "3005",
+     "gross_in": 400000000,
+     "actual_out": 424832,
+     "proto_out": 424832.82511454436,
+     "diff_pct": 0.00019422137325086908,
+     "out_denom": "ibc/498A07"
+    }
+   ],
+   "osmoUsdFromTx": 0.05255054630327683,
+   "predicted": 0.42483282511454434,
+   "actual": 0.424832,
+   "unit": "USD (OSMO legs at this tx's own OSMO→USDC hop)",
+   "diff_pct": 0.00019422137322866462,
+   "settle_coin": [
+    "OSMO",
+    8.075368
+   ],
+   "settle_nam": -400,
+   "d1_amount_num": 398.8008,
+   "quote_minute_price": 0.0010652736905241915,
+   "spot_before_3005": 0.0010664145486668942
+  },
+  {
+   "ts": "2026-10-28T14:40:27Z",
+   "height": 73379031,
+   "hash": "6A870D640E1D",
+   "kind": "buy",
+   "pool_id": "3008,3005,3368",
+   "legs": [
+    {
+     "pool": "3005",
+     "gross_in": 45000000,
+     "actual_out": 45861416258,
+     "proto_out": 45861417699.47387,
+     "diff_pct": 0.000003143108062708677,
+     "out_denom": "NAM"
+    },
+    {
+     "pool": "3368",
+     "gross_in": 281230178.3053286,
+     "actual_out": 14358522715,
+     "proto_out": 14373531000.813261,
+     "diff_pct": 0.10452527819997393,
+     "out_denom": "NAM"
+    }
+   ],
+   "osmoUsdFromTx": 0.0528839404956754,
+   "predicted": 60234.94870028713,
+   "actual": 150129.938973,
+   "unit": "NAM",
+   "diff_pct": -59.87812350265457,
+   "settle_coin": [
+    "allUSDC",
+    -150
+   ],
+   "settle_nam": 150129.938973,
+   "d1_amount_num": 150129.938973,
+   "quote_minute_price": 0.000919364469864624,
+   "spot_before_3005": 0.000919364468850499
+  },
+  {
+   "ts": "2026-10-28T14:39:40Z",
+   "height": 73378980,
+   "hash": "C69D6DD03C5A",
+   "kind": "buy",
+   "pool_id": "3005",
+   "legs": [
+    {
+     "pool": "3005",
+     "gross_in": 10000000,
+     "actual_out": 10861211982,
+     "proto_out": 10861211994.451994,
+     "diff_pct": 1.1464644789072054e-7,
+     "out_denom": "NAM"
+    }
+   ],
+   "osmoUsdFromTx": null,
+   "predicted": 10861.211994451995,
+   "actual": 10861.211982,
+   "unit": "NAM",
+   "diff_pct": 1.1464644789072054e-7,
+   "settle_coin": [
+    "allUSDC",
+    -10
+   ],
+   "settle_nam": 10861.211982,
+   "d1_amount_num": 10861.211982,
+   "quote_minute_price": 0.0009179472803332676,
+   "spot_before_3005": 0.0009165322742923825
+  },
+  {
+   "ts": "2026-10-28T14:39:30Z",
+   "height": 73378969,
+   "hash": "337CB7773007",
+   "kind": "buy",
+   "pool_id": "3005",
+   "legs": [
+    {
+     "pool": "3005",
+     "gross_in": 10000000,
+     "actual_out": 10894800397,
+     "proto_out": 10894800409.114494,
+     "diff_pct": 1.1119518639191028e-7,
+     "out_denom": "NAM"
+    }
+   ],
+   "osmoUsdFromTx": null,
+   "predicted": 10894.800409114494,
+   "actual": 10894.800397,
+   "unit": "NAM",
+   "diff_pct": 1.1119518639191028e-7,
+   "settle_coin": [
+    "allUSDC",
+    -10
+   ],
+   "settle_nam": 10894.800397,
+   "d1_amount_num": 10894.800397,
+   "quote_minute_price": 0.0009151172703214784,
+   "spot_before_3005": 0.0009137044488965392
+  },
+  {
+   "ts": "2026-10-28T14:39:23Z",
+   "height": 73378960,
+   "hash": "E3DD92EFD7FA",
+   "kind": "buy",
+   "pool_id": "3005",
+   "legs": [
+    {
+     "pool": "3005",
+     "gross_in": 10000000,
+     "actual_out": 10928544861,
+     "proto_out": 10928544873.870785,
+     "diff_pct": 1.177721697942502e-7,
+     "out_denom": "NAM"
+    }
+   ],
+   "osmoUsdFromTx": null,
+   "predicted": 10928.544873870786,
+   "actual": 10928.544861,
+   "unit": "NAM",
+   "diff_pct": 1.177721697942502e-7,
+   "settle_coin": [
+    "allUSDC",
+    -10
+   ],
+   "settle_nam": 10928.544861,
+   "d1_amount_num": 10928.544861,
+   "quote_minute_price": 0.0009122916295635454,
+   "spot_before_3005": 0.000910880992662969
+  },
+  {
+   "ts": "2026-10-28T14:39:16Z",
+   "height": 73378952,
+   "hash": "341A6D566495",
+   "kind": "buy",
+   "pool_id": "3005",
+   "legs": [
+    {
+     "pool": "3005",
+     "gross_in": 10000000,
+     "actual_out": 10962446344,
+     "proto_out": 10962446356.884338,
+     "diff_pct": 1.1753160666927442e-7,
+     "out_denom": "NAM"
+    }
+   ],
+   "osmoUsdFromTx": null,
+   "predicted": 10962.446356884338,
+   "actual": 10962.446344,
+   "unit": "NAM",
+   "diff_pct": 1.1753160666927442e-7,
+   "settle_coin": [
+    "allUSDC",
+    -10
+   ],
+   "settle_nam": 10962.446344,
+   "d1_amount_num": 10962.446344,
+   "quote_minute_price": 0.0009094703579057262,
+   "spot_before_3005": 0.0009080619055916718
+  },
+  {
+   "ts": "2026-10-28T14:39:08Z",
+   "height": 73378943,
+   "hash": "B82AC30BC4A0",
+   "kind": "buy",
+   "pool_id": "3005",
+   "legs": [
+    {
+     "pool": "3005",
+     "gross_in": 10000000,
+     "actual_out": 10996505821,
+     "proto_out": 10996505833.848436,
+     "diff_pct": 1.1684109235687856e-7,
+     "out_denom": "NAM"
+    }
+   ],
+   "osmoUsdFromTx": null,
+   "predicted": 10996.505833848436,
+   "actual": 10996.505821,
+   "unit": "NAM",
+   "diff_pct": 1.1684107015241807e-7,
+   "settle_coin": [
+    "allUSDC",
+    -10
+   ],
+   "settle_nam": 10996.505821,
+   "d1_amount_num": 10996.505821,
+   "quote_minute_price": 0.0009066534554058324,
+   "spot_before_3005": 0.0009052471876826477
+  },
+  {
+   "ts": "2026-10-28T14:38:58Z",
+   "height": 73378933,
+   "hash": "8E01CB3BA86F",
+   "kind": "buy",
+   "pool_id": "3005",
+   "legs": [
+    {
+     "pool": "3005",
+     "gross_in": 10000000,
+     "actual_out": 11030724275,
+     "proto_out": 11030724288.034666,
+     "diff_pct": 1.1816692069288592e-7,
+     "out_denom": "NAM"
+    }
+   ],
+   "osmoUsdFromTx": null,
+   "predicted": 11030.724288034666,
+   "actual": 11030.724275,
+   "unit": "NAM",
+   "diff_pct": 1.1816689848842543e-7,
+   "settle_coin": [
+    "allUSDC",
+    -10
+   ],
+   "settle_nam": 11030.724275,
+   "d1_amount_num": 11030.724275,
+   "quote_minute_price": 0.0009038409220866868,
+   "spot_before_3005": 0.0009024368389358967
+  },
+  {
+   "ts": "2026-10-28T13:46:41Z",
+   "height": 73375378,
+   "hash": "1097B1F90508",
+   "kind": "sell",
+   "pool_id": "3005,3368,3009",
+   "legs": [
+    {
+     "pool": "3005",
+     "gross_in": 8000000000,
+     "actual_out": 7310259,
+     "proto_out": 7310259.329392463,
+     "diff_pct": 0.000004505893191897314,
+     "out_denom": "ibc/498A07"
+    },
+    {
+     "pool": "3009",
+     "gross_in": 1000000000,
+     "actual_out": 17126212,
+     "proto_out": 17126212.16725338,
+     "diff_pct": 9.76592939849752e-7,
+     "out_denom": "uosmo"
+    },
+    {
+     "pool": "3368",
+     "gross_in": 879517757.566415,
+     "actual_out": 15111926,
+     "proto_out": 15095470.472973298,
+     "diff_pct": -0.1088909979224506,
+     "out_denom": "uosmo"
+    },
+    {
+     "pool": "3368",
+     "gross_in": 1000000000,
+     "actual_out": 17353983,
+     "proto_out": 17334992.018277686,
+     "diff_pct": -0.10943298562822168,
+     "out_denom": "uosmo"
+    }
+   ],
+   "osmoUsdFromTx": 0.052658616597056666,
+   "predicted": 9.919845260059718,
+   "actual": 9.921711485973843,
+   "unit": "USD (OSMO legs at this tx's own OSMO→USDC hop)",
+   "diff_pct": -0.018809516047335606,
+   "settle_coin": [
+    "allUSDC",
+    9.114837
+   ],
+   "settle_nam": -10000,
+   "d1_amount_num": 9946.068,
+   "quote_minute_price": 0.000934877488187923,
+   "spot_before_3005": 0.000934877481953567
+  },
+  {
+   "ts": "2026-10-28T13:00:56Z",
+   "height": 73372277,
+   "hash": "2C574CD641A3",
+   "kind": "sell",
+   "pool_id": "3005",
+   "legs": [
+    {
+     "pool": "3005",
+     "gross_in": 1000000000,
+     "actual_out": 932197,
+     "proto_out": 932197.9775190423,
+     "diff_pct": 0.00010486185240132784,
+     "out_denom": "ibc/498A07"
+    }
+   ],
+   "osmoUsdFromTx": null,
+   "predicted": 0.9321979775190423,
+   "actual": 0.932197,
+   "unit": "USD (OSMO legs at this tx's own OSMO→USDC hop)",
+   "diff_pct": 0.00010486185240132784,
+   "settle_nam": -1000,
+   "d1_amount_num": 997.002,
+   "quote_minute_price": 0.000935000130390912,
+   "spot_before_3005": 0.0009373438279313486
+  },
+  {
+   "ts": "2026-10-28T12:58:34Z",
+   "height": 73372116,
+   "hash": "9C07F76614B2",
+   "kind": "sell",
+   "pool_id": "3005",
+   "legs": [
+    {
+     "pool": "3005",
+     "gross_in": 2000000000,
+     "actual_out": 1878480,
+     "proto_out": 1878480.6975431365,
+     "diff_pct": 0.00003713338105892916,
+     "out_denom": "ibc/498A07"
+    }
+   ],
+   "osmoUsdFromTx": 0.052872822115417266,
+   "predicted": 1.8784806975431365,
+   "actual": 1.87848,
+   "unit": "USD (OSMO legs at this tx's own OSMO→USDC hop)",
+   "diff_pct": 0.00003713338105892916,
+   "settle_coin": [
+    "OSMO",
+    35.489197
+   ],
+   "settle_nam": -2000,
+   "d1_amount_num": 1994.004,
+   "quote_minute_price": 0.0009420643087977757,
+   "spot_before_3005": 0.0009468092652573859
+  },
+  {
+   "ts": "2026-10-28T12:56:11Z",
+   "height": 73371954,
+   "hash": "3D6DAF8E46A2",
+   "kind": "sell",
+   "pool_id": "3005",
+   "legs": [
+    {
+     "pool": "3005",
+     "gross_in": 5000000000,
+     "actual_out": 4780039,
+     "proto_out": 4780039.027762774,
+     "diff_pct": 5.808064473811214e-7,
+     "out_denom": "ibc/498A07"
+    }
+   ],
+   "osmoUsdFromTx": 0.05287148283041924,
+   "predicted": 4.780039027762775,
+   "actual": 4.780039,
+   "unit": "USD (OSMO legs at this tx's own OSMO→USDC hop)",
+   "diff_pct": 5.808064473811214e-7,
+   "settle_coin": [
+    "OSMO",
+    90.309194
+   ],
+   "settle_nam": -5000,
+   "d1_amount_num": 4985.01,
+   "quote_minute_price": 0.0009588825298244136,
+   "spot_before_3005": 0.0009711097582394347
+  },
+  {
+   "ts": "2026-10-28T12:53:13Z",
+   "height": 73371757,
+   "hash": "944B93AC7684",
+   "kind": "sell",
+   "pool_id": "3005",
+   "legs": [
+    {
+     "pool": "3005",
+     "gross_in": 2000000000,
+     "actual_out": 1946324,
+     "proto_out": 1946324.1896704892,
+     "diff_pct": 0.000009745062445887243,
+     "out_denom": "ibc/498A07"
+    }
+   ],
+   "osmoUsdFromTx": 0.05283382781576165,
+   "predicted": 1.9463241896704893,
+   "actual": 1.946324,
+   "unit": "USD (OSMO legs at this tx's own OSMO→USDC hop)",
+   "diff_pct": 0.000009745062445887243,
+   "settle_coin": [
+    "OSMO",
+    36.798072
+   ],
+   "settle_nam": -2000,
+   "d1_amount_num": 1994.004,
+   "quote_minute_price": 0.0009760883127616595,
+   "spot_before_3005": 0.0009810925818817691
+  },
+  {
+   "ts": "2026-10-28T07:29:07Z",
+   "height": 73349880,
+   "hash": "1CA8380EC97F",
+   "kind": "buy",
+   "pool_id": "3005,3368",
+   "legs": [
+    {
+     "pool": "3005",
+     "gross_in": 6382849.783651387,
+     "actual_out": 6574832368,
+     "proto_out": 6574833397.360629,
+     "diff_pct": 0.000015656074126013664,
+     "out_denom": "NAM"
+    },
+    {
+     "pool": "3368",
+     "gross_in": 29483365.705770515,
+     "actual_out": 1614213379,
+     "proto_out": 1615994423.7570686,
+     "diff_pct": 0.11033515024958529,
+     "out_denom": "NAM"
+    }
+   ],
+   "osmoUsdFromTx": 0.053916516651665164,
+   "predicted": 8190.827821117698,
+   "actual": 8189.045747,
+   "unit": "NAM",
+   "diff_pct": 0.021761682285759143,
+   "settle_coin": [
+    "ATOM",
+    -4.9
+   ],
+   "settle_nam": 8189.045747,
+   "d1_amount_num": 8189.045747,
+   "quote_minute_price": 0.000951774428764141,
+   "spot_before_3005": 0.0009517744167366221
+  },
+  {
+   "ts": "2026-10-28T07:27:02Z",
+   "height": 73349740,
+   "hash": "016520FDE0F1",
+   "kind": "buy",
+   "pool_id": "3005",
+   "legs": [
+    {
+     "pool": "3005",
+     "gross_in": 1628555.4091165315,
+     "actual_out": 1713343997,
+     "proto_out": 1713344922.144407,
+     "diff_pct": 0.00005399641920256215,
+     "out_denom": "NAM"
+    }
+   ],
+   "osmoUsdFromTx": null,
+   "predicted": 1713.344922144407,
+   "actual": 1713.343997,
+   "unit": "NAM",
+   "diff_pct": 0.00005399641920256215,
+   "settle_coin": [
+    "ATOM",
+    -1
+   ],
+   "settle_nam": 1713.343997,
+   "d1_amount_num": 1713.343997,
+   "quote_minute_price": 0.0009476631679586758,
+   "spot_before_3005": 0.000943568658988666
+  },
+  {
+   "ts": "2026-10-28T06:05:53Z",
+   "height": 73344266,
+   "hash": "A097129E272C",
+   "kind": "sell",
+   "pool_id": "3005",
+   "legs": [
+    {
+     "pool": "3005",
+     "gross_in": 10000000000,
+     "actual_out": 9620830,
+     "proto_out": 9620829.816229707,
+     "diff_pct": -0.0000019101293102785633,
+     "out_denom": "ibc/498A07"
+    }
+   ],
+   "osmoUsdFromTx": null,
+   "predicted": 9.620829816229707,
+   "actual": 9.62083,
+   "unit": "USD (OSMO legs at this tx's own OSMO→USDC hop)",
+   "diff_pct": -0.0000019101293102785633,
+   "settle_coin": [
+    "USDC",
+    9.62083
+   ],
+   "settle_nam": -10000,
+   "d1_amount_num": 9970.02,
+   "quote_minute_price": 0.0009649759980421302,
+   "spot_before_3005": 0.000989495388752941
+  },
+  {
+   "ts": "2026-10-28T04:07:08Z",
+   "height": 73336222,
+   "hash": "F3451320CCA3",
+   "kind": "buy",
+   "pool_id": "3008,3005",
+   "legs": [
+    {
+     "pool": "3005",
+     "gross_in": 1000000,
+     "actual_out": 999977971,
+     "proto_out": 999977997.746214,
+     "diff_pct": 0.000002674680321668177,
+     "out_denom": "NAM"
+    }
+   ],
+   "osmoUsdFromTx": null,
+   "predicted": 999.977997746214,
+   "actual": 9990.977971,
+   "unit": "NAM",
+   "diff_pct": -89.99119004517107,
+   "settle_coin": [
+    "allUSDC",
+    -10
+   ],
+   "settle_nam": 9990.977971,
+   "d1_amount_num": 9990.977971,
+   "quote_minute_price": 0.000959433846621801,
+   "spot_before_3005": 0.0009944431730784238
+  },
+  {
+   "ts": "2026-10-28T04:06:54Z",
+   "height": 73336206,
+   "hash": "B80F3C6E3D0A",
+   "kind": "buy",
+   "pool_id": "3005,3368",
+   "legs": [
+    {
+     "pool": "3005",
+     "gross_in": 8000000,
+     "actual_out": 8141173733,
+     "proto_out": 8141173951.735098,
+     "diff_pct": 0.0000026867759572724026,
+     "out_denom": "NAM"
+    },
+    {
+     "pool": "3368",
+     "gross_in": 6012024.048096193,
+     "actual_out": 335958429,
+     "proto_out": 336332907.74182266,
+     "diff_pct": 0.11146579740157758,
+     "out_denom": "NAM"
+    },
+    {
+     "pool": "3368",
+     "gross_in": 35600367.91531782,
+     "actual_out": 2014623064,
+     "proto_out": 2016882930.4226928,
+     "diff_pct": 0.11217316346046058,
+     "out_denom": "NAM"
+    }
+   ],
+   "osmoUsdFromTx": 0.05570189581421753,
+   "predicted": 10494.389789899613,
+   "actual": 10155.796797,
+   "unit": "NAM",
+   "diff_pct": 3.3339874720576423,
+   "settle_coin": [
+    "allUSDC",
+    -10
+   ],
+   "settle_nam": 10155.796797,
+   "d1_amount_num": 10155.796796999999,
+   "quote_minute_price": 0.000959433846621801,
+   "spot_before_3005": 0.0009594338206235891
+  },
+  {
+   "ts": "2026-10-28T03:34:42Z",
+   "height": 73334017,
+   "hash": "844EE4C8A2E3",
+   "kind": "buy",
+   "pool_id": "3005,3368",
+   "legs": [
+    {
+     "pool": "3005",
+     "gross_in": 7000000,
+     "actual_out": 7331048563,
+     "proto_out": 7331049422.246702,
+     "diff_pct": 0.000011720652159930012,
+     "out_denom": "NAM"
+    },
+    {
+     "pool": "3368",
+     "gross_in": 53457216.99809876,
+     "actual_out": 3108630113,
+     "proto_out": 3112165078.969675,
+     "diff_pct": 0.11371458942290857,
+     "out_denom": "NAM"
+    }
+   ],
+   "osmoUsdFromTx": 0.05564285168018094,
+   "predicted": 10443.214501216376,
+   "actual": 10439.678676,
+   "unit": "NAM",
+   "diff_pct": 0.033869100056738155,
+   "settle_coin": [
+    "allUSDC",
+    -10
+   ],
+   "settle_nam": 10439.678676,
+   "d1_amount_num": 10439.678676,
+   "quote_minute_price": 0.000893401878593278,
+   "spot_before_3005": 0.000938643139402391
+  }
+ ],
+ "aggRows": [
+  {
+   "ts": "2026-10-28T15:14:48Z",
+   "hash": "0FF2D1235991",
+   "grossNam": 10000,
+   "poolsUsed": [
+    "3005",
+    "3368"
+   ],
+   "routerLegs": [
+    "3005:8973.018 NAM",
+    "3368:405.526 NAM",
+    "3368:973.050 NAM"
+   ],
+   "prototypeAggregateUsd": 10.338742971663134,
+   "prototypeSplit": [
+    {
+     "id": "3005",
+     "nam": 9196.091313935207,
+     "usd": 9.522636363400037
+    },
+    {
+     "id": "3368",
+     "nam": 803.9086860647923,
+     "usd": 0.8161066082630959
+    }
+   ],
+   "actualUsdFromLegs": 10.775517378546525,
+   "settleUsd": 10.34082,
+   "diffVsLegsPct": -4.05339615295861,
+   "diffVsSettlePct": -0.020085721798335232,
+   "osmoUsdFromTx": 0.05288490007729311
+  },
+  {
+   "ts": "2026-10-28T13:46:41Z",
+   "hash": "1097B1F90508",
+   "grossNam": 10000,
+   "poolsUsed": [
+    "3005",
+    "3368",
+    "3009"
+   ],
+   "routerLegs": [
+    "3005:7976.016 NAM",
+    "3009:997.002 NAM",
+    "3368:855.815 NAM",
+    "3368:973.050 NAM"
+   ],
+   "prototypeAggregateUsd": 9.124400620229359,
+   "prototypeSplit": [
+    {
+     "id": "3005",
+     "nam": 8108.910553915042,
+     "usd": 7.407693638349994
+    },
+    {
+     "id": "3368",
+     "nam": 1328.429934639382,
+     "usd": 1.1977499648537464
+    },
+    {
+     "id": "3009",
+     "nam": 562.6595114455765,
+     "usd": 0.5189570170256183
+    }
+   ],
+   "actualUsdFromLegs": 9.921711485973843,
+   "settleUsd": 9.114837,
+   "diffVsLegsPct": -8.036021475444322,
+   "diffVsSettlePct": 0.10492365611540766,
+   "osmoUsdFromTx": 0.052658616597056666
+  }
+ ]
+}

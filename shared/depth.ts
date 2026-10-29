@@ -1,0 +1,362 @@
+// Depth: what the base coin fetches at every price across every Osmosis pool that holds it, read from the chain's own
+// state (each concentrated-liquidity pool's tick map, each weighted pool's reserves, the order book's resting orders)
+// and merged into one ladder and one curve. This file holds what the Worker and the page share: the response types,
+// the four sizes, the stored price offsets, the heat bands and every sentence the page says about the figures (no
+// sentence here names a figure; the words are checked against test/banned-words.ts).
+//
+// Units: a "raw" price is counter base units per base-coin base unit inside one pool; the common axis is USD per
+// whole base coin. Amounts in the response are whole coins; the model works in base units (worker/src/depth/model.ts).
+
+/** The sizes answered each minute, in whole base coins: the executable figures of the Answer view. */
+export const DEPTH_SIZES = [1_000, 10_000, 100_000, 1_000_000] as const;
+/** The size the touch is read at, in whole base coins: the effective price of the first coins each way. */
+export const DEPTH_TOUCH_SIZE = 100;
+/** The price offsets stored per minute, in percent of the reference price, each side (bid_1 ... bid_50, ask_1 ... ask_50). */
+export const DEPTH_OFFSETS_PCT = [1, 2, 5, 10, 25, 50] as const;
+/** The heat bands of the time view: one band every HEAT_BAND_PCT percent upward from a quarter of the reference price. */
+export const HEAT_BAND_PCT = 2.5;
+export const HEAT_LO_RATIO = 0.25;
+/**
+ * The band count. The plan asked for 112 bands of 2½ % from a quarter of the reference to four times it, which no whole
+ * count gives (ln 16 / ln 1.025 = 112.3): the count is kept (the stored heat row is float32[112]) and the top edge is
+ * HEAT_TOP_RATIO, 3.97 times the reference, so every sentence about the bands says "almost four times" (HEAT_RANGE_WORDS)
+ * and the heat answer carries its own edges. Recorded against owner decision 19.
+ */
+export const HEAT_BANDS = 112;
+/** The 113 band edges as ratios of the reference price: HEAT_LO_RATIO x (1 + HEAT_BAND_PCT / 100)^k, k = 0 ... 112. */
+export const HEAT_EDGES: readonly number[] = Array.from({ length: HEAT_BANDS + 1 }, (_, k) => HEAT_LO_RATIO * (1 + HEAT_BAND_PCT / 100) ** k);
+/** The last edge: what the top band reaches (under four times the reference). */
+export const HEAT_TOP_RATIO = HEAT_EDGES[HEAT_BANDS];
+/** The aggregate curve's grid: steps of a quarter percent within four times the reference price each way, one percent beyond. */
+export const GRID_FINE_STEP = 0.0025;
+export const GRID_FINE_SPAN = 4;
+export const GRID_COARSE_STEP = 0.01;
+/** The curve served to the page is thinned to at most this many points a side. */
+export const CURVE_POINTS_MAX = 400;
+
+export type DepthPoolType = 'concentrated' | 'balancer' | 'stableswap' | 'cosmwasm';
+export type DepthSide = 'bid' | 'ask';
+
+/** One read behind a figure: where, when, at what height, how big and how long. */
+export interface DepthRead {
+  url: string;
+  at: number;
+  height: number | null;
+  bytes: number;
+  ms: number;
+  status?: number | string;
+}
+export interface DepthReadError {
+  error: string;
+  at: number;
+  url?: string;
+}
+
+export interface DepthSplit {
+  pool: string;
+  nam: number;
+  usd: number;
+}
+
+/**
+ * One executable figure: selling or buying `nam` whole coins across every priced pool, filled best price first. One
+ * shape for both sides, so the quote route and the stored rows share it: `usd` is the USD out for a sale and the USD in
+ * for a buy (plan section 2 spelled them usdOut and usdIn; the side says which, and the page's labels say it in words).
+ */
+export interface DepthFill {
+  nam: number;
+  /** USD out for a sale, USD in for a buy. */
+  usd: number;
+  avgPrice: number | null;
+  marginalPrice: number;
+  complete: boolean;
+  filledNam: number;
+  split: DepthSplit[];
+}
+
+export interface DepthTouch {
+  bestBidEff: number | null;
+  bestBidPool: string | null;
+  bestAskEff: number | null;
+  bestAskPool: string | null;
+  sizeNam: number;
+}
+
+export interface DepthWithin {
+  bidUsd10: number;
+  bidUsd25: number;
+  bidUsd50: number;
+  askNam10: number;
+  askNam25: number;
+  askUsd10: number;
+  totalBidUsd: number;
+  totalAskNam: number;
+}
+
+/** USD resting within each offset of the reference price, one entry per DEPTH_OFFSETS_PCT, each side. */
+export interface DepthOffsets {
+  bid: number[];
+  ask: number[];
+}
+
+/** A rung of the raw ladder: a tick range of a concentrated pool, a level of the book, or a weighted pool's reserves. */
+export interface DepthLevel {
+  pool: string;
+  type: DepthPoolType;
+  side: DepthSide | 'both';
+  loUsd: number;
+  hiUsd: number;
+  nam: number;
+  counter: number;
+  counterUsd: number;
+  positions?: number;
+  orders?: number;
+  spread: number;
+  taker: number;
+}
+
+export interface DepthPoolCl {
+  currentTick: number;
+  liquidity: number;
+  ranges: number;
+  positions?: number;
+}
+export interface DepthBookLevel {
+  price: number;
+  /** Bids rest in the counter coin, asks in the base coin (whole coins). */
+  amount: number;
+  orders: number;
+}
+export interface DepthPoolBook {
+  bids: DepthBookLevel[];
+  asks: DepthBookLevel[];
+  orders: number;
+  bestBid: number | null;
+  bestAsk: number | null;
+  state: { url: string; at: number };
+}
+
+export interface DepthPool {
+  id: string;
+  type: DepthPoolType;
+  pair: string;
+  counterDenom: string;
+  counterSymbol: string;
+  counterDecimals: number;
+  /** USD per whole counter coin (plan section 2 named this and the pool's value both counterUsd; the value is counterValueUsd). */
+  counterUsd: number | null;
+  counterUsdHow: string;
+  spotUsd: number | null;
+  spread: number;
+  taker: number | null;
+  sides: 'both' | 'nam' | 'coin' | 'empty' | 'unknown';
+  nam: number;
+  counter: number;
+  /** The pool's counter coin at counterUsd, in USD. */
+  counterValueUsd: number | null;
+  read: DepthRead | DepthReadError;
+  cl?: DepthPoolCl;
+  book?: DepthPoolBook;
+}
+
+export interface DepthUnpriced {
+  id: string;
+  pair: string;
+  why: string;
+}
+
+export interface DepthCurve {
+  price: number[];
+  bidUsd: number[];
+  bidNam: number[];
+  askUsd: number[];
+  askNam: number[];
+  perPool: Record<string, { bidUsd: number[]; askUsd: number[] }>;
+}
+
+export interface DepthChecks {
+  estimate: { nam: number; chainUusdc: number; ours: number; diffPct: number; url: string; at: number } | null;
+  route: { nam: number; routerUsdc: number; ours: number; diffPct: number; at: number } | null;
+  realised: { n: number; within1pct: number; lastAt: number | null };
+}
+
+export interface DepthProv {
+  what: string;
+  url: string;
+  at: number;
+  height: number | null;
+  bytes: number;
+  status: number | string;
+}
+
+export interface DepthRef {
+  pool: string;
+  usd: number;
+  height: number | null;
+  at: number;
+  source: string;
+  status?: 'live' | 'stale';
+}
+
+/** GET /api/depth: the whole minute's answer, served from the kv row the minute wrote. */
+export interface DepthResponse {
+  at: number;
+  generatedAt: number;
+  ref: DepthRef;
+  pools: DepthPool[];
+  unpriced: DepthUnpriced[];
+  answer: { sizes: number[]; sell: DepthFill[]; buy: DepthFill[] };
+  touch: DepthTouch;
+  within: DepthWithin;
+  offsets: DepthOffsets;
+  book: { levels: DepthLevel[] };
+  curve: DepthCurve;
+  checks: DepthChecks;
+  prov: DepthProv[];
+  cost: { reads: number; bytes: number; ms: number };
+  note?: string;
+}
+
+/** GET /api/depth/quote?side=&nam= : the exact walk of the stored curve for any size. */
+export interface DepthQuoteResponse extends DepthFill {
+  side: 'sell' | 'buy';
+  vsRef: number | null;
+  at: number;
+  height: number | null;
+  prov: DepthProv[];
+}
+
+export interface DepthHistoryPoint {
+  t: number;
+  at: number;
+  height: number | null;
+  refUsd: number;
+  spotUsd: number | null;
+  bid: (number | null)[];
+  ask: (number | null)[];
+  sell: (number | null)[];
+  buy: (number | null)[];
+  bestBid: number | null;
+  bestAsk: number | null;
+  bidUsd: number | null;
+  askNam: number | null;
+  note: string | null;
+}
+export interface DepthHistoryResponse {
+  pool: string;
+  step: '1m' | '1h';
+  from: number;
+  to: number;
+  points: DepthHistoryPoint[];
+  gaps: { from: number; to: number; why: string }[];
+  start: number | null;
+  prov: DepthProv[];
+}
+
+export interface DepthHeatResponse {
+  bands: { edges: number[]; pct: number };
+  columns: { t: number; refUsd: number; bid: string; ask: string; height: number | null }[];
+  step: '1m' | '5m' | '1h';
+  max: number;
+  prov: DepthProv[];
+}
+
+export interface DepthOwnerItem {
+  pool: string;
+  kind: 'position' | 'order';
+  id: string;
+  side?: DepthSide;
+  loUsd: number;
+  hiUsd: number;
+  nam: number;
+  usd: number;
+  since: number | null;
+  remaining?: number;
+  placed?: number;
+}
+export interface DepthOwner {
+  address: string;
+  short: string;
+  label: string | null;
+  category: string | null;
+  pools: string[];
+  positions: number;
+  orders: number;
+  nam: number;
+  usd: number;
+  share: number;
+  items: DepthOwnerItem[];
+}
+export interface DepthOwnersResponse {
+  at: number;
+  height: number | null;
+  owners: DepthOwner[];
+  totals: { nam: number; usd: number; positions: number; orders: number };
+  prov: DepthProv[];
+}
+
+export interface DepthChangeRow {
+  ts: number;
+  pool: string;
+  ref: string;
+  kind: 'added' | 'removed' | 'filled' | 'grew' | 'shrank';
+  side: DepthSide | null;
+  loUsd: number | null;
+  hiUsd: number | null;
+  nam: number | null;
+  usd: number | null;
+  owner: string | null;
+  height: number | null;
+}
+
+// ---------------------------------------------------------------------------------------------------- the words
+/** The sources a figure names, in plain words (the page never says the acronyms test/banned-words.ts forbids). */
+export const DEPTH_SOURCES = {
+  clStore: 'Osmosis chain node (concentrated-liquidity tick store)',
+  poolManager: 'Osmosis chain node (pool manager)',
+  gamm: 'Osmosis chain node (weighted and stable pools)',
+  priceList: 'Osmosis quote service price list',
+  takerFee: 'Osmosis chain node (taker fee of the pair)',
+  estimate: 'Osmosis chain node (its own swap estimate)',
+} as const;
+/** The order book's source names its pool, which comes from the module's configuration (worker/src/depth/config.ts bookPoolIds), never from these words. */
+export const bookSource = (poolId: string): string => `Osmosis order book contract (pool ${poolId})`;
+
+/** The heat bands, said once under the time view: the band width and the span, which stops under four times the reference. */
+export const HEAT_RANGE_WORDS = 'each band two and a half percent wide, from a quarter of the reference price to almost four times it';
+
+/** What a "level" of a concentrated pool is, said once per view. */
+export const CL_LEVEL_WORDS = 'a reading of the pool’s tick map: what its positions would give between two prices, not a resting order';
+
+/** Why a pool is listed and not counted. */
+export const UNPRICED_NO_PRICE = 'the quote service’s price list gives this coin no price, so the pool is listed and not counted';
+export const UNPRICED_NO_TAKER = 'the pair’s taker fee was not read, so the pool is listed and not counted';
+export const UNPRICED_NOT_READ = (why: string) => `not read this minute (${why}), so the pool is listed and not counted`;
+
+/** How a pool in another coin was put on the USD axis. `coin` is the coin's symbol; `at` its price list time in words. */
+export const counterUsdHow = (coin: string, usd: number, at: string): string =>
+  `${coin} at the quote service’s price list, ${usd} USD, ${at}; converting ${coin} to USDC would cost another hop`;
+export const USDC_AS_ONE = 'Noble USDC counted as one US dollar';
+
+/** The rule for a book whose nearest bid sits far under the pools' price. */
+export const SELL_INTO_POOLS = 'the order book’s nearest bid is under the pool price after fees: sell into the pools, not the book';
+
+/** The honest start under the time view. */
+export const HONEST_START = 'Depth has been recorded since the first stored minute; nothing on the chain gives earlier depth.';
+
+/** An empty side, and why it is possible. */
+export const NO_BIDS = 'no bids: nothing is resting to buy into on this side, which a pool emptied of its counter coin or a book with no buy orders allows';
+export const NO_ASKS = 'no asks: nothing is resting to sell into on this side';
+
+/** A read that did not answer this minute: the last reading is shown dimmed with this. */
+export const notReadSince = (clock: string, why: string) => `not read since ${clock}, ${why}`;
+
+/** Every fixed sentence above, for test/depth-words.test.ts: none may carry a figure. */
+export const DEPTH_FIXED_WORDS: readonly string[] = [
+  ...Object.values(DEPTH_SOURCES), HEAT_RANGE_WORDS, CL_LEVEL_WORDS, UNPRICED_NO_PRICE, UNPRICED_NO_TAKER, USDC_AS_ONE, SELL_INTO_POOLS, HONEST_START, NO_BIDS, NO_ASKS,
+];
+/** The sentences built from a read or the configuration, with sample arguments: the only figures they carry are the ones passed in. */
+export const DEPTH_BUILT_WORDS: readonly string[] = [
+  bookSource('3008'), UNPRICED_NOT_READ('status 429'), counterUsdHow('OSMO', 0.0529, '02:56 UTC'), notReadSince('02:56 UTC', 'status 429'),
+];
+export const DEPTH_WORDS: readonly string[] = [...DEPTH_FIXED_WORDS, ...DEPTH_BUILT_WORDS];

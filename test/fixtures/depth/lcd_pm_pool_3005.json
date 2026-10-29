@@ -1,0 +1,20 @@
+// 2026-10-29T02:19:21.860Z GET https://osmosis-rest.publicnode.com/osmosis/poolmanager/v1beta1/pools/3005
+// status 200 bytes 783 ms 220 content-encoding br ratelimit 
+{
+ "pool": {
+  "@type": "/osmosis.concentratedliquidity.v1beta1.Pool",
+  "address": "osmo1m459jtgn77tz8cffvthq5jh0erswxu9872mjd9qde546mslc6udq85we5r",
+  "incentives_address": "osmo1udxty2z8grrujgd3wwfmyc7j42aeh54qae2vap7xt4r92jvn5gxqr9tw25",
+  "spread_rewards_address": "osmo1n6mm8p4dzd9fe3aly9uzfxx963zxf3ah8vurl4lqm5ggnk0q2vuskr0rtv",
+  "id": "3005",
+  "current_tick_liquidity": "12182537984.214367314128069678",
+  "token0": "ibc/C7110DEC66869DAE9BE9C3C60F4B5313B16A2204AE020C3B0527DD6B322386A3",
+  "token1": "ibc/498A0751C798A0D9A389AA3691123DADA57DAA4FE165D5C75894505B876BA6E4",
+  "current_sqrt_price": "0.031935379420358432301010285098659131",
+  "current_tick": "-26980132",
+  "tick_spacing": "100",
+  "exponent_at_price_one": "-6",
+  "spread_factor": "0.002000000000000000",
+  "last_liquidity_update": "2026-10-28T14:49:51.062590774Z"
+ }
+}

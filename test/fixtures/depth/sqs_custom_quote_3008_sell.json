@@ -1,0 +1,44 @@
+// 2026-10-29T02:19:16.119Z GET https://sqs.osmosis.zone/router/custom-direct-quote?tokenIn=1000000000ibc/C7110DEC66869DAE9BE9C3C60F4B5313B16A2204AE020C3B0527DD6B322386A3&tokenOutDenom=ibc/498A0751C798A0D9A389AA3691123DADA57DAA4FE165D5C75894505B876BA6E4&poolID=3008
+// status 200 bytes 893 ms 642 content-encoding null ratelimit 
+{
+ "amount_in": {
+  "denom": "ibc/C7110DEC66869DAE9BE9C3C60F4B5313B16A2204AE020C3B0527DD6B322386A3",
+  "amount": "1000000000"
+ },
+ "amount_out": "349650",
+ "route": [
+  {
+   "pools": [
+    {
+     "id": 3008,
+     "type": 3,
+     "balances": [],
+     "spread_factor": "0.000000000000000000",
+     "token_out_denom": "ibc/498A0751C798A0D9A389AA3691123DADA57DAA4FE165D5C75894505B876BA6E4",
+     "taker_fee": "0.001000000000000000",
+     "liquidity_cap": "175",
+     "code_id": 885
+    }
+   ],
+   "has-cw-pool": false,
+   "out_amount": "349650",
+   "in_amount": "1000000000"
+  }
+ ],
+ "tokens": [
+  {
+   "denom": "ibc/498A0751C798A0D9A389AA3691123DADA57DAA4FE165D5C75894505B876BA6E4",
+   "liquidity_cap": "1412391"
+  },
+  {
+   "denom": "ibc/C7110DEC66869DAE9BE9C3C60F4B5313B16A2204AE020C3B0527DD6B322386A3",
+   "liquidity_cap": "0"
+  }
+ ],
+ "liquidity_cap": "175",
+ "liquidity_cap_overflow": false,
+ "effective_fee": "0.001000000000000000",
+ "price_impact": "0.000000000000000000",
+ "price_impact_unknown": true,
+ "in_base_out_quote_spot_price": "0.000000000000000000"
+}
