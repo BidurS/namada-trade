@@ -43,8 +43,8 @@ export interface Proof {
 }
 
 export const PROOF: Proof = {
-  "reportDate": "2026-10-20",
-  "reportGeneratedAt": 1792529580000,
+  "reportDate": "2026-10-29",
+  "reportGeneratedAt": 1793253300000,
   "marketEventsTested": 22,
   "pricePoints": 104,
   "priceMovesFlagged": 10,
