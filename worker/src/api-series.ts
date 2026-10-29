@@ -13,10 +13,12 @@
 // A request the route cannot answer as asked is refused with plain words (400), an unknown key or path is a 404 in
 // the NotServedBody shape, and no refusal or failure is ever cached (Cache-Control: no-store). Every query
 // parameter a route reads is listed in SERIES_PARAMS and read only through `params()`, so the edge cache key
-// (worker/src/http.ts CACHE_PARAMS) can be checked against it (test/series-api.test.ts).
+// (worker/src/http.ts CACHE_PARAMS) can be checked against it (test/series-api.test.ts). The refusal body, the `?at=`
+// reading and the route wrapper are worker/src/api-route.ts, shared with the depth routes.
 import { Hono, type Context } from 'hono';
 import type { Env } from './util';
-import { NOT_SERVED, TRADES_LIMIT_MAX, type NotServedBody } from '../../shared/types';
+import { NOT_SERVED, TRADES_LIMIT_MAX } from '../../shared/types';
+import { asOfOf, refuse, route } from './api-route';
 import { parseBeforeParam, clampLimit, LIMIT_MIN } from '../../shared/paging';
 import { isWholeAddress } from '../../shared/search-grammar';
 import { fetchNamPools } from './sources/sqs';
@@ -41,29 +43,6 @@ function params<R extends Route>(c: Context, route: R): Record<(typeof SERIES_PA
   for (const k of SERIES_PARAMS[route] as readonly string[]) out[k] = c.req.query(k);
   return out as Record<(typeof SERIES_PARAMS)[R][number], string | undefined>;
 }
-
-/** `?at=<unix ms>`: answers as of that time (Rewind); anything else, or a time not in the past, is now. */
-function asOfOf(raw: string | undefined, now = Date.now()): { asOf: number; replay: boolean } {
-  const at = raw ? Number(raw) : NaN;
-  return Number.isFinite(at) && at > 0 && at < now ? { asOf: at, replay: true } : { asOf: now, replay: false };
-}
-
-const refuse = (c: Context, status: 400 | 404 | 500, endpoint: string, error: string, reason?: string) => {
-  const body: NotServedBody = { error, reason: reason ?? error, endpoint };
-  c.header('Cache-Control', 'no-store');
-  return c.json(body, status);
-};
-
-/** Run one route: a SeriesInputError is the route's own refusal; anything else is a failure, never cached. */
-const route = <R extends Route>(path: R, run: (c: Context<{ Bindings: Env }>) => Promise<unknown>) => async (c: Context<{ Bindings: Env }>) => {
-  try {
-    return c.json(await run(c));
-  } catch (e) {
-    if (e instanceof SeriesInputError) return refuse(c, e.status, path, e.message, e.reason);
-    console.error(path, e);
-    return refuse(c, 500, path, 'Something went wrong on our side.');
-  }
-};
 
 seriesApp.get('/', route('/api/series', async (c) => {
   const p = params(c, '/api/series');

@@ -44,6 +44,7 @@ import { clampLimit, prefixRange, decodeHolderCursor, encodeHolderCursor, encode
 import { parse, isWholeAddress, INPUT_MAX, type Parsed } from '../../shared/search-grammar';
 import { EXPLORERS, NAMADA as NAMADA_SHARED } from '../../shared/config';
 import { seriesApp } from './api-series';
+import { depthApp } from './api-depth';
 import { ROLLUP_KEYS } from './series-sql';
 import { DAY_HOURS, HISTORY_ALL_DAYS } from '../../shared/history';
 import { SINGLE_POOL_USDC_SWAP } from './cron';
@@ -1938,6 +1939,7 @@ app.get('/api/metrics/history', async (c) => {
 });
 
 app.route('/api/series', seriesApp); // the series and Trade-basics routes (worker/src/api-series.ts, screener-plan 2.12)
+app.route('/api/depth', depthApp); // the depth routes (worker/src/api-depth.ts, depth plan section 2)
 
 // Compact for `kvGet` import to stay used by future routes
 void kvGet;

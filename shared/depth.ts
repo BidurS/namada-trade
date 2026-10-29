@@ -198,13 +198,20 @@ export interface DepthChecks {
   realised: { n: number; within1pct: number; lastAt: number | null };
 }
 
+/**
+ * One read behind a figure. A read of an outside source carries its `url`; a read of the Worker's own stored rows
+ * (the API's history, heat and changes) carries no URL but the `table` and the `key` range it read, with `status`
+ * 'stored' and `at` and `height` the newest row's own.
+ */
 export interface DepthProv {
   what: string;
-  url: string;
+  url: string | null;
   at: number;
   height: number | null;
   bytes: number;
   status: number | string;
+  table?: string;
+  key?: Record<string, string | number>;
 }
 
 export interface DepthRef {
@@ -235,14 +242,32 @@ export interface DepthResponse {
   note?: string;
 }
 
-/** GET /api/depth/quote?side=&nam= : the exact walk of the stored curve for any size. */
+/**
+ * GET /api/depth/quote?side=&nam= : the exact walk of the stored minute for any size. `nam` is the size answered: the
+ * size asked rounded to three significant digits (QUOTE_NAM_DIGITS), which is also the edge cache's key for the quote
+ * (worker/src/http.ts quoteNamKey), so the route only ever sees the rounded size and the size as typed is the page's to
+ * keep, never this answer's. `ref` is the minute's
+ * reference, `vsRef` the fill's average price against it in percent. `how` says what was walked: the pool models rebuilt
+ * from the stored states on the stored curve's own grid (the split by pool exact), or the stored aggregate curve alone
+ * when the states were not stored (then the split is empty and `note` says so). An incomplete fill carries `note`.
+ */
 export interface DepthQuoteResponse extends DepthFill {
   side: 'sell' | 'buy';
+  ref: DepthRef;
   vsRef: number | null;
   at: number;
   height: number | null;
+  how: string;
+  note?: string;
   prov: DepthProv[];
 }
+/** The quote size is rounded to this many significant digits (the edge cache keeps one copy per rounded size and side). */
+export const QUOTE_NAM_DIGITS = 3;
+export const QUOTE_NAM_MIN = 1;
+export const QUOTE_NAM_MAX = 10_000_000;
+export const roundQuoteNam = (nam: number): number => Number(nam.toPrecision(QUOTE_NAM_DIGITS));
+/** The newest stored minute is served as stale past this age (plan section 2). */
+export const DEPTH_STALE_MS = 3 * 60_000;
 
 export interface DepthHistoryPoint {
   t: number;
@@ -265,19 +290,40 @@ export interface DepthHistoryResponse {
   step: '1m' | '1h';
   from: number;
   to: number;
+  asOf: number;
   points: DepthHistoryPoint[];
+  /** Steps in [from, to) with no stored row, merged into runs; never filled in. */
   gaps: { from: number; to: number; why: string }[];
+  /** The first stored step of this pool at this step, or null when nothing is stored. */
   start: number | null;
+  /** The row cap (plan C7): true when the window held more rows than the cap and the answer stops at the cap. */
+  cut: boolean;
+  note: string | null;
   prov: DepthProv[];
 }
+/** GET /api/depth/history reads at most this many rows in its one statement (plan C7, worker/src/depth/config.ts caps.historyRowsMax says the same). */
+export const HISTORY_ROWS_MAX = 43_200;
+/** The default history window: the last day at one-minute steps. */
+export const HISTORY_DEFAULT_MS = 86_400_000;
 
 export interface DepthHeatResponse {
+  days: number;
+  from: number;
+  to: number;
+  asOf: number;
   bands: { edges: number[]; pct: number };
+  /** One column per stored step: the bands as stored (base64 float32[112], USD per band, relative to that step's reference). A step with no row has no column. */
   columns: { t: number; refUsd: number; bid: string; ask: string; height: number | null }[];
   step: '1m' | '5m' | '1h';
+  /** The largest band value over every column, for the colour scale. */
   max: number;
+  /** How the columns were picked, in words. */
+  how: string;
   prov: DepthProv[];
 }
+/** The heat windows served, in days, and the step each is read at. */
+export const HEAT_DAYS: Record<number, '1m' | '5m' | '1h'> = { 1: '1m', 7: '5m', 30: '1h' };
+export const HEAT_DEFAULT_DAYS = 7;
 
 export interface DepthOwnerItem {
   pool: string;
@@ -318,6 +364,17 @@ export interface DepthOwnersResponse {
   totals: { nam: number; usd: number; positions: number; orders: number };
   prov: DepthProv[];
 }
+/** GET /api/depth/owners: kv depth.owners with each owner's label as the labels table has it now, and the hour's own notes. */
+export interface DepthOwnersApiResponse extends DepthOwnersResponse {
+  hour: number;
+  positions: { at: number | null; height: number | null; read: boolean; pools: string[]; why?: string };
+  orders: { at: number | null; height: number | null; read: boolean; why?: string };
+  /** The three facts the hourly job holds the chain's answers to, as it found them. */
+  invariants: Record<'inRange' | 'tickStore' | 'bookTotals', { ok: boolean | null; note: string }>;
+  notes: string[];
+  /** Owners whose label came from the labels table this request. */
+  labelled: number;
+}
 
 /**
  * One row of depth_changes: liquidity that appeared, left or filled, as the diff of two readings (worker/src/depth/diff.ts).
@@ -340,6 +397,15 @@ export interface DepthChangeRow {
   owner: string | null;
   height: number | null;
 }
+/** GET /api/depth/changes: a page of depth_changes, newest first, keyset on (ts, pool_id, ref); `next` is the cursor of the page after, null at the end. */
+export interface DepthChangesResponse {
+  pool: string | null;
+  rows: DepthChangeRow[];
+  next: string | null;
+  limit: number;
+  prov: DepthProv[];
+}
+export const CHANGES_LIMIT_MAX = 200;
 
 // ---------------------------------------------------------------------------------------------------- the words
 /** The sources a figure names, in plain words (the page never says the acronyms test/banned-words.ts forbids). */
@@ -417,14 +483,42 @@ export const OWNERS_NO_MINUTE = 'no stored minute yet, so there is no live set t
 /** A read that did not answer this minute: the last reading is shown dimmed with this. */
 export const notReadSince = (clock: string, why: string) => `not read since ${clock}, ${why}`;
 
+/** The API's own sentences (worker/src/api-depth.ts). */
+export const DEPTH_NOT_STORED = 'No depth minute has been stored yet.';
+export const OWNERS_NOT_STORED = 'No hourly reading of the position and order owners has been stored yet.';
+export const DEPTH_STALE_WORDS = 'the newest stored minute is older than three minutes';
+/** The minute rows' retention, said whenever a history at one-minute steps is asked: `days` from the configuration's caps.retentionMs. */
+export const minuteRowsKept = (days: number) => `minute rows are kept ${days} days; before that, ask for hours`;
+export const GAP_MINUTE = 'no row was stored for these minutes (the pool was not read, or nothing was written that minute); nothing is filled in';
+export const GAP_HOUR = 'no row was stored for these hours; nothing is filled in';
+export const HEAT_HOW: Record<'1m' | '5m' | '1h', string> = {
+  '1m': 'one column per stored minute of the aggregate',
+  '5m': 'one column per five minutes: the last minute of each five as stored, a missing one left blank',
+  '1h': 'one column per stored hour: the hour’s last minute, from the hourly rows',
+};
+export const QUOTE_HOW_STATES = 'the pool models rebuilt from the minute’s stored states, walked on the stored curve’s own grid and again between the two grid prices the fill fell between';
+export const QUOTE_HOW_CURVE = 'the stored aggregate curve alone: the minute’s states were not stored, so the split by pool is empty';
+/** An incomplete fill: `filled` is the fill's own figure, `symbol` the base coin's from the configuration. */
+export const quoteIncomplete = (side: 'sell' | 'buy', filled: string, symbol: string) =>
+  side === 'sell' ? `only ${filled} ${symbol} can be sold before the last bid is used` : `only ${filled} ${symbol} can be bought before the last ask is used`;
+/** The history answer stopped at the row cap: `n` is the cap, from the configuration. */
+export const historyCut = (n: number) => `the window held more than ${n} rows, so the answer stops at the cap; ask a shorter window or hours`;
+/** The `what` of a stored read's provenance line: the table, the pool and the counts are the read's own. */
+export const historyRowsWords = (table: string, pool: string, rows: number, steps: number) => `${table} rows of pool ${pool}: ${rows} of ${steps} steps`;
+export const heatRowsWords = (table: string, columns: number) => `${table} rows of the aggregate: ${columns} columns`;
+export const changesRowsWords = (pool: string | null, rows: number) => `depth_changes rows${pool ? ` of pool ${pool}` : ''}: ${rows}`;
+
 /** Every fixed sentence above, for test/depth-words.test.ts: none may carry a figure. */
 export const DEPTH_FIXED_WORDS: readonly string[] = [
   ...Object.values(DEPTH_SOURCES), ...Object.values(DEPTH_CHECK_TITLES), HEAT_RANGE_WORDS, CL_LEVEL_WORDS, UNPRICED_NO_PRICE, UNPRICED_NO_TAKER, UNPRICED_EMPTY, UNPRICED_NO_META,
   BOOK_LEG_LEFT_OUT, USDC_AS_ONE, SELL_INTO_POOLS, HONEST_START, NO_BIDS, NO_ASKS,
   ...Object.values(INVARIANT_WORDS), OWNERS_NO_ARCHIVE, BOOK_NOT_READ_CLOSING, OWNERS_NO_MINUTE,
+  DEPTH_NOT_STORED, OWNERS_NOT_STORED, DEPTH_STALE_WORDS, GAP_MINUTE, GAP_HOUR, ...Object.values(HEAT_HOW), QUOTE_HOW_STATES, QUOTE_HOW_CURVE,
 ];
 /** The sentences built from a read or the configuration, with sample arguments: the only figures they carry are the ones passed in. */
 export const DEPTH_BUILT_WORDS: readonly string[] = [
   bookSource('3008'), UNPRICED_NOT_READ('status 429'), counterUsdHow('OSMO', 0.0529, '02:56 UTC'), notReadSince('02:56 UTC', 'status 429'), cutByCap(40), dustWords(1, 'NAM'),
+  quoteIncomplete('sell', '1,234,567', 'NAM'), quoteIncomplete('buy', '1,234,567', 'NAM'), historyCut(43200), minuteRowsKept(30),
+  historyRowsWords('depth_minute', 'all', 1420, 1440), heatRowsWords('depth_hourly', 720), changesRowsWords('3005', 200), changesRowsWords(null, 200),
 ];
 export const DEPTH_WORDS: readonly string[] = [...DEPTH_FIXED_WORDS, ...DEPTH_BUILT_WORDS];

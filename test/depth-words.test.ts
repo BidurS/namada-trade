@@ -4,7 +4,7 @@
 // from a read or the configuration, never from these words.
 import { describe, it, expect } from 'vitest';
 import { BANNED } from './banned-words';
-import { DEPTH_WORDS, DEPTH_FIXED_WORDS, DEPTH_BUILT_WORDS, DEPTH_SOURCES, bookSource, counterUsdHow, dustWords, HEAT_EDGES, HEAT_BANDS, HEAT_TOP_RATIO, HEAT_RANGE_WORDS, DEPTH_SIZES, DEPTH_OFFSETS_PCT, DEPTH_TOUCH_SIZE } from '../shared/depth';
+import { DEPTH_WORDS, DEPTH_FIXED_WORDS, DEPTH_BUILT_WORDS, DEPTH_SOURCES, bookSource, counterUsdHow, dustWords, minuteRowsKept, historyRowsWords, heatRowsWords, changesRowsWords, HEAT_EDGES, HEAT_BANDS, HEAT_TOP_RATIO, HEAT_RANGE_WORDS, DEPTH_SIZES, DEPTH_OFFSETS_PCT, DEPTH_TOUCH_SIZE } from '../shared/depth';
 
 describe('the depth words', () => {
   it('none carries a banned word', () => {
@@ -16,8 +16,13 @@ describe('the depth words', () => {
     for (const w of DEPTH_FIXED_WORDS) expect(w, w).not.toMatch(/\d/);
     expect(Object.keys(DEPTH_SOURCES)).not.toContain('book');
   });
-  it('the built sentences carry only the figure passed in: the book’s pool from the configuration, a coin’s price, a clock', () => {
-    expect(DEPTH_BUILT_WORDS.length).toBe(6);
+  it('the built sentences carry only the figure passed in: the book’s pool from the configuration, a coin’s price, a clock, the retention and the stored reads’ counts', () => {
+    expect(DEPTH_BUILT_WORDS.length).toBe(14);
+    expect(minuteRowsKept(30).match(/\d+/g)).toEqual(['30']);
+    expect(historyRowsWords('depth_minute', 'all', 1420, 1440).match(/\d+/g)).toEqual(['1420', '1440']);
+    expect(heatRowsWords('depth_hourly', 720).match(/\d+/g)).toEqual(['720']);
+    expect(changesRowsWords(null, 200)).toBe('depth_changes rows: 200');
+    expect(changesRowsWords('3005', 7)).toBe('depth_changes rows of pool 3005: 7');
     expect(dustWords(1, 'NAM')).toBe('holds under 1 NAM and almost none of the other coin, so the pool is listed and not read');
     expect(dustWords(1, 'NAM').match(/\d+/g)).toEqual(['1']);
     expect(bookSource('3008')).toBe('Osmosis order book contract (pool 3008)');

@@ -36,14 +36,14 @@ import { OSMOSIS, INTERNAL_LABELS } from './config';
 import { OSMOSIS_DATA_SOURCE } from './sources/osmosis-data';
 import { JOB_WINDOW_MS, OSMOSIS_SUMMARY_STALE_MS } from './series';
 import { poolHoldsSomething } from '../../shared/pool-sides';
+import { ApiInputError } from './api-route';
 
 const H = 3_600_000, D = 86_400_000, MIN = 60_000;
 type DB = Env['DB'];
 
 /** A request the route refuses, with the status and the plain words it answers with. */
-export class SeriesInputError extends Error {
-  constructor(readonly status: 400 | 404, message: string, readonly reason?: string) { super(message); }
-}
+/** A series route's own refusal (worker/src/api-route.ts ApiInputError: the shared route wrapper answers it). */
+export class SeriesInputError extends ApiInputError {}
 
 const fmtClock = (ms: number) => new Date(ms).toISOString().slice(11, 16);
 const fmtDayTime = (ms: number) => `${fmtDay(ms)} ${fmtClock(ms)} UTC`;

@@ -3,8 +3,9 @@
 import type { Env } from './util';
 import { DAY_MS, DAILY_DAYS, HISTORY_FETCH_DAYS } from '../../shared/history';
 import { TRADES_TAPE_LIMIT } from '../../shared/types';
+import { QUOTE_NAM_MIN, QUOTE_NAM_MAX, roundQuoteNam, HEAT_DAYS, CHANGES_LIMIT_MAX } from '../../shared/depth';
 
-export const CACHEABLE_API = /^\/api\/(overview|pools|pressure|blindspot|orderflow|flows|holders|search|metrics\/history|quote\/curve|alerts\/rules|alerts\/recent|intel|series|series\/changes|series\/volume|series\/pairs|series\/trades|series\/values)$/;
+export const CACHEABLE_API = /^\/api\/(overview|pools|pressure|blindspot|orderflow|flows|holders|search|metrics\/history|quote\/curve|alerts\/rules|alerts\/recent|intel|series|series\/changes|series\/volume|series\/pairs|series\/trades|series\/values|depth|depth\/quote|depth\/history|depth\/heat|depth\/owners|depth\/changes)$/;
 
 const THRESHOLDS = ['ibcInventory', 'unlock', 'bigSwap', 'unshield', 'bond'];
 /**
@@ -33,6 +34,13 @@ export const CACHE_PARAMS: Record<string, string[]> = {
   '/api/series/pairs': [],
   '/api/series/trades': ['before', 'maker', 'min', 'limit', 'at'],
   '/api/series/values': ['at'],
+  // The depth routes (worker/src/api-depth.ts DEPTH_PARAMS lists exactly these; test/depth-api.test.ts checks it)
+  '/api/depth': [],
+  '/api/depth/quote': ['side', 'nam'],
+  '/api/depth/history': ['pool', 'from', 'to', 'step', 'at'],
+  '/api/depth/heat': ['days', 'at'],
+  '/api/depth/owners': [],
+  '/api/depth/changes': ['pool', 'before', 'limit'],
   '/api/export/holders': ['chain', 'by', 'category', 'search', 'limit', 'format', 'min', 'max'],
   '/api/export/flows': ['chain', 'kind', 'whale', 'minNam', 'arb', 'pairs', 'search', 'at', 'limit', 'format', 'since', 'addr', 'hash', 'height'],
 };
@@ -59,13 +67,23 @@ export function rewoundAt(url: URL, now = Date.now()): string | null {
   return Number.isFinite(at) && at > 0 && at < now ? String(at) : null;
 }
 
-/** The cache key for a request: its path and the parameters the route reads, sorted (`at` as rewoundAt reads it). */
+/**
+ * The depth quote's size as the route answers it: rounded to three significant digits (shared/depth.ts roundQuoteNam), so
+ * every size that rounds alike is one edge copy. A size the route would refuse is kept as written (the refusal is never stored).
+ */
+export function quoteNamKey(raw: string | null): string | null {
+  if (raw == null) return null;
+  const n = Number(raw);
+  return raw !== '' && Number.isFinite(n) && n >= QUOTE_NAM_MIN && n <= QUOTE_NAM_MAX ? String(roundQuoteNam(n)) : raw;
+}
+
+/** The cache key for a request: its path and the parameters the route reads, sorted (`at` as rewoundAt reads it, the quote's `nam` rounded). */
 export function cacheKeyUrl(url: URL, now = Date.now()): string {
   const keep = cacheParamsOf(url.pathname);
   const out = new URL(url.origin + url.pathname);
   if (!keep) return url.toString();
   for (const k of [...keep].sort()) {
-    const v = k === 'at' ? rewoundAt(url, now) : url.searchParams.get(k);
+    const v = k === 'at' ? rewoundAt(url, now) : k === 'nam' && url.pathname === '/api/depth/quote' ? quoteNamKey(url.searchParams.get(k)) : url.searchParams.get(k);
     if (v != null) out.searchParams.set(k, v);
   }
   return out.toString();
@@ -138,6 +156,16 @@ export function isReplay(url: URL): boolean {
     const limit = url.searchParams.get('limit');
     if (limit != null && limit !== String(TRADES_TAPE_LIMIT)) return true;
   }
+  // The depth history's default window (the last day of the aggregate at one-minute steps) and the hourly one are a
+  // few cache entries a pool; any `from` or `to` is a window of its own and a read of up to 43,200 rows: limited on a miss.
+  // A changes page behind a cursor or at a page length the page does not ask for is one entry per value, as the tape's.
+  if (p === '/api/depth/history' && (url.searchParams.has('from') || url.searchParams.has('to'))) return true;
+  if (p === '/api/depth/heat') { const d = url.searchParams.get('days'); if (d != null && !(d in HEAT_DAYS)) return true; }
+  if (p === '/api/depth/changes') {
+    if (url.searchParams.has('before')) return true;
+    const limit = url.searchParams.get('limit');
+    if (limit != null && limit !== String(CHANGES_LIMIT_MAX)) return true;
+  }
   if (p === '/api/flows' || p === '/api/holders') {
     // a size, a cursor or a date jump: every value is its own cache entry
     // so is an address (every start of 8 to 62 characters of every address, or a whole one); a hub's count reads
@@ -194,7 +222,16 @@ const EDGE_CACHE = 'public, max-age=5, s-maxage=15, stale-while-revalidate=30';
  * catch up and add a row with an older time (the list's "last checked the chain" line covers that).
  */
 export const EDGE_CACHE_BEHIND = 'public, max-age=5, s-maxage=60, stale-while-revalidate=30';
-export const edgeCacheOf = (url: URL) => (url.pathname === '/api/flows' && url.searchParams.has('before') ? EDGE_CACHE_BEHIND : EDGE_CACHE);
+/**
+ * The depth routes (depth plan section 2): the minute's answer and the quotes walked on it 30 s (a new minute lands
+ * every 60 s), the history 30 s, the heat a minute, the owners five minutes (the hour writes them once).
+ */
+export const DEPTH_EDGE_SECONDS: Record<string, number> = { '/api/depth': 30, '/api/depth/quote': 30, '/api/depth/history': 30, '/api/depth/heat': 60, '/api/depth/owners': 300, '/api/depth/changes': 30 };
+export const edgeCacheOf = (url: URL) => {
+  const depth = DEPTH_EDGE_SECONDS[url.pathname];
+  if (depth != null) return `public, max-age=5, s-maxage=${depth}, stale-while-revalidate=30`;
+  return url.pathname === '/api/flows' && url.searchParams.has('before') ? EDGE_CACHE_BEHIND : EDGE_CACHE;
+};
 
 /**
  * Every API answer: not for search indexes (the footer links /api/overview; robots.txt keeps the read paths

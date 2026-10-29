@@ -147,7 +147,8 @@ export function modelOfState(cfg: DepthConfig, s: StoredPoolState): PoolModel | 
   } catch { return null; }
   return null;
 }
-const pricedOfState = (cfg: DepthConfig, s: StoredPoolState): PricedPool | null => {
+/** A stored state as a priced pool for the aggregate (the realised check and the quote route rebuild the minute from these). */
+export const pricedOfState = (cfg: DepthConfig, s: StoredPoolState): PricedPool | null => {
   const model = modelOfState(cfg, s);
   return model ? { id: s.id, type: s.type, model, counterUsd: s.counterUsd, counterDecimals: s.counterDecimals, taker: s.taker } : null;
 };
