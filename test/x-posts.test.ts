@@ -7,7 +7,7 @@ import { join } from 'node:path';
 import { createHmac } from 'node:crypto';
 import { testD1, type TestD1 } from './d1-sqlite';
 import { configureAlerts, moveCard } from '../worker/src/sources/discord';
-import { cardText, cutX, oauthHeader, postMoveOnX, postOnce, postRecapOnX, recapText, xLength, X_DAILY_MAX, X_MAX_AGE_MS, X_RECAP_HOUR_UTC } from '../worker/src/sources/x';
+import { cardText, cutX, oauthHeader, postMoveOnX, postOnce, postRecapOnX, recapChart, recapText, xLength, X_DAILY_MAX, X_MAX_AGE_MS, X_RECAP_HOUR_UTC } from '../worker/src/sources/x';
 import { rowToFlow } from '../worker/src/analytics';
 import type { Flow } from '../shared/types';
 
@@ -69,6 +69,45 @@ describe('the text', () => {
     const thin = recapText({ generatedAt: t, price: { usd: null } });
     expect(thin).not.toContain('Price');
     expect(thin).not.toContain('undefined');
+  });
+});
+
+describe('the recap\'s picture', () => {
+  it('draws the digest\'s price chart from the hourly rows, and nothing when there are none', async () => {
+    const db = testD1();
+    expect(await recapChart(db as any, t)).toBeNull();
+    for (let h = 1; h <= 48; h++) {
+      await db.prepare('INSERT INTO metrics (key, ts, value) VALUES (?, ?, ?)').bind('price.usd.1h', t - h * 3_600_000, 0.001 + h * 0.00001).run();
+    }
+    await db.prepare('INSERT INTO metrics (key, ts, value) VALUES (?, ?, ?)').bind('price.usd', t - 60_000, 0.00101).run();
+    const png = await recapChart(db as any, t);
+    expect(png).not.toBeNull();
+    expect([...png!.slice(0, 8)]).toEqual([137, 80, 78, 71, 13, 10, 26, 10]);
+  });
+
+  it('uploads the picture and attaches it; a picture X does not take leaves the post as text', async () => {
+    const db = testD1();
+    let uploads = 0, uploadOk = true;
+    const bodies: any[] = [];
+    vi.stubGlobal('fetch', vi.fn(async (u: string, init?: RequestInit) => {
+      if (String(u) === 'https://api.x.com/2/media/upload') {
+        uploads++;
+        expect(init?.body).toBeInstanceOf(FormData);
+        expect((init?.body as FormData).get('media_category')).toBe('tweet_image');
+        return new Response(JSON.stringify(uploadOk ? { data: { id: '777' } } : { detail: 'nope' }), { status: uploadOk ? 200 : 400 });
+      }
+      bodies.push(JSON.parse(String(init?.body)));
+      return new Response(JSON.stringify({ data: { id: '1' } }), { status: 201 });
+    }));
+    const pic = async () => new Uint8Array([137, 80, 78, 71]);
+    expect(await postOnce(env(db), 'alert:x:p1', () => 'with picture', 'p1', pic)).toBe('posted');
+    expect(bodies[0]).toEqual({ text: 'with picture', media: { media_ids: ['777'] } });
+    uploadOk = false;
+    expect(await postOnce(env(db), 'alert:x:p2', () => 'text only', 'p2', pic)).toBe('posted');
+    expect(bodies[1]).toEqual({ text: 'text only' });
+    expect(await postOnce(env(db), 'alert:x:p3', () => 'drawing failed', 'p3', async () => { throw new Error('no rows'); })).toBe('posted');
+    expect(bodies[2]).toEqual({ text: 'drawing failed' });
+    expect(uploads).toBe(2);
   });
 });
 

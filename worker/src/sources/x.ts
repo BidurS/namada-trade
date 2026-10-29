@@ -1,6 +1,6 @@
 // Posts on X (@ the owner's account), automatically: the moves the site's own channel hears of (operatorMove: 10,000
 // NAM and up, no bot round trips or rewards claims), new and changed governance proposals, new forum topics and
-// replies, and a daily recap at 13:00 UTC (owner's choice, 2026-10-29).
+// replies, and a daily recap at 13:00 UTC with the daily digest's price chart (owner's choices, 2026-10-29).
 //
 // X's API is paid per call (https://docs.x.com/x-api/getting-started/pricing: $0.015 a post, $0.20 a post with a
 // link, checked 2026-10-29), so only the recap carries a link; an alert names the move, its figures and their source
@@ -20,6 +20,8 @@ import { kvSet } from '../db';
 import { readMoveContext } from './discord-context';
 import { alertsOn, claimDiscordAlert, crossingOf, fits, forumCard, govCard, moveCard, operatorMove, releaseClaims, type Card, type GovContext } from './discord';
 import { mdToPlain } from './telegram';
+import { CHART_MINUTE_BOUND_MS, readChartRows, shapePriceChart, type ChartContext } from '../digest/charts/read';
+import { isNotRead, priceChart, toPng } from '../digest/charts/charts';
 
 export interface XEnv { DB: D1Database; X_API_KEY?: string; X_API_SECRET?: string; X_ACCESS_TOKEN?: string; X_ACCESS_SECRET?: string }
 
@@ -106,14 +108,40 @@ export async function oauthHeader(env: Required<Omit<XEnv, 'DB'>>, method: strin
 /** X's answer to one post: its status, and its id when taken. Never logged with the keys. */
 export interface XAnswer { ok: boolean; status: number; id?: string; detail?: string }
 
-export async function xPost(env: XEnv, text: string): Promise<XAnswer> {
+export async function xPost(env: XEnv, text: string, mediaIds: string[] = []): Promise<XAnswer> {
   try {
     const auth = await oauthHeader(env as Required<Omit<XEnv, 'DB'>>, 'POST', POST_URL);
-    const res = await fetch(POST_URL, { method: 'POST', headers: { authorization: auth, 'content-type': 'application/json' }, body: JSON.stringify({ text }), signal: AbortSignal.timeout(X_TIMEOUT_MS) });
+    const body = { text, ...(mediaIds.length ? { media: { media_ids: mediaIds } } : {}) };
+    const res = await fetch(POST_URL, { method: 'POST', headers: { authorization: auth, 'content-type': 'application/json' }, body: JSON.stringify(body), signal: AbortSignal.timeout(X_TIMEOUT_MS) });
     const j = (await res.json().catch(() => null)) as any;
     return { ok: res.ok && !!j?.data?.id, status: res.status, id: j?.data?.id, detail: typeof j?.detail === 'string' ? j.detail.slice(0, 200) : typeof j?.title === 'string' ? j.title : undefined };
   } catch {
     return { ok: false, status: 0 };
+  }
+}
+
+const UPLOAD_URL = 'https://api.x.com/2/media/upload';
+/** A picture upload may take longer than a post. */
+export const X_UPLOAD_TIMEOUT_MS = 15_000;
+/**
+ * Uploads a PNG for a post (POST /2/media/upload, multipart: `media` and media_category tweet_image; the form's fields
+ * are not part of an OAuth 1.0a signature): its media id, or null when X did not take it (the post then goes without).
+ */
+export async function xUpload(env: XEnv, png: Uint8Array): Promise<string | null> {
+  try {
+    const form = new FormData();
+    form.append('media_category', 'tweet_image');
+    form.append('media', new Blob([png], { type: 'image/png' }), 'chart.png');
+    const auth = await oauthHeader(env as Required<Omit<XEnv, 'DB'>>, 'POST', UPLOAD_URL);
+    const res = await fetch(UPLOAD_URL, { method: 'POST', headers: { authorization: auth }, body: form, signal: AbortSignal.timeout(X_UPLOAD_TIMEOUT_MS) });
+    const j = (await res.json().catch(() => null)) as any;
+    const id = j?.data?.id ?? j?.media_id_string;
+    if (res.ok && typeof id === 'string') return id;
+    console.error(`x: the picture was not taken (${res.status}${j?.detail ? `: ${String(j.detail).slice(0, 200)}` : ''})`);
+    return null;
+  } catch (e) {
+    console.error('x: the picture was not uploaded', e);
+    return null;
   }
 }
 
@@ -136,7 +164,7 @@ const giveBackDaily = (db: D1Database, now: number) =>
  * Posts `text` under claim `key` and one of the day's posts. Never throws. The claim and the day's post are given back
  * when X gave no answer, a 5xx or a 429; a refusal keeps them, and is recorded.
  */
-export async function postOnce(env: XEnv, key: string, text: () => Promise<string> | string, what: string): Promise<'posted' | 'claimed' | 'full' | 'failed'> {
+export async function postOnce(env: XEnv, key: string, text: () => Promise<string> | string, what: string, picture?: () => Promise<Uint8Array | null>): Promise<'posted' | 'claimed' | 'full' | 'failed'> {
   try {
     if (!postsOnX(env)) return 'failed';
     if (!(await claimDiscordAlert(env.DB, [key]))) return 'claimed';
@@ -150,7 +178,10 @@ export async function postOnce(env: XEnv, key: string, text: () => Promise<strin
       await giveBackDaily(env.DB, now);
       return 'failed';
     }
-    const a = await xPost(env, body);
+    // a picture that cannot be drawn or uploaded never costs the post: it goes as text
+    const png = picture ? await picture().catch((e) => { console.error(`x: ${what}: the picture was not drawn`, e); return null; }) : null;
+    const media = png ? await xUpload(env, png) : null;
+    const a = await xPost(env, body, media ? [media] : []);
     await kvSet(env.DB, 'x.last', JSON.stringify({ at: now, what, status: a.status, ok: a.ok, ...(a.detail ? { detail: a.detail } : {}) })).catch(() => {});
     if (a.ok) return 'posted';
     console.error(`x: ${what} not posted (${a.status}${a.detail ? `: ${a.detail}` : ''})`);
@@ -213,7 +244,25 @@ export function recapText(o: RecapFigures, now = Date.now()): string {
  * The cron's tick: from X_RECAP_HOUR_UTC, the day's recap once (claimed by date), read from the overview the site
  * answers. A tick before that hour, or after the day's recap, does nothing.
  */
-export async function postRecapOnX(env: XEnv, overview: () => Promise<RecapFigures>, now = Date.now()): Promise<void> {
+export async function postRecapOnX(env: XEnv, overview: () => Promise<RecapFigures>, now = Date.now(), picture: () => Promise<Uint8Array | null> = () => recapChart(env.DB, now)): Promise<void> {
   if (!postsOnX(env) || new Date(now).getUTCHours() < X_RECAP_HOUR_UTC) return;
-  await postOnce(env, `alert:x:recap:${day(now)}`, async () => recapText(await overview(), now), `recap ${day(now)}`);
+  await postOnce(env, `alert:x:recap:${day(now)}`, async () => recapText(await overview(), now), `recap ${day(now)}`, picture);
+}
+
+/**
+ * The recap's picture: the daily digest's price chart (digest/charts: the hourly quote and the executed hourly price
+ * over its days to `now`), drawn from the same rows by the same code. Null when the price was not read in that window.
+ */
+export async function recapChart(db: D1Database, now: number): Promise<Uint8Array | null> {
+  const last = await db.prepare("SELECT MAX(ts) ts FROM metrics WHERE key = 'price.usd'").first<{ ts: number | null }>().catch(() => null);
+  const at = last?.ts != null ? Number(last.ts) : null;
+  const ctx: ChartContext = {
+    now, kind: 'daily',
+    clock: { eNow: null, epochAt: null, startedAt: null, errorMs: null, epochMs: null, paramsAt: null },
+    listing: null, stakeNow: null,
+    quoteNow: at != null ? { at, live: now - at <= CHART_MINUTE_BOUND_MS } : null,
+  };
+  const shaped = shapePriceChart(await readChartRows(db, ctx), ctx);
+  if (isNotRead(shaped)) return null;
+  return (await toPng(priceChart(shaped.input))).png;
 }
