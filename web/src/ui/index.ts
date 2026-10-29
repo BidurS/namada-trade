@@ -41,10 +41,12 @@ export { OrderflowChart, type OrderflowChartProps } from './OrderflowChart';
 export { SeriesChart, namTick, namShort, type SeriesChartProps, type SeriesRange } from './SeriesChart';
 export { OrderSizeCurve, type OrderSizeCurveProps } from './OrderSizeCurve';
 export { DepthChart, type DepthChartProps, type DepthChartMark, type DepthChartTrade } from './DepthChart';
+export { HeatChart, type HeatChartProps, type HeatChartTrade } from './HeatChart';
 export { curveAt, fromApi, sliderToSize, sizeToSlider, logPos, type CurveQuote, type CurveReading } from './curveMath';
 export { niceTicks, takeaway } from './chartMath';
 export { Sparkline, type SparklineProps } from './Sparkline';
 export { useSize } from './useSize';
+export { useMinWidth } from './useMinWidth';
 
 // icons and the mark (shell, F1)
 export * from './Icon';

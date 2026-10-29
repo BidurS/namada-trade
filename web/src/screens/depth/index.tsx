@@ -1,7 +1,8 @@
 // Depth (/depth), step S5: views 1 and 2 of the depth plan (section 3.2). Phone: the yellow answer band (view 1),
 // then the black book band with two tabs, Levels and Curve (view 2). Desktop (1024 px up): the answer band, then the
-// book band as a split, the ladder the sticky left 5/12 column and the curve on the right. Views 3 and 4 (over time,
-// who holds it) are step S6.
+// book band as a split, the ladder the sticky left 5/12 column and the curve on the right. Then (step S6) the black
+// time band (view 3: the heat, the executable line, the change rows, the cost and what was left out) and the black
+// owners band (view 4).
 //
 // One shared state for the side and the size: the chips read the minute's own figures for the four stored sizes;
 // any other size typed is walked on the stored minute by /api/depth/quote (debounced). The minute is fetched every
@@ -16,11 +17,13 @@ import { Notice, Segmented, SkeletonBlock } from '../../ui/index';
 import { fmtNamRule, fmtUtcClock } from '../../lib/format';
 import { ageOutStamps } from '../../lib/prov';
 import { routeById } from '../../../../shared/routes';
-import { BOOK_EYEBROW, BOOK_WAITS, DEPTH_ASKING, FETCHING_MINUTE, LABEL_BOOK_VIEW, REWIND_NO_BOOK, REWIND_NO_MINUTE, SITE_SYMBOL, TAB_CURVE, TAB_LEVELS, rewindMinute } from '../../../../shared/depth';
+import { BOOK_EYEBROW, BOOK_WAITS, DEPTH_ASKING, FETCHING_MINUTE, LABEL_BOOK_VIEW, OVER_EYEBROW, REWIND_NO_BOOK, REWIND_NO_MINUTE, SITE_SYMBOL, TAB_CURVE, TAB_LEVELS, WHO_EYEBROW, rewindMinute } from '../../../../shared/depth';
 import { Answer } from './Answer';
 import { Ladder } from './Ladder';
 import { Curve } from './Curve';
-import { quoteKey, useDepthHistoryAt, useDepthLatest, useDepthQuote, useTradesWeek } from './data';
+import { Over } from './Over';
+import { Who } from './Who';
+import { quoteKey, useDepthChanges, useDepthHistoryAt, useDepthLatest, useDepthOwners, useDepthQuote, useTradesWeek } from './data';
 import { refreshFailedNote } from '../home/data';
 import { DEFAULT_SIZE, SIZES, depthStamp, parseAmount, pointAt, readingOfPoint, readingOfQuote, readingOfStored, type Reading, type Side } from './model';
 
@@ -51,6 +54,9 @@ export default function DepthScreen({ route }: ScreenProps) {
   const quote = useDepthQuote(live && d != null && amount != null && !stored, side, stored ? null : amount, immediate, d?.at ?? null);
   const history = useDepthHistoryAt(at);
   const trades = useTradesWeek(at);
+  // step S6: the change rows of the last month (the time view's longest window; the owners' "replaced this week" reads the same rows) and the hour's owners
+  const changes = useDepthChanges(30, at);
+  const owners = useDepthOwners(live);
 
   // a kept minute after a failed refresh reads old, with the time it was fetched
   const kept = d != null && latest.failedAt != null;
@@ -135,6 +141,18 @@ export default function DepthScreen({ route }: ScreenProps) {
             <Segmented label={LABEL_BOOK_VIEW} className="dp-tabs" value={view} onChange={setView} options={[{ value: 'levels', label: TAB_LEVELS }, { value: 'curve', label: TAB_CURVE }]} />
           ) : null}
           {bookBody}
+        </div>
+      </section>
+      <section className="band ground-ink dp-overband" aria-labelledby="h-over">
+        <div className="wrap">
+          <p className="eyebrow">{OVER_EYEBROW}</p>
+          <Over d={d} stamp={stamp} symbol={symbol} at={at} trades={trades} changes={changes} headingId="h-over" />
+        </div>
+      </section>
+      <section className="band ground-ink dp-whoband" aria-labelledby="h-who">
+        <div className="wrap">
+          <p className="eyebrow">{WHO_EYEBROW}</p>
+          <Who owners={owners} changes={changes} symbol={symbol} rewound={rewound} headingId="h-who" />
         </div>
       </section>
     </div>

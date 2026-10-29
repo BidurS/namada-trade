@@ -8,7 +8,13 @@
 // hero from the stored minute, the split chips, the fact strip, the computed sentences, a typed size asking the quote
 // route and the hero following it, a ladder row opening its sheet, the table views, the desktop split with the ladder
 // on the left, a rewound page naming the reference pool from the stored rows, the chart holding every trade it
-// counts and its mark labels clear of one another, and the words free of the banned list. Skipped, with the reason,
+// counts and its mark labels clear of one another, and the words free of the banned list. Step S6 adds the time band
+// (the heat from the stored column of the fixtures tiled over the window with a twenty-minute outage and one failed
+// minute: a blank column and a broken hairline at 375 and 1280, the paint of a week measured under 200 ms of
+// main-thread time through the chart's own performance measure, the legend's five steps and its blank floor, the
+// honest start, the executable line broken at the outage, the change rows worded with their owners, the cost line and
+// what was left out) and the owners band (the owners of the fixtures' hour with a disclosure per owner, "replaced this
+// week" from the change rows, the address control). Skipped, with the reason,
 // without the build or a browser, except under CI, where the missing build or browser fails the file.
 // With DEPTH_SHOTS=1 it also writes docs/design/build-shots/depth-375.png and depth-1280.png (full page, dark).
 import { describe, it, expect, beforeAll, afterAll } from 'vitest';
@@ -19,7 +25,8 @@ import { chromium, type Browser, type Locator, type Page } from '@playwright/tes
 import { depthFixtureText } from './depth-fixtures';
 import { BANNED } from './banned-words';
 import { routeById } from '../shared/routes';
-import { REWIND_NO_BOOK, REWIND_NO_SPLIT, sellQuotableLead, tradesInView } from '../shared/depth';
+import { GAPS_NONE, HEAT_EDGES, HEAT_HOW, OWNERS_REWIND, REWIND_NO_BOOK, REWIND_NO_SPLIT, recordedSince, sellQuotableLead, tradesInView, type DepthChangeRow } from '../shared/depth';
+import { fmtUtcLong } from '../shared/format';
 
 const ROOT = join(__dirname, '..');
 const DIST = join(ROOT, 'web', 'dist');
@@ -38,6 +45,17 @@ const LATEST = fixtureJson('api_depth_latest.json');
 const REWIND_AT: number = LATEST.at + 20 * 60_000;
 const QUOTES: Record<string, unknown> = { 'sell:7300': fixtureJson('api_depth_quote_sell_7300.json'), 'buy:7300': fixtureJson('api_depth_quote_buy_7300.json'), 'sell:25000': fixtureJson('api_depth_quote_sell_25000.json') };
 const SNAP = JSON.parse(readFileSync(join(ROOT, 'docs', 'design', 'data', 'snapshot.json'), 'utf8'));
+const HEAT_COL = fixtureJson('api_depth_heat_column.json');
+const OWNERS = fixtureJson('api_depth_owners.json');
+const MIN = 60_000, HOUR = 3_600_000, DAY = 86_400_000;
+/** The stored minutes stop for twenty minutes ten hours before now, and one minute three hours before now failed (on a five-minute grid's fourth minute, the one the week's read keeps, so the week's columns show it too). */
+const outageAt = (now: number) => Math.floor((now - 10 * HOUR) / (5 * MIN)) * 5 * MIN;
+const failedAt = (now: number) => Math.floor((now - 3 * HOUR) / (5 * MIN)) * 5 * MIN + 4 * MIN;
+const stored = (t: number, now: number) => !(t >= outageAt(now) && t < outageAt(now) + 20 * MIN) && t !== failedAt(now);
+/** The first stored minute: three days before now. */
+const startOf = (now: number) => Math.floor((now - 3 * DAY) / MIN) * MIN;
+/** When depth was first recorded (the history answer's recordedSince): a day before the first minute row, as it is once the minute rows' retention has passed and the hourly rows reach further back. */
+const recordedFrom = (now: number) => startOf(now) - DAY;
 const TYPES: Record<string, string> = { '.html': 'text/html; charset=utf-8', '.js': 'text/javascript', '.css': 'text/css', '.woff2': 'font/woff2', '.png': 'image/png', '.svg': 'image/svg+xml', '.ico': 'image/x-icon', '.json': 'application/json', '.webmanifest': 'application/manifest+json' };
 
 /** The minute as of now: the stored times moved so the stamps read fresh (the figures are untouched). */
@@ -63,7 +81,51 @@ function historyOf(at: number) {
   const d = LATEST;
   const pt = (t: number) => ({ t, at: t + 30_000, height: d.ref.height, refUsd: d.ref.usd, spotUsd: null, bid: d.offsets.bid, ask: d.offsets.ask, sell: d.answer.sell.map((f: { usd: number }) => f.usd), buy: d.answer.buy.map((f: { usd: number }) => f.usd), bestBid: d.touch.bestBidEff, bestAsk: d.touch.bestAskEff, bidUsd: d.within.totalBidUsd, askNam: d.within.totalAskNam, note: null });
   const m = Math.floor(d.at / 60_000) * 60_000;
-  return { pool: 'all', refPool: '3005', step: '1m', from: at - 600_000, to: at + 1, asOf: at, points: [pt(m - 60_000), pt(m)], gaps: [], start: m - 60_000, cut: false, note: null, prov: [] };
+  return { pool: 'all', refPool: '3005', step: '1m', from: at - 600_000, to: at + 1, asOf: at, points: [pt(m - 60_000), pt(m)], gaps: [], start: m - 60_000, recordedSince: recordedFrom(at), cut: false, note: null, prov: [] };
+}
+
+/** The heat of the last `days` as the route answers it: the fixture's column at every step of the window but the outage and the failed minute. */
+function heatOf(days: number, now: number) {
+  const step = days === 1 ? '1m' : days === 7 ? '5m' : '1h';
+  const stepMs = step === '1m' ? MIN : step === '5m' ? 5 * MIN : HOUR;
+  const to = now, from = to - days * DAY;
+  const columns: unknown[] = [];
+  const first = step === '5m' ? Math.ceil(from / (5 * MIN)) * 5 * MIN + 4 * MIN : Math.ceil(from / stepMs) * stepMs;
+  for (let t = first; t < to; t += stepMs) {
+    if (t < startOf(now) || (step !== '1h' && !stored(t, now))) continue;
+    if (step === '1h' && !stored(t + 59 * MIN, now)) continue;
+    columns.push({ t, refUsd: HEAT_COL.refUsd, bid: HEAT_COL.bid, ask: HEAT_COL.ask, height: HEAT_COL.height });
+  }
+  const table = step === '1h' ? 'depth_hourly' : 'depth_minute';
+  return { days, from, to, asOf: now, bands: { edges: [...HEAT_EDGES], pct: 2.5 }, columns, step, max: 272.77, how: 'one column per stored minute of the aggregate', prov: [{ what: `${table} rows of the aggregate: ${columns.length} columns`, url: null, table, key: { pool_id: 'all', from, to, step }, at: now - 30_000, height: HEAT_COL.height, bytes: 1, status: 'stored' }] };
+}
+/** The stored figures over a window (the executable line): one point per stored minute, or per hour with the hour's own range. */
+function historyWindow(from: number, to: number, step: '1m' | '1h', now: number) {
+  const d = LATEST;
+  const stepMs = step === '1m' ? MIN : HOUR;
+  const points: unknown[] = [];
+  const gaps: unknown[] = [];
+  for (let t = Math.ceil(from / stepMs) * stepMs; t < to; t += stepMs) {
+    if (t < startOf(now)) continue;
+    if (step === '1m' && !stored(t, now)) continue;
+    // the quotable size keeps the minute's own figure (the rewound hero reads it); the other sizes vary a little, so the line has a low and a high
+    const sell = d.answer.sell.map((f: { usd: number }, i: number) => (i === 1 ? f.usd * (1 + ((t / stepMs) % 7) * 0.0005) : f.usd));
+    points.push({ t, at: t + 30_000, height: d.ref.height, refUsd: d.ref.usd, spotUsd: null, bid: d.offsets.bid, ask: d.offsets.ask, sell, buy: d.answer.buy.map((f: { usd: number }) => f.usd), bestBid: d.touch.bestBidEff, bestAsk: d.touch.bestAskEff, bidUsd: d.within.totalBidUsd, askNam: d.within.totalAskNam, note: null, ...(step === '1h' ? { hour: { sellLo: sell[1] * 0.99, sellHi: sell[1] * 1.01, bidLo: null, bidHi: null, n: 60 } } : {}) });
+  }
+  if (step === '1m' && outageAt(now) >= from) gaps.push({ from: outageAt(now), to: outageAt(now) + 20 * MIN, why: 'no row was stored for these minutes' });
+  return { pool: 'all', refPool: '3005', step, from, to, asOf: now, points, gaps, start: startOf(now), recordedSince: recordedFrom(now), cut: false, note: null, prov: [{ what: `depth_${step === '1m' ? 'minute' : 'hourly'} rows of pool all: ${points.length}`, url: null, table: step === '1m' ? 'depth_minute' : 'depth_hourly', key: { pool_id: 'all', from, to }, at: now - 30_000, height: LATEST.ref.height, bytes: 1, status: 'stored' }] };
+}
+/** A few change rows of the last days, worded by the page: an order pulled and placed again by the same owner (replaced once this week), a position withdrawn, a pool's reserves grown. */
+function changesOf(now: number): DepthChangeRow[] {
+  const book = OWNERS.owners.find((o: { orders: number }) => o.orders > 0);
+  const pos = OWNERS.owners.find((o: { positions: number }) => o.positions > 0);
+  const order = book.items[0], position = pos.items[0];
+  return [
+    { ts: now - 2 * HOUR, pool: order.pool, ref: `ord:${order.id}`, kind: 'added', side: order.side, loUsd: order.loUsd, hiUsd: order.hiUsd, nam: order.nam, usd: order.usd, owner: book.address, height: 73_429_400 },
+    { ts: now - 5 * HOUR, pool: order.pool, ref: `ord:${order.id}`, kind: 'removed', side: order.side, loUsd: order.loUsd, hiUsd: order.hiUsd, nam: order.nam, usd: order.usd, owner: book.address, height: 73_429_300 },
+    { ts: now - DAY, pool: position.pool, ref: `pos:${position.id}`, kind: 'removed', side: null, loUsd: position.loUsd, hiUsd: position.hiUsd, nam: position.nam, usd: position.usd, owner: pos.address, height: 73_429_000 },
+    { ts: now - 2 * DAY, pool: '3439', ref: 'res', kind: 'grew', side: null, loUsd: null, hiUsd: null, nam: 990, usd: 1.02, owner: null, height: 73_428_000 },
+  ];
 }
 
 async function mockApi(page: Page, origin: string) {
@@ -77,7 +139,18 @@ async function mockApi(page: Page, origin: string) {
       const q = QUOTES[`${u.searchParams.get('side')}:${u.searchParams.get('nam')}`];
       return q ? json(q) : json({ error: 'nam must be one of the sizes the fixtures hold.', reason: 'test', endpoint: '/api/depth/quote' }, 400);
     }
-    if (u.pathname === '/api/depth/history') return json(historyOf(Number(u.searchParams.get('at') ?? Date.now())));
+    if (u.pathname === '/api/depth/history') {
+      const now = Number(u.searchParams.get('at') ?? Date.now());
+      // the rewound hero asks the ten minutes before its moment (useDepthHistoryAt); the executable line asks a window of days
+      if (u.searchParams.has('from') && Number(u.searchParams.get('to')) - Number(u.searchParams.get('from')) > HOUR) return json(historyWindow(Number(u.searchParams.get('from')), Math.min(now, Number(u.searchParams.get('to') ?? now)), (u.searchParams.get('step') ?? '1m') as '1m' | '1h', now));
+      return json(historyOf(now));
+    }
+    if (u.pathname === '/api/depth/heat') return json(heatOf(Number(u.searchParams.get('days') ?? 7), Number(u.searchParams.get('at') ?? Date.now())));
+    if (u.pathname === '/api/depth/owners') return json({ ...OWNERS, at: Date.now() - 20 * MIN });
+    if (u.pathname === '/api/depth/changes') {
+      const rows = changesOf(Date.now());
+      return json({ pool: null, rows, next: null, limit: 200, prov: [{ what: `depth_changes rows: ${rows.length}`, url: null, table: 'depth_changes', key: { before: Date.now(), limit: 200 }, at: rows[0].ts, height: rows[0].height, bytes: 1, status: 'stored' }] });
+    }
     if (u.pathname === '/api/series/trades') return json(tradesNow(Date.now()));
     if (u.pathname === '/api/overview') return json({ ...SNAP.overview, generatedAt: Date.now(), asOf: Date.now() });
     if (u.pathname === '/api/alerts/recent') return json({ hits: [], since: Date.now() - 86_400_000, until: Date.now(), last: null });
@@ -112,7 +185,12 @@ async function audit(page: Page) {
       if (w < 44 || h < 44) smallTargets.push(`${Math.round(w)}x${Math.round(h)} ${el.tagName.toLowerCase()} "${(el.getAttribute('aria-label') || el.textContent || '').trim().slice(0, 30)}"`);
     }
     const rows = [...document.querySelectorAll('.dp-lrow:not(.dp-lrow--head)')].filter(visible).map((r) => Math.round(r.getBoundingClientRect().height));
+    // what sticks out past the viewport, for the failure message
+    const vw = window.visualViewport?.width ?? window.innerWidth;
+    const over = (el: Element) => el.getBoundingClientRect().right > vw + 1;
+    const wide = [...document.querySelectorAll('body *')].filter((el) => visible(el) && over(el) && ![...el.children].some(over)).slice(0, 12).map((el) => `${el.tagName.toLowerCase()}.${String(el.getAttribute('class') ?? '').slice(0, 40)} ${Math.round(el.getBoundingClientRect().left)}-${Math.round(el.getBoundingClientRect().right)} "${(el.textContent ?? '').trim().slice(0, 30)}"`);
     return {
+      wide,
       overflowX: de.scrollWidth > Math.round(window.visualViewport?.width ?? window.innerWidth), scrollWidth: de.scrollWidth, innerWidth: window.innerWidth,
       h1: [...document.querySelectorAll('h1')].map((x) => (x.textContent ?? '').trim()), tables: document.querySelectorAll('table').length, smallText, smallTargets, rows,
       text: (document.querySelector('main')?.textContent ?? '').replace(/\s+/g, ' '),
@@ -180,7 +258,7 @@ describe.skipIf(!ready)('the depth page, built, on the fixtures (375, 320 and 12
         await count(page.locator('.dp-rows .dp-lrow--ref')).toBe(1);
         const a = await audit(page);
         expect(a.h1).toEqual([ROUTE.h1]);
-        expect(a.overflowX, `scrollWidth ${a.scrollWidth} > ${a.innerWidth}`).toBe(false);
+        expect(a.overflowX, `scrollWidth ${a.scrollWidth} > ${a.innerWidth}: ${a.wide.join(' | ')}`).toBe(false);
         expect(a.tables).toBe(0);
         expect(a.smallText).toEqual([]);
         expect(a.smallTargets).toEqual([]);
@@ -302,8 +380,8 @@ describe.skipIf(!ready)('the depth page, built, on the fixtures (375, 320 and 12
       await page.locator('.dp-chart__plot').focus();
       await page.keyboard.press('ArrowRight');
       await text(page.locator('.dp-chart .readout')).toContain('selling');
-      await page.getByRole('button', { name: 'Table view' }).last().click();
-      await count(page.locator('.dp-table .dp-trow')).toBeGreaterThan(1);
+      await page.locator('.dp-curve').getByRole('button', { name: 'Table view' }).click();
+      await count(page.locator('.dp-curve .dp-table .dp-trow')).toBeGreaterThan(1);
     } finally {
       await ctx.close();
     }
@@ -326,6 +404,9 @@ describe.skipIf(!ready)('the depth page, built, on the fixtures (375, 320 and 12
       await text(page.locator('.dp-bookband')).toContain(REWIND_NO_BOOK);
       await count(page.locator('.dp-rows')).toBe(0);
       await count(page.locator('.dp-say p')).toBe(0);
+      await text(page.locator('.dp-who')).toContain(OWNERS_REWIND);
+      await seen(page.locator('.dph-plot canvas'));
+      await count(page.locator('.dp-cost')).toBe(0);
       expect(errors).toEqual([]);
       const a = await audit(page);
       for (const re of [BANNED]) expect(a.text).not.toMatch(re);
@@ -333,6 +414,132 @@ describe.skipIf(!ready)('the depth page, built, on the fixtures (375, 320 and 12
       await ctx.close();
     }
   }, 60_000);
+
+  for (const [w, h] of [[375, 812], [1280, 800]] as const) {
+    it(`${w} wide, over time: a blank column and a broken hairline at the outage, never one path; the paint of a week under 200 ms; the legend's five steps and the blank floor; the honest start; the executable line broken; the change rows with their owners; the cost line and what was left out`, async () => {
+      const { page, ctx, errors } = await open(w, h);
+      try {
+        await settled(page);
+        const over = page.locator('.dp-over');
+        await seen(over.locator('.dph-plot canvas'));
+        // the phone opens on the day drawn in five-minute columns; the desktop on the week
+        await text(over.locator('.dp-over__cols')).toContain(w < 1024 ? 'one column per five minutes' : 'one column per five minutes');
+        if (w < 1024) await text(over.locator('.dp-over__cols')).toContain('five-minute columns');
+        await text(over.locator('.dp-over__cols')).toMatch(/\d+ blank/);
+        // the hairline is more than one path: broken at the outage (and at the failed minute)
+        await count(over.locator('.dph-plot svg .dph-ref')).toBeGreaterThanOrEqual(2);
+        // the legend: five swatches of the ramp, the blank floor, the reference line, the sized trades, the blank column
+        await count(over.locator('.dph-key .dph-sw')).toBe(7);
+        await text(over.locator('.dph-key')).toMatch(/under \$[\d.,]+: blank/);
+        await text(over.locator('.dph-key')).toContain('and above');
+        await text(over.locator('.dph-key')).toContain('sized by its NAM');
+        await count(over.locator('.dph-plot svg .dph-trade')).toBeGreaterThanOrEqual(1);
+        // the honest start names the first recording (the answer's recordedSince, a day before the minute rows' own start here), never the minute rows' edge
+        await text(over.locator('.dp-over__start')).toMatch(/^Depth has been recorded since \d+ \w+ \d{4}, \d\d:\d\d UTC; nothing on the chain gives earlier depth\.$/);
+        await text(over.locator('.dp-over__start')).toBe(recordedSince(fmtUtcLong(recordedFrom(Date.now()))).replace(/\s+/g, ' '));
+        // the executable line over the day: at least two runs (the outage is a gap at every width), its title from the stored minutes, the hour band, and the window's gaps said in words under it
+        await over.getByRole('radio', { name: '24 h' }).click();
+        await expect.poll(() => over.locator('.dp-over__cols').textContent().then((t) => /one column per (minute|five minutes), (1440|288) of them/.test(t ?? '')), { timeout: T }).toBe(true);
+        // the phone's day is drawn in fives and says so once, never "per stored minute" beside "five-minute columns"; the desktop's says minutes
+        if (w < 1024) {
+          await text(over.locator('.dp-over__cols')).toContain(HEAT_HOW['5m']);
+          await text(over.locator('.dp-over__cols')).not.toContain(HEAT_HOW['1m']);
+        } else {
+          await text(over.locator('.dp-over__cols')).toContain(HEAT_HOW['1m']);
+        }
+        await count(over.locator('.dp-exec svg .dp-exec__line')).toBeGreaterThanOrEqual(2);
+        await text(over.locator('.dp-exec .chartsec__title')).toContain('Selling 10,000 NAM fetched $');
+        await count(over.locator('.dp-exec svg .dp-exec__band')).toBeGreaterThanOrEqual(1);
+        await text(over.locator('.dp-exec__gaps')).toMatch(/^1 stretch of this window has no stored row and is drawn blank; the longest, 20 min, began \d+ \w+, \d\d:\d\d UTC$/);
+        // the week: the paint measured by the chart itself, under 200 ms of main-thread time; the twenty-minute outage still breaks the line (a bucket is about an hour at 375 px)
+        await over.getByRole('radio', { name: '7 d' }).click();
+        await expect.poll(() => over.locator('.dp-over__cols').textContent().then((t) => /2,?016 of them|20[01]\d of them/.test(t ?? '')), { timeout: T }).toBe(true);
+        const paints = await page.evaluate(() => performance.getEntriesByName('depth-heat-paint').map((e) => e.duration));
+        expect(paints.length).toBeGreaterThan(0);
+        expect(Math.max(...paints), `paint ms ${paints.map((x) => x.toFixed(1)).join(', ')}`).toBeLessThan(200);
+        await count(over.locator('.dph-plot svg .dph-ref')).toBeGreaterThanOrEqual(2);
+        await count(over.locator('.dp-exec svg .dp-exec__line')).toBeGreaterThanOrEqual(2);
+        await text(over.locator('.dp-exec__gaps')).toContain('1 stretch of this window has no stored row');
+        // the keyboard readout: a band at a time, and the blank column named
+        await over.locator('.dph-plot').focus();
+        await page.keyboard.press('ArrowLeft');
+        await text(over.locator('.dph .readout')).toMatch(/UTC: /);
+        // the table view says how many of the week's columns it lists (sixty of 2,016, one in 34) and names the blank column
+        await over.getByRole('button', { name: 'Table view' }).click();
+        await count(over.locator('.dph-table .dph-trow')).toBeGreaterThan(10);
+        await count(over.locator('.dph-table .dph-trow:not(.dp-trow--head)')).toBeLessThanOrEqual(61);
+        await text(over.locator('.dph-table__note')).toMatch(/^\d+ of 2,?016 columns listed, one in \d+, and the last$/);
+        await text(over.locator('.dph-table')).toContain('Reference price');
+        await over.getByRole('button', { name: 'Chart view' }).click();
+        // the month from the hourly rows: the line from the hours, the band the hours' own, no gap listed by the hourly answer here
+        await over.getByRole('radio', { name: '30 d' }).click();
+        await expect.poll(() => over.locator('.dp-over__cols').textContent().then((t) => (t ?? '').includes('one column per hour')), { timeout: T }).toBe(true);
+        await count(over.locator('.dp-exec svg .dp-exec__band')).toBeGreaterThanOrEqual(1);
+        await text(over.locator('.dp-exec__gaps')).toBe(GAPS_NONE);
+        // the table names each hourly column by its own stored hour (a whole hour), never by its slot’s start (the window ends at whatever millisecond the page asked; the fixtures hold three days of hours, so a few rows of the sixty)
+        await over.getByRole('button', { name: 'Table view' }).click();
+        await expect.poll(() => over.locator('.dph-table .dph-trow:not(.dp-trow--head):not(.dph-trow--gap) [role=cell]:first-child').allTextContents(), { timeout: T }).toSatisfy((ts: string[]) => ts.length >= 5 && ts.every((t) => /:00\s?UTC$/.test(t.trim())));
+        expect(Date.now() % HOUR).not.toBe(0);
+        await over.getByRole('button', { name: 'Chart view' }).click();
+        // the change rows, worded, the owner as the address control
+        await count(over.locator('.dp-changes__list li')).toBe(4);
+        await text(over.locator('.dp-changes__list')).toContain('withdrawn from pool 3005 by');
+        await text(over.locator('.dp-changes__list')).toContain('order');
+        await text(over.locator('.dp-changes__list')).toContain('the pool’s reserves grew in pool 3439');
+        await count(over.locator('.dp-changes__list .xaddr')).toBe(3);
+        // the cost line from the minute's own cost, and what was left out
+        await text(over.locator('.dp-cost')).toMatch(/\d+ requests, [\d.]+ KB read, [\d.]+ (ms|s) of reading/);
+        await text(over.locator('.dp-leftout')).toContain('pool 3020');
+        await text(over.locator('.dp-leftout')).toContain('The Namada side');
+        await count(over.locator('.srcb')).toBeGreaterThanOrEqual(2);
+        expect(errors).toEqual([]);
+      } finally {
+        await ctx.close();
+      }
+    }, 90_000);
+
+    it(`${w} wide, who holds it: the owners sorted by share with the address control, pool chips, the coins and USD resting, what is held and since when; a disclosure listing each item; replaced this week from the change rows; the hour's checks`, async () => {
+      const { page, ctx, errors } = await open(w, h);
+      try {
+        await settled(page);
+        const who = page.locator('.dp-who');
+        await count(who.locator('details.dp-orow')).toBe(OWNERS.owners.length);
+        await text(who.locator('.dp-who__totals')).toContain(`${OWNERS.owners.length} owners`);
+        // sorted by share: the first row holds the largest share, and the rows never rise
+        const shares = await who.locator('.dp-orow__share').allTextContents();
+        const nums = shares.map((t) => parseFloat(t.replace(/[^\d.]/g, '')));
+        for (let i = 1; i < nums.length; i++) expect(nums[i]).toBeLessThanOrEqual(nums[i - 1] + 1e-9);
+        const first = who.locator('details.dp-orow').first();
+        await text(first.locator('.dp-orow__pools')).toContain('order book 3008');
+        await text(first.locator('.dp-orow__holds')).toMatch(/\d+ orders/);
+        await text(first.locator('.dp-orow__nam')).toContain('NAM');
+        await text(first.locator('.dp-orow__usd')).toMatch(/^\$/);
+        await text(first.locator('.dp-orow__since')).toMatch(/\d{4}/);
+        // the owner whose order was pulled and placed again carries the count
+        await count(who.locator('.dp-orow__rep', { hasText: 'replaced 1 time this week' })).toBe(1);
+        // the disclosure lists each order's price and what is left of it
+        await first.locator('summary').click();
+        await seen(first.locator('.dp-orow__items li'));
+        await count(first.locator('.dp-orow__items li')).toBe(OWNERS.owners[0].items.length);
+        await text(first.locator('.dp-orow__items li').first()).toMatch(/order \d+ at [\d.]+: [\d,.]+ of [\d,.]+ (NAM|USD) left/);
+        // a position owner's item names its range and that it holds the price
+        const posRow = who.locator('details.dp-orow', { hasText: '1 position' }).first();
+        await posRow.locator('summary').click();
+        await text(posRow.locator('.dp-orow__items')).toContain('position ');
+        // the address control opens the address sheet, as the holders list does
+        await first.locator('.xaddr').first().click();
+        await seen(page.locator('dialog[open]'));
+        await page.keyboard.press('Escape');
+        // the hour's own checks, each with its word
+        await text(who.locator('.dp-inv')).toContain('holds: the positions in range add up to the pool’s current liquidity');
+        await seen(who.locator('.srcb'));
+        expect(errors).toEqual([]);
+      } finally {
+        await ctx.close();
+      }
+    }, 90_000);
+  }
+
 
   it('Home and Trade carry the two quotable numbers with the minute’s time, linking to /depth', async () => {
     for (const path of ['/', '/trade']) {

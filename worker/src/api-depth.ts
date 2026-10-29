@@ -83,10 +83,14 @@ export const LATEST_AND_STATES_SQL = kvManySql([KV_KEYS.latest, KV_KEYS.states])
 export const HISTORY_COLUMNS = 'at, height, ref_usd, spot_usd, bid_1, bid_2, bid_5, bid_10, bid_25, bid_50, ask_1, ask_2, ask_5, ask_10, ask_25, ask_50, sell_1k, sell_10k, sell_100k, sell_1m, buy_1k, buy_10k, buy_100k, buy_1m, best_bid, best_ask, bid_usd, ask_nam, note';
 /** The history read: one primary-key range (pool_id, minute | hour) in step order, at most HISTORY_ROWS_MAX rows (plan C7). */
 export const HISTORY_MINUTE_SQL = `SELECT minute AS t, ${HISTORY_COLUMNS} FROM depth_minute WHERE pool_id = ?1 AND minute >= ?2 AND minute < ?3 ORDER BY minute LIMIT ?4`;
-export const HISTORY_HOUR_SQL = `SELECT hour AS t, ${HISTORY_COLUMNS} FROM depth_hourly WHERE pool_id = ?1 AND hour >= ?2 AND hour < ?3 ORDER BY hour LIMIT ?4`;
-/** The first stored step of the pool: the left edge of the primary key, no row walked. */
-export const HISTORY_START_MINUTE_SQL = 'SELECT MIN(minute) AS start FROM depth_minute WHERE pool_id = ?1';
-export const HISTORY_START_HOUR_SQL = 'SELECT MIN(hour) AS start FROM depth_hourly WHERE pool_id = ?1';
+/** The hourly rows add the hour's own range of the quotable figures (worker/src/depth/sql.ts DEPTH_HOURLY_EXTRA) and its count of minutes. */
+export const HISTORY_HOUR_SQL = `SELECT hour AS t, ${HISTORY_COLUMNS}, sell_10k_lo, sell_10k_hi, bid_10_lo, bid_10_hi, n FROM depth_hourly WHERE pool_id = ?1 AND hour >= ?2 AND hour < ?3 ORDER BY hour LIMIT ?4`;
+/**
+ * The first stored minute and the first stored hour of the pool in one statement: each the left edge of its table's
+ * primary key, no row walked. The step's own start runs the gap arithmetic; the earlier of the two is when depth was
+ * first recorded (recordedSince), which the minute table alone cannot say once its retention has passed.
+ */
+export const HISTORY_START_SQL = 'SELECT (SELECT MIN(minute) FROM depth_minute WHERE pool_id = ?1) AS start_minute, (SELECT MIN(hour) FROM depth_hourly WHERE pool_id = ?1) AS start_hour';
 
 /**
  * The heat read of the aggregate's rows: a day at every minute, a week at the last minute of each five (the key's own
@@ -234,6 +238,7 @@ const pointOf = (r: Record<string, unknown>): DepthHistoryPoint => ({
   bid: [r.bid_1, r.bid_2, r.bid_5, r.bid_10, r.bid_25, r.bid_50].map(num), ask: [r.ask_1, r.ask_2, r.ask_5, r.ask_10, r.ask_25, r.ask_50].map(num),
   sell: [r.sell_1k, r.sell_10k, r.sell_100k, r.sell_1m].map(num), buy: [r.buy_1k, r.buy_10k, r.buy_100k, r.buy_1m].map(num),
   bestBid: num(r.best_bid), bestAsk: num(r.best_ask), bidUsd: num(r.bid_usd), askNam: num(r.ask_nam), note: typeof r.note === 'string' ? r.note : null,
+  ...(r.n != null ? { hour: { sellLo: num(r.sell_10k_lo), sellHi: num(r.sell_10k_hi), bidLo: num(r.bid_10_lo), bidHi: num(r.bid_10_hi), n: Number(r.n) } } : {}),
 });
 
 /** One provenance line for a read of stored rows: no URL (nothing outside was asked) but the table and the key range, the newest row's own time and height, the rows' size. */
@@ -249,13 +254,16 @@ export async function readHistory(db: D1Database, cfg: DepthConfig, ask: History
   // one row past the cap is asked for, so a window that holds exactly the cap (a whole retention of minutes) is not said to be cut
   const [range, startRow] = await db.batch([
     db.prepare(minute ? HISTORY_MINUTE_SQL : HISTORY_HOUR_SQL).bind(pool, from, to, limit + 1),
-    db.prepare(minute ? HISTORY_START_MINUTE_SQL : HISTORY_START_HOUR_SQL).bind(pool),
+    db.prepare(HISTORY_START_SQL).bind(pool),
   ]);
   const read = (range.results ?? []) as Record<string, unknown>[];
   const cut = read.length > limit;
   const rows = cut ? read.slice(0, limit) : read;
   const points = rows.map(pointOf);
-  const start = num((startRow.results?.[0] as { start?: unknown } | undefined)?.start);
+  const starts = startRow.results?.[0] as { start_minute?: unknown; start_hour?: unknown } | undefined;
+  const startMinute = num(starts?.start_minute), startHour = num(starts?.start_hour);
+  const start = minute ? startMinute : startHour;
+  const recordedSince = startMinute != null && startHour != null ? Math.min(startMinute, startHour) : startMinute ?? startHour;
   const stepMs = minute ? MIN_MS : HOUR_MS;
   // a step is a gap only once its row is due: inside the known span, up to what the writer has had time to write, and
   // never past the cap (what lies past the last row read is not known to be missing)
@@ -264,7 +272,7 @@ export async function readHistory(db: D1Database, cfg: DepthConfig, ask: History
   const table = minute ? 'depth_minute' : 'depth_hourly';
   const notes = [minute ? minuteRowsKept(Math.round(cfg.caps.retentionMs / DAY_MS)) : null, cut ? historyCut(limit) : null, start == null ? `nothing is stored for pool ${pool} at this step` : start > from ? `stored from ${fmtUtcLong(start)}` : null].filter((x): x is string => !!x);
   return {
-    pool, refPool: cfg.refPoolId, step, from, to, asOf, points, gaps, start, cut, note: notes.length ? notes.join('; ') : null,
+    pool, refPool: cfg.refPoolId, step, from, to, asOf, points, gaps, start, recordedSince, cut, note: notes.length ? notes.join('; ') : null,
     prov: [storedProv(historyRowsWords(table, pool, points.length, Math.floor((to - 1) / stepMs) - Math.ceil(from / stepMs) + 1), table, { pool_id: pool, from, to, limit }, points, asOf)],
   };
 }

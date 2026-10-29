@@ -9,10 +9,10 @@
 // it was fetched, so a figure is never shown fresh beside a failure (N2). A server without the routes (404) is
 // `unserved`: a missing page with its reason, never a fault, and not asked again.
 import { useCallback, useEffect, useRef, useState } from 'react';
-import type { DepthHistoryResponse, DepthQuoteResponse, DepthResponse } from '../../../../shared/depth';
-import { CURVE_TRADES_DAYS, DEPTH_FAILED, DEPTH_REFRESH_MS, DEPTH_UNSERVED, QUOTE_DEBOUNCE_MS, QUOTE_FAILED, TRADES_FAILED, TRADES_NO_PAGE, roundQuoteNam } from '../../../../shared/depth';
+import type { DepthChangeRow, DepthChangesResponse, DepthHeatResponse, DepthHistoryResponse, DepthOwnersApiResponse, DepthQuoteResponse, DepthResponse } from '../../../../shared/depth';
+import { CHANGES_LIMIT_MAX, CURVE_TRADES_DAYS, DEPTH_FAILED, DEPTH_REFRESH_MS, DEPTH_UNSERVED, QUOTE_DEBOUNCE_MS, QUOTE_FAILED, TRADES_FAILED, TRADES_NO_PAGE, roundQuoteNam } from '../../../../shared/depth';
 import { TRADES_TAPE_LIMIT, type Provenance, type TradeRow } from '../../../../shared/types';
-import { ApiError, fetchDepth, fetchDepthHistory, fetchDepthQuote, fetchTrades, isNotServed } from '../../api';
+import { ApiError, fetchDepth, fetchDepthChanges, fetchDepthHeat, fetchDepthHistory, fetchDepthOwners, fetchDepthQuote, fetchTrades, isNotServed } from '../../api';
 import { useVisible } from '../../app/index';
 
 /** The stored trades' source name, as the Activity tape names it (a stamp's `source`, shown in the sheet, never in running text). */
@@ -196,5 +196,72 @@ export function useTradesWeek(at: number | null) {
     },
     at ? null : 5 * 60_000,
     TRADES_FAILED,
+  );
+}
+
+// ---------------------------------------------------------------- step S6: the time view and the owners
+
+/** The heat bands of the last `days` (as of `at` under Rewind), asked again every DEPTH_REFRESH_MS while live and visible. */
+export const useDepthHeat = (days: number, at: number | null) =>
+  useLoaded<DepthHeatResponse>(`heat:${days}:${at ?? 'live'}`, (signal) => fetchDepthHeat(days, at, { signal }), at ? null : DEPTH_REFRESH_MS, DEPTH_FAILED);
+
+/**
+ * The stored figures of the aggregate over the last `days` for the executable line: minute rows up to a week (the row cap
+ * holds thirty days of minutes, but a week is already ten thousand points), hourly rows for the month, each with the
+ * hour's own lowest and highest. The window's end is now or the rewound moment.
+ */
+export const useDepthHistoryWindow = (days: number, at: number | null) => {
+  const step: '1m' | '1h' = days > 7 ? '1h' : '1m';
+  return useLoaded<DepthHistoryResponse>(
+    `hist:${days}:${at ?? 'live'}`,
+    (signal) => {
+      const end = at ?? Date.now();
+      return fetchDepthHistory({ pool: 'all', from: end - days * 86_400_000, to: end + 1, step, asOf: at }, { signal });
+    },
+    at ? null : DEPTH_REFRESH_MS,
+    DEPTH_FAILED,
+  );
+};
+
+/** The newest hour's owners: live only (the kv row holds the newest hour; a rewound page says so). */
+export const useDepthOwners = (live: boolean) => useLoaded<DepthOwnersApiResponse>(live ? 'owners' : null, (signal) => fetchDepthOwners({ signal }), 5 * 60_000, DEPTH_FAILED);
+
+/** The change rows read for a window: at most this many pages of CHANGES_LIMIT_MAX rows (the newest). */
+export const CHANGES_PAGES_MAX = 5;
+export interface ChangesWindow {
+  rows: DepthChangeRow[];
+  /** True when the window held more rows than the pages read: the rows are the newest. */
+  cut: boolean;
+  from: number;
+  to: number;
+  prov: DepthChangesResponse['prov'];
+}
+/**
+ * The change rows of the last `days` (to `at` under Rewind: the route takes no `at`, so the rows after the moment are
+ * dropped here and the pages run until the window's start or the page cap). Newest first.
+ */
+export function useDepthChanges(days: number, at: number | null) {
+  return useLoaded<ChangesWindow>(
+    `changes:${days}:${at ?? 'live'}`,
+    async (signal) => {
+      const to = at ?? Date.now();
+      const from = to - days * 86_400_000;
+      const rows: DepthChangeRow[] = [];
+      let before: string | null = null;
+      let cut = false;
+      let prov: DepthChangesResponse['prov'] = [];
+      for (let page = 0; page < CHANGES_PAGES_MAX; page++) {
+        const r = await fetchDepthChanges({ before, limit: CHANGES_LIMIT_MAX }, { signal });
+        if (page === 0 || !prov.length) prov = r.prov;
+        rows.push(...r.rows.filter((x) => x.ts >= from && x.ts <= to));
+        const oldest = r.rows[r.rows.length - 1];
+        if (!r.next || !oldest || oldest.ts < from) break;
+        before = r.next;
+        if (page === CHANGES_PAGES_MAX - 1) cut = true;
+      }
+      return { rows, cut, from, to, prov };
+    },
+    at ? null : DEPTH_REFRESH_MS,
+    DEPTH_FAILED,
   );
 }

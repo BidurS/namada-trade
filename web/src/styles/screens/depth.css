@@ -156,3 +156,111 @@
     .dp-book__a.is-off, .dp-book__b.is-off { display: none; }
   }
 }
+
+/* ==========================================================================
+   Depth, step S6: the time band (view 3: the heat, the executable line, the
+   change rows, the cost line) and the owners band (view 4). The heat cells
+   paint in the --heat-1 ... --heat-5 ramp (one hue, five steps, validated as an
+   ordinal ramp in both themes); the hairline is --c-mark; the trade dots are
+   --c-ink-2. Reads --c-* ground tokens and the ramp only.
+   ========================================================================== */
+@layer components {
+  .dp-overband, .dp-whoband { padding-block: var(--s-7); }
+  .dp-overband .eyebrow, .dp-whoband .eyebrow { margin-bottom: var(--s-3); }
+  .dp-over, .dp-who { display: grid; gap: var(--s-4); min-width: 0; }
+  .dp-over__cols, .dp-over__start { max-width: 64ch; }
+
+  /* ---------- the heat ---------- */
+  .dph { display: grid; gap: var(--s-3); margin: 0; min-width: 0; }
+  .dph-plot { height: 260px; }
+  .dph-cells { position: absolute; left: 0; top: 0; display: block; pointer-events: none; }
+  .dph-plot > svg { position: absolute; inset: 0; }
+  .dph-grid { opacity: .6; }
+  .dph-ref { fill: none; stroke: var(--c-mark); stroke-width: 1.5; stroke-linejoin: round; }
+  .dph-trade { fill: var(--c-ink-2); stroke: var(--c-bg); stroke-width: 1; opacity: .75; }
+  .dph-cursor { fill: none; stroke: var(--c-mark); stroke-width: 1.5; }
+  .dph-readout { color: var(--c-ink); font-size: var(--t-13); }
+  .dph-sw { display: inline-block; width: 14px; height: 14px; margin-right: var(--s-2); border-radius: var(--r-1); vertical-align: middle; }
+  .dph-sw--1 { background: var(--heat-1); }
+  .dph-sw--2 { background: var(--heat-2); }
+  .dph-sw--3 { background: var(--heat-3); }
+  .dph-sw--4 { background: var(--heat-4); }
+  .dph-sw--5 { background: var(--heat-5); }
+  .dph-sw--blank { background: transparent; border: 1px solid var(--c-line-strong); }
+  .dph-sw--gap { background: transparent; border: 1px dashed var(--c-line-strong); }
+  .dph-key-ref { border-top-color: var(--c-mark); }
+  .dph-key-trade { display: inline-block; width: 10px; height: 10px; margin-right: var(--s-2); border-radius: 50%; background: var(--c-ink-2); vertical-align: middle; }
+  .dph-key li { display: inline-flex; align-items: center; }
+  .dph-trow { grid-template-columns: minmax(0, 1.2fr) minmax(0, 1fr) minmax(0, 1.6fr) minmax(0, 1fr) minmax(0, 1.6fr) minmax(0, 1fr); }
+  .dph-trow--gap { color: var(--c-ink-2); }
+  .dph-table__note { padding: var(--s-2) 0; }
+  .dph-gapcell { font-family: var(--font-text); }
+
+  /* ---------- the executable line ---------- */
+  .dp-exec .chartsec__h { font-size: var(--t-18); line-height: var(--lh-18); }
+  .dp-exec__plot { height: 180px; }
+  .dp-exec__gaps { max-width: 64ch; }
+  .dp-exec__gap { color: var(--c-ink); }
+  .key__sw--band { background: var(--c-ink-3); opacity: .4; }
+
+  /* ---------- the change rows ---------- */
+  .dp-changes { display: grid; gap: var(--s-3); }
+  .dp-changes__list { display: grid; list-style: none; padding: 0; margin: 0; border-top: 1px solid var(--c-line); }
+  .dp-changes__list li { padding: var(--s-3) 0; border-bottom: 1px solid var(--c-line); font-size: var(--t-13); line-height: 20px; overflow-wrap: anywhere; }
+  .dp-changes__list b { font-weight: var(--w-medium); font-family: var(--font-code); font-size: var(--t-12); }
+  .dp-changes__owner { display: inline; }
+
+  /* ---------- the cost line and what was left out ---------- */
+  .dp-cost { display: grid; gap: var(--s-3); padding-top: var(--s-4); border-top: 1px solid var(--c-line); }
+  .dp-cost .cap, .dp-leftout { max-width: 64ch; }
+  .dp-cost .cap b { font-weight: var(--w-medium); color: var(--c-ink); }
+  .dp-leftout { display: grid; gap: var(--s-2); list-style: none; padding: 0; margin: 0; font-size: var(--t-13); line-height: 20px; color: var(--c-ink-2); overflow-wrap: anywhere; }
+  .dp-cost .cap { overflow-wrap: anywhere; }
+
+  /* ---------- who holds it ---------- */
+  .dp-who__totals { max-width: 72ch; }
+  .dp-who__totals b { font-weight: var(--w-medium); color: var(--c-ink); }
+  .dp-orows { display: grid; border-top: 2px solid var(--c-ink); min-width: 0; }
+  .dp-orow { border-bottom: 1px solid var(--c-line); min-width: 0; }
+  .dp-orow--head { display: none; }
+  .dp-orow > summary { position: relative; display: grid; grid-template-columns: minmax(0, 1fr) auto; grid-template-areas: "owner share" "pools pools" "nam usd" "holds since"; gap: 4px var(--s-3); align-items: center; min-height: 44px; padding: 10px 8px; margin-inline: -8px; font-size: var(--t-13); line-height: 18px; list-style: none; cursor: pointer; isolation: isolate; }
+  .dp-orow > summary::-webkit-details-marker { display: none; }
+  .dp-orow > summary:hover { background: var(--c-hover); }
+  .dp-orow > summary:focus-visible { outline: var(--ring-w) solid var(--c-focus); outline-offset: -2px; }
+  .dp-orow__owner { grid-area: owner; display: flex; flex-wrap: wrap; align-items: center; gap: 4px var(--s-2); min-width: 0; }
+  .dp-orow__owner .xaddr { font-weight: var(--w-medium); }
+  .dp-orow__rep { font-size: var(--t-12); line-height: 16px; color: var(--c-ink-2); }
+  .dp-orow__pools { grid-area: pools; display: flex; flex-wrap: wrap; gap: 4px 6px; }
+  .dp-orow__pools:empty { display: none; }
+  .dp-orow__nam { grid-area: nam; font-family: var(--font-code); font-size: var(--t-12); }
+  .dp-orow small { font-size: var(--t-12); line-height: 16px; color: var(--c-ink-2); }
+  .dp-orow__usd { grid-area: usd; font-family: var(--font-code); font-size: var(--t-12); text-align: right; }
+  .dp-orow__share { grid-area: share; position: relative; min-width: 64px; padding: 2px 6px; font-family: var(--font-code); font-size: var(--t-12); text-align: right; }
+  .dp-orow__bar { position: absolute; right: 0; top: 0; bottom: 0; z-index: -1; background: color-mix(in srgb, var(--buy) 18%, transparent); pointer-events: none; }
+  .dp-orow__holds { grid-area: holds; color: var(--c-ink-2); }
+  .dp-orow__since { grid-area: since; font-family: var(--font-code); font-size: var(--t-12); text-align: right; color: var(--c-ink-2); }
+  .dp-orow__items { display: grid; gap: var(--s-2); list-style: none; margin: 0; padding: 0 0 var(--s-3) var(--s-4); font-size: var(--t-13); line-height: 20px; overflow-wrap: anywhere; }
+  .dp-orow__items li { display: flex; flex-wrap: wrap; align-items: center; gap: 4px var(--s-2); }
+  .dp-orow__when { color: var(--c-ink-2); white-space: nowrap; }
+  .dp-inv { display: grid; gap: var(--s-2); margin: 0; font-size: var(--t-13); line-height: 20px; color: var(--c-ink-2); max-width: 72ch; }
+  .dp-inv dt { font-weight: var(--w-medium); color: var(--c-ink); }
+  .dp-inv dd b { font-weight: var(--w-medium); color: var(--c-ink); }
+
+  @media (min-width: 640px) {
+    .dph-plot { height: 320px; }
+    .dp-exec__plot { height: 200px; }
+  }
+  @media (min-width: 1024px) {
+    .dp-overband, .dp-whoband { padding-block: var(--s-8); }
+    .dp-orow--head { display: grid; }
+    .dp-orow--head, .dp-orow > summary { grid-template-columns: minmax(0, 2fr) minmax(0, 1.6fr) minmax(0, 1fr) minmax(0, 1fr) 96px minmax(0, 1fr) 110px; grid-template-areas: "owner pools nam usd share holds since"; }
+    .dp-orow--head { min-height: 32px; padding: 6px 8px; margin-inline: -8px; gap: var(--s-3); align-items: center; color: var(--c-ink-2); font-size: var(--t-11); line-height: 16px; font-weight: var(--w-medium); letter-spacing: var(--track-caps); text-transform: uppercase; }
+    .dp-orow--head > span:nth-child(1) { grid-area: owner; }
+    .dp-orow--head > span:nth-child(2) { grid-area: pools; }
+    .dp-orow--head > span:nth-child(3) { grid-area: nam; }
+    .dp-orow--head > span:nth-child(4) { grid-area: usd; text-align: right; }
+    .dp-orow--head > span:nth-child(5) { grid-area: share; text-align: right; }
+    .dp-orow--head > span:nth-child(6) { grid-area: holds; }
+    .dp-orow--head > span:nth-child(7) { grid-area: since; text-align: right; }
+  }
+}

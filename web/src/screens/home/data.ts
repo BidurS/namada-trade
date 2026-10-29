@@ -131,19 +131,8 @@ export function useAgedRes<T>(r: Res<T>, pageStale: boolean, receivedAt: number 
   return aged ? { ...r, data, old: true, oldWhy: note } : r;
 }
 
-/** True from the given width up, following resizes (the sparkline is fetched only where it shows). */
-export function useMinWidth(px: number): boolean {
-  const q = `(min-width: ${px}px)`;
-  const [on, setOn] = useState(() => typeof window !== 'undefined' && window.matchMedia(q).matches);
-  useEffect(() => {
-    const m = window.matchMedia(q);
-    const f = () => setOn(m.matches);
-    f();
-    m.addEventListener('change', f);
-    return () => m.removeEventListener('change', f);
-  }, [q]);
-  return on;
-}
+/** True from the given width up, following resizes (the sparkline is fetched only where it shows); the hook lives with the UI kit, the depth page uses it too. */
+export { useMinWidth } from '../../ui/useMinWidth';
 
 const MIN = 60_000;
 

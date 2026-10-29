@@ -76,6 +76,15 @@
     --buy-bg:        color-mix(in srgb, var(--buy) 24%, transparent);    /* tick flash only (price or net-flow value changed), fades to transparent in 320 ms */
     --sell-bg:       color-mix(in srgb, var(--sell) 24%, transparent);
 
+    /* The heat ramp (depth page, view 3): one hue (the --buy hue, OKLCH 255), five steps faint to strong, dark to light
+       on black; validated as an ordinal ramp (test/depth-palette.test.ts: monotone lightness, adjacent steps 0.06 apart
+       or more, the faintest step 2.46:1 on --bg). A band under the faintest step's floor is blank, never a sixth step. */
+    --heat-1:        #0b4c92;
+    --heat-2:        #316cb5;
+    --heat-3:        #528ed9;
+    --heat-4:        #73b1ff;
+    --heat-5:        #b3d4ff;
+
     /* Status. Only for fresh / old / no data / sources disagree, always beside a word */
     --good:          #2fbf2f;   /* fresh.    8.6 on bg                                   */
     --warn:          #ff9d00;   /* old.      10.1                                        */
@@ -186,6 +195,12 @@
     --shield: #6250d6;          /* 4.9/5.4 */
     --pos:  #b02f63;            /* 5.2/5.7 */
     --tag-tint: 5%;
+    /* the heat ramp on paper: the same hue, light to dark, the faintest step 2.10:1 on --bg */
+    --heat-1: #70adfb;
+    --heat-2: #4f8bd6;
+    --heat-3: #2e69b2;
+    --heat-4: #06498e;
+    --heat-5: #032d5c;
 
     --good: #0a7a0a;            /* 5.0 / 5.5 / 4.7 */
     --warn: #a84a07;            /* darkened from the brief's #b45309 (4.25 on surface-2): 5.2 / 5.8 / 4.9 */

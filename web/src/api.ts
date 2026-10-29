@@ -10,7 +10,7 @@ export type {
   SeriesResponse, PriceChangesResponse, VolumeResponse, PairsResponse, TradesResponse, ValuesResponse,
 };
 
-import type { DepthHistoryResponse, DepthQuoteResponse, DepthResponse } from '../../shared/depth';
+import type { DepthChangesResponse, DepthHeatResponse, DepthHistoryResponse, DepthOwnersApiResponse, DepthQuoteResponse, DepthResponse } from '../../shared/depth';
 import { authFetch } from './lib/auth';
 import { encodeFlowCursor } from '../../shared/paging';
 import { filterFlows, plainNotes, serverIgnoredFlowFilter, withAddressReport, withFlow, withHolder, withOverview, withPressure } from './lib/compat';
@@ -518,6 +518,19 @@ export function depthHistoryParams(o: DepthHistoryQuery): URLSearchParams {
 export const fetchDepthHistory = (o: DepthHistoryQuery = {}, opts: RequestOpts = {}) => {
   const q = depthHistoryParams(o).toString();
   return get<DepthHistoryResponse>(`/api/depth/history${q ? `?${q}` : ''}`, opts);
+};
+/** The aggregate's heat bands over the last `days` (1, 7 or 30; the Worker picks the step), as of `asOf` under Rewind. */
+export const fetchDepthHeat = (days: number, asOf: number | null = null, opts: RequestOpts = {}) => get<DepthHeatResponse>(`/api/depth/heat${at(asOf, new URLSearchParams({ days: String(days) }))}`, opts);
+/** The newest hour's position and order owners (live only: the kv row holds the newest hour). */
+export const fetchDepthOwners = (opts: RequestOpts = {}) => get<DepthOwnersApiResponse>('/api/depth/owners', opts);
+/** A page of depth_changes, newest first; `before` is the previous page's cursor. The route takes no `at`: a rewound page stops at the rows older than its moment. */
+export const fetchDepthChanges = (o: { pool?: string | null; before?: string | null; limit?: number } = {}, opts: RequestOpts = {}) => {
+  const q = new URLSearchParams();
+  if (o.pool) q.set('pool', o.pool);
+  if (o.before) q.set('before', o.before);
+  if (o.limit) q.set('limit', String(o.limit));
+  const s = q.toString();
+  return get<DepthChangesResponse>(`/api/depth/changes${s ? `?${s}` : ''}`, opts);
 };
 
 export async function saveLabel(address: string, label: string, category = 'watch', note = ''): Promise<{ ok: boolean; error?: string }> {

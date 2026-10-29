@@ -7,7 +7,8 @@
 // whole reserves, from that pool's own curve in the answer (thinned to 120 points a side on the grid rebuilt here from the
 // reference price with shared/depth-grid.ts), as shares of the band's own figure.
 import type { DepthCurve, DepthFill, DepthHistoryPoint, DepthHistoryResponse, DepthLevel, DepthPool, DepthPoolType, DepthQuoteResponse, DepthResponse } from '../../../../shared/depth';
-import { CURVE_POOL_POINTS_MAX, DEPTH_PLAIN_SOURCE, DEPTH_QUOTABLE_SIZE, DEPTH_SIZES, DEPTH_SOURCES, LADDER_FOLD_PCT, LADDER_MID_PCT, poolWord } from '../../../../shared/depth';
+import { CURVE_POOL_POINTS_MAX, DEPTH_PLAIN_SOURCE, DEPTH_QUOTABLE_SIZE, DEPTH_SIZES, DEPTH_SOURCES, FULL_RANGE, LADDER_FOLD_PCT, LADDER_MID_PCT, poolWord, rangeWords } from '../../../../shared/depth';
+import { fmtSig } from '../../../../shared/format';
 import { buildGrid, cumOn, thinIndices } from '../../../../shared/depth-grid';
 import { SIZE_SLICE_JUMP_FROM_ZERO_PCT, SIZE_SLICE_JUMP_MIN_PCT, SIZE_SLICE_JUMP_RATIO } from '../../../../shared/size-table';
 import { tradeValue } from '../../../../shared/settle';
@@ -457,6 +458,9 @@ export const levelsIn = (d: DepthResponse, pool: string, b: Band): DepthLevel[] 
 
 /** A typed amount is parsed as the Trade ticket parses it (shared/format.ts). */
 export { parseAmount };
+
+/** A range in words: the two prices at significant digits, or the whole range when the position spans every price the pool can reach (the chain's own extremes). */
+export const priceRange = (lo: number | null, hi: number | null): string => (lo != null && hi != null && lo <= 1e-9 && hi >= 1e9 ? FULL_RANGE : rangeWords(lo != null ? fmtSig(lo) : '—', hi != null ? fmtSig(hi) : '—'));
 
 /** "10k", "1M" for a chip or a mark. */
 export const shortSize = (n: number): string => (n >= 1e6 ? `${+(n / 1e6).toFixed(2)}M` : n >= 1e3 ? `${+(n / 1e3).toFixed(1)}k` : String(n));

@@ -351,6 +351,27 @@ describe('GET /api/depth/history: the stored rows by primary-key range', () => {
     expect(body.points.some((p) => p.t > hole - MIN && p.t < hole + MIN)).toBe(false);
     expect(body.gaps).toEqual([{ from: hole, to: hole + MIN, why: GAP_MINUTE }]);
     expect(body.start).toBe(NOW - H);
+    expect(body.recordedSince).toBe(NOW - H);
+  });
+
+  it('recordedSince is the earlier of the first minute row and the first hourly row at either step: after the minute rows’ retention the one-minute window still names the first recording, while its own start is the retention’s edge', async () => {
+    at(NOW);
+    const db = testD1();
+    // the hourly rows begin forty days back (kept forever); the minute rows only thirty (the retention delete took the rest)
+    seedHours(db, 'all', NOW - 40 * D, NOW - H);
+    seedMinutes(db, 'all', NOW - 30 * D, NOW);
+    const minutes = (await call<DepthHistoryResponse>(db, '/api/depth/history')).body;
+    expect(minutes.start).toBe(NOW - 30 * D);
+    expect(minutes.recordedSince).toBe(NOW - 40 * D);
+    expect(minutes.gaps).toEqual([]);
+    const hours = (await call<DepthHistoryResponse>(db, `/api/depth/history?step=1h&from=${NOW - 2 * D}`)).body;
+    expect(hours.start).toBe(NOW - 40 * D);
+    expect(hours.recordedSince).toBe(NOW - 40 * D);
+    // the minute rows alone (the first hour has not closed yet): the one start there is
+    const young = testD1();
+    seedMinutes(young, 'all', NOW - 30 * MIN, NOW);
+    expect((await call<DepthHistoryResponse>(young, '/api/depth/history')).body.recordedSince).toBe(NOW - 30 * MIN);
+    expect((await call<DepthHistoryResponse>(young, '/api/depth/history?step=1h')).body).toMatchObject({ start: null, recordedSince: NOW - 30 * MIN, points: [] });
   });
 
   it('hours read the hourly rows; a missing hour is a gap once its writer is due; a window before the start says when it starts', async () => {
@@ -432,7 +453,7 @@ describe('GET /api/depth/history: the stored rows by primary-key range', () => {
     at(NOW);
     const db = testD1();
     const { body } = await call<DepthHistoryResponse>(db, '/api/depth/history?pool=3005');
-    expect(body).toMatchObject({ points: [], gaps: [], start: null, cut: false });
+    expect(body).toMatchObject({ points: [], gaps: [], start: null, recordedSince: null, cut: false });
     expect(body.note).toContain('nothing is stored for pool 3005 at this step');
     for (const [q, words] of [
       ['step=5m', 'step must be 1m or 1h.'], ['pool=abc', 'pool must be a pool id or all (every pool summed).'], ['from=x', 'from must be a unix time in milliseconds or a day (YYYY-MM-DD).'],
@@ -710,7 +731,7 @@ describe('query plans: every statement the routes run', () => {
   const plan = (db: TestD1, sql: string) => all(db, `EXPLAIN QUERY PLAN ${sql}`, ...Array.from({ length: nParams(sql) }, () => 1)).map((r) => r.detail).join(' | ');
   const statements: [string, string][] = [
     ['LATEST_SQL', A.LATEST_SQL], ['LATEST_AND_STATES_SQL', A.LATEST_AND_STATES_SQL],
-    ['HISTORY_MINUTE_SQL', A.HISTORY_MINUTE_SQL], ['HISTORY_HOUR_SQL', A.HISTORY_HOUR_SQL], ['HISTORY_START_MINUTE_SQL', A.HISTORY_START_MINUTE_SQL], ['HISTORY_START_HOUR_SQL', A.HISTORY_START_HOUR_SQL],
+    ['HISTORY_MINUTE_SQL', A.HISTORY_MINUTE_SQL], ['HISTORY_HOUR_SQL', A.HISTORY_HOUR_SQL], ['HISTORY_START_SQL', A.HISTORY_START_SQL],
     ['HEAT_MINUTE_SQL', A.HEAT_MINUTE_SQL], ['HEAT_FIVE_SQL', A.HEAT_FIVE_SQL], ['HEAT_HOUR_SQL', A.HEAT_HOUR_SQL], ['OWNERS_SQL', A.OWNERS_SQL],
     ...[false, true].flatMap((pool) => [false, true].map((tie): [string, string] => [`changesSql(pool ${pool}, tie ${tie})`, A.changesSql({ pool, tie })])),
   ];
@@ -725,7 +746,9 @@ describe('query plans: every statement the routes run', () => {
     }
     expect(plan(db, A.HISTORY_MINUTE_SQL)).toBe('SEARCH depth_minute USING INDEX sqlite_autoindex_depth_minute_1 (pool_id=? AND minute>? AND minute<?)');
     expect(plan(db, A.HISTORY_HOUR_SQL)).toBe('SEARCH depth_hourly USING INDEX sqlite_autoindex_depth_hourly_1 (pool_id=? AND hour>? AND hour<?)');
-    expect(plan(db, A.HISTORY_START_MINUTE_SQL)).toBe('SEARCH depth_minute USING COVERING INDEX sqlite_autoindex_depth_minute_1 (pool_id=?)');
+    // the two starts: each the left edge of its table's primary key, in one statement
+    expect(plan(db, A.HISTORY_START_SQL)).toContain('SEARCH depth_minute USING COVERING INDEX sqlite_autoindex_depth_minute_1 (pool_id=?)');
+    expect(plan(db, A.HISTORY_START_SQL)).toContain('SEARCH depth_hourly USING COVERING INDEX sqlite_autoindex_depth_hourly_1 (pool_id=?)');
     expect(plan(db, A.HEAT_FIVE_SQL)).toBe('SEARCH depth_minute USING INDEX sqlite_autoindex_depth_minute_1 (pool_id=? AND minute>? AND minute<?)');
     expect(plan(db, A.HEAT_HOUR_SQL)).toBe('SEARCH depth_hourly USING INDEX sqlite_autoindex_depth_hourly_1 (pool_id=? AND hour>? AND hour<?)');
     // the owners: the kv row by key, the addresses out of its JSON, each label by the table's primary key

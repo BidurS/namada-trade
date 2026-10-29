@@ -289,6 +289,8 @@ export interface DepthHistoryPoint {
   bidUsd: number | null;
   askNam: number | null;
   note: string | null;
+  /** An hourly row only: the hour's lowest and highest figure for the quotable size sold and for the USD bid within ten percent, and how many minutes it rolled up. */
+  hour?: { sellLo: number | null; sellHi: number | null; bidLo: number | null; bidHi: number | null; n: number };
 }
 export interface DepthHistoryResponse {
   pool: string;
@@ -301,8 +303,14 @@ export interface DepthHistoryResponse {
   points: DepthHistoryPoint[];
   /** Steps in [from, to) with no stored row, merged into runs; never filled in. */
   gaps: { from: number; to: number; why: string }[];
-  /** The first stored step of this pool at this step, or null when nothing is stored. */
+  /** The first stored step of this pool at this step (the gap arithmetic runs from it), or null when nothing is stored. */
   start: number | null;
+  /**
+   * When depth was first recorded for this pool: the earlier of the first minute row and the first hourly row, read
+   * at every step. The minute rows are kept for a retention and the hourly rows forever, so after the retention a
+   * one-minute window's `start` is the retention's edge while this stays the first recording. Null when nothing is stored.
+   */
+  recordedSince: number | null;
   /** The row cap (plan C7): true when the window held more rows than the cap and the answer stops at the cap. */
   cut: boolean;
   note: string | null;
@@ -707,6 +715,148 @@ export const DEPTH_PLAIN_SOURCE = 'Osmosis chain';
 /** The plain words of each read's `what`, for the SourceLine; the raw `what` stays in the sheet. */
 export const provLabel = (what: string) => what;
 
+// ---------------------------------------------------------------------------------------------------- views 3 and 4 (step S6)
+/** The time view. */
+export const OVER_EYEBROW = 'Over time';
+export const OVER_H2 = 'Where the liquidity rested, minute by minute';
+export const overLead = (symbol: string) =>
+  `Time across, price up in USD per ${symbol}. The colour is the USD resting in each band of the reference price, from the stored minutes; the reference pool’s own price is the line, and a stored trade is a dot sized by its ${symbol}. A minute with no stored row is a blank column and the line breaks there; nothing is filled in.`;
+export const LABEL_WINDOW = 'Window';
+/** The three windows are input choices (as a chart's 24h / 7d / 30d), not figures; the value is the days asked of the heat route. */
+export const HEAT_RANGES = [
+  { value: '1', label: '24 h' },
+  { value: '7', label: '7 d' },
+  { value: '30', label: '30 d' },
+] as const;
+export const HEAT_STEP_WORDS: Record<'1m' | '5m' | '1h', string> = { '1m': 'minute', '5m': 'five minutes', '1h': 'hour' };
+/** 'one column per five minutes, 288 of them, 3 blank' */
+export const columnsWords = (n: number, step: string, blank: number) => `one column per ${step}, ${n} of them${blank ? `, ${blank} blank` : ''}`;
+export const PHONE_FIVE = 'On a narrow screen the day is drawn in five-minute columns, the last stored minute of each five.';
+export const HEAT_LEGEND_LABEL = 'USD resting in a band';
+export const legendStep = (lo: string, hi: string) => `${lo} – ${hi}`;
+export const legendTop = (lo: string) => `${lo} and above`;
+export const legendBlank = (floor: string) => `under ${floor}: blank`;
+export const KEY_GAP = 'A blank column: no minute stored';
+export const keyTradesSized = (days: number, symbol: string) => `Stored trade of the last ${days} days, sized by its ${symbol}; bot round trips are left out by the flow index`;
+export const heatReadout = (clock: string, side: 'bid' | 'ask', usd: string, lo: string, hi: string) =>
+  side === 'bid' ? `${clock}: ${usd} resting to buy between ${lo} and ${hi}` : `${clock}: ${usd} for sale between ${lo} and ${hi}`;
+export const heatReadoutBlank = (clock: string, lo: string, hi: string) => `${clock}: nothing above the floor between ${lo} and ${hi}`;
+/** The band straddling the reference price holds both sides: the sum, then each side's own figure. */
+export const heatReadoutBoth = (clock: string, usd: string, bid: string, ask: string, lo: string, hi: string) =>
+  `${clock}: ${usd} resting on both sides between ${lo} and ${hi}: ${bid} to buy under the reference price, ${ask} for sale above it`;
+export const heatGapReadout = (clock: string) => `${clock}: no minute stored`;
+export const HEAT_READOUT_NONE = 'Press or use the arrow keys to read a band at a time.';
+export const HEAT_GROUP_LABEL = 'The bands over time. Left and right move in time, up and down in price.';
+export const heatAria = (n: number, blank: number, lo: string, hi: string, symbol: string, trades: number) =>
+  `USD resting per price band over time: ${n} columns, ${blank} blank, prices from ${lo} to ${hi} USD per ${symbol}, ${trades} stored trades.`;
+export const HEAT_TABLE_LABEL = 'The columns listed: the reference price and the band holding most on each side';
+/** The table lists at most so many rows; it says which: 'every column listed', or '60 of 1,440 columns listed, one in 24, and the last'. */
+export const HEAT_TABLE_ALL = 'every column listed';
+export const tableThinned = (shown: string, n: string, every: string) => `${shown} of ${n} columns listed, one in ${every}, and the last`;
+export const HEAD_TIME = 'Time';
+export const HEAD_REF_PRICE = 'Reference price';
+export const HEAD_BID_MOST = 'Largest bid band';
+export const HEAD_ASK_MOST = 'Largest ask band';
+export const HEAD_BID_ALL = 'Bids in the bands';
+export const HEAD_ASK_ALL = 'Asks in the bands';
+export const HEAT_NO_COLUMN = 'no minute stored';
+export const HEAT_WAITS = 'The time view is drawn from the stored minutes, so it is not shown until they answer.';
+export const HEAT_NONE = 'No minute is stored in this window.';
+/** The honest start, with the first stored minute's date (the history answer's recordedSince: the earlier of the first minute row and the first hourly row, so the retention's edge is never named as the start). */
+export const recordedSince = (when: string) => `Depth has been recorded since ${when}; nothing on the chain gives earlier depth.`;
+/** The gaps the history answer lists for the window, under the executable line: the count, the longest in words (fmtAge), and when it began. */
+export const gapsWords = (n: number, longest: string, began: string) => `${n} ${n === 1 ? 'stretch' : 'stretches'} of this window ${n === 1 ? 'has' : 'have'} no stored row and ${n === 1 ? 'is' : 'are'} drawn blank; the longest, ${longest}, began ${began}`;
+export const GAPS_NONE = 'Every step of this window up to the newest due has a stored row.';
+/** The executable line under the heat. */
+export const execH2 = (nam: string, symbol: string) => `What selling ${nam} ${symbol} fetched, each stored minute`;
+export const execUnit = (symbol: string) => `USD out for the quotable size of ${symbol}, every stored minute; shaded: the lowest and highest of each hour`;
+export const execTakeaway = (nam: string, symbol: string, last: string, lo: string, hi: string) => `Selling ${nam} ${symbol} fetched ${last} at the last stored minute, between ${lo} and ${hi} over the window`;
+export const execOne = (nam: string, symbol: string, last: string) => `Selling ${nam} ${symbol} fetched ${last} at the one stored minute in the window`;
+export const EXEC_NONE = 'No stored minute in this window.';
+export const KEY_BAND_HOUR = 'Shaded: the lowest and highest of each hour';
+export const KEY_EXEC = 'The USD fetched, each stored minute';
+export const EXEC_LOW = 'Low';
+export const EXEC_HIGH = 'High';
+export const EXEC_LAST = 'Last stored minute';
+export const EXEC_READING = 'Reading';
+export const EXEC_READOUT_NONE = 'Press or use the arrow keys to read a minute.';
+export const EXEC_GROUP_LABEL = 'The line. Arrow keys read it minute by minute.';
+export const execGapReadout = (clock: string) => `${clock}: no minute stored`;
+export const SOURCE_OVER = 'Where the time view comes from';
+export const SOURCE_HEAT = 'The heat bands';
+export const SOURCE_EXEC = 'The stored minutes';
+export const SOURCE_HOURS = 'The stored hours';
+export const SOURCE_CHANGES = 'The change rows';
+/** The change rows in the window. */
+export const CHANGES_H3 = 'What moved';
+export const changesInWindow = (n: number) => `${n} changes of resting liquidity in this window`;
+/** The read stopped at its page cap inside the window: the count is a floor, never the window's count. */
+export const changesAtLeast = (n: number) => `at least ${n} changes of resting liquidity in this window: the read stopped at the newest ${n}`;
+export const changesListed = (n: number) => `the newest ${n} are listed`;
+export const CHANGES_NONE = 'No change of resting liquidity was recorded in this window.';
+export const CHANGES_LEAD = 'Each row is the difference between two readings of the chain: a tick range or the reserves of a pool each minute, a position or an order each hour with the address that holds it.';
+export const CHANGE_VERBS: Record<DepthChangeRow['kind'], string> = { added: 'added to', removed: 'withdrawn from', filled: 'filled in', grew: 'grew in', shrank: 'shrank in' };
+/** A position's range in words: the two prices, or, for a position whose range spans every price the pool can reach, the whole range. */
+export const rangeWords = (lo: string, hi: string) => `${lo} – ${hi}`;
+export const FULL_RANGE = 'the whole price range';
+export const positionWhat = (id: string, range: string) => `position ${id} (${range})`;
+export const orderWhat = (id: string, side: 'bid' | 'ask' | null, price: string) => `${side ? `${side} ` : ''}order ${id} at ${price}`;
+export const rangeWhat = (lo: string, hi: string) => `a tick range ${lo} – ${hi}`;
+export const RESERVES_WHAT = 'the pool’s reserves';
+/** '28 Oct, 14:49 UTC: position 15533107 (0.000902 – 0.000923) withdrawn from pool 3005 by osmo1…: 201,000 NAM, $190' */
+export const changeWords = (clock: string, what: string, verb: string, pool: string, owner: string | null, size: string) => `${clock}: ${what} ${verb} ${pool}${owner ? ` by ${owner}` : ''}: ${size}`;
+export const sizeWords = (nam: string, symbol: string, usd: string) => `${nam} ${symbol}, ${usd}`;
+/** The same sentence in pieces, so the owner can be the address control: head, then BY_WORD and the owner, then the size after a colon. */
+export const changeHead = (clock: string, what: string, verb: string, pool: string) => `${clock}: ${what} ${verb} ${pool}`;
+export const BY_WORD = 'by';
+export const CHANGE_NO_SIZE = 'size not stored';
+/** The cost and what was left out, under the time view. */
+export const COST_LABEL = 'What a minute costs';
+export const minuteCostWords = (reads: number, kb: string, ms: string) => `${reads} requests, ${kb} read, ${ms} of reading, for the newest minute`;
+export const COST_CAPS = 'The caps the minute runs under are the Worker’s configuration; the Sources sheet carries the store’s row against them.';
+export const LEFT_OUT_LABEL = 'Left out, and why';
+export const LEFT_OUT_NONE = 'Every listed pool was read and priced this minute.';
+export const leftOutPool = (pool: string, pair: string, why: string) => `${pool} (${pair}): ${why}`;
+export const notReadPool = (pool: string, pair: string, why: string) => `${pool} (${pair}): not read this minute (${why}); its last reading is not counted`;
+/** A pair whose counter coin has no symbol in the quote service's metadata is named in words, never by its raw denomination. */
+export const pairUnnamed = (symbol: string) => `${symbol} / a coin the metadata does not name`;
+export const leftOutNamada = (symbol: string) => `The Namada side: ${symbol} on its own chain has no pool or order book to read, so only Osmosis is counted.`;
+/** Who holds it. */
+export const WHO_EYEBROW = 'Who holds it';
+export const WHO_H2 = 'The addresses whose positions and orders are the liquidity';
+export const whoLead = (symbol: string) =>
+  `Every concentrated-liquidity position and every resting order, grouped by the address that holds it, from the hourly read of the chain; the largest share of the USD resting first. A position gives both coins inside its range and ${symbol} alone above it; an order rests in one coin at one price.`;
+export const HEAD_OWNER = 'Owner';
+export const headResting = (symbol: string) => `${symbol} resting`;
+export const HEAD_USD_RESTING = 'USD resting';
+export const HEAD_SHARE = 'Share';
+export const HEAD_HOLDS = 'Holds';
+export const HEAD_SINCE = 'Since';
+export const positionsWords = (n: number) => `${n} ${n === 1 ? 'position' : 'positions'}`;
+export const holdsWords = (positions: number, orders: number) => [positions ? positionsWords(positions) : '', orders ? ordersWords(orders) : ''].filter(Boolean).join(', ');
+export const replacedWords = (n: number) => `replaced ${n} ${n === 1 ? 'time' : 'times'} this week`;
+export const itemPosition = (id: string, range: string, nam: string, symbol: string, usd: string, inRange: boolean) =>
+  `position ${id}: ${range}, ${nam} ${symbol} and ${usd}${inRange ? ', holding the price' : ''}`;
+export const itemOrder = (id: string, side: 'bid' | 'ask' | null, price: string, remaining: string, placed: string, unit: string) =>
+  `${side ? `${side} ` : ''}order ${id} at ${price}: ${remaining} of ${placed} ${unit} left`;
+/** A bid order's quantities are the counter coin's, priced as USD (the hero's rule, counterUsdHow); an ask order's are the base coin's, whose symbol the configuration gives. */
+export const ORDER_BID_UNIT = 'USD';
+export const ownersTotals = (n: number, positions: number, orders: number, usd: string) => `${n} owners, ${positions} positions and ${orders} orders, ${usd} resting`;
+export const ownersLabelled = (n: number) => `${n} labelled through the labels table`;
+export const OWNERS_NONE_LABELLED = 'none labelled';
+export const ownersReadAt = (clock: string, height: string) => `read ${clock}, height ${height}`;
+export const OWNERS_SOURCE_LABEL = 'Where the owners come from';
+export const SOURCE_OWNERS = 'The hourly read';
+export const OWNERS_REWIND = 'The owners are read once an hour and kept as the newest hour only, so they are not shown for a past moment.';
+export const OWNERS_WAITS = 'The owners cannot be listed until the hourly read answers.';
+export const ITEMS_LABEL = 'Each position and order';
+export const INVARIANTS_LABEL = 'The hour’s own checks';
+export const INV_OK = 'holds';
+export const INV_NOT = 'does not hold';
+export const INV_NONE = 'not checked';
+export const ORDERS_CARRIED = 'the orders are the hour before’s reading';
+export const openOwnerAria = (name: string) => `${name}: each position and order`;
+
 /** Every fixed sentence above, for test/depth-words.test.ts: none may carry a figure. */
 export const DEPTH_FIXED_WORDS: readonly string[] = [
   ...Object.values(DEPTH_SOURCES), ...Object.values(DEPTH_CHECK_TITLES), HEAT_RANGE_WORDS, CL_LEVEL_WORDS, UNPRICED_NO_PRICE, UNPRICED_NO_TAKER, UNPRICED_EMPTY, UNPRICED_NO_META,
@@ -718,6 +868,11 @@ export const DEPTH_FIXED_WORDS: readonly string[] = [
   RESERVES_WORDS, LADDER_TABLE_LABEL, SOURCE_EVERY_LEVEL, LABEL_LEVEL_WIDTH, CHART_GROUP_LABEL, NO_POINT_IN_WINDOW, LABEL_PRICE_WINDOW, SOURCE_THE_CURVE, SOURCE_STORED_TRADES, FLOW_INDEX_PLAIN, TRADES_FAILED, TRADES_NO_PAGE,
   HERO_GET, HERO_PAY, MINUTE_NOT_ANSWERED, SPLIT_LABEL, NOT_AMOUNT, MINUTE_FIGURES, STORED_MINUTE_FIGURES, FETCHING_MINUTE, TAB_LEVELS, TAB_CURVE, LABEL_SIDE, LABEL_SIZE, LABEL_AMOUNT, LABEL_BOOK_VIEW, TRY_AGAIN,
   LINE_SELL_LABEL, LINE_BID_LABEL, LINE_DOT_LABEL, LINE_SOURCE, FACT_REF_UNNAMED,
+  // step S6: the time view, the change rows, the cost line and the owners
+  OVER_EYEBROW, OVER_H2, LABEL_WINDOW, ...Object.values(HEAT_STEP_WORDS), PHONE_FIVE, HEAT_LEGEND_LABEL, KEY_GAP, HEAT_READOUT_NONE, HEAT_GROUP_LABEL, HEAT_TABLE_LABEL, HEAT_TABLE_ALL, GAPS_NONE, HEAD_TIME, HEAD_REF_PRICE, HEAD_BID_MOST, HEAD_ASK_MOST, HEAD_BID_ALL, HEAD_ASK_ALL, HEAT_NO_COLUMN, HEAT_WAITS, HEAT_NONE,
+  EXEC_NONE, KEY_BAND_HOUR, KEY_EXEC, EXEC_LOW, EXEC_HIGH, EXEC_LAST, EXEC_READING, EXEC_READOUT_NONE, EXEC_GROUP_LABEL, SOURCE_OVER, SOURCE_HEAT, SOURCE_EXEC, SOURCE_HOURS, SOURCE_CHANGES,
+  CHANGES_H3, CHANGES_NONE, CHANGES_LEAD, ...Object.values(CHANGE_VERBS), RESERVES_WHAT, CHANGE_NO_SIZE, BY_WORD, COST_LABEL, COST_CAPS, LEFT_OUT_LABEL, LEFT_OUT_NONE,
+  WHO_EYEBROW, WHO_H2, HEAD_OWNER, HEAD_USD_RESTING, HEAD_SHARE, HEAD_HOLDS, HEAD_SINCE, OWNERS_NONE_LABELLED, OWNERS_SOURCE_LABEL, SOURCE_OWNERS, OWNERS_REWIND, OWNERS_WAITS, ITEMS_LABEL, INVARIANTS_LABEL, INV_OK, INV_NOT, INV_NONE, ORDERS_CARRIED, FULL_RANGE, ORDER_BID_UNIT,
 ];
 /** The sentences built from a read or the configuration, with sample arguments: the only figures they carry are the ones passed in. */
 export const DEPTH_BUILT_WORDS: readonly string[] = [
@@ -741,7 +896,18 @@ export const DEPTH_PAGE_WORDS: readonly string[] = [
   sideWord('ask'), sideWord('bid'), openBandAria('bid', '0.0010098', '0.0010199', '$1.41', '−1.0%'), sheetTitle('ask', '0.0010199', '0.0010301'), distFromPrice('−1.0%'),
   chartAria('linear', '0.00051', '0.00204', 'NAM', 8, 3), chartAria('log', '0.000102', '0.0102', 'NAM', 8, 4), tradeTitle('buy', '400', 'NAM', '0.001025', '$0.41', '28 Oct, 02:56 UTC'), tradeTitle('sell', '10,000', 'NAM', '0.00099', '$9.90', '28 Oct, 02:56 UTC'),
   chartSummary('506.80', '0.0000001', '1,083,780', '201.59'), tradesToggle(7), heroVerb('sell'), heroVerb('buy'), amountsAre('NAM'),
-  // the curve's three windows are input choices (as a chart's 24h / 7d / 30d), not figures
+  // step S6
+  overLead('NAM'), columnsWords(288, 'five minutes', 3), columnsWords(1440, 'minute', 0), legendStep('$0.03', '$0.11'), legendTop('$4.21'), legendBlank('$0.03'), keyTradesSized(7, 'NAM'),
+  heatReadout('28 Oct, 02:40 UTC', 'bid', '$12.40', '0.0010050', '0.0010301'), heatReadout('28 Oct, 02:40 UTC', 'ask', '$12.40', '0.0010050', '0.0010301'), heatReadoutBlank('28 Oct, 02:40 UTC', '0.0010050', '0.0010301'), heatGapReadout('28 Oct, 02:40 UTC'),
+  heatReadoutBoth('28 Oct, 02:40 UTC', '$5.45', '$0.18', '$5.27', '0.0010163', '0.0010417'), tableThinned('60', '1,440', '24'), gapsWords(1, '20 min', '28 Oct, 02:40 UTC'), gapsWords(2, '1.2 h', '28 Oct, 02:40 UTC'), changesAtLeast(1000),
+  heatAria(288, 3, '0.00025', '0.0041', 'NAM', 4), recordedSince('26 Oct 2026, 12:00 UTC'), execH2('10,000', 'NAM'), execUnit('NAM'), execTakeaway('10,000', 'NAM', '$9.92', '$9.80', '$9.95'), execOne('10,000', 'NAM', '$9.92'), execGapReadout('28 Oct, 02:40 UTC'),
+  changesInWindow(12), changesListed(200), positionWhat('15533107', rangeWords('0.000902', '0.000923')), positionWhat('14599704', FULL_RANGE), orderWhat('140', 'ask', '1.0'), orderWhat('140', null, '1.0'), rangeWhat('0.00090', '0.00092'),
+  changeWords('28 Oct, 14:49 UTC', 'position 15533107 (0.000902 – 0.000923)', 'withdrawn from', 'pool 3005', 'osmo1…9l27', '201,000 NAM, $190'), changeWords('28 Oct, 14:49 UTC', 'the pool’s reserves', 'grew in', 'pool 3439', null, '990 NAM, $1.02'), sizeWords('201,000', 'NAM', '$190'), changeHead('28 Oct, 14:49 UTC', 'order 140 at 1.0', 'filled in', 'order book 3008'),
+  minuteCostWords(6, '57.5 KB', '1.2 s'), leftOutPool('pool 3020', 'NAM / UM', UNPRICED_NO_PRICE), notReadPool('pool 3368', 'NAM / OSMO', 'status 429'), leftOutNamada('NAM'), pairUnnamed('NAM'),
+  whoLead('NAM'), headResting('NAM'), positionsWords(1), positionsWords(4), holdsWords(4, 10), holdsWords(0, 1), replacedWords(1), replacedWords(3), itemPosition('14599704', FULL_RANGE, '156,566', 'NAM', '$159.67', true), itemPosition('15533107', rangeWords('0.000902', '0.000923'), '201,000', 'NAM', '$190', false),
+  itemOrder('140', 'ask', '1.0', '221', '221', 'NAM'), ownersTotals(50, 49, 43, '$916,851'), ownersLabelled(3), ownersReadAt('03:05 UTC', '73,429,291'), openOwnerAria('osmo1…9l27'),
+  // the curve's three windows and the heat's are input choices (as a chart's 24h / 7d / 30d), not figures
   ...CURVE_RANGES.map((r) => r.label),
+  ...HEAT_RANGES.map((r) => r.label),
 ];
 export const DEPTH_WORDS: readonly string[] = [...DEPTH_FIXED_WORDS, ...DEPTH_BUILT_WORDS, ...DEPTH_PAGE_WORDS];

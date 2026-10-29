@@ -12,8 +12,9 @@ import { CURVE_POOL_POINTS_MAX, DEPTH_SIZES, LADDER_FOLD_PCT, LADDER_MID_PCT, DE
 import { buildGrid, cumOn, thinIndices } from '../shared/depth-grid';
 import { fmtNamRule, fmtSharePct, fmtSig, fmtUsdRule } from '../shared/format';
 import {
-  bookRule, cliffOf, cumToBand, curveWindow, depthStamp, isFar, isMid, ladderOf, marketSize, markedBand, overlap, parseAmount, perPoolCurves, pointAt, poolName, poolsAtPrice, readingOfPoint, readingOfQuote, readingOfStored, routerLine, shortSize, sizeMarks, splitShares, storedFill, touchSpread, tradeMarks,
+  bookRule, cliffOf, cumToBand, curveWindow, depthStamp, isFar, isMid, ladderOf, marketSize, markedBand, overlap, parseAmount, perPoolCurves, pointAt, poolName, poolsAtPrice, priceRange, readingOfPoint, readingOfQuote, readingOfStored, routerLine, shortSize, sizeMarks, splitShares, storedFill, touchSpread, tradeMarks,
 } from '../web/src/screens/depth/model';
+import { FULL_RANGE } from '../shared/depth';
 import type { TradeRow } from '../shared/types';
 
 const D = depthFixture<DepthResponse>('api_depth_latest.json');
@@ -267,7 +268,7 @@ describe('the curve', () => {
 
 describe('rewound: the stored minute', () => {
   const pt = { t: D.at, at: D.at + 30_000, height: D.ref.height, refUsd: D.ref.usd, spotUsd: null, bid: D.offsets.bid, ask: D.offsets.ask, sell: D.answer.sell.map((f) => f.usd), buy: D.answer.buy.map((f) => f.usd), bestBid: D.touch.bestBidEff, bestAsk: D.touch.bestAskEff, bidUsd: D.within.totalBidUsd, askNam: D.within.totalAskNam, note: null };
-  const h: DepthHistoryResponse = { pool: 'all', refPool: '3005', step: '1m', from: D.at - 600_000, to: D.at + 1, asOf: D.at + 1, points: [{ ...pt, t: D.at - 60_000, at: D.at - 30_000 }, pt], gaps: [], start: D.at - 600_000, cut: false, note: null, prov: [] };
+  const h: DepthHistoryResponse = { pool: 'all', refPool: '3005', step: '1m', from: D.at - 600_000, to: D.at + 1, asOf: D.at + 1, points: [{ ...pt, t: D.at - 60_000, at: D.at - 30_000 }, pt], gaps: [], start: D.at - 600_000, recordedSince: D.at - 600_000, cut: false, note: null, prov: [] };
   it('the newest point at or before the moment is read; its figure for a stored size is the minute’s, the split empty and the marginal not stored', () => {
     expect(pointAt(h, D.at + 20_000)).toBe(h.points[1]);
     expect(pointAt(h, D.at - 1)).toBe(h.points[0]);
@@ -304,5 +305,13 @@ describe('the words and the small helpers', () => {
     expect(sellQuotable('10,000', 'NAM', '$9.92')).toBe('Selling 10,000 NAM now fetches $9.92 across every Osmosis pool');
     expect(bidQuotable('$26.43', '10%')).toBe('$26.43 of bids within 10% of the price');
     expect(sellQuotable('10,000', 'NAM', '$9.92').match(/\d[\d,.]*/g)).toEqual(['10,000', '9.92']);
+  });
+});
+
+describe('a position’s range in words (step S6)', () => {
+  it('two prices at significant digits; a position spanning every price the pool can reach (the chain’s own extremes) is the whole range, never two unreadable figures', () => {
+    expect(priceRange(0.000902, 0.000923)).toBe('0.000902 – 0.000923');
+    expect(priceRange(1e-12, 1e38)).toBe(FULL_RANGE);
+    expect(priceRange(null, 0.001)).toBe('— – 0.001');
   });
 });

@@ -12,7 +12,7 @@
 // at 36 decimals, liquidity at 18, rounding each step the way x/concentrated-liquidity does) so the chain-estimate check
 // can hold 0.01 %; the display curve is Number, whose worst error the research measured at 9.7e-6 relative.
 import { decToScaled } from './proto';
-import { base64Bytes, bytesToBase64 } from '../util';
+import { bytesToBase64 } from '../util';
 import type { DepthFill, DepthLevel, DepthOffsets, DepthPoolType, DepthSplit, DepthTouch, DepthWithin } from '../../../shared/depth';
 import { HEAT_EDGES } from '../../../shared/depth';
 // the grid and its thinning are shared with the page (shared/depth-grid.ts), which rebuilds the grid from the stored reference
@@ -525,11 +525,8 @@ export const packF32 = (a: Float32Array): string => {
   a.forEach((v, i) => dv.setFloat32(i * 4, v, true));
   return bytesToBase64(b);
 };
-export const unpackF32 = (s: string): Float32Array => {
-  const b = base64Bytes(s);
-  const dv = new DataView(b.buffer, b.byteOffset, b.byteLength);
-  return Float32Array.from({ length: b.length >> 2 }, (_, i) => dv.getFloat32(i * 4, true));
-};
+/** The decoder is the shared one (shared/depth-heat.ts), so the page and the Worker read one stored form by one function. */
+export { unpackF32 } from '../../../shared/depth-heat';
 /** Every pool's raw levels on the USD axis: a concentrated pool's ranges, the book's levels, a weighted pool's reserves. */
 export function levelsOf(pools: PricedPool[], baseDecimals: number, positionsInRange?: (poolId: string, loTick: number, hiTick: number) => number): DepthLevel[] {
   const out: DepthLevel[] = [];
