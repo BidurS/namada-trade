@@ -89,6 +89,12 @@ export interface NamPrice {
   error?: string;
   /** How the price was read; set whenever `usd` is. */
   how?: NamPriceHow;
+  /**
+   * The direct quote's own answer when the router was asked (routeSpotUrl): base units of USDC out for `nam` NAM sold
+   * in the reference pool alone, whatever the guard made of the route. The depth module's check 2 compares its own walk
+   * of that pool with it (worker/src/depth/index.ts), so the tick asks the quote service nothing more.
+   */
+  routeOut?: { nam: number; amountOut: string; at: number };
 }
 
 /**
@@ -122,9 +128,12 @@ export async function fetchNamPrice(tries = 3, budget?: QuoteBudget): Promise<Na
   if (!res || typeof res !== 'object' || Array.isArray(res)) return { usd: null, osmoUsd, coinUsd, at, error: quoteErrorText('no_price') };
   if (budget && !(await budget())) return { usd: null, osmoUsd, coinUsd, at, error: quoteErrorText('busy') };
   try {
-    const r = routeSpot(await sqsGet(routeSpotUrl(), 12000, tries));
-    if (r && 'usd' in r) return { usd: r.usd, osmoUsd, coinUsd, at, how: r.how };
-    return { usd: null, osmoUsd, coinUsd, at, error: r ? routeOtherPoolsText(r.otherPools) : routeNoSpotText() };
+    const res = await sqsGet(routeSpotUrl(), 12000, tries);
+    const r = routeSpot(res);
+    const out = String(res?.amount_out ?? '');
+    const routeOut = /^\d+$/.test(out) ? { nam: ROUTE_REF_NAM, amountOut: out, at: Date.now() } : undefined;
+    if (r && 'usd' in r) return { usd: r.usd, osmoUsd, coinUsd, at, how: r.how, ...(routeOut ? { routeOut } : {}) };
+    return { usd: null, osmoUsd, coinUsd, at, error: r ? routeOtherPoolsText(r.otherPools) : routeNoSpotText(), ...(routeOut ? { routeOut } : {}) };
   } catch (e) {
     return { usd: null, osmoUsd, coinUsd, at, error: quoteErrorText(classify(e)) };
   }
@@ -189,12 +198,13 @@ function routeSpot(res: any): { usd: number; how: Extract<NamPriceHow, { how: 'r
  * shaped like an Osmosis pool account (util.ts isPoolAccount): such a pool keeps its figures with no address, so it
  * is never labelled a pool (cron.ts) nor taken by the live parser as one (live-hub.ts).
  */
-export async function fetchNamPools(): Promise<{ pools: PoolInfo[]; at: number; error?: string; refused?: number }> {
+export async function fetchNamPools(): Promise<{ pools: PoolInfo[]; at: number; error?: string; refused?: number; raw?: unknown[] }> {
   const at = Date.now();
   try {
     const denom = encodeURIComponent(NAM.osmoDenom);
     const url = `${OSMOSIS.sqs}/pools?filter[denom]=${denom}`;
     const res = await sqsGet(url, 15000);
+    // the answer as given is handed on (`raw`), so the depth module's own pool list (worker/src/depth/pools.ts) needs no second read
     const list: any[] = Array.isArray(res) ? res : res.data || [];
     const pools: PoolInfo[] = [];
     let refused = 0;
@@ -241,7 +251,7 @@ export async function fetchNamPools(): Promise<{ pools: PoolInfo[]; at: number; 
     // a pool empty on both sides holds nothing to trade: it is left out of the list, the pool count and the labels
     const held = pools.filter(poolHoldsSomething);
     held.sort((a, b) => b.liquidityUsd - a.liquidityUsd);
-    return refused ? { pools: held, at, refused } : { pools: held, at };
+    return refused ? { pools: held, at, refused, raw: list } : { pools: held, at, raw: list };
   } catch (e) {
     return { pools: [], at, error: quoteErrorText(classify(e)) };
   }

@@ -1,0 +1,1404 @@
+// 2026-10-29T02:11:52.813Z GET https://sqs.osmosis.zone/pools?filter[denom]=ibc/C7110DEC66869DAE9BE9C3C60F4B5313B16A2204AE020C3B0527DD6B322386A3
+// status 200 bytes 35087 ms 849 content-encoding null ratelimit 
+{
+ "data": [
+  {
+   "chain_model": {
+    "address": "osmo14jlk9xpt7ht9hd7y6xlazal2rwn8ar3jygm5yrf7r0a2r4w5exuq85ymap",
+    "incentives_address": "osmo1a3u5m7tq027emzl0aywsyqeq3aumtum5e09z6zyjhuxnhck85jssum9kus",
+    "spread_rewards_address": "osmo1jqe5ssvdqa4ptpl0kcw7lzp8jtzcrnqmfnnjuk54k5n40hgcdflsyj8cjm",
+    "id": 3017,
+    "current_tick_liquidity": "894403.578922344724250986",
+    "token0": "ibc/C7110DEC66869DAE9BE9C3C60F4B5313B16A2204AE020C3B0527DD6B322386A3",
+    "token1": "factory/osmo1z6r6qdknhgsc0zeracktgpcxf43j6sekq07nw8sxduc9lg0qjjlqfu25e3/alloyed/allBTC",
+    "current_sqrt_price": "0.001089846637990799112331073065288086",
+    "current_tick": -53812235,
+    "tick_spacing": 100,
+    "exponent_at_price_one": -6,
+    "spread_factor": "0.005000000000000000",
+    "last_liquidity_update": "2026-05-09T11:03:21.795724219Z"
+   },
+   "balances": [
+    {
+     "denom": "factory/osmo1z6r6qdknhgsc0zeracktgpcxf43j6sekq07nw8sxduc9lg0qjjlqfu25e3/alloyed/allBTC",
+     "amount": "2150"
+    },
+    {
+     "denom": "ibc/C7110DEC66869DAE9BE9C3C60F4B5313B16A2204AE020C3B0527DD6B322386A3",
+     "amount": "820670329"
+    }
+   ],
+   "type": 2,
+   "spread_factor": "0.005000000000000000",
+   "liquidity_cap": "2",
+   "liquidity_cap_error": "zero cap for denom (ibc/C7110DEC66869DAE9BE9C3C60F4B5313B16A2204AE020C3B0527DD6B322386A3)",
+   "apr_data": {
+    "swap_fees": {
+     "lower": 0.3063314348042056,
+     "upper": 11.781978261700216
+    },
+    "superfluid": {},
+    "osmosis": {},
+    "boost": {},
+    "total_apr": {
+     "lower": 0.3063314348042056,
+     "upper": 11.781978261700216
+    }
+   },
+   "fees_data": {
+    "volume_24h": 0,
+    "volume_7d": 0,
+    "fees_spent_24h": 0,
+    "fees_spent_7d": 0,
+    "fees_percentage": ""
+   }
+  },
+  {
+   "chain_model": {
+    "address": "osmo13dwjjmyuzscw2kf4hz55gehea53kd6hmc9xnttquxnhykf0r86yqxexuae",
+    "id": 3398,
+    "pool_params": {
+     "swap_fee": "0.010000000000000000",
+     "exit_fee": "0.000000000000000000"
+    },
+    "future_pool_governor": "24h",
+    "total_shares": {
+     "denom": "gamm/pool/3398",
+     "amount": "12538490878177841"
+    },
+    "pool_liquidity": [
+     {
+      "denom": "ibc/498A0751C798A0D9A389AA3691123DADA57DAA4FE165D5C75894505B876BA6E4",
+      "amount": "3340"
+     },
+     {
+      "denom": "ibc/C7110DEC66869DAE9BE9C3C60F4B5313B16A2204AE020C3B0527DD6B322386A3",
+      "amount": "3761574"
+     }
+    ],
+    "scaling_factors": [
+     1,
+     1
+    ]
+   },
+   "balances": [
+    {
+     "denom": "ibc/498A0751C798A0D9A389AA3691123DADA57DAA4FE165D5C75894505B876BA6E4",
+     "amount": "3340"
+    },
+    {
+     "denom": "ibc/C7110DEC66869DAE9BE9C3C60F4B5313B16A2204AE020C3B0527DD6B322386A3",
+     "amount": "3761574"
+    }
+   ],
+   "type": 1,
+   "spread_factor": "0.010000000000000000",
+   "liquidity_cap": "1",
+   "liquidity_cap_error": "zero cap for denom (ibc/C7110DEC66869DAE9BE9C3C60F4B5313B16A2204AE020C3B0527DD6B322386A3)",
+   "apr_data": {
+    "swap_fees": {},
+    "superfluid": {},
+    "osmosis": {},
+    "boost": {},
+    "total_apr": {}
+   },
+   "fees_data": {
+    "volume_24h": 0,
+    "volume_7d": 0,
+    "fees_spent_24h": 0,
+    "fees_spent_7d": 0,
+    "fees_percentage": ""
+   }
+  },
+  {
+   "chain_model": {
+    "address": "osmo1q7w4mzsdxv7dfc3qx7g7hn94gfua9ysj390v4jwwl99w2h4cu7tsyl0g9w",
+    "incentives_address": "osmo16dyy46jannuvns4w23h9q5tlpnn5t35hskpyerm643mwacsehzvqhtyvgh",
+    "spread_rewards_address": "osmo1hhv402c9tu6zsj0elnsj3muap0qd6ytfr0036nxaweahprfc0tws3x8dyk",
+    "id": 3018,
+    "current_tick_liquidity": "0.000000000000000000",
+    "token0": "ibc/C7110DEC66869DAE9BE9C3C60F4B5313B16A2204AE020C3B0527DD6B322386A3",
+    "token1": "ibc/698350B8A61D575025F3ED13E9AC9C0F45C89DEFE92F76D5838F1D3C1A7FF7C9",
+    "current_sqrt_price": "0.000000000000000000000000000000000000",
+    "tick_spacing": 100,
+    "exponent_at_price_one": -6,
+    "spread_factor": "0.010000000000000000",
+    "last_liquidity_update": "2026-05-09T11:11:12.185281013Z"
+   },
+   "balances": [
+    {
+     "denom": "ibc/698350B8A61D575025F3ED13E9AC9C0F45C89DEFE92F76D5838F1D3C1A7FF7C9",
+     "amount": "1080"
+    },
+    {
+     "denom": "ibc/C7110DEC66869DAE9BE9C3C60F4B5313B16A2204AE020C3B0527DD6B322386A3",
+     "amount": "1076"
+    }
+   ],
+   "type": 2,
+   "spread_factor": "0.010000000000000000",
+   "liquidity_cap": "1",
+   "liquidity_cap_error": "zero cap for denom (ibc/C7110DEC66869DAE9BE9C3C60F4B5313B16A2204AE020C3B0527DD6B322386A3)",
+   "apr_data": {
+    "swap_fees": {},
+    "superfluid": {},
+    "osmosis": {},
+    "boost": {},
+    "total_apr": {}
+   },
+   "fees_data": {
+    "volume_24h": 0,
+    "volume_7d": 0,
+    "fees_spent_24h": 0,
+    "fees_spent_7d": 0,
+    "fees_percentage": ""
+   }
+  },
+  {
+   "chain_model": {
+    "address": "osmo10lhyguzmkmdwt8sk5x9t98zm0n68x9l9vj2mmhwprjxwtsv4ylpqzm55pv",
+    "incentives_address": "osmo1075h54pvqvl4m36sh8w5zhgdcckhkjssfasuv3he2wehv63j9qcs5nql7e",
+    "spread_rewards_address": "osmo1cfkq9zdlkycczxd69zqmqavl2hc76eauyqvsyn7gzchz6e82t9ms8e0meq",
+    "id": 3010,
+    "current_tick_liquidity": "0.000000000000000000",
+    "token0": "ibc/C7110DEC66869DAE9BE9C3C60F4B5313B16A2204AE020C3B0527DD6B322386A3",
+    "token1": "ibc/498A0751C798A0D9A389AA3691123DADA57DAA4FE165D5C75894505B876BA6E4",
+    "current_sqrt_price": "0.000000000000000000000000000000000000",
+    "tick_spacing": 100,
+    "exponent_at_price_one": -6,
+    "spread_factor": "0.010000000000000000",
+    "last_liquidity_update": "2026-05-09T11:04:36.965196913Z"
+   },
+   "balances": [
+    {
+     "denom": "ibc/498A0751C798A0D9A389AA3691123DADA57DAA4FE165D5C75894505B876BA6E4",
+     "amount": "661"
+    },
+    {
+     "denom": "ibc/C7110DEC66869DAE9BE9C3C60F4B5313B16A2204AE020C3B0527DD6B322386A3",
+     "amount": "747"
+    }
+   ],
+   "type": 2,
+   "spread_factor": "0.010000000000000000",
+   "liquidity_cap": "1",
+   "liquidity_cap_error": "zero cap for denom (ibc/C7110DEC66869DAE9BE9C3C60F4B5313B16A2204AE020C3B0527DD6B322386A3)",
+   "apr_data": {
+    "swap_fees": {},
+    "superfluid": {},
+    "osmosis": {},
+    "boost": {},
+    "total_apr": {}
+   },
+   "fees_data": {
+    "volume_24h": 0,
+    "volume_7d": 0,
+    "fees_spent_24h": 0,
+    "fees_spent_7d": 0,
+    "fees_percentage": ""
+   }
+  },
+  {
+   "chain_model": {
+    "address": "osmo1j6zwg8lws2j58mgvfyrmls7ux2hgusvhe5gejf3nl67u8ej5hauqx6rk5q",
+    "id": 3439,
+    "pool_params": {
+     "swap_fee": "0.010000000000000000",
+     "exit_fee": "0.000000000000000000"
+    },
+    "future_pool_governor": "24h",
+    "total_weight": "1073741824000000.000000000000000000",
+    "total_shares": {
+     "denom": "gamm/pool/3439",
+     "amount": "50000000000000000000"
+    },
+    "pool_assets": [
+     {
+      "token": {
+       "denom": "ibc/498A0751C798A0D9A389AA3691123DADA57DAA4FE165D5C75894505B876BA6E4",
+       "amount": "13665263"
+      },
+      "weight": "536870912000000"
+     },
+     {
+      "token": {
+       "denom": "ibc/C7110DEC66869DAE9BE9C3C60F4B5313B16A2204AE020C3B0527DD6B322386A3",
+       "amount": "13256987688"
+      },
+      "weight": "536870912000000"
+     }
+    ]
+   },
+   "balances": [
+    {
+     "denom": "ibc/498A0751C798A0D9A389AA3691123DADA57DAA4FE165D5C75894505B876BA6E4",
+     "amount": "13665263"
+    },
+    {
+     "denom": "ibc/C7110DEC66869DAE9BE9C3C60F4B5313B16A2204AE020C3B0527DD6B322386A3",
+     "amount": "13256987688"
+    }
+   ],
+   "type": 0,
+   "spread_factor": "0.010000000000000000",
+   "liquidity_cap": "14",
+   "liquidity_cap_error": "zero cap for denom (ibc/C7110DEC66869DAE9BE9C3C60F4B5313B16A2204AE020C3B0527DD6B322386A3)",
+   "apr_data": {
+    "swap_fees": {
+     "lower": 32.09954276634164,
+     "upper": 32.09954276634164
+    },
+    "superfluid": {},
+    "osmosis": {},
+    "boost": {},
+    "total_apr": {
+     "lower": 32.09954276634164,
+     "upper": 32.09954276634164
+    }
+   },
+   "fees_data": {
+    "volume_24h": 0,
+    "volume_7d": 0,
+    "fees_spent_24h": 0,
+    "fees_spent_7d": 0,
+    "fees_percentage": ""
+   }
+  },
+  {
+   "chain_model": {
+    "address": "osmo1gecl5ec5s723d6vjyz5mwtlp97dt8tp5zq4hs6p8gsy8key4n75quzf9u6",
+    "incentives_address": "osmo19pe3ceuuwrrja9gnlg98ckpapwuk7sdju2z0gyree6scg4k5q5cqwnaayj",
+    "spread_rewards_address": "osmo10f8qwr2glt6s4zzf7smr9dekym52d8ke6j60ags9xv83yzlfq00q3xlqr6",
+    "id": 3020,
+    "current_tick_liquidity": "29966367047.185403041497430720",
+    "token0": "ibc/C7110DEC66869DAE9BE9C3C60F4B5313B16A2204AE020C3B0527DD6B322386A3",
+    "token1": "ibc/0FA9232B262B89E77D1335D54FB1E1F506A92A7E4B51524B400DC69C68D28372",
+    "current_sqrt_price": "0.420655917977043171716724345020783297",
+    "current_tick": -8230486,
+    "tick_spacing": 100,
+    "exponent_at_price_one": -6,
+    "spread_factor": "0.010000000000000000",
+    "last_liquidity_update": "2026-10-28T04:06:54.861838618Z"
+   },
+   "balances": [
+    {
+     "denom": "ibc/0FA9232B262B89E77D1335D54FB1E1F506A92A7E4B51524B400DC69C68D28372",
+     "amount": "3491227565"
+    },
+    {
+     "denom": "ibc/C7110DEC66869DAE9BE9C3C60F4B5313B16A2204AE020C3B0527DD6B322386A3",
+     "amount": "41179599789"
+    }
+   ],
+   "type": 2,
+   "spread_factor": "0.010000000000000000",
+   "liquidity_cap": "45",
+   "liquidity_cap_error": "zero cap for denom (ibc/0FA9232B262B89E77D1335D54FB1E1F506A92A7E4B51524B400DC69C68D28372)",
+   "apr_data": {
+    "swap_fees": {
+     "lower": 10.88382684465365,
+     "upper": 47.30165430064951
+    },
+    "superfluid": {},
+    "osmosis": {},
+    "boost": {},
+    "total_apr": {
+     "lower": 10.88382684465365,
+     "upper": 47.30165430064951
+    }
+   },
+   "fees_data": {
+    "volume_24h": 0,
+    "volume_7d": 0,
+    "fees_spent_24h": 0,
+    "fees_spent_7d": 0,
+    "fees_percentage": ""
+   }
+  },
+  {
+   "chain_model": {
+    "address": "osmo1hldk6q5yy3dpw3tkwedhpw43w3ycvu36ygw0u0fnwvhydc6jju5spvds3u",
+    "incentives_address": "osmo1letuf52ct33la824smlx7g0kapuzlseekxxpc6yelscztjgta3asrusvyz",
+    "spread_rewards_address": "osmo1uh2fn8j3w5hhn9r02ft9j9xl58v7h7qelwg8847c545x7pwke5zqdqc6ss",
+    "id": 3263,
+    "current_tick_liquidity": "0.000000000000000000",
+    "token0": "ibc/C7110DEC66869DAE9BE9C3C60F4B5313B16A2204AE020C3B0527DD6B322386A3",
+    "token1": "factory/osmo1twk0c4kcwnhkyn6pzxe0qsk6a3nrye2w2sy309d60sljfysugagsd7e3mn/alloyed/allZEC",
+    "current_sqrt_price": "0.000000000000000000000000000000000000",
+    "tick_spacing": 100,
+    "exponent_at_price_one": -6,
+    "spread_factor": "0.010000000000000000",
+    "last_liquidity_update": "2026-05-09T11:08:20.599798016Z"
+   },
+   "balances": [
+    {
+     "denom": "factory/osmo1twk0c4kcwnhkyn6pzxe0qsk6a3nrye2w2sy309d60sljfysugagsd7e3mn/alloyed/allZEC",
+     "amount": "857"
+    },
+    {
+     "denom": "ibc/C7110DEC66869DAE9BE9C3C60F4B5313B16A2204AE020C3B0527DD6B322386A3",
+     "amount": "880"
+    }
+   ],
+   "type": 2,
+   "spread_factor": "0.010000000000000000",
+   "liquidity_cap": "0",
+   "liquidity_cap_error": "zero cap for denom (factory/osmo1twk0c4kcwnhkyn6pzxe0qsk6a3nrye2w2sy309d60sljfysugagsd7e3mn/alloyed/allZEC); zero cap for denom (ibc/C7110DEC66869DAE9BE9C3C60F4B5313B16A2204AE020C3B0527DD6B322386A3)",
+   "apr_data": {
+    "swap_fees": {},
+    "superfluid": {},
+    "osmosis": {},
+    "boost": {},
+    "total_apr": {}
+   },
+   "fees_data": {
+    "volume_24h": 0,
+    "volume_7d": 0,
+    "fees_spent_24h": 0,
+    "fees_spent_7d": 0,
+    "fees_percentage": ""
+   }
+  },
+  {
+   "chain_model": {
+    "address": "osmo1gwum6evhr6syq7gvs4prnncqxez542jln47m4j37mcuhsqd92c9s7wk5xn",
+    "id": 3367,
+    "pool_params": {
+     "swap_fee": "0.030000000000000000",
+     "exit_fee": "0.000000000000000000"
+    },
+    "future_pool_governor": "24h",
+    "total_weight": "1073741824000000.000000000000000000",
+    "total_shares": {
+     "denom": "gamm/pool/3367",
+     "amount": "62500000000000000"
+    },
+    "pool_assets": [
+     {
+      "token": {
+       "denom": "ibc/C7110DEC66869DAE9BE9C3C60F4B5313B16A2204AE020C3B0527DD6B322386A3",
+       "amount": "61126118"
+      },
+      "weight": "536870912000000"
+     },
+     {
+      "token": {
+       "denom": "uosmo",
+       "amount": "1017462"
+      },
+      "weight": "536870912000000"
+     }
+    ]
+   },
+   "balances": [
+    {
+     "denom": "ibc/C7110DEC66869DAE9BE9C3C60F4B5313B16A2204AE020C3B0527DD6B322386A3",
+     "amount": "61126118"
+    },
+    {
+     "denom": "uosmo",
+     "amount": "1017462"
+    }
+   ],
+   "type": 0,
+   "spread_factor": "0.030000000000000000",
+   "liquidity_cap": "1",
+   "liquidity_cap_error": "zero cap for denom (ibc/C7110DEC66869DAE9BE9C3C60F4B5313B16A2204AE020C3B0527DD6B322386A3)",
+   "apr_data": {
+    "swap_fees": {},
+    "superfluid": {},
+    "osmosis": {},
+    "boost": {},
+    "total_apr": {}
+   },
+   "fees_data": {
+    "volume_24h": 0,
+    "volume_7d": 0,
+    "fees_spent_24h": 0,
+    "fees_spent_7d": 0,
+    "fees_percentage": ""
+   }
+  },
+  {
+   "chain_model": {
+    "address": "osmo176m4peqy6qr0zc9q3vw8x454xtslc87gaucnwuy4c9swjcc2myfsfcdsa7",
+    "incentives_address": "osmo1l4f2qqs2drdnc8g2fx0pal5r20akmzj7hhdd07gvu8mpq84gezds29kff3",
+    "spread_rewards_address": "osmo1xfjwmy9yw2u33ee8kg6ktrg87jd2rgk6esvty3076sya5t4r0dnq29fx3q",
+    "id": 3006,
+    "current_tick_liquidity": "0.000000000000000000",
+    "token0": "ibc/C7110DEC66869DAE9BE9C3C60F4B5313B16A2204AE020C3B0527DD6B322386A3",
+    "token1": "ibc/23104D411A6EB6031FA92FB75F227422B84989969E91DCAD56A535DD7FF0A373",
+    "current_sqrt_price": "0.000000000000000000000000000000000000",
+    "tick_spacing": 100,
+    "exponent_at_price_one": -6,
+    "spread_factor": "0.010000000000000000",
+    "last_liquidity_update": "2026-05-09T11:03:54.272506157Z"
+   },
+   "balances": [
+    {
+     "denom": "ibc/23104D411A6EB6031FA92FB75F227422B84989969E91DCAD56A535DD7FF0A373",
+     "amount": "567"
+    },
+    {
+     "denom": "ibc/C7110DEC66869DAE9BE9C3C60F4B5313B16A2204AE020C3B0527DD6B322386A3",
+     "amount": "563"
+    }
+   ],
+   "type": 2,
+   "spread_factor": "0.010000000000000000",
+   "liquidity_cap": "1",
+   "liquidity_cap_error": "zero cap for denom (ibc/C7110DEC66869DAE9BE9C3C60F4B5313B16A2204AE020C3B0527DD6B322386A3)",
+   "apr_data": {
+    "swap_fees": {},
+    "superfluid": {},
+    "osmosis": {},
+    "boost": {},
+    "total_apr": {}
+   },
+   "fees_data": {
+    "volume_24h": 0,
+    "volume_7d": 0,
+    "fees_spent_24h": 0,
+    "fees_spent_7d": 0,
+    "fees_percentage": ""
+   }
+  },
+  {
+   "chain_model": {
+    "address": "osmo1fltj8zcxmhp8gc044v258pfcnpw7tgmzsvucp6utthxk8j3q0s3q3cy5dt",
+    "incentives_address": "osmo122gze6fs2w825fsjghnfezaws28v3jrcghzmkej4ct3lexasq3lqcha0rs",
+    "spread_rewards_address": "osmo1ggfydz47l2al836pcthpypwy3cx55snp27d0sxtksmgeqelftulqwg7wt9",
+    "id": 3015,
+    "current_tick_liquidity": "164928126.048371215381062390",
+    "token0": "ibc/C7110DEC66869DAE9BE9C3C60F4B5313B16A2204AE020C3B0527DD6B322386A3",
+    "token1": "uosmo",
+    "current_sqrt_price": "0.141042832934692291410807602572664631",
+    "current_tick": -17010692,
+    "tick_spacing": 100,
+    "exponent_at_price_one": -6,
+    "spread_factor": "0.010000000000000000",
+    "last_liquidity_update": "2026-10-25T16:03:58.064393945Z"
+   },
+   "balances": [
+    {
+     "denom": "ibc/C7110DEC66869DAE9BE9C3C60F4B5313B16A2204AE020C3B0527DD6B322386A3",
+     "amount": "15951029798"
+    },
+    {
+     "denom": "uosmo",
+     "amount": "13883549"
+    }
+   ],
+   "type": 2,
+   "spread_factor": "0.010000000000000000",
+   "liquidity_cap": "19",
+   "liquidity_cap_error": "",
+   "apr_data": {
+    "swap_fees": {
+     "lower": 2.0598193286781665,
+     "upper": 130.7415966691362
+    },
+    "superfluid": {},
+    "osmosis": {},
+    "boost": {},
+    "total_apr": {
+     "lower": 2.0598193286781665,
+     "upper": 130.7415966691362
+    }
+   },
+   "fees_data": {
+    "volume_24h": 0,
+    "volume_7d": 0,
+    "fees_spent_24h": 0,
+    "fees_spent_7d": 0,
+    "fees_percentage": ""
+   }
+  },
+  {
+   "chain_model": {
+    "address": "osmo1eua7d2fym73k2qmdehp3tkay486zpjjqy4cl5sy8n4ezgaydvfvszwmupp",
+    "incentives_address": "osmo1p0x56gmv4njrzn0a4t5s305dh3waed0wh452l0h8fmqs8fwr9x2s4gymgf",
+    "spread_rewards_address": "osmo13fu9wmxcsh0e0thy6aw282plxnk7v9qekh2c26m40ttz0gvzj9xswpvhch",
+    "id": 3022,
+    "current_tick_liquidity": "0.000000000000000000",
+    "token0": "ibc/C7110DEC66869DAE9BE9C3C60F4B5313B16A2204AE020C3B0527DD6B322386A3",
+    "token1": "ibc/2F21E6D4271DE3F561F20A02CD541DAF7405B1E9CB3B9B07E3C2AC7D8A4338A5",
+    "current_sqrt_price": "0.000000000000000000000000000000000000",
+    "tick_spacing": 100,
+    "exponent_at_price_one": -6,
+    "spread_factor": "0.010000000000000000",
+    "last_liquidity_update": "2026-05-09T11:10:38.016868557Z"
+   },
+   "balances": [
+    {
+     "denom": "ibc/2F21E6D4271DE3F561F20A02CD541DAF7405B1E9CB3B9B07E3C2AC7D8A4338A5",
+     "amount": "862"
+    },
+    {
+     "denom": "ibc/C7110DEC66869DAE9BE9C3C60F4B5313B16A2204AE020C3B0527DD6B322386A3",
+     "amount": "788"
+    }
+   ],
+   "type": 2,
+   "spread_factor": "0.010000000000000000",
+   "liquidity_cap": "1",
+   "liquidity_cap_error": "zero cap for denom (ibc/C7110DEC66869DAE9BE9C3C60F4B5313B16A2204AE020C3B0527DD6B322386A3)",
+   "apr_data": {
+    "swap_fees": {},
+    "superfluid": {},
+    "osmosis": {},
+    "boost": {},
+    "total_apr": {}
+   },
+   "fees_data": {
+    "volume_24h": 0,
+    "volume_7d": 0,
+    "fees_spent_24h": 0,
+    "fees_spent_7d": 0,
+    "fees_percentage": ""
+   }
+  },
+  {
+   "chain_model": {
+    "address": "osmo1nsmnhgh8ljrw89mtz9lh5fnjlzs03892m6v3g9hcwwmjrghzgtas0uvkhp",
+    "incentives_address": "osmo128a0nyfje0a0e57qs9qm0tarlqcxjffm8zfgapy6rcpp8mv0zevqutfeam",
+    "spread_rewards_address": "osmo1tlpfretkpty3ff239f4xng5dqfh62h8y7kln6629gj22sgulgsaqhgypxn",
+    "id": 3012,
+    "current_tick_liquidity": "0.000000000000000000",
+    "token0": "ibc/C7110DEC66869DAE9BE9C3C60F4B5313B16A2204AE020C3B0527DD6B322386A3",
+    "token1": "ibc/BC26A7A805ECD6822719472BCB7842A48EF09DF206182F8F259B2593EB5D23FB",
+    "current_sqrt_price": "0.000000000000000000000000000000000000",
+    "tick_spacing": 100,
+    "exponent_at_price_one": -6,
+    "spread_factor": "0.010000000000000000",
+    "last_liquidity_update": "2026-05-09T11:07:58.684381884Z"
+   },
+   "balances": [
+    {
+     "denom": "ibc/BC26A7A805ECD6822719472BCB7842A48EF09DF206182F8F259B2593EB5D23FB",
+     "amount": "713"
+    },
+    {
+     "denom": "ibc/C7110DEC66869DAE9BE9C3C60F4B5313B16A2204AE020C3B0527DD6B322386A3",
+     "amount": "721"
+    }
+   ],
+   "type": 2,
+   "spread_factor": "0.010000000000000000",
+   "liquidity_cap": "1",
+   "liquidity_cap_error": "zero cap for denom (ibc/C7110DEC66869DAE9BE9C3C60F4B5313B16A2204AE020C3B0527DD6B322386A3)",
+   "apr_data": {
+    "swap_fees": {},
+    "superfluid": {},
+    "osmosis": {},
+    "boost": {},
+    "total_apr": {}
+   },
+   "fees_data": {
+    "volume_24h": 0,
+    "volume_7d": 0,
+    "fees_spent_24h": 0,
+    "fees_spent_7d": 0,
+    "fees_percentage": ""
+   }
+  },
+  {
+   "chain_model": {
+    "address": "osmo1aumare74jsjfnyxf6wh6wucpazpjkc9er884zfx34pzpmc6z9czsth0n22",
+    "incentives_address": "osmo1z0tsfnuffd5ys982m4txyx2fnry6nhk4jnx5crljxhn536gejwpqadtqck",
+    "spread_rewards_address": "osmo1n82kyj4d6r8xlkcdtsafjgkgwqwn8g2klgl3prenfnccyvaafh9qnjhdrl",
+    "id": 3405,
+    "current_tick_liquidity": "1316957716.387684566758075722",
+    "token0": "ibc/BC26A7A805ECD6822719472BCB7842A48EF09DF206182F8F259B2593EB5D23FB",
+    "token1": "ibc/C7110DEC66869DAE9BE9C3C60F4B5313B16A2204AE020C3B0527DD6B322386A3",
+    "current_sqrt_price": "9.092186230310012954665636606397399604",
+    "current_tick": 16266785,
+    "tick_spacing": 100,
+    "exponent_at_price_one": -6,
+    "spread_factor": "0.025000000000000000",
+    "last_liquidity_update": "2026-10-26T17:47:52.368588926Z"
+   },
+   "balances": [
+    {
+     "denom": "ibc/BC26A7A805ECD6822719472BCB7842A48EF09DF206182F8F259B2593EB5D23FB",
+     "amount": "150861224"
+    },
+    {
+     "denom": "ibc/C7110DEC66869DAE9BE9C3C60F4B5313B16A2204AE020C3B0527DD6B322386A3",
+     "amount": "11806926068"
+    }
+   ],
+   "type": 2,
+   "spread_factor": "0.025000000000000000",
+   "liquidity_cap": "26",
+   "liquidity_cap_error": "",
+   "apr_data": {
+    "swap_fees": {
+     "lower": 40.794304092046126,
+     "upper": 143.9250359582211
+    },
+    "superfluid": {},
+    "osmosis": {},
+    "boost": {},
+    "total_apr": {
+     "lower": 40.794304092046126,
+     "upper": 143.9250359582211
+    }
+   },
+   "fees_data": {
+    "volume_24h": 0,
+    "volume_7d": 0,
+    "fees_spent_24h": 0,
+    "fees_spent_7d": 0,
+    "fees_percentage": ""
+   }
+  },
+  {
+   "chain_model": {
+    "address": "osmo1c3qf8md8flvrvl5amwg8ct3wjnqp3xezm5mt4mkpjfjr5yzmadwqrpztup",
+    "incentives_address": "osmo1eyqks66e264m54e7smpdtlw84jch8ljty9vtdsr9yzhz26avcnmse5mn57",
+    "spread_rewards_address": "osmo1wqs4y86mx6t33fqwd4gz0u6m85cs9uu34etwepkttc0c9h6at0lsh77pzh",
+    "id": 3023,
+    "current_tick_liquidity": "0.000000000000000000",
+    "token0": "ibc/C7110DEC66869DAE9BE9C3C60F4B5313B16A2204AE020C3B0527DD6B322386A3",
+    "token1": "factory/osmo1n3n75av8awcnw4jl62n3l48e6e4sxqmaf97w5ua6ddu4s475q5qq9udvx4/alloyed/allSOL",
+    "current_sqrt_price": "0.000000000000000000000000000000000000",
+    "tick_spacing": 100,
+    "exponent_at_price_one": -6,
+    "spread_factor": "0.010000000000000000",
+    "last_liquidity_update": "2026-05-09T11:06:13.620584818Z"
+   },
+   "balances": [
+    {
+     "denom": "factory/osmo1n3n75av8awcnw4jl62n3l48e6e4sxqmaf97w5ua6ddu4s475q5qq9udvx4/alloyed/allSOL",
+     "amount": "852"
+    },
+    {
+     "denom": "ibc/C7110DEC66869DAE9BE9C3C60F4B5313B16A2204AE020C3B0527DD6B322386A3",
+     "amount": "828"
+    }
+   ],
+   "type": 2,
+   "spread_factor": "0.010000000000000000",
+   "liquidity_cap": "1",
+   "liquidity_cap_error": "zero cap for denom (ibc/C7110DEC66869DAE9BE9C3C60F4B5313B16A2204AE020C3B0527DD6B322386A3)",
+   "apr_data": {
+    "swap_fees": {},
+    "superfluid": {},
+    "osmosis": {},
+    "boost": {},
+    "total_apr": {}
+   },
+   "fees_data": {
+    "volume_24h": 0,
+    "volume_7d": 0,
+    "fees_spent_24h": 0,
+    "fees_spent_7d": 0,
+    "fees_percentage": ""
+   }
+  },
+  {
+   "chain_model": {
+    "address": "osmo1wtzrkc64h0y354pnux0xr743wmhqgf9lfcveaxasu8jfddvakzdshhqyr3",
+    "id": 3454,
+    "pool_params": {
+     "swap_fee": "0.050000000000000000",
+     "exit_fee": "0.000000000000000000"
+    },
+    "future_pool_governor": "24h",
+    "total_weight": "1073741824000000.000000000000000000",
+    "total_shares": {
+     "denom": "gamm/pool/3454",
+     "amount": "1320511425877066394"
+    },
+    "pool_assets": [
+     {
+      "token": {
+       "denom": "ibc/C7110DEC66869DAE9BE9C3C60F4B5313B16A2204AE020C3B0527DD6B322386A3",
+       "amount": "383549250"
+      },
+      "weight": "536870912000000"
+     },
+     {
+      "token": {
+       "denom": "uosmo",
+       "amount": "6750204"
+      },
+      "weight": "536870912000000"
+     }
+    ]
+   },
+   "balances": [
+    {
+     "denom": "ibc/C7110DEC66869DAE9BE9C3C60F4B5313B16A2204AE020C3B0527DD6B322386A3",
+     "amount": "383549250"
+    },
+    {
+     "denom": "uosmo",
+     "amount": "6750204"
+    }
+   ],
+   "type": 0,
+   "spread_factor": "0.050000000000000000",
+   "liquidity_cap": "1",
+   "liquidity_cap_error": "zero cap for denom (ibc/C7110DEC66869DAE9BE9C3C60F4B5313B16A2204AE020C3B0527DD6B322386A3)",
+   "apr_data": {
+    "swap_fees": {
+     "lower": 88.19881545531807,
+     "upper": 88.19881545531807
+    },
+    "superfluid": {},
+    "osmosis": {},
+    "boost": {},
+    "total_apr": {
+     "lower": 88.19881545531807,
+     "upper": 88.19881545531807
+    }
+   },
+   "fees_data": {
+    "volume_24h": 0,
+    "volume_7d": 0,
+    "fees_spent_24h": 0,
+    "fees_spent_7d": 0,
+    "fees_percentage": ""
+   }
+  },
+  {
+   "chain_model": {
+    "address": "osmo1rj0hh5zutd4d7rpw3af95zmw965krfh3uk5f8tnpgpx9tj4w79fqvustrn",
+    "id": 3402,
+    "pool_params": {
+     "swap_fee": "0.003000000000000000",
+     "exit_fee": "0.000000000000000000"
+    },
+    "future_pool_governor": "24h",
+    "total_weight": "1073741824000000.000000000000000000",
+    "total_shares": {
+     "denom": "gamm/pool/3402",
+     "amount": "3082243031778575420"
+    },
+    "pool_assets": [
+     {
+      "token": {
+       "denom": "ibc/C7110DEC66869DAE9BE9C3C60F4B5313B16A2204AE020C3B0527DD6B322386A3",
+       "amount": "17431738252"
+      },
+      "weight": "536870912000000"
+     },
+     {
+      "token": {
+       "denom": "uosmo",
+       "amount": "344135938"
+      },
+      "weight": "536870912000000"
+     }
+    ]
+   },
+   "balances": [
+    {
+     "denom": "ibc/C7110DEC66869DAE9BE9C3C60F4B5313B16A2204AE020C3B0527DD6B322386A3",
+     "amount": "17431738252"
+    },
+    {
+     "denom": "uosmo",
+     "amount": "344135938"
+    }
+   ],
+   "type": 0,
+   "spread_factor": "0.003000000000000000",
+   "liquidity_cap": "18",
+   "liquidity_cap_error": "zero cap for denom (ibc/C7110DEC66869DAE9BE9C3C60F4B5313B16A2204AE020C3B0527DD6B322386A3)",
+   "apr_data": {
+    "swap_fees": {
+     "lower": 17.04912722232589,
+     "upper": 17.04912722232589
+    },
+    "superfluid": {},
+    "osmosis": {},
+    "boost": {},
+    "total_apr": {
+     "lower": 17.04912722232589,
+     "upper": 17.04912722232589
+    }
+   },
+   "fees_data": {
+    "volume_24h": 0,
+    "volume_7d": 0,
+    "fees_spent_24h": 0,
+    "fees_spent_7d": 0,
+    "fees_percentage": ""
+   }
+  },
+  {
+   "chain_model": {
+    "address": "osmo1n7lp9m8elk3g4xzpvq9hdnxywmywt5s2wnjclu8yzadnl2xsezjq5n89gq",
+    "id": 3062,
+    "pool_params": {
+     "swap_fee": "0.010000000000000000",
+     "exit_fee": "0.000000000000000000"
+    },
+    "future_pool_governor": "24h",
+    "total_weight": "1073741824000000.000000000000000000",
+    "total_shares": {
+     "denom": "gamm/pool/3062",
+     "amount": "10000000000000000"
+    },
+    "pool_assets": [
+     {
+      "token": {
+       "denom": "ibc/37CB3078432510EE57B9AFA8DBE028B33AE3280A144826FEAC5F2334CF2C5539",
+       "amount": "552371"
+      },
+      "weight": "536870912000000"
+     },
+     {
+      "token": {
+       "denom": "ibc/C7110DEC66869DAE9BE9C3C60F4B5313B16A2204AE020C3B0527DD6B322386A3",
+       "amount": "19645005"
+      },
+      "weight": "536870912000000"
+     }
+    ]
+   },
+   "balances": [
+    {
+     "denom": "ibc/37CB3078432510EE57B9AFA8DBE028B33AE3280A144826FEAC5F2334CF2C5539",
+     "amount": "552371"
+    },
+    {
+     "denom": "ibc/C7110DEC66869DAE9BE9C3C60F4B5313B16A2204AE020C3B0527DD6B322386A3",
+     "amount": "19645005"
+    }
+   ],
+   "type": 0,
+   "spread_factor": "0.010000000000000000",
+   "liquidity_cap": "1",
+   "liquidity_cap_error": "zero cap for denom (ibc/C7110DEC66869DAE9BE9C3C60F4B5313B16A2204AE020C3B0527DD6B322386A3)",
+   "apr_data": {
+    "swap_fees": {},
+    "superfluid": {},
+    "osmosis": {},
+    "boost": {},
+    "total_apr": {}
+   },
+   "fees_data": {
+    "volume_24h": 0,
+    "volume_7d": 0,
+    "fees_spent_24h": 0,
+    "fees_spent_7d": 0,
+    "fees_percentage": ""
+   }
+  },
+  {
+   "chain_model": {
+    "address": "osmo1m3uzk3ey4k0wdegjrg0vwjwcacjpzy2m0svq7yj3vphrh3ug6qcsc0ddql",
+    "incentives_address": "osmo1ahcl995vqyrj5xcflp7423myukkprsw2k37huapsg52qum0telsq8dhghu",
+    "spread_rewards_address": "osmo1rx4053k2467avp9n2mhp45yan4jau8hfkzmk5ck5sel4yczgzgrq0hy6yp",
+    "id": 3016,
+    "current_tick_liquidity": "0.000000000000000000",
+    "token0": "ibc/C7110DEC66869DAE9BE9C3C60F4B5313B16A2204AE020C3B0527DD6B322386A3",
+    "token1": "factory/osmo1z6r6qdknhgsc0zeracktgpcxf43j6sekq07nw8sxduc9lg0qjjlqfu25e3/alloyed/allBTC",
+    "current_sqrt_price": "0.000000000000000000000000000000000000",
+    "tick_spacing": 100,
+    "exponent_at_price_one": -6,
+    "spread_factor": "0.005000000000000000",
+    "last_liquidity_update": "2025-06-24T22:08:19.436597936Z"
+   },
+   "balances": [],
+   "type": 2,
+   "spread_factor": "0.005000000000000000",
+   "liquidity_cap": "0",
+   "liquidity_cap_error": "",
+   "apr_data": {
+    "swap_fees": {},
+    "superfluid": {},
+    "osmosis": {},
+    "boost": {},
+    "total_apr": {}
+   },
+   "fees_data": {
+    "volume_24h": 0,
+    "volume_7d": 0,
+    "fees_spent_24h": 0,
+    "fees_spent_7d": 0,
+    "fees_percentage": ""
+   }
+  },
+  {
+   "chain_model": {
+    "address": "osmo1xh4memv90ek5m87xpqtkj2aghxrtud69rry7gk33hsyu20aaqu8s7mpecz",
+    "incentives_address": "osmo1v284zk4e2tqa7dytvvzm3dunys5ptleqra5dkz4m3fke8435mjmsxdwqw3",
+    "spread_rewards_address": "osmo1wg97r077w9dzngl4ld24xu00hegqr99y6d0n5k6pvsfhhpexsznqhtduyq",
+    "id": 3052,
+    "current_tick_liquidity": "5126681.852540710792568823",
+    "token0": "ibc/C7110DEC66869DAE9BE9C3C60F4B5313B16A2204AE020C3B0527DD6B322386A3",
+    "token1": "ibc/D176154B0C63D1F9C6DCFB4F70349EBF2E2B5A87A05902F57A6AE92B863E9AEC",
+    "current_sqrt_price": "0.107806160546214184688270635110288020",
+    "current_tick": -17837784,
+    "tick_spacing": 100,
+    "exponent_at_price_one": -6,
+    "spread_factor": "0.010000000000000000",
+    "last_liquidity_update": "2026-05-09T11:02:59.30376841Z"
+   },
+   "balances": [
+    {
+     "denom": "ibc/C7110DEC66869DAE9BE9C3C60F4B5313B16A2204AE020C3B0527DD6B322386A3",
+     "amount": "47555858"
+    },
+    {
+     "denom": "ibc/D176154B0C63D1F9C6DCFB4F70349EBF2E2B5A87A05902F57A6AE92B863E9AEC",
+     "amount": "553932"
+    }
+   ],
+   "type": 2,
+   "spread_factor": "0.010000000000000000",
+   "liquidity_cap": "1",
+   "liquidity_cap_error": "zero cap for denom (ibc/C7110DEC66869DAE9BE9C3C60F4B5313B16A2204AE020C3B0527DD6B322386A3)",
+   "apr_data": {
+    "swap_fees": {
+     "lower": 0.6301654636978471,
+     "upper": 0.6301654636978471
+    },
+    "superfluid": {},
+    "osmosis": {},
+    "boost": {},
+    "total_apr": {
+     "lower": 0.6301654636978471,
+     "upper": 0.6301654636978471
+    }
+   },
+   "fees_data": {
+    "volume_24h": 0,
+    "volume_7d": 0,
+    "fees_spent_24h": 0,
+    "fees_spent_7d": 0,
+    "fees_percentage": ""
+   }
+  },
+  {
+   "chain_model": {
+    "address": "osmo1ln75k46kd2hqcae7h94yhgqrk2m3e6ulpkxs3ptcsrlgpha93lmqd4ydw6",
+    "incentives_address": "osmo17prv5zm3wfqerrcmlqfv57ps5mczla3azs597evrhsgjmceddczs0vf404",
+    "spread_rewards_address": "osmo1wypxgdl4lm0pnsxts56t2290q0a5g9dte6fzeckuwhmsnl9am9ps3wuw6w",
+    "id": 3021,
+    "current_tick_liquidity": "0.000000000000000000",
+    "token0": "ibc/C7110DEC66869DAE9BE9C3C60F4B5313B16A2204AE020C3B0527DD6B322386A3",
+    "token1": "ibc/2F21E6D4271DE3F561F20A02CD541DAF7405B1E9CB3B9B07E3C2AC7D8A4338A5",
+    "current_sqrt_price": "0.000000000000000000000000000000000000",
+    "tick_spacing": 100,
+    "exponent_at_price_one": -6,
+    "spread_factor": "0.010000000000000000",
+    "last_liquidity_update": "2025-06-30T10:46:00.356984628Z"
+   },
+   "balances": [],
+   "type": 2,
+   "spread_factor": "0.010000000000000000",
+   "liquidity_cap": "0",
+   "liquidity_cap_error": "",
+   "apr_data": {
+    "swap_fees": {},
+    "superfluid": {},
+    "osmosis": {},
+    "boost": {},
+    "total_apr": {}
+   },
+   "fees_data": {
+    "volume_24h": 0,
+    "volume_7d": 0,
+    "fees_spent_24h": 0,
+    "fees_spent_7d": 0,
+    "fees_percentage": ""
+   }
+  },
+  {
+   "chain_model": {
+    "address": "osmo1m459jtgn77tz8cffvthq5jh0erswxu9872mjd9qde546mslc6udq85we5r",
+    "incentives_address": "osmo1udxty2z8grrujgd3wwfmyc7j42aeh54qae2vap7xt4r92jvn5gxqr9tw25",
+    "spread_rewards_address": "osmo1n6mm8p4dzd9fe3aly9uzfxx963zxf3ah8vurl4lqm5ggnk0q2vuskr0rtv",
+    "id": 3005,
+    "current_tick_liquidity": "12182537984.214367314128069678",
+    "token0": "ibc/C7110DEC66869DAE9BE9C3C60F4B5313B16A2204AE020C3B0527DD6B322386A3",
+    "token1": "ibc/498A0751C798A0D9A389AA3691123DADA57DAA4FE165D5C75894505B876BA6E4",
+    "current_sqrt_price": "0.031935379420358432301010285098659131",
+    "current_tick": -26980132,
+    "tick_spacing": 100,
+    "exponent_at_price_one": -6,
+    "spread_factor": "0.002000000000000000",
+    "last_liquidity_update": "2026-10-28T14:49:51.062590774Z"
+   },
+   "balances": [
+    {
+     "denom": "ibc/498A0751C798A0D9A389AA3691123DADA57DAA4FE165D5C75894505B876BA6E4",
+     "amount": "187511006"
+    },
+    {
+     "denom": "ibc/C7110DEC66869DAE9BE9C3C60F4B5313B16A2204AE020C3B0527DD6B322386A3",
+     "amount": "751550946149"
+    }
+   ],
+   "type": 2,
+   "spread_factor": "0.002000000000000000",
+   "liquidity_cap": "188",
+   "liquidity_cap_error": "zero cap for denom (ibc/C7110DEC66869DAE9BE9C3C60F4B5313B16A2204AE020C3B0527DD6B322386A3)",
+   "apr_data": {
+    "swap_fees": {
+     "lower": 1.3126317189567651,
+     "upper": 106.39701652208414
+    },
+    "superfluid": {},
+    "osmosis": {},
+    "boost": {},
+    "total_apr": {
+     "lower": 1.3126317189567651,
+     "upper": 106.39701652208414
+    }
+   },
+   "fees_data": {
+    "volume_24h": 0,
+    "volume_7d": 0,
+    "fees_spent_24h": 0,
+    "fees_spent_7d": 0,
+    "fees_percentage": ""
+   }
+  },
+  {
+   "chain_model": {
+    "address": "osmo1h6zkrf476ha3csjmgf6eneh3p43ltmjlppvyzpmpyfxts0zk3k0s288e7l",
+    "incentives_address": "osmo1qkfdgl0pkp8sf5l28zwh9tatue5mpa6y5ssuv0ne4frqj9zc4vns7t9t02",
+    "spread_rewards_address": "osmo1r0wmz495qty98wp7fuwn5g0zwnktuy0meqcw656y5zxnnufusr3sqfqeal",
+    "id": 3368,
+    "current_tick_liquidity": "24473990135.628735661075226846",
+    "token0": "uosmo",
+    "token1": "ibc/C7110DEC66869DAE9BE9C3C60F4B5313B16A2204AE020C3B0527DD6B322386A3",
+    "current_sqrt_price": "7.120031169147902107031707900326058586",
+    "current_tick": 13069484,
+    "tick_spacing": 100,
+    "exponent_at_price_one": -6,
+    "spread_factor": "0.025000000000000000",
+    "last_liquidity_update": "2026-10-28T03:34:13.419302003Z"
+   },
+   "balances": [
+    {
+     "denom": "ibc/C7110DEC66869DAE9BE9C3C60F4B5313B16A2204AE020C3B0527DD6B322386A3",
+     "amount": "86871066000"
+    },
+    {
+     "denom": "uosmo",
+     "amount": "1668114886"
+    }
+   ],
+   "type": 2,
+   "spread_factor": "0.025000000000000000",
+   "liquidity_cap": "87",
+   "liquidity_cap_error": "zero cap for denom (ibc/C7110DEC66869DAE9BE9C3C60F4B5313B16A2204AE020C3B0527DD6B322386A3)",
+   "apr_data": {
+    "swap_fees": {
+     "lower": 111.34999000096025,
+     "upper": 500
+    },
+    "superfluid": {},
+    "osmosis": {},
+    "boost": {},
+    "total_apr": {
+     "lower": 111.34999000096025,
+     "upper": 500
+    }
+   },
+   "fees_data": {
+    "volume_24h": 0,
+    "volume_7d": 0,
+    "fees_spent_24h": 0,
+    "fees_spent_7d": 0,
+    "fees_percentage": ""
+   }
+  },
+  {
+   "chain_model": {
+    "address": "osmo1z2zamg27em7xsd7tywp2r6leus3tc3ccthejnc8nt694a023l9vqj45jpw",
+    "incentives_address": "osmo1m8ms2rsw579vsm53xzm0rd7p30whada9q626xje83ku265d5macs9yv06k",
+    "spread_rewards_address": "osmo1h64hsvwtydurl0zl0ca83rxgyu5ml688u6a97d9z38qva5jkr7rs5tflqp",
+    "id": 3019,
+    "current_tick_liquidity": "0.000000000000000000",
+    "token0": "ibc/C7110DEC66869DAE9BE9C3C60F4B5313B16A2204AE020C3B0527DD6B322386A3",
+    "token1": "ibc/C140AFD542AE77BD7DCC83F13FDD8C5E5BB8C4929785E6EC2F4C636F98F17901",
+    "current_sqrt_price": "0.000000000000000000000000000000000000",
+    "tick_spacing": 100,
+    "exponent_at_price_one": -6,
+    "spread_factor": "0.010000000000000000",
+    "last_liquidity_update": "2026-05-09T11:09:06.933836092Z"
+   },
+   "balances": [
+    {
+     "denom": "ibc/C140AFD542AE77BD7DCC83F13FDD8C5E5BB8C4929785E6EC2F4C636F98F17901",
+     "amount": "1191"
+    },
+    {
+     "denom": "ibc/C7110DEC66869DAE9BE9C3C60F4B5313B16A2204AE020C3B0527DD6B322386A3",
+     "amount": "1059"
+    }
+   ],
+   "type": 2,
+   "spread_factor": "0.010000000000000000",
+   "liquidity_cap": "1",
+   "liquidity_cap_error": "zero cap for denom (ibc/C7110DEC66869DAE9BE9C3C60F4B5313B16A2204AE020C3B0527DD6B322386A3)",
+   "apr_data": {
+    "swap_fees": {},
+    "superfluid": {},
+    "osmosis": {},
+    "boost": {},
+    "total_apr": {}
+   },
+   "fees_data": {
+    "volume_24h": 0,
+    "volume_7d": 0,
+    "fees_spent_24h": 0,
+    "fees_spent_7d": 0,
+    "fees_percentage": ""
+   }
+  },
+  {
+   "chain_model": {
+    "address": "osmo18r47qvvyh6rkxay8uc5dz9g8jrdtpag9vntcrsvf0r0ulpajenequtm8ul",
+    "incentives_address": "osmo1nw2sxn2xsnuzhtk48c9talz08wawp398z8n426zygxl8u6sly8dq807ggc",
+    "spread_rewards_address": "osmo1deqtyu84md0mgrk0mnrfyrpjzvknvvfnl3cvmc2r5ck7emwl76vqrnjmmm",
+    "id": 3037,
+    "current_tick_liquidity": "0.000000000000000000",
+    "token0": "ibc/C7110DEC66869DAE9BE9C3C60F4B5313B16A2204AE020C3B0527DD6B322386A3",
+    "token1": "ibc/89EE10FCF78800B572BAAC7080AEFA301B5F3BBC51C5371E907EB129C5B900E7",
+    "current_sqrt_price": "0.000000000000000000000000000000000000",
+    "tick_spacing": 100,
+    "exponent_at_price_one": -6,
+    "spread_factor": "0.010000000000000000",
+    "last_liquidity_update": "2026-01-21T11:30:49.007475394Z"
+   },
+   "balances": [
+    {
+     "denom": "ibc/89EE10FCF78800B572BAAC7080AEFA301B5F3BBC51C5371E907EB129C5B900E7",
+     "amount": "202"
+    },
+    {
+     "denom": "ibc/C7110DEC66869DAE9BE9C3C60F4B5313B16A2204AE020C3B0527DD6B322386A3",
+     "amount": "195"
+    }
+   ],
+   "type": 2,
+   "spread_factor": "0.010000000000000000",
+   "liquidity_cap": "1",
+   "liquidity_cap_error": "zero cap for denom (ibc/C7110DEC66869DAE9BE9C3C60F4B5313B16A2204AE020C3B0527DD6B322386A3)",
+   "apr_data": {
+    "swap_fees": {},
+    "superfluid": {},
+    "osmosis": {},
+    "boost": {},
+    "total_apr": {}
+   },
+   "fees_data": {
+    "volume_24h": 0,
+    "volume_7d": 0,
+    "fees_spent_24h": 0,
+    "fees_spent_7d": 0,
+    "fees_percentage": ""
+   }
+  },
+  {
+   "chain_model": {
+    "address": "osmo1myn2qs0rmj0fqtngq46epke7kh89ev68clar9dcj0p4h88lt78msn2cuyu",
+    "incentives_address": "osmo1prpdrnylyzkd2z7cx8n6nx930ex34fae4dg73wylzpw5hj4pkp6suje6vd",
+    "spread_rewards_address": "osmo13zsunpel7qfmky6qq0588rpdtq63r0pzg34qfavkn3y8tqmypztqs8d6at",
+    "id": 3011,
+    "current_tick_liquidity": "0.000000000000000000",
+    "token0": "ibc/C7110DEC66869DAE9BE9C3C60F4B5313B16A2204AE020C3B0527DD6B322386A3",
+    "token1": "factory/osmo1z6r6qdknhgsc0zeracktgpcxf43j6sekq07nw8sxduc9lg0qjjlqfu25e3/alloyed/allBTC",
+    "current_sqrt_price": "0.000000000000000000000000000000000000",
+    "tick_spacing": 100,
+    "exponent_at_price_one": -6,
+    "spread_factor": "0.010000000000000000",
+    "last_liquidity_update": "2026-05-09T11:07:34.9717302Z"
+   },
+   "balances": [
+    {
+     "denom": "factory/osmo1z6r6qdknhgsc0zeracktgpcxf43j6sekq07nw8sxduc9lg0qjjlqfu25e3/alloyed/allBTC",
+     "amount": "972"
+    },
+    {
+     "denom": "ibc/C7110DEC66869DAE9BE9C3C60F4B5313B16A2204AE020C3B0527DD6B322386A3",
+     "amount": "886"
+    }
+   ],
+   "type": 2,
+   "spread_factor": "0.010000000000000000",
+   "liquidity_cap": "1",
+   "liquidity_cap_error": "zero cap for denom (ibc/C7110DEC66869DAE9BE9C3C60F4B5313B16A2204AE020C3B0527DD6B322386A3)",
+   "apr_data": {
+    "swap_fees": {},
+    "superfluid": {},
+    "osmosis": {},
+    "boost": {},
+    "total_apr": {}
+   },
+   "fees_data": {
+    "volume_24h": 0,
+    "volume_7d": 0,
+    "fees_spent_24h": 0,
+    "fees_spent_7d": 0,
+    "fees_percentage": ""
+   }
+  },
+  {
+   "chain_model": {
+    "address": "osmo1rcl39flt5ua3t92vtwj7xllj9u2ucmrsjdhl945jc25f6zxvnvns5rtv6l",
+    "incentives_address": "osmo14apnaezsdv8c7h87avzwf43e2u4yqxemh5lf8cqdjekx52d5ywpsmepy5q",
+    "spread_rewards_address": "osmo19c049m3pz7wpmrlv9w20ac66llw3p0fnmg9xvf9vs9vstuc3fmgsvmz4l5",
+    "id": 3009,
+    "current_tick_liquidity": "2505626593.299568257527713402",
+    "token0": "ibc/C7110DEC66869DAE9BE9C3C60F4B5313B16A2204AE020C3B0527DD6B322386A3",
+    "token1": "uosmo",
+    "current_sqrt_price": "0.139246552136134611719857564405616027",
+    "current_tick": -17061040,
+    "tick_spacing": 100,
+    "exponent_at_price_one": -6,
+    "spread_factor": "0.001000000000000000",
+    "last_liquidity_update": "2025-06-21T17:00:13.646586756Z"
+   },
+   "balances": [
+    {
+     "denom": "ibc/C7110DEC66869DAE9BE9C3C60F4B5313B16A2204AE020C3B0527DD6B322386A3",
+     "amount": "17994178556"
+    },
+    {
+     "denom": "uosmo",
+     "amount": "348901795"
+    }
+   ],
+   "type": 2,
+   "spread_factor": "0.001000000000000000",
+   "liquidity_cap": "19",
+   "liquidity_cap_error": "zero cap for denom (ibc/C7110DEC66869DAE9BE9C3C60F4B5313B16A2204AE020C3B0527DD6B322386A3)",
+   "apr_data": {
+    "swap_fees": {
+     "lower": 1.3434854777384537,
+     "upper": 1.3434854777384537
+    },
+    "superfluid": {},
+    "osmosis": {},
+    "boost": {},
+    "total_apr": {
+     "lower": 1.3434854777384537,
+     "upper": 1.3434854777384537
+    }
+   },
+   "fees_data": {
+    "volume_24h": 0,
+    "volume_7d": 0,
+    "fees_spent_24h": 0,
+    "fees_spent_7d": 0,
+    "fees_percentage": ""
+   }
+  },
+  {
+   "chain_model": {
+    "address": "osmo1zgn0stc4upnezcnyhkrf775ducjfqs4cre57q0q5j6flqgd2tf8sxz06mz",
+    "id": 3007,
+    "pool_params": {
+     "swap_fee": "0.000100000000000000",
+     "exit_fee": "0.000000000000000000"
+    },
+    "future_pool_governor": "24h",
+    "total_weight": "1073741824000000.000000000000000000",
+    "total_shares": {
+     "denom": "gamm/pool/3007",
+     "amount": "1000000000000000000"
+    },
+    "pool_assets": [
+     {
+      "token": {
+       "denom": "ibc/498A0751C798A0D9A389AA3691123DADA57DAA4FE165D5C75894505B876BA6E4",
+       "amount": "162340"
+      },
+      "weight": "536870912000000"
+     },
+     {
+      "token": {
+       "denom": "ibc/C7110DEC66869DAE9BE9C3C60F4B5313B16A2204AE020C3B0527DD6B322386A3",
+       "amount": "170386287"
+      },
+      "weight": "536870912000000"
+     }
+    ]
+   },
+   "balances": [
+    {
+     "denom": "ibc/498A0751C798A0D9A389AA3691123DADA57DAA4FE165D5C75894505B876BA6E4",
+     "amount": "162340"
+    },
+    {
+     "denom": "ibc/C7110DEC66869DAE9BE9C3C60F4B5313B16A2204AE020C3B0527DD6B322386A3",
+     "amount": "170386287"
+    }
+   ],
+   "type": 0,
+   "spread_factor": "0.000100000000000000",
+   "liquidity_cap": "1",
+   "liquidity_cap_error": "zero cap for denom (ibc/C7110DEC66869DAE9BE9C3C60F4B5313B16A2204AE020C3B0527DD6B322386A3)",
+   "apr_data": {
+    "swap_fees": {
+     "lower": 0.12677701374960207,
+     "upper": 0.12677701374960207
+    },
+    "superfluid": {},
+    "osmosis": {},
+    "boost": {},
+    "total_apr": {
+     "lower": 0.12677701374960207,
+     "upper": 0.12677701374960207
+    }
+   },
+   "fees_data": {
+    "volume_24h": 0,
+    "volume_7d": 0,
+    "fees_spent_24h": 0,
+    "fees_spent_7d": 0,
+    "fees_percentage": ""
+   }
+  },
+  {
+   "chain_model": {
+    "contract_address": "osmo1cf6jdap430ugk6c27cdm5stqkq7z3rkgfl5ps5nnw3d5409sw3vql4364c",
+    "pool_id": 3008,
+    "code_id": 885,
+    "instantiate_msg": "eyJiYXNlX2Rlbm9tIjoiaWJjL0M3MTEwREVDNjY4NjlEQUU5QkU5QzNDNjBGNEI1MzEzQjE2QTIyMDRBRTAyMEMzQjA1MjdERDZCMzIyMzg2QTMiLCJxdW90ZV9kZW5vbSI6ImliYy80OThBMDc1MUM3OThBMEQ5QTM4OUFBMzY5MTEyM0RBREE1N0RBQTRGRTE2NUQ1Qzc1ODk0NTA1Qjg3NkJBNkU0In0="
+   },
+   "balances": [
+    {
+     "denom": "ibc/498A0751C798A0D9A389AA3691123DADA57DAA4FE165D5C75894505B876BA6E4",
+     "amount": "174700606"
+    },
+    {
+     "denom": "ibc/C7110DEC66869DAE9BE9C3C60F4B5313B16A2204AE020C3B0527DD6B322386A3",
+     "amount": "810665411525"
+    }
+   ],
+   "type": 3,
+   "spread_factor": "0.000000000000000000",
+   "liquidity_cap": "175",
+   "liquidity_cap_error": "zero cap for denom (ibc/C7110DEC66869DAE9BE9C3C60F4B5313B16A2204AE020C3B0527DD6B322386A3)",
+   "apr_data": {
+    "swap_fees": {},
+    "superfluid": {},
+    "osmosis": {},
+    "boost": {},
+    "total_apr": {}
+   },
+   "fees_data": {
+    "volume_24h": 0,
+    "volume_7d": 0,
+    "fees_spent_24h": 0,
+    "fees_spent_7d": 0,
+    "fees_percentage": ""
+   }
+  }
+ ],
+ "meta": {
+  "total_items": 28
+ }
+}

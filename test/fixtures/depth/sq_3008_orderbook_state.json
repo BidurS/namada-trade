@@ -1,0 +1,12 @@
+// 2026-10-29T02:14:55.293Z GET https://osmosis-rest.publicnode.com/cosmwasm/wasm/v1/contract/osmo1cf6jdap430ugk6c27cdm5stqkq7z3rkgfl5ps5nnw3d5409sw3vql4364c/smart/eyJvcmRlcmJvb2tfc3RhdGUiOnt9fQ%3D%3D
+// smart query {"orderbook_state":{}}
+// status 200 bytes 248 ms 235
+{
+ "data": {
+  "quote_denom": "ibc/498A0751C798A0D9A389AA3691123DADA57DAA4FE165D5C75894505B876BA6E4",
+  "base_denom": "ibc/C7110DEC66869DAE9BE9C3C60F4B5313B16A2204AE020C3B0527DD6B322386A3",
+  "current_tick": 0,
+  "next_bid_tick": -33500000,
+  "next_ask_tick": -27000000
+ }
+}

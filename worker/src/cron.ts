@@ -2,6 +2,7 @@ import type { Env } from './util';
 import { runBatch, stmt, kvGet, kvSet, kvGetJson } from './db';
 import { fetchOsmosisHolderList, fetchOsmosisSupplyBase, fetchOsmosisBalanceBase, OSMOSIS_HOLDER_PAGES, OSMOSIS_NEXT_KEY_MAX, KEPLR_REST_SRC, type HolderListRead, type KeplrOpts, type OsmosisBalanceRead } from './sources/osmosis';
 import { fetchNamPools, fetchNamPrice, priceSourceName } from './sources/sqs';
+import * as depth from './depth/index';
 import { PRICE_HOW_KEY, priceHealth, priceHowStmt, type PriceHowLog } from './price-how';
 import { QUOTE_KEYS } from '../../shared/settle';
 import { namBalance, namTotalSupply, namTotalStake, namadaEpoch, namadaStatusAll, delegationsAt, answeringRpcs, listingHeads, QUICK, RpcBreaker, allNamBalances, allBonds, ListingTooLargeError, LISTING_MAX_VALUE_BYTES, type BalanceListing, type BondListing, type ReadOpts, type Rpc } from './sources/namada';
@@ -1650,6 +1651,19 @@ export async function runCron(env: Env) {
     const poolsRow: SourceHealth = { name: 'Osmosis SQS (pools)', ok: poolRes.pools.length > 0 && !poolRes.refused, at: poolRes.at, note: poolRes.error ?? refusedNote };
     health.push(poolsRow);
 
+    // 1b. Depth (worker/src/depth/index.ts, plan 1.1): the live pools' state from the chain, beside the reads above, in
+    //     a phase of its own (DEPTH_PHASE_MS) started only while the tick is not late. Its reads go now; its writes go in
+    //     a batch of its own after the metrics batch below (metricsWritten); its failure never ends the tick, and the
+    //     tick waits for it only before the health rows are merged.
+    let metricsWrittenResolve: () => void = () => {};
+    const metricsWritten = new Promise<void>((resolve) => { metricsWrittenResolve = resolve; });
+    const depthPhase = late() ? null : phaseSignal(signal, Date.now() + depth.DEPTH_PHASE_MS);
+    const depthRun: Promise<unknown> = depthPhase
+      ? depth.minute(env, now, { health, signal: depthPhase.signal, late, pools: poolRes.raw ?? null, poolsAt: poolRes.at, routeOut: price.routeOut ?? null, writeAfter: metricsWritten })
+          .catch((e) => { console.error('depth minute', e); health.push({ name: depth.DEPTH_HEALTH.pools, ok: false, at: now, note: String(e).slice(0, 160) }); })
+          .finally(depthPhase.done)
+      : Promise.resolve(health.push({ name: depth.DEPTH_HEALTH.pools, ok: false, at: now, note: 'Not run this tick: the tick was already late when the depth phase would have started.' }));
+
     // Every pool the quote service lists is labelled, so the holder list can leave pools out (holders.ts notPool).
     if (shouldSyncHolders && poolRes.pools.length) {
       await runBatch(env.DB, poolRes.pools.filter((p) => p.address).map((p) => stmt.label(p.address, 'osmosis', `Osmosis Pool #${p.id} (${p.pair})`, 'pool', 'auto', null, now))).catch((e) => console.error('pool labels', e));
@@ -1714,7 +1728,7 @@ export async function runCron(env: Env) {
       poolsRow.ok = false;
       poolsRow.note = [poolsRow.note, `Not a number, so not stored: ${unreadable.join(', ')}`].filter(Boolean).join(' ').slice(0, 160);
     }
-    await runBatch(env.DB, [...internalStmts, ...(howStmt ? [howStmt] : []), ...metricStmts.filter((s) => Number.isFinite(s.params[2]))]);
+    await runBatch(env.DB, [...internalStmts, ...(howStmt ? [howStmt] : []), ...metricStmts.filter((s) => Number.isFinite(s.params[2]))]).finally(metricsWrittenResolve);
 
     // 3b. The series (worker/src/series.ts): once an hour and once a day, each in the first minutes of the hour, on a
     //     tick that reads no chain listing unless the window is closing. The two run side by side, so their outside
@@ -1921,6 +1935,8 @@ export async function runCron(env: Env) {
     await appendHealthLog(env.DB, await checkFlips(env.DB, checkStmts, now), now).catch(() => {});
     await runBatch(env.DB, checkStmts);
     // What has been learnt so far is written now: a stall in the stake phase must not hide it.
+    // the depth phase ends inside its own budget; its health rows go out with this merge
+    await depthRun;
     await mergeHealth(env, health);
 
     // 5. Bonded stake. Estimates for every address from bond/unbond history (hourly since 2026-10-20: the bond listing

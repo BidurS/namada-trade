@@ -55,6 +55,13 @@ echo "$out" | python3 -c "
 import sys,json; n=json.load(sys.stdin)[0]['results'][0]['n']; print('0012 index:', n)
 sys.exit(0 if n == 1 else 1)" || { echo "FAIL migration 0012 is not in place: not deploying"; exit 1; }
 
+# 0013 (the depth tables): the depth minute writes depth_minute every tick and reads kv rows beside it; without the
+# three tables and the changes index the minute's batch fails on every tick and its health row says so
+for i in 1 2 3 4 5; do out=$(npx wrangler d1 execute namada-trade-db --remote --json --command "SELECT (SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name IN ('depth_minute','depth_hourly','depth_changes')) tables, (SELECT COUNT(*) FROM sqlite_master WHERE type='index' AND name = 'depth_changes_ts') n" 2>&1) && ! echo "$out" | grep -q 7403 && break; echo "retrying (Cloudflare 7403)"; sleep 6; done
+echo "$out" | python3 -c "
+import sys,json; r=json.load(sys.stdin)[0]['results'][0]; print('0013 tables and index:', r)
+sys.exit(0 if r['tables'] == 3 and r['n'] == 1 else 1)" || { echo "FAIL migration 0013 is not in place: not deploying"; exit 1; }
+
 echo "== 2. deploy"
 npm run deploy 2>&1 | grep -E "Current Version ID|Deployed|rror"
 

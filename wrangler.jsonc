@@ -29,6 +29,11 @@
     }
   ],
 
+  // The depth archive (docs: depth plan 1.6): one gzipped object per live pool per hour, written by the hourly depth
+  // job (step S3). Created once by the owner with `wrangler r2 bucket create namada-trade-depth`; the code tolerates the
+  // binding missing (worker/src/util.ts Env.DEPTH_R2 is optional) and then writes no archive and says so.
+  "r2_buckets": [{ "binding": "DEPTH_R2", "bucket_name": "namada-trade-depth" }],
+
   "durable_objects": {
     "bindings": [{ "name": "LIVE", "class_name": "LiveHub" }]
   },

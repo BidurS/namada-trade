@@ -35,6 +35,8 @@ export interface Env {
   WS_LIMITER?: { limit(o: { key: string }): Promise<{ success: boolean }> };
   /** The Osmosis quote service calls all visitors' quotes may make, 10 per 10 s per location (worker/src/api.ts quoteBudget) */
   QUOTE_LIMITER?: { limit(o: { key: string }): Promise<{ success: boolean }> };
+  /** The depth archive (wrangler.jsonc r2_buckets, bucket namada-trade-depth): the hourly raw states (depth plan 1.6, step S3). Optional: a Worker without it writes no archive and says so. */
+  DEPTH_R2?: R2Bucket;
 }
 
 export class HttpError extends Error {

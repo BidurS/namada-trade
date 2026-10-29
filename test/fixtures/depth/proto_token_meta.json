@@ -1,0 +1,119 @@
+// 2026-10-29T02:35:28.801Z GET sqs.osmosis.zone/tokens/metadata for the counter coins of every NAM pool (proto/token-meta.json, the research prototype's cached read; the URL and the time are inside)
+{
+ "readAt": "2026-10-29T02:35:28.801Z",
+ "url": "https://sqs.osmosis.zone/tokens/metadata?denoms=ibc%2F498A0751C798A0D9A389AA3691123DADA57DAA4FE165D5C75894505B876BA6E4,ibc%2FD176154B0C63D1F9C6DCFB4F70349EBF2E2B5A87A05902F57A6AE92B863E9AEC,factory%2Fosmo1z6r6qdknhgsc0zeracktgpcxf43j6sekq07nw8sxduc9lg0qjjlqfu25e3%2Falloyed%2FallBTC,factory%2Fosmo1n3n75av8awcnw4jl62n3l48e6e4sxqmaf97w5ua6ddu4s475q5qq9udvx4%2Falloyed%2FallSOL,ibc%2F2F21E6D4271DE3F561F20A02CD541DAF7405B1E9CB3B9B07E3C2AC7D8A4338A5,ibc%2F23104D411A6EB6031FA92FB75F227422B84989969E91DCAD56A535DD7FF0A373,uosmo,ibc%2FBC26A7A805ECD6822719472BCB7842A48EF09DF206182F8F259B2593EB5D23FB,ibc%2F698350B8A61D575025F3ED13E9AC9C0F45C89DEFE92F76D5838F1D3C1A7FF7C9,factory%2Fosmo1twk0c4kcwnhkyn6pzxe0qsk6a3nrye2w2sy309d60sljfysugagsd7e3mn%2Falloyed%2FallZEC,ibc%2FC140AFD542AE77BD7DCC83F13FDD8C5E5BB8C4929785E6EC2F4C636F98F17901,ibc%2F37CB3078432510EE57B9AFA8DBE028B33AE3280A144826FEAC5F2334CF2C5539,ibc%2F0FA9232B262B89E77D1335D54FB1E1F506A92A7E4B51524B400DC69C68D28372,ibc%2F89EE10FCF78800B572BAAC7080AEFA301B5F3BBC51C5371E907EB129C5B900E7",
+ "tokens": {
+  "factory/osmo1n3n75av8awcnw4jl62n3l48e6e4sxqmaf97w5ua6ddu4s475q5qq9udvx4/alloyed/allSOL": {
+   "name": "Solana",
+   "symbol": "SOL",
+   "coinMinimalDenom": "factory/osmo1n3n75av8awcnw4jl62n3l48e6e4sxqmaf97w5ua6ddu4s475q5qq9udvx4/alloyed/allSOL",
+   "decimals": 9,
+   "preview": false,
+   "coingeckoId": "solana"
+  },
+  "factory/osmo1twk0c4kcwnhkyn6pzxe0qsk6a3nrye2w2sy309d60sljfysugagsd7e3mn/alloyed/allZEC": {
+   "name": "Zcash",
+   "symbol": "ZEC",
+   "coinMinimalDenom": "factory/osmo1twk0c4kcwnhkyn6pzxe0qsk6a3nrye2w2sy309d60sljfysugagsd7e3mn/alloyed/allZEC",
+   "decimals": 8,
+   "preview": false,
+   "coingeckoId": "zcash"
+  },
+  "factory/osmo1z6r6qdknhgsc0zeracktgpcxf43j6sekq07nw8sxduc9lg0qjjlqfu25e3/alloyed/allBTC": {
+   "name": "Bitcoin",
+   "symbol": "BTC",
+   "coinMinimalDenom": "factory/osmo1z6r6qdknhgsc0zeracktgpcxf43j6sekq07nw8sxduc9lg0qjjlqfu25e3/alloyed/allBTC",
+   "decimals": 8,
+   "preview": false,
+   "coingeckoId": "bitcoin"
+  },
+  "ibc/0FA9232B262B89E77D1335D54FB1E1F506A92A7E4B51524B400DC69C68D28372": {
+   "name": "Penumbra",
+   "symbol": "UM",
+   "coinMinimalDenom": "ibc/0FA9232B262B89E77D1335D54FB1E1F506A92A7E4B51524B400DC69C68D28372",
+   "decimals": 6,
+   "preview": false,
+   "coingeckoId": ""
+  },
+  "ibc/23104D411A6EB6031FA92FB75F227422B84989969E91DCAD56A535DD7FF0A373": {
+   "name": "Ondo US Dollar Yield",
+   "symbol": "USDY",
+   "coinMinimalDenom": "ibc/23104D411A6EB6031FA92FB75F227422B84989969E91DCAD56A535DD7FF0A373",
+   "decimals": 18,
+   "preview": false,
+   "coingeckoId": "ondo-us-dollar-yield"
+  },
+  "ibc/2F21E6D4271DE3F561F20A02CD541DAF7405B1E9CB3B9B07E3C2AC7D8A4338A5": {
+   "name": "Wrapped Lido Staked Ether",
+   "symbol": "wstETH",
+   "coinMinimalDenom": "ibc/2F21E6D4271DE3F561F20A02CD541DAF7405B1E9CB3B9B07E3C2AC7D8A4338A5",
+   "decimals": 18,
+   "preview": false,
+   "coingeckoId": "wrapped-steth"
+  },
+  "ibc/37CB3078432510EE57B9AFA8DBE028B33AE3280A144826FEAC5F2334CF2C5539": {
+   "name": "NYM",
+   "symbol": "NYM",
+   "coinMinimalDenom": "ibc/37CB3078432510EE57B9AFA8DBE028B33AE3280A144826FEAC5F2334CF2C5539",
+   "decimals": 6,
+   "preview": false,
+   "coingeckoId": "nym"
+  },
+  "ibc/498A0751C798A0D9A389AA3691123DADA57DAA4FE165D5C75894505B876BA6E4": {
+   "name": "USDC (Noble)",
+   "symbol": "USDC.noble",
+   "coinMinimalDenom": "ibc/498A0751C798A0D9A389AA3691123DADA57DAA4FE165D5C75894505B876BA6E4",
+   "decimals": 6,
+   "preview": false,
+   "coingeckoId": "usd-coin"
+  },
+  "ibc/698350B8A61D575025F3ED13E9AC9C0F45C89DEFE92F76D5838F1D3C1A7FF7C9": {
+   "name": "Stride Staked TIA",
+   "symbol": "stTIA",
+   "coinMinimalDenom": "ibc/698350B8A61D575025F3ED13E9AC9C0F45C89DEFE92F76D5838F1D3C1A7FF7C9",
+   "decimals": 6,
+   "preview": false,
+   "coingeckoId": ""
+  },
+  "ibc/89EE10FCF78800B572BAAC7080AEFA301B5F3BBC51C5371E907EB129C5B900E7": {
+   "name": "Lombard Staked Bitcoin",
+   "symbol": "LBTC",
+   "coinMinimalDenom": "ibc/89EE10FCF78800B572BAAC7080AEFA301B5F3BBC51C5371E907EB129C5B900E7",
+   "decimals": 8,
+   "preview": false,
+   "coingeckoId": "lombard-staked-btc"
+  },
+  "ibc/BC26A7A805ECD6822719472BCB7842A48EF09DF206182F8F259B2593EB5D23FB": {
+   "name": "AtomOne",
+   "symbol": "ATONE",
+   "coinMinimalDenom": "ibc/BC26A7A805ECD6822719472BCB7842A48EF09DF206182F8F259B2593EB5D23FB",
+   "decimals": 6,
+   "preview": false,
+   "coingeckoId": "atomone"
+  },
+  "ibc/C140AFD542AE77BD7DCC83F13FDD8C5E5BB8C4929785E6EC2F4C636F98F17901": {
+   "name": "Stride Staked ATOM",
+   "symbol": "stATOM",
+   "coinMinimalDenom": "ibc/C140AFD542AE77BD7DCC83F13FDD8C5E5BB8C4929785E6EC2F4C636F98F17901",
+   "decimals": 6,
+   "preview": false,
+   "coingeckoId": "stride-staked-atom"
+  },
+  "ibc/D176154B0C63D1F9C6DCFB4F70349EBF2E2B5A87A05902F57A6AE92B863E9AEC": {
+   "name": "Stride Staked OSMO",
+   "symbol": "stOSMO",
+   "coinMinimalDenom": "ibc/D176154B0C63D1F9C6DCFB4F70349EBF2E2B5A87A05902F57A6AE92B863E9AEC",
+   "decimals": 6,
+   "preview": false,
+   "coingeckoId": "stride-staked-osmo"
+  },
+  "uosmo": {
+   "name": "Osmosis",
+   "symbol": "OSMO",
+   "coinMinimalDenom": "uosmo",
+   "decimals": 6,
+   "preview": false,
+   "coingeckoId": "osmosis"
+  }
+ }
+}

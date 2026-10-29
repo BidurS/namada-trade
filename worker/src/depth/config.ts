@@ -51,6 +51,48 @@ export interface DepthConfig {
   offsetsPct: readonly number[];
   touchSize: number;
   heat: { edges: readonly number[]; pct: number };
+  /**
+   * The floor under which a pool that holds something is listed as dust and not read: the research prototype's live
+   * rule (proto/snapshot.mjs: at least one whole base coin, or at least this many base units of the other coin), which
+   * is what plan 1.2 a counted (16 live pools of 28 listed on 2026-10-29). Ten pools held a few hundred base units of
+   * each coin that day; reading their tick maps every minute would cost requests for no depth.
+   */
+  dust: { baseUnits: number; counterUnits: number };
+  read: DepthReadRules;
+  checks: DepthCheckRules;
+}
+
+/** How the minute reads (plan 1.2; the figures are the research's). */
+export interface DepthReadRules {
+  /** The most abci queries in one JSON-RPC batch POST: the public node answered ten in a body and refused more (proto/snapshot.mjs). */
+  rpcBatchMax: number;
+  /** When a batch fails, at most this many pools are read from the REST gateway instead (two GETs each) before the phase gives up. */
+  lcdFallbackPools: number;
+  /** Taker fees are read one pair at a time, at most this many a minute, and kept this long. */
+  takerReadsPerMinute: number;
+  takerMaxAgeMs: number;
+  /** A counter coin's symbol and decimals from the quote service's metadata, kept this long. */
+  metaMaxAgeMs: number;
+  /** The book's live ticks are listed again (all_ticks, in pages) when the known set is older than this or the book's best tick is not in it. */
+  bookDiscoveryMaxAgeMs: number;
+  bookPageSize: number;
+  /** A read's own timeout inside the phase. */
+  timeoutMs: number;
+}
+/** The tolerances of plan section 5 (owner decision 24). */
+export interface DepthCheckRules {
+  estimateOkPct: number;
+  estimateWarnPct: number;
+  routeOkPct: number;
+  executedOkPct: number;
+  executedWarnPct: number;
+  /** The stored swaps of this long before the tick are walked. */
+  executedWindowMs: number;
+  /** The newest comparisons the check keeps in its detail, and the kv row keeps. */
+  executedKeep: number;
+  realisedKeep: number;
+  /** Idle after this long without a trade the check could walk. */
+  executedIdleMs: number;
 }
 
 /** The caps of plan section 7 (cost.txt section 6 applied to this design), read 2026-10-29. */
@@ -68,6 +110,28 @@ export const DEPTH_CAPS: DepthCaps = {
   r2ObjectMax: 1_000_000,
   historyRowsMax: 43_200,
   heatRowsMax: 2_016,
+};
+
+export const DEPTH_READ_RULES: DepthReadRules = {
+  rpcBatchMax: 10,
+  lcdFallbackPools: 2,
+  takerReadsPerMinute: 3,
+  takerMaxAgeMs: 3_600_000,
+  metaMaxAgeMs: 86_400_000,
+  bookDiscoveryMaxAgeMs: 3_600_000,
+  bookPageSize: 300,
+  timeoutMs: 8_000,
+};
+export const DEPTH_CHECK_RULES: DepthCheckRules = {
+  estimateOkPct: 0.01,
+  estimateWarnPct: 0.1,
+  routeOkPct: 0.05,
+  executedOkPct: 1,
+  executedWarnPct: 3,
+  executedWindowMs: 120_000,
+  executedKeep: 20,
+  realisedKeep: 50,
+  executedIdleMs: 86_400_000,
 };
 
 /** Depth for NAM on Osmosis: the configuration this Worker runs. */
@@ -89,6 +153,9 @@ export const NAM_DEPTH: DepthConfig = {
   offsetsPct: DEPTH_OFFSETS_PCT,
   touchSize: DEPTH_TOUCH_SIZE,
   heat: { edges: HEAT_EDGES, pct: HEAT_BAND_PCT },
+  dust: { baseUnits: 1_000_000, counterUnits: 10_000 },
+  read: DEPTH_READ_RULES,
+  checks: DEPTH_CHECK_RULES,
 };
 
 /** What the module knows of a counter coin before any read: the configured entry, or null (the metadata read names the rest; a coin it does not name is unpriced). */

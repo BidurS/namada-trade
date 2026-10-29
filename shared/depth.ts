@@ -33,6 +33,10 @@ export const GRID_FINE_SPAN = 4;
 export const GRID_COARSE_STEP = 0.01;
 /** The curve served to the page is thinned to at most this many points a side. */
 export const CURVE_POINTS_MAX = 400;
+/** Each pool's own curve in the served answer is thinned further (sixteen pools at the aggregate's count would not fit the one stored row). */
+export const CURVE_POOL_POINTS_MAX = 120;
+/** The stored minute's answer (kv depth.latest) stays under this many bytes of JSON. */
+export const DEPTH_LATEST_MAX_BYTES = 150_000;
 
 export type DepthPoolType = 'concentrated' | 'balancer' | 'stableswap' | 'cosmwasm';
 export type DepthSide = 'bid' | 'ask';
@@ -142,7 +146,8 @@ export interface DepthPool {
   pair: string;
   counterDenom: string;
   counterSymbol: string;
-  counterDecimals: number;
+  /** Null when neither the configuration nor the quote service's metadata names the coin's decimals (the pool is then unpriced). */
+  counterDecimals: number | null;
   /** USD per whole counter coin (plan section 2 named this and the pool's value both counterUsd; the value is counterValueUsd). */
   counterUsd: number | null;
   counterUsdHow: string;
@@ -150,8 +155,9 @@ export interface DepthPool {
   spread: number;
   taker: number | null;
   sides: 'both' | 'nam' | 'coin' | 'empty' | 'unknown';
+  /** Whole coins; the counter is null when its decimals are not known. */
   nam: number;
-  counter: number;
+  counter: number | null;
   /** The pool's counter coin at counterUsd, in USD. */
   counterValueUsd: number | null;
   read: DepthRead | DepthReadError;
@@ -159,6 +165,7 @@ export interface DepthPool {
   book?: DepthPoolBook;
 }
 
+/** A listed pool that is not summed: unpriced, empty, dust, or cut by the pool cap; `why` says which. */
 export interface DepthUnpriced {
   id: string;
   pair: string;
@@ -175,7 +182,8 @@ export interface DepthCurve {
 }
 
 export interface DepthChecks {
-  estimate: { nam: number; chainUusdc: number; ours: number; diffPct: number; url: string; at: number } | null;
+  /** Base units of the counter coin: the chain's own estimate and ours for `nam` whole base coins in the reference pool. */
+  estimate: { nam: number; chainUusdc: number; ours: number; diffPct: number; url: string; at: number; height: number | null } | null;
   route: { nam: number; routerUsdc: number; ours: number; diffPct: number; at: number } | null;
   realised: { n: number; within1pct: number; lastAt: number | null };
 }
@@ -344,6 +352,24 @@ export const SELL_INTO_POOLS = 'the order book’s nearest bid is under the pool
 /** The honest start under the time view. */
 export const HONEST_START = 'Depth has been recorded since the first stored minute; nothing on the chain gives earlier depth.';
 
+/** Why a listed pool is not read: nothing inside, or too little to be worth a read every minute. */
+export const UNPRICED_EMPTY = 'empty on both sides, so the pool is listed and not read';
+export const UNPRICED_DUST = 'holds less than one whole coin on either side, so the pool is listed and not read';
+export const UNPRICED_NO_META = 'the quote service’s token metadata does not name this coin, so the pool is listed and not counted';
+/** A pool past the cap on pools read a minute: `n` is the cap, from the configuration. */
+export const cutByCap = (n: number) => `past the cap of ${n} pools read a minute (the largest by counter value are read), so the pool is listed and not read`;
+
+/** The realised check leaves out a trade with an order-book leg, and says so. */
+export const BOOK_LEG_LEFT_OUT = 'took part of its coins from an order-book order since gone: the book is not on the chain’s tick map and cannot be rebuilt';
+
+/** The titles of the four checks on the Status page (checks table rows). */
+export const DEPTH_CHECK_TITLES = {
+  depth_vs_chain_estimate: 'Depth vs the chain’s own swap estimate (the reference pool, the smallest size)',
+  depth_vs_route_quote: 'Depth vs the quote service’s direct quote in the reference pool',
+  depth_vs_executed: 'Depth vs the trades that settled (walked on the minute before each)',
+  depth_budget: 'Depth store within its caps (rows this month, database size, archive puts)',
+} as const;
+
 /** An empty side, and why it is possible. */
 export const NO_BIDS = 'no bids: nothing is resting to buy into on this side, which a pool emptied of its counter coin or a book with no buy orders allows';
 export const NO_ASKS = 'no asks: nothing is resting to sell into on this side';
@@ -353,10 +379,11 @@ export const notReadSince = (clock: string, why: string) => `not read since ${cl
 
 /** Every fixed sentence above, for test/depth-words.test.ts: none may carry a figure. */
 export const DEPTH_FIXED_WORDS: readonly string[] = [
-  ...Object.values(DEPTH_SOURCES), HEAT_RANGE_WORDS, CL_LEVEL_WORDS, UNPRICED_NO_PRICE, UNPRICED_NO_TAKER, USDC_AS_ONE, SELL_INTO_POOLS, HONEST_START, NO_BIDS, NO_ASKS,
+  ...Object.values(DEPTH_SOURCES), ...Object.values(DEPTH_CHECK_TITLES), HEAT_RANGE_WORDS, CL_LEVEL_WORDS, UNPRICED_NO_PRICE, UNPRICED_NO_TAKER, UNPRICED_EMPTY, UNPRICED_DUST, UNPRICED_NO_META,
+  BOOK_LEG_LEFT_OUT, USDC_AS_ONE, SELL_INTO_POOLS, HONEST_START, NO_BIDS, NO_ASKS,
 ];
 /** The sentences built from a read or the configuration, with sample arguments: the only figures they carry are the ones passed in. */
 export const DEPTH_BUILT_WORDS: readonly string[] = [
-  bookSource('3008'), UNPRICED_NOT_READ('status 429'), counterUsdHow('OSMO', 0.0529, '02:56 UTC'), notReadSince('02:56 UTC', 'status 429'),
+  bookSource('3008'), UNPRICED_NOT_READ('status 429'), counterUsdHow('OSMO', 0.0529, '02:56 UTC'), notReadSince('02:56 UTC', 'status 429'), cutByCap(40),
 ];
 export const DEPTH_WORDS: readonly string[] = [...DEPTH_FIXED_WORDS, ...DEPTH_BUILT_WORDS];

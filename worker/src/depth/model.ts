@@ -476,6 +476,17 @@ export function executeBuy(agg: Aggregate, pools: { id: string }[], nam: number)
   const usd = askUsd[i0] + t * (askUsd[i1] - askUsd[i0]); const price = grid[i0] + t * (grid[i1] - grid[i0]);
   return { nam, filledNam: nam, usd, marginalPrice: price, avgPrice: usd / nam, complete: true, split: splitAt(agg, pools, i0, 'ask', t, i1) };
 }
+/** Buying with `usd` of the counter value: walk the ask side (prices ascending) to where the cumulative USD reaches the budget; `nam` is the base coin bought, `usd` the budget. */
+export function executeBuyUsd(agg: Aggregate, pools: { id: string }[], usd: number): DepthFill {
+  const { grid, askNam, askUsd } = agg; const n = grid.length;
+  let loI = -1;
+  for (let i = 0; i < n; i++) if (askUsd[i] >= usd) { loI = i; break; }
+  if (loI < 0) { const i = n - 1; return { nam: askNam[i], filledNam: askNam[i], usd: askUsd[i], marginalPrice: grid[i], avgPrice: askNam[i] ? askUsd[i] / askNam[i] : null, complete: false, split: splitAt(agg, pools, i, 'ask', 1) }; }
+  const i1 = loI, i0 = Math.max(loI - 1, 0);
+  const a = askUsd[i0], b = askUsd[i1]; const t = b > a ? (usd - a) / (b - a) : 1;
+  const nam = askNam[i0] + t * (askNam[i1] - askNam[i0]); const price = grid[i0] + t * (grid[i1] - grid[i0]);
+  return { nam, filledNam: nam, usd, marginalPrice: price, avgPrice: nam > 0 ? usd / nam : null, complete: true, split: splitAt(agg, pools, i0, 'ask', t, i1) };
+}
 /** A cumulative value at a price, linear between grid points. */
 export function cumAt(agg: Aggregate, key: 'bidNam' | 'bidUsd' | 'askNam' | 'askUsd', price: number): number {
   const g = agg.grid, v = agg[key];

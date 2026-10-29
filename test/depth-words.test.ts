@@ -17,7 +17,7 @@ describe('the depth words', () => {
     expect(Object.keys(DEPTH_SOURCES)).not.toContain('book');
   });
   it('the built sentences carry only the figure passed in: the book’s pool from the configuration, a coin’s price, a clock', () => {
-    expect(DEPTH_BUILT_WORDS.length).toBe(4);
+    expect(DEPTH_BUILT_WORDS.length).toBe(5);
     expect(bookSource('3008')).toBe('Osmosis order book contract (pool 3008)');
     expect(bookSource('3008').match(/\d+/g)).toEqual(['3008']);
     expect(bookSource('12').match(/\d+/g)).toEqual(['12']);
