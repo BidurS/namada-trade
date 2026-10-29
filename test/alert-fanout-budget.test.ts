@@ -250,6 +250,31 @@ describe('a cron tick', () => {
     expect(JSON.parse(kv(db, 'gov.state')!)).toEqual({ [prop]: 'voting' });
     expect(forumRow(db).note).toBe('3 latest posts read');
   });
+
+  it('with the X keys set posts the proposal on X and none of the forum posts (owner, 2026-10-29)', async () => {
+    const base = 883000, prop = 883900;
+    const { db, env } = await seededTick('cx', 2, base, prop);
+    // from 13:00 UTC the tick also posts the day's recap (sources/x.ts postRecapOnX): today's is taken, so the run's
+    // posts on X are this tick's alerts whatever the hour
+    insert(db, 'kv', [{ key: `alert:x:recap:${new Date().toISOString().slice(0, 10)}`, value: '1', updated_at: NOW }]);
+    network(base, 3, prop);
+    const chain = globalThis.fetch;
+    const tweets: string[] = [];
+    vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      if (String(input) !== 'https://api.x.com/2/tweets') return chain(input, init);
+      tweets.push(JSON.parse(String(init?.body)).text);
+      return new Response(JSON.stringify({ data: { id: String(tweets.length), text: '' } }), { status: 201, headers: { 'content-type': 'application/json' } });
+    }));
+    await runCron({ ...env, X_API_KEY: 'ck', X_API_SECRET: 'cs', X_ACCESS_TOKEN: 'at', X_ACCESS_SECRET: 'as' });
+    expect(kv(db, 'forum.last_post_id')).toBe(String(base + 3));
+    expect(kv(db, `alert:x:gov:prop:${prop}:voting`), 'X posting is on in this run').not.toBeNull();
+    expect(tweets.length).toBeGreaterThan(0);
+    expect(tweets.filter((t) => !t.includes('Raise the cap')), 'every post is the proposal\'s').toEqual([]);
+    for (let id = base + 1; id <= base + 3; id++) {
+      expect(kv(db, `alert:forum:post:${id}`), 'the forum alert went to Discord').not.toBeNull();
+      expect(kv(db, `alert:x:forum:post:${id}`), 'and not to X').toBeNull();
+    }
+  });
 });
 
 // ---------------------------------------------------------------- answer bodies

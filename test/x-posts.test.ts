@@ -1,4 +1,4 @@
-// Automatic X posts (worker/src/sources/x.ts): the site's own big moves, votes, forum news and a daily recap, each
+// Automatic X posts (worker/src/sources/x.ts): the site's own big moves, votes and a daily recap (no forum posts), each
 // posted once, at most X_DAILY_MAX a day, fresh moves only, within 280 of X's weighted characters, mentioning no one,
 // signed with OAuth 1.0a. Fetch is stubbed: nothing reaches X.
 import { describe, it, expect, vi, afterEach, beforeEach } from 'vitest';

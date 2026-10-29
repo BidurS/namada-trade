@@ -1,6 +1,8 @@
 // Posts on X (@ the owner's account), automatically: the moves the site's own channel hears of (operatorMove: 10,000
-// NAM and up, no bot round trips or rewards claims), new and changed governance proposals, new forum topics and
-// replies, and a daily recap at 13:00 UTC with the daily digest's price chart (owner's choices, 2026-10-29).
+// NAM and up, no bot round trips or rewards claims), new and changed governance proposals, and a daily recap at
+// 13:00 UTC with the daily digest's price chart (owner's choices, 2026-10-29). Forum topics and replies are not posted
+// (owner, 2026-10-29): any forum account writes them, links and bare domains included, and the post would carry
+// them under the site's name.
 //
 // X's API is paid per call (https://docs.x.com/x-api/getting-started/pricing: $0.015 a post, $0.20 a post with a
 // link, checked 2026-10-29), so only the recap carries a link; an alert names the move, its figures and their source
@@ -10,15 +12,15 @@
 // Each post is claimed once (`alert:x:` keys, swept with the other claims: auth.ts sweepAuth). An answer that is no
 // answer, a 5xx or a 429 gives the claim back, so the alert offered again is posted; a refusal (401/403: the keys, 402:
 // no credits, 400: the text) is not tried again, and kv `x.last` records it for the health view. Text an outsider
-// wrote (a label, a forum post, a proposal) never mentions anyone: an @ is written as "(at)".
+// wrote (a label, a proposal) never mentions anyone: an @ is written as "(at)".
 //
 // The keys are the owner's X app's (OAuth 1.0a, Read and Write): X_API_KEY, X_API_SECRET, X_ACCESS_TOKEN,
 // X_ACCESS_SECRET, set by scripts/x-connect.sh at hidden prompts. Without all four nothing is posted.
-import type { Flow, ForumPost, GovernanceProposal } from '../../../shared/types';
+import type { Flow, GovernanceProposal } from '../../../shared/types';
 import { SITE } from '../../../shared/site';
 import { kvSet } from '../db';
 import { readMoveContext } from './discord-context';
-import { alertsOn, claimDiscordAlert, crossingOf, fits, forumCard, govCard, moveCard, operatorMove, releaseClaims, type Card, type GovContext } from './discord';
+import { alertsOn, claimDiscordAlert, crossingOf, fits, govCard, moveCard, operatorMove, releaseClaims, type Card, type GovContext } from './discord';
 import { mdToPlain } from './telegram';
 import { CHART_MINUTE_BOUND_MS, readChartRows, shapePriceChart, type ChartContext } from '../digest/charts/read';
 import { isNotRead, priceChart, toPng } from '../digest/charts/charts';
@@ -67,8 +69,8 @@ export function cutX(s: string, max = X_MAX): string {
 const noMentions = (s: string) => s.replace(/@/g, '(at)');
 
 /**
- * A card as a post: the title, the first paragraph (who moved it and the price, or a post's opening words, or a
- * proposal's votes) and the record it comes from, without links, in X's 280.
+ * A card as a post: the title, the first paragraph (who moved it and the price, or a proposal's votes) and the record
+ * it comes from, without links, in X's 280.
  */
 export function cardText(card: Card, now = Date.now()): string {
   const e = fits(card);
@@ -212,8 +214,6 @@ export async function postMoveOnX(env: XEnv, flow: Flow, whaleNam = 10000): Prom
   }, `move ${flow.id}`);
 }
 
-export const postForumOnX = (env: XEnv, post: ForumPost, categoryName?: string | null) =>
-  postOnce(env, `alert:x:forum:post:${post.id}`, () => cardText(forumCard(post, categoryName)), `forum post ${post.id}`);
 export const postGovOnX = (env: XEnv, prop: GovernanceProposal, isNew: boolean, g: GovContext = {}) =>
   postOnce(env, `alert:x:gov:prop:${prop.id}:${prop.status}`, () => cardText(govCard(prop, isNew, g)), `proposal ${prop.id} ${prop.status}`);
 

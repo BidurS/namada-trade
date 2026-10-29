@@ -8,7 +8,7 @@ import { QUOTE_KEYS } from '../../shared/settle';
 import { namBalance, namTotalSupply, namTotalStake, namadaEpoch, namadaStatusAll, delegationsAt, answeringRpcs, listingHeads, QUICK, RpcBreaker, allNamBalances, allBonds, ListingTooLargeError, LISTING_MAX_VALUE_BYTES, type BalanceListing, type BondListing, type ReadOpts, type Rpc } from './sources/namada';
 import { fetchIntelChecked } from './sources/intel';
 import { sendTelegramForum, sendTelegramGov, telegramRun, TG_CRON_MS, TG_CRON_SENDS } from './sources/telegram';
-import { postForumOnX, postGovOnX, postRecapOnX, repostNamada } from './sources/x';
+import { postGovOnX, postRecapOnX, repostNamada } from './sources/x';
 import { sendDiscordForumAlert, sendDiscordGovAlert, sendsAlerts, alertBudget, flushAlerts, sweepNoticeChannels, RUN_ALERT_POSTS, RUN_ALERT_WINDOW_MS, type GovContext } from './sources/discord';
 import { NAM, NAMADA, OSMOSIS } from './config';
 import { fetchJson, toNam, isRealAddress, FETCH_TEXT_MAX_BYTES, publicNote, redact, registerSecrets } from './util';
@@ -201,7 +201,8 @@ async function syncIntelAndAlerts(env: Env, health: SourceHealth[]) {
             const category = intel.topics.find((t) => t.id === post.topicId)?.categoryName ?? null;
             const discord = await sendDiscordForumAlert(env.DISCORD_WEBHOOK_URL, post, env.DB, budget, category);
             await sendTelegramForum(env, post, category, tgRun);
-            await postForumOnX(env, post, category);
+            // not on X (owner, 2026-10-29): a forum post is anyone's words, links and domains included, and X would
+            // carry them under the site's name (sources/x.ts)
             if (discord === 'waiting') waited = true;
             else if (!waited) done = post.id;
           }
