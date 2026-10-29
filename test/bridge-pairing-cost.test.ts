@@ -331,7 +331,7 @@ async function bridgeReads(db: ReturnType<typeof testD1>, now: number) {
                       FROM flows f WHERE f.chain='namada' AND f.kind IN ('ibc_in','ibc_out') AND f.ts >= ?
                       AND (f.from_addr LIKE 'osmo1%' OR f.to_addr LIKE 'osmo1%' OR f.from_addr = ? OR f.to_addr = ?) AND (f.meta IS NULL OR f.meta NOT LIKE '%"tokenSymbol":%') AND ${NOT_LEGACY_TWIN}
                       ORDER BY f.ts DESC LIMIT ?`).bind(from14, ESCROW, ESCROW, BRIDGE_CHECK_ROWS).all<any>();
-  const ob = await db.prepare(`SELECT id, kind, ts, height, from_addr, to_addr, amount_num, json_object('packetSequence', json_extract(meta, '$.packetSequence')) meta
+  const ob = await db.prepare(`SELECT id, kind, ts, height, from_addr, to_addr, amount_num, json_object('channel', json_extract(meta, '$.channel'), 'packetSequence', json_extract(meta, '$.packetSequence')) meta
                       FROM flows WHERE chain='osmosis' AND kind IN ('ibc_in','ibc_out') AND ts >= ? ORDER BY ts DESC LIMIT ?`).bind(from14 - 15 * 60000, BRIDGE_CHECK_ROWS).all<any>();
   const nbOld = await db.prepare(`SELECT f.id, f.kind, f.ts, f.height, f.from_addr, f.to_addr, f.amount_num, f.meta FROM flows f WHERE f.chain='namada' AND f.kind IN ('ibc_in','ibc_out') AND f.ts >= ?
                       AND (f.from_addr LIKE 'osmo1%' OR f.to_addr LIKE 'osmo1%' OR f.from_addr = ? OR f.to_addr = ?) AND (f.meta IS NULL OR f.meta NOT LIKE '%"tokenSymbol":%') AND ${NOT_LEGACY_TWIN}`).bind(from14, ESCROW, ESCROW).all<any>();

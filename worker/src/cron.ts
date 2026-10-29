@@ -679,10 +679,22 @@ export function bridgeJudgedFrom(namada: { ts: number }[], osmosis: { ts: number
 
 /**
  * Bridge crossings recorded on one chain and not on the other: each Namada bridge row (to or from an osmo1 address)
- * should have the Osmosis record of the same transfer (same addresses and amount within 15 minutes), and the other
- * way round. Rows younger than 30 minutes are not judged (relayers can be slow). Refunded sends are left out.
+ * should have the Osmosis record of the same transfer, and the other way round. Rows younger than 30 minutes are not
+ * judged (relayers can be slow). Refunded sends are left out.
  *
- * Chain users decide how many rows there are (a dust transfer is one) and this runs every minute, so the Osmosis
+ * Two records are one crossing first by packet identity: a Namada row and an Osmosis row of complementary kinds (a
+ * Namada ibc_out with an Osmosis ibc_in, a Namada ibc_in with an Osmosis ibc_out) whose meta.packetSequence are the
+ * same string of digits, whose amounts are equal within a micro unit, and whose channels, when the rows carry them,
+ * are the bridge's (NAM.namadaChannel on the Namada row, NAM.osmoChannel on the Osmosis row). Such a pair has no time
+ * window beyond the 14 days the reads cover: on 2026-10-29 a relayer delivered a send of 800,000 NAM 37.7 minutes
+ * after it left, and a 15-minute window had the check flag a crossing that completed. A sequence numbers the packets
+ * of one sending channel, so the complementary kinds keep a Namada send's sequence from pairing with an Osmosis
+ * send's. When several rows share a sequence (a replay, a mis-parse), they pair one to one in time order and the
+ * rest go on to the second pass. The Osmosis records are indexed by kind and sequence once, so this pass grows with
+ * the rows.
+ *
+ * The rows left then pair by addresses, amount and time (the same addresses and amount within 15 minutes). Chain
+ * users decide how many rows there are (a dust transfer is one) and this runs every minute, so the Osmosis
  * records are indexed by kind, addresses and amount and searched by time: the work grows with the rows, not with
  * their product. The Namada rows that name both their addresses are taken first, oldest first, each with the earliest
  * unpaired Osmosis record in its window: with windows of one width that pairs as many records of one key as can be
@@ -783,9 +795,48 @@ export function unpairedCrossings(namada: any[], osmosis: any[], now: number): {
     pairOf.set(n, o); holder.set(o, n);
   };
   const timed = namada.filter((n) => Number.isFinite(n.ts)).sort(byTime);
+  // First by packet identity. A row's meta is the read's JSON text or an object; its sequence counts when it is a
+  // string of digits (a number is accepted and made one), as analytics.ts ibcRowOf and flows-query.ts read it; a
+  // channel the row carries must be the bridge's on its chain. The Osmosis records are indexed once by kind and
+  // sequence, each list in time order, and a Namada row takes the earliest unused one of its sequence whose amount is
+  // its own (less than a micro unit apart, the rule the window pass applies). Each chain assigns a channel's
+  // sequences once, so a list holds one record and the pass grows with the rows; rows sharing one sequence (a replay,
+  // a mis-parse) are scanned against each other, and that list is not indexed by amount. A row paired this way is
+  // fixed: the search for chains of moves below never moves it off its packet.
+  const metaOf = (r: any): any => (typeof r.meta === 'string' ? safeParseJson(r.meta, {}) : r.meta ?? {});
+  const seqOf = (m: any): string | null => {
+    const v = m?.packetSequence;
+    const s = typeof v === 'number' && Number.isFinite(v) ? String(v) : typeof v === 'string' ? v : null;
+    return s != null && /^\d+$/.test(s) ? s : null;
+  };
+  const onBridge = (m: any, channel: string) => m?.channel == null || m.channel === channel;
+  const seqKey = (kind: unknown, seq: string) => `${kind}:${seq}`;
+  const fixed = new Set<any>();
+  const bySeq = new Map<string, any[]>();
+  for (const o of osmosis) {
+    if (!Number.isFinite(o.ts)) continue;
+    const m = metaOf(o), seq = seqOf(m);
+    if (seq == null || !onBridge(m, NAM.osmoChannel)) continue;
+    const key = seqKey(o.kind, seq);
+    let list = bySeq.get(key);
+    if (!list) bySeq.set(key, (list = []));
+    list.push(o);
+  }
+  for (const list of bySeq.values()) list.sort(byTime);
+  for (const n of timed) {
+    const m = metaOf(n), seq = seqOf(m);
+    if (seq == null || !onBridge(m, NAM.namadaChannel)) continue;
+    const list = bySeq.get(seqKey(want(n), seq));
+    if (!list) continue;
+    const o = list.find((x) => !used.has(x) && fits(n, x));
+    if (!o) continue;
+    used.add(o); pairOf.set(n, o); holder.set(o, n); fixed.add(n);
+  }
+  // Then by addresses, amount and time, over the rows and records left.
   const own = (n: any) => clsOf(n.from_addr) === 'own' && clsOf(n.to_addr) === 'own';
   const order = [...timed.filter(own), ...timed.filter((n) => !own(n))];
   for (const n of order) {
+    if (pairOf.has(n)) continue;
     const hit = search(n);
     if (hit) take(n, hit);
   }
@@ -813,7 +864,7 @@ export function unpairedCrossings(namada: any[], osmosis: any[], now: number): {
         if (budget.looks <= 0) return false;
         budget.looks--;
         const o = b.rows[j], n2 = holder.get(o);
-        if (n2 == null || n2 === n || seen.has(o) || !fits(n, o)) continue;
+        if (n2 == null || n2 === n || fixed.has(n2) || seen.has(o) || !fits(n, o)) continue;
         seen.add(o);
         budget.held = true;
         if (augment(n2, depth - 1, seen, budget)) { pairOf.set(n, o); holder.set(o, n); return true; }
@@ -1859,10 +1910,13 @@ export async function runCron(env: Env) {
         'This site\'s Osmosis flow index: live stream and catch-up search', { streaming, lastStreamReport: l?.at ?? null, sweptToHeight: sw?.height ?? null, sweptAt: sw?.at ?? null }, now));
     }
 
-    // Every bridge crossing should be on record on both chains (14 days; the last 30 minutes are not judged).
-    // Each read takes the newest BRIDGE_CHECK_ROWS rows and, of meta, only what the pairing and the stuck-packet list
-    // use (never the memo, which the sender writes). When a read comes back full, only the crossings the reads cover
-    // whole are judged, and the check says from when (judgedFrom) instead of passing.
+    // Every bridge crossing should be on record on both chains (14 days; the last 30 minutes are not judged). The two
+    // records of a crossing pair by packet sequence and channel first, whatever the time between them, and by
+    // addresses, amount and a 15-minute window after that (unpairedCrossings). Each read takes the newest
+    // BRIDGE_CHECK_ROWS rows and, of meta, only what the pairing and the stuck-packet list use (never the memo, which
+    // the sender writes): the Osmosis read takes the channel and the sequence so the pairing can see both. When a read
+    // comes back full, only the crossings the reads cover whole are judged, and the check says from when (judgedFrom)
+    // instead of passing.
     const from14 = now - 14 * 86400000;
     const [nb, ob, orf] = await Promise.all([
       env.DB.prepare(`SELECT f.id, f.kind, f.ts, f.height, f.from_addr, f.to_addr, f.amount_num,
@@ -1871,7 +1925,7 @@ export async function runCron(env: Env) {
                       AND (f.from_addr LIKE 'osmo1%' OR f.to_addr LIKE 'osmo1%' OR f.from_addr = ? OR f.to_addr = ?) AND (f.meta IS NULL OR f.meta NOT LIKE '%"tokenSymbol":%') AND ${NOT_LEGACY_TWIN}
                       ORDER BY f.ts DESC LIMIT ?`)
         .bind(from14, NAMADA.internal.ibc, NAMADA.internal.ibc, BRIDGE_CHECK_ROWS).all<any>().catch(() => null),
-      env.DB.prepare(`SELECT id, kind, ts, height, from_addr, to_addr, amount_num, json_object('packetSequence', json_extract(meta, '$.packetSequence')) meta
+      env.DB.prepare(`SELECT id, kind, ts, height, from_addr, to_addr, amount_num, json_object('channel', json_extract(meta, '$.channel'), 'packetSequence', json_extract(meta, '$.packetSequence')) meta
                       FROM flows WHERE chain='osmosis' AND kind IN ('ibc_in','ibc_out') AND ts >= ? ORDER BY ts DESC LIMIT ?`).bind(from14 - 15 * 60000, BRIDGE_CHECK_ROWS).all<any>().catch(() => null),
       env.DB.prepare(`SELECT id, ts, from_addr, to_addr, amount_num, json_object('packetSequence', json_extract(meta, '$.packetSequence'), 'refundReceiver', json_extract(meta, '$.refundReceiver')) meta
                       FROM flows WHERE chain='osmosis' AND kind='other' AND ts >= ? AND meta LIKE '%"ibcTimeoutRefund":true%' ORDER BY ts DESC LIMIT ?`).bind(from14, BRIDGE_CHECK_ROWS).all<any>().catch(() => null),
