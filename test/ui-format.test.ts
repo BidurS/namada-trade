@@ -3,7 +3,7 @@
 import { describe, it, expect } from 'vitest';
 import {
   MINUS, fmtUsdRule, fmtUsdWhole, splitPrice, fmtNamRule, fmtNamSigned, fmtPctRule, fmtPctSigned, fmtCoin,
-  fmtAge, ageOf, fmtAgo, fmtUtcLong, fmtUtcClock, fmtDateline, fmtDayMonth, fmtAddr, roundToTotal,
+  fmtAge, ageOf, fmtAgo, fmtUtcLong, fmtUtcClock, fmtDateline, fmtDayMonth, fmtMonthYear, fmtAddr, roundToTotal,
   explorerTx, explorerAddr,
 } from '../web/src/lib/format';
 import { uiStatus, STATUS_WORD, plainSource, stampText, ageRange, scopeRowText, CHECK_TITLES, checkUi, worstStatus } from '../web/src/lib/prov';
@@ -117,6 +117,11 @@ describe('ages (system.md 5.3)', () => {
     expect(fmtUtcClock(t)).toBe('11:24\u00a0UTC');
     expect(fmtDayMonth(t)).toBe('17 Oct');
     expect(fmtDateline(t)).toBe('Sat 17 Oct 2026 · 11:24\u00a0UTC');
+    // a month key, as the depth store's budget names its month, in the same three-letter months
+    expect(fmtMonthYear('2026-10')).toBe('Oct 2026');
+    expect(fmtMonthYear('2026-13')).toBeNull();
+    expect(fmtMonthYear('October 2026')).toBeNull();
+    expect(fmtMonthYear(null)).toBeNull();
   });
   it('short addresses keep the first 10 and last 5 characters', () => {
     expect(fmtAddr('tnam1qqscx0000000000000000000000000000027zh')).toBe('tnam1qqscx…027zh');

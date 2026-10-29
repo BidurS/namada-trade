@@ -279,6 +279,12 @@ export const BODY: Record<string, PageCopy> = {
         ],
       },
       {
+        h2: 'Is this the order book?',
+        paras: [
+          'It is the order book and the pools, merged. NAM on Osmosis trades in one order book of limit orders against USDC and in a set of pools where NAM is swapped against USDC, OSMO and other coins. The Depth page reads every one of them from the chain each minute and merges them into one answer: what selling or buying a given amount of NAM would fetch across all of them, which pool takes each part, what rests at every price, and who placed it. Every figure carries the block it was read at, and a pool that could not be read is named with the reason rather than filled in.',
+        ],
+      },
+      {
         h2: 'What does this site not do?',
         paras: [
           'It does not trade, hold funds, give investment advice or ask for a wallet\'s secret. Signing in is a signed message that costs nothing and moves nothing, and what is stored is the alert choices and where they are sent.',

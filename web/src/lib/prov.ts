@@ -6,7 +6,8 @@
 // name appears only in the sheet, under "Technical name".
 import type { ReactNode } from 'react';
 import type { Check, Pressure, Provenance, SourceStatus, Sourced } from '../../../shared/types';
-import { ageOf, fmtCount, fmtDayMonthYear, fmtNamRule, fmtPctRule, fmtUtcClock, fmtUtcLong } from './format';
+import { ageOf, fmtCount, fmtDayMonthYear, fmtMonthYear, fmtNamRule, fmtPctRule, fmtUtcClock, fmtUtcLong } from './format';
+import { DEPTH_CHECK_TITLES } from '../../../shared/depth-checks';
 
 export type Status = SourceStatus;
 /** The four data states as the UI names them (the `data-status` attribute values). */
@@ -167,6 +168,8 @@ export const CHECK_TITLES: Record<string, string> = {
   namada_index_lag: "This site's Namada records keep up with the chain",
   osmosis_index: "This site's Osmosis records are listening and caught up",
   bridge_records_paired: 'Every bridge crossing is on record on both chains',
+  // the depth module's four checks, titled where the module keeps its words (shared/depth.ts)
+  ...DEPTH_CHECK_TITLES,
 };
 
 /** A check's plain title: CHECK_TITLES, else its key in words. */
@@ -269,6 +272,21 @@ export function checkDetail(c: Check): string | null {
     }
     case 'osmosis_index':
       return typeof d.streaming === 'boolean' ? (d.streaming ? 'listening' : 'not listening') : null;
+    case 'depth_budget': {
+      // The depth store's caps (worker/src/depth/budget.ts budgetCheckStmt): the rows written this month against the
+      // cap, the database size the last statement reported, the archive puts; and the store's own reason when a cap
+      // stopped its writes. Every figure is the check's own detail, none typed here.
+      const rows = detailNum(d.rowsWritten), max = detailNum(d.rowsMonthMax), pct = detailNum(d.pctOfCap);
+      if (rows == null || max == null) return null;
+      const month = fmtMonthYear(typeof d.month === 'string' ? d.month : null);
+      const size = detailNum(d.sizeAfter);
+      const puts = detailNum(d.r2Puts);
+      const parts = [`${fmtCount(rows)} of ${fmtCount(max)} rows written${month ? ` in ${month}` : ' this month'}${pct != null ? ` (${fmtPctRule(pct, 1)} of the cap)` : ''}`];
+      parts.push(size != null ? `database ${(size / 1e9).toFixed(3)} GB` : 'database size not reported');
+      if (puts != null) parts.push(`${plural(puts, 'archive put', 'archive puts')}`);
+      const why = typeof d.why === 'string' && d.why ? `; ${d.why}` : '';
+      return `${parts.join(', ')}${why}`;
+    }
     default:
       return null;
   }

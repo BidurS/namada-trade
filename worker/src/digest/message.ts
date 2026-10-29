@@ -10,7 +10,7 @@ import { DIGEST_HOUR_UTC } from '../../../shared/alerts';
 import { explorerHashOf, safeHttpUrl } from '../../../shared/flow-rules';
 import { NAMADA } from '../config';
 import { NAMADA_CURSOR_MAX_LAG, NAMADA_CURSOR_STALE_MS, OSMOSIS_LIVE_STALE_MS, OSMOSIS_SWEEP_STALE_MS } from '../analytics';
-import type { PriceBasisCounts } from './figures';
+import { SOURCES, type DepthLine, type PriceBasisCounts } from './figures';
 
 const MIN = 60_000;
 const HOUR = 60 * MIN;
@@ -233,6 +233,15 @@ export interface ChartRef {
   present: boolean;
 }
 
+/** The two depth lines of the Trades field (depth plan section 6): each its own figure, since the hour's row can hold one and not the other. */
+export interface DepthValue {
+  sizeNam: number;
+  withinPct: number;
+  /** window: the lowest and highest over `hours` hours with a figure of the `stored` rows the window holds */
+  sell: (DepthLine & { window: { lo: number; hi: number; hours: number; stored: number } | null }) | NotRead;
+  bids: DepthLine | NotRead;
+}
+
 export interface DigestFigures {
   kind: DigestKind;
   now: number;
@@ -250,6 +259,8 @@ export interface DigestFigures {
   holders: Figure<HoldersValue>;
   governance: Figure<GovValue>;
   validators: Figure<ValidatorsValue>;
+  /** the depth store's two lines; absent in a figures set made before the store existed */
+  depth?: Figure<DepthValue>;
   charts?: ChartRef[];
 }
 
@@ -458,6 +469,8 @@ export function lateNote(now: number): string {
 export const MARK_ORDER = [
   'totalStake', 'posBalance', 'namadaScan', 'bondListing', 'epochClock', 'sqsQuote', 'tradeIndex', 'osmosisIndex', 'dataApi',
   'escrow', 'maspBalance', 'balanceListing', 'namadaTop10', 'osmosisHolders', 'osmosisTop10', 'proposals', 'validatorDaily',
+  // the depth store came after the worked example of section 7.1 (2026-10-23), so its mark is numbered after the seventeen
+  'depthStore',
 ] as const;
 export type MarkKey = (typeof MARK_ORDER)[number];
 /** A Sources entry: the source and its time, the provider name fit() may drop, and a tail that cites another mark. */
@@ -814,10 +827,57 @@ function fieldPrice(c: Ctx): EmbedField {
   return { name, value: [`${usdPrice(q.value)} ${c.marks.sup('sqsQuote')}${asOf(q, c)}`, ...changes].join(' · '), inline: true };
 }
 
+/** The depth store's name in the Sources list is figures.ts's, so the entry and the not-read line never name it differently (no provider: the chain is the source). */
+const DEPTH_STORE_SOURCE = SOURCES.depthStore;
+
+/**
+ * The two depth lines (depth plan section 6): "Selling 10,000 NAM across every pool fetched $9.92 at 07:59 UTC (lowest
+ * $9.80, highest $10.01 over the 24 h's 24 stored hours)" and "USD of bids within 10 % of the price: $507.29 at 07:59
+ * UTC", each from the newest closed hour with its source mark; a line not read says so with the store's last hour. The
+ * range names the hours it was taken over when some stored hours carry no figure ("over 14 of the 24 h's 24 stored
+ * hours"). No figure here is computed: both are the hour's own stored columns.
+ */
+function depthLines(c: Ctx): string[] {
+  const f = c.fig.depth;
+  if (!f) return [];
+  const parts: string[] = [];
+  if (isNotRead(f)) {
+    c.marks.cite('depthStore', notReadEntry(DEPTH_STORE_SOURCE, f, c.now));
+    parts.push(notReadLine('Depth', f, c.now));
+    return parts;
+  }
+  const v = f.value;
+  // a store that has never stored an hour: no read to cite (no time, no block), so the line names the store itself
+  if (isNotRead(v.sell) && isNotRead(v.bids) && v.sell.lastAt == null && v.bids.lastAt == null && v.sell.reason === v.bids.reason) return [notReadLine('Depth', v.sell, c.now)];
+  const sellLabel = `Selling ${int(v.sizeNam)} NAM across every pool`;
+  const bidsLabel = `USD of bids within ${v.withinPct} % of the price`;
+  const read = isNotRead(v.sell) ? (isNotRead(v.bids) ? null : v.bids) : v.sell;
+  if (read) c.marks.cite('depthStore', { text: `${DEPTH_STORE_SOURCE}, hour to ${timeWords(read.at, c.now)}${read.height != null ? `, block ${int(read.height)}` : ''}` });
+  else c.marks.cite('depthStore', notReadEntry(DEPTH_STORE_SOURCE, isNotRead(v.sell) ? v.sell : (v.bids as NotRead), c.now));
+  const D = c.marks.sup('depthStore');
+  // both lines unread for one reason (no hour stored yet, or the hour too old): one line says it
+  if (isNotRead(v.sell) && isNotRead(v.bids) && v.sell.reason === v.bids.reason) { parts.push(notReadLine('Depth', v.sell, c.now)); return parts; }
+  if (isNotRead(v.sell)) parts.push(notReadLine(sellLabel, v.sell, c.now));
+  else {
+    const w = v.sell.window;
+    const over = w ? (w.hours === w.stored ? `the ${c.win}'s ${plural(w.hours, 'stored hour')}` : `${int(w.hours)} of the ${c.win}'s ${plural(w.stored, 'stored hour')}`) : '';
+    const range = w ? ` (lowest ${usd(w.lo)}, highest ${usd(w.hi)} over ${over})` : '';
+    parts.push(`${sellLabel} fetched ${usd(v.sell.usd)} at ${timeWords(v.sell.at, c.now)}${range} ${D}.`);
+  }
+  if (isNotRead(v.bids)) parts.push(notReadLine(bidsLabel, v.bids, c.now));
+  else parts.push(`${bidsLabel}: ${usd(v.bids.usd)} at ${timeWords(v.bids.at, c.now)} ${D}.`);
+  return parts;
+}
+
 function fieldTrades(c: Ctx): EmbedField {
   const name = 'Trades';
   const f = c.fig.trades;
-  if (isNotRead(f)) return fieldNotRead(name, f, c, true);
+  if (isNotRead(f)) {
+    // the depth lines are their own read: they stand under the not-read line when the trade reads failed
+    const field = fieldNotRead(name, f, c, true);
+    const depth = depthLines(c);
+    return depth.length ? { ...field, value: `${field.value}\n${depth.join(' ')}` } : field;
+  }
   const v = f.value;
   const ix = osmosisIndex(c);
   const quote = !isNotRead(c.fig.price) && !isNotRead(c.fig.price.value.quote) ? c.fig.price.value.quote.value : null;
@@ -865,6 +925,7 @@ function fieldTrades(c: Ctx): EmbedField {
     c.marks.cite('dataApi', { text: `Osmosis data API, updated ${timeWords(api.at, c.now)}` });
     parts.push(`Osmosis data API ${c.win}: ${usd(api.value)} ${c.marks.sup('dataApi')}${asOf(api, c)}.`);
   }
+  parts.push(...depthLines(c));
   const body = parts.join(' ');
   return { name, value: ix.behind ? `${name}: ${ix.behind}\n${body}` : body, inline: true };
 }

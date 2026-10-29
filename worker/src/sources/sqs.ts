@@ -211,7 +211,7 @@ export async function fetchNamPools(): Promise<{ pools: PoolInfo[]; at: number; 
 
     for (const p of list) {
       const cm = p.chain_model || {};
-      // CosmWasm pools name these fields pool_id and contract_address (pool 3008, the NAM transmuter).
+      // CosmWasm pools name these fields pool_id and contract_address (pool 3008, Osmosis's NAM/USDC order book contract, code id 885).
       const id = String(cm.id || cm.pool_id || p.id || '');
       // The address becomes a pool label that leaves it out of every holder list, and a pool the live parser books
       // liquidity against, so the answer's word is taken only for an address shaped like a pool account: a Namada

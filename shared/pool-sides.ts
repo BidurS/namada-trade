@@ -1,7 +1,8 @@
 // What a NAM pool holds, read from its two reserves. A pool emptied on both sides holds nothing and is left out of the
-// pool list and the pool count; a pool with one side empty is shown by what it holds, never as a "$0" pool: since
-// 21 Oct 2026 pool 3008 holds about 910,000 NAM and no USDC, so it can be bought from but not sold into, and the
-// router counts no NAM in a pool's liquidity, so its listed liquidity reads $0.
+// pool list and the pool count; a pool with one side empty is shown by what it holds, never as a "$0" pool. The words
+// come from the read each time, never from a note here: pool 3008 (the NAM/USDC order book) held NAM and no USDC on
+// 21 Oct 2026 and 174.70 USDC of bids beside its NAM on 29 Oct, and the router counts no NAM in a pool's liquidity,
+// so a pool holding only NAM reads $0 in the router's list while it can still be bought from.
 
 /** 'both': two sides to trade; 'nam': only NAM inside; 'coin': only the other coin; 'empty': nothing; 'unknown': a reserve not read. */
 export type PoolSides = 'both' | 'nam' | 'coin' | 'empty' | 'unknown';

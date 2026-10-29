@@ -2155,7 +2155,7 @@ export const RETIRED_HEALTH = ['Namada RPC (balance refresh)', 'Namada RPC (stak
  * name, so a source that failed at 03:00 and recovered at 03:01 would otherwise leave no trace for the digest's
  * operator embed. A row seen for the first time is no flip.
  */
-async function mergeHealth(env: Env, health: SourceHealth[]) {
+export async function mergeHealth(env: Env, health: SourceHealth[]) {
   const prev = (await kvGetJson<Record<string, SourceHealth>>(env.DB, 'source.health').catch(() => null)) ?? {};
   for (const n of RETIRED_HEALTH) delete prev[n];
   const flips: HealthLogEntry[] = [];

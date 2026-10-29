@@ -217,7 +217,7 @@ describe('readDigestFigures on the survey\'s rows', () => {
       const sql = s.sql.replace(/\s+/g, ' ');
       expect(p, sql.slice(0, 100)).not.toMatch(/SCAN flows|INDEX flows_ts|SCAN metrics|SCAN kv\b|SCAN holders|SCAN unbond_queue|SCAN listings/);
       if (/FROM validator_daily|validator_daily a/.test(sql)) continue;
-      expect(p, sql.slice(0, 100)).toMatch(/sqlite_autoindex_metrics_1|flows_kind|flows_to|flows_from|INTEGER PRIMARY KEY|sqlite_autoindex_kv_1|kv_alert_claim_time|SEARCH unbond_queue/);
+      expect(p, sql.slice(0, 100)).toMatch(/sqlite_autoindex_metrics_1|flows_kind|flows_to|flows_from|INTEGER PRIMARY KEY|sqlite_autoindex_kv_1|kv_alert_claim_time|SEARCH unbond_queue|sqlite_autoindex_depth_hourly_1/);
     }
     const claims = log.find((s) => s.sql.includes("key LIKE 'alert:gov:prop:%'"))!;
     expect(claims.sql).toMatch(/INDEXED BY kv_alert_claim_time/);

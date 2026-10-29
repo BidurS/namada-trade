@@ -203,7 +203,8 @@ describe('a holder list longer than one tick can read', () => {
     // the count still includes osmo1zzz, whose reading is 7 h 10 min old: that is what the count is as of
     expect(f!.osmosis!.rowsAt).toBe(SYNC - 10 * MIN);
     expect(holderFiguresProv(f!.osmosis!.top10?.at, f!.osmosis!.rowsAt, later)).toMatchObject({ status: 'stale', at: SYNC - 10 * MIN });
-  });
+    // three virtual ticks of paged reads run about 3 s alone and past the 5 s default under the full run's load (the S7 review of 2026-10-29 saw 5.06 s)
+  }, 20_000);
 
   it('as before: one page with no next key that adds up to the supply is one complete pass; the one who left is zeroed', async () => {
     const db = seeded(SYNC);

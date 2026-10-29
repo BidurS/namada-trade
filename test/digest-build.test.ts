@@ -117,7 +117,9 @@ describe('the adapter on the survey\'s stored answers gives message.ts the worke
     expect(field(e, 'Price')).toBe('$0.00087359 ⁶ · 24 h +3.31 % (vs $0.00084557 at 07:59 UTC yesterday) · 7 d −13.97 % (vs $0.00101543, 16 Oct 07:59 UTC)');
     expect(field(e, 'Trades')).toBe(
       'Last executed hour 05:00 UTC: $0.00091650 from 1 trade ⁷; the quote is 4.68 % under it. ' +
-      '24 h: 9 trades, 60,537.86 NAM (bought 29,284.64 / sold 31,253.22), $53.91 at the stored prices (1 at execution, 8 at the Osmosis quote of their minute), 4 traders ⁸. Osmosis data API 24 h: $41.74 ⁹.',
+      '24 h: 9 trades, 60,537.86 NAM (bought 29,284.64 / sold 31,253.22), $53.91 at the stored prices (1 at execution, 8 at the Osmosis quote of their minute), 4 traders ⁸. Osmosis data API 24 h: $41.74 ⁹. ' +
+      // the depth store (2026-10-29) had no hour on 2026-10-23: one not-read line naming the store, no mark (no read to cite)
+      "Depth: not read — no hour of this site's depth store is on record yet.",
     );
     expect(field(e, 'Bridge (24 h)')).toBe(
       'Namada → Osmosis 1,454.20 NAM (1 crossing). Osmosis → Namada 359,041.66 NAM (5 crossings, largest 259,041.66). ' +
@@ -420,17 +422,18 @@ describe('the attention section\'s place and marks', () => {
     const m = attentionMarks(all);
     expect([m.marks.scan, m.marks.clock, m.marks.stream, m.marks.listing, m.marks.pass, m.marks.validators]).toEqual(['³', '⁵', '⁸', '¹²', '¹⁴', '¹⁷']);
     // its own: the quote's readings over the window, the trades' own prices, the labels, the coin quotes
-    expect([m.marks.quote, m.marks.trades, m.marks.labels, m.marks.coinQuote]).toEqual(['¹⁸', '¹⁹', '²⁰', '²¹']);
+    expect([m.marks.quote, m.marks.trades, m.marks.labels, m.marks.coinQuote]).toEqual(['¹⁹', '²⁰', '²¹', '²²']);
     expect(m.extra).toEqual([]);
     // only the own marks the section prints are numbered first, in that order
     const used = attentionMarks(all, new Set(['trades', 'coinQuote'] as const));
-    expect([used.marks.trades, used.marks.coinQuote]).toEqual(['¹⁸', '¹⁹']);
+    expect([used.marks.trades, used.marks.coinQuote]).toEqual(['¹⁹', '²⁰']);
     // the validators section not read: its mark is not in the digest's list
     const without = all.filter((x) => x.key !== ('validatorDaily' as MarkKey));
     const w = attentionMarks(without);
-    expect(w.marks.validators).toBe('¹⁷');
-    expect(w.extra).toEqual([{ mark: '¹⁷', text: 'the daily validator snapshot (the first complete bond listing of each UTC day)' }]);
-    expect([w.marks.quote, w.marks.trades, w.marks.labels, w.marks.coinQuote]).toEqual(['¹⁸', '¹⁹', '²⁰', '²¹']);
+    // numbered after the digest's highest mark (the depth store's, eighteenth), not after its count
+    expect(w.marks.validators).toBe('¹⁹');
+    expect(w.extra).toEqual([{ mark: '¹⁹', text: 'the daily validator snapshot (the first complete bond listing of each UTC day)' }]);
+    expect([w.marks.quote, w.marks.trades, w.marks.labels, w.marks.coinQuote]).toEqual(['²⁰', '²¹', '²²', '²³']);
   });
 });
 

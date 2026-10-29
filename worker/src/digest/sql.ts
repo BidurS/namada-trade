@@ -96,6 +96,16 @@ export const SQL = {
           WHERE kind IN ('buy','sell') AND chain = 'osmosis' AND ts >= ? AND ts < ? AND (meta IS NULL OR meta NOT LIKE '%"arb":true%')
           ORDER BY ts DESC LIMIT ${DIGEST_TRADES_MAX + 1})`,
 
+  /** The newest closed hour of the depth store's aggregate row (pool_id 'all', one primary-key seek): what selling the
+   *  quotable size fetched across every pool (sell_10k is the column of DEPTH_QUOTABLE_SIZE, 10,000 base coins; the
+   *  digest test holds the two together) and the USD of bids within 10 % of the reference price (bid_10). */
+  depthHour: `SELECT hour, at, height, sell_10k, bid_10, n, note FROM depth_hourly WHERE pool_id = ? AND hour <= ? ORDER BY hour DESC LIMIT 1`,
+  /** The window's hourly rows of the aggregate (one primary-key range): the lowest and highest sell_10k of the window,
+   *  the hours the two were taken over (n counts the rows whose sell_10k_lo is not NULL, the ones MIN and MAX read; an
+   *  hour whose reference pool was not read has none) and the rows stored in the window. */
+  depthDay: `SELECT MIN(sell_10k_lo) lo, MAX(sell_10k_hi) hi, COUNT(sell_10k_lo) n, COUNT(*) stored
+    FROM depth_hourly WHERE pool_id = ? AND hour >= ? AND hour < ?`,
+
   /** the bridge crossings the Osmosis records show in the window (the side the series trusts; flows_kind) */
   bridge: `SELECT f.kind, COUNT(*) n, SUM(f.amount_num) nam, MAX(f.amount_num) largest,
            SUM(CASE WHEN json_extract(f.meta,'$.via') = 'catch-up search' THEN 1 ELSE 0 END) late

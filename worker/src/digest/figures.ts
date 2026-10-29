@@ -15,6 +15,8 @@ import {
   INTEL_STALE_MS, MINUTE_BOUND_MS, OSMOSIS_PASS_TRUST_MS, PARAMS_STALE_MS, boundOf, changeFrom, firstRow, metricFigure, readNow,
 } from './freshness';
 import { ANCHOR_KV_KEYS, DIGEST_TRADES_MAX, MASP_ADDRESS, SQL } from './sql';
+import { AGGREGATE_POOL_ID } from '../depth/sql';
+import { DEPTH_OFFSETS_PCT, DEPTH_QUOTABLE_SIZE, OFFSET_10_INDEX } from '../../../shared/depth';
 import {
   DB_NOT_ANSWERED, HOUR_MS, ReadFailed, digestWindow, fmtClock, isNotRead, notRead, rowsOf, staleReason, valueOf,
   type Answer, type Change, type DigestKind, type DigestWindow, type Figure, type MetricFigure, type MetricRow, type Stamp,
@@ -48,6 +50,7 @@ export const SOURCES = {
   params: 'indexer.namada.net chain parameters',
   proposals: 'indexer.namada.net proposals',
   validatorDaily: 'the first complete bond listings of the two days',
+  depthStore: "this site's depth store (every Osmosis pool holding NAM, read by the minute)",
 } as const;
 
 /** The health rows two "not read" rules read (spec 5.8, 5.9). */
@@ -83,6 +86,11 @@ export interface VdDayRow { day: string; validators: number; stake: number | nul
 export interface VdMoveRow { validator: string; name: string | null; state: string | null; s_today: number; s_yday: number | null; d: number; d_today: number | null; d_yday: number | null }
 export interface VdSetsRow { joined: number; left_: number; gross: number | null }
 export interface VdStateRow { validator: string; name: string | null; s_from: string | null; s_to: string | null }
+/** The depth store's newest hourly row of the aggregate: the hour, the read behind it and the two figures (NULL with the reason in note when not filled). */
+export interface DepthHourRow { hour: number; at: number; height: number | null; sell_10k: number | null; bid_10: number | null; n: number; note: string | null }
+/** The window's hourly rows of the aggregate: the lowest and highest of the hours' own extremes, and how many hours had a row. */
+/** n is the count of hours the lowest and highest were taken over (rows with a figure); stored counts every row of the window. */
+export interface DepthDayRow { lo: number | null; hi: number | null; n: number; stored: number }
 
 /** Every statement's answer, by name; the pure shapers read only this. */
 export interface DigestReads {
@@ -120,6 +128,8 @@ export interface DigestReads {
   vdMoves: Answer<VdMoveRow>;
   vdSets: Answer<VdSetsRow>;
   vdStates: Answer<VdStateRow>;
+  depthHour: Answer<DepthHourRow>;
+  depthDay: Answer<DepthDayRow>;
   /** the two days compared, decided while reading; null when validator_daily could not be read */
   vdCompared: { day: string; baseDay: string; noListingToday: boolean; baseIsOldest: boolean } | null;
 }
@@ -258,6 +268,20 @@ export interface Validators {
   noListingToday: boolean; baseIsOldest: boolean;
 }
 
+/** One depth line: a figure of the newest closed hour with the hour it names and the read it came from. */
+export interface DepthLine { usd: number; hour: number; at: number; height: number | null }
+/** The two depth lines of the price-and-trades section (depth plan section 6): what selling the quotable size fetched
+ *  across every pool at the newest closed hour, with the window's lowest and highest when the hours carry them, and the
+ *  USD of bids within DEPTH_OFFSETS_PCT[OFFSET_10_INDEX] of the reference price. Each is its own figure: the hour's row
+ *  can hold one and not the other (NULL with the reason in its note), and an hour not stored leaves both not read. */
+export interface Depth {
+  sizeNam: number;
+  withinPct: number;
+  /** window: the lowest and highest over `hours` hours with a figure of the `stored` rows the window holds */
+  sell: Figure<DepthLine & { window: { lo: number; hi: number; hours: number; stored: number } | null }>;
+  bids: Figure<DepthLine>;
+}
+
 export interface DigestFigures {
   kind: DigestKind;
   now: number;
@@ -275,6 +299,7 @@ export interface DigestFigures {
   holders: Figure<Holders>;
   governance: Figure<Governance>;
   validators: Figure<Validators>;
+  depth: Figure<Depth>;
 }
 
 // ------------------------------------------------------------------------------------------------- the reads
@@ -348,6 +373,8 @@ export async function collectDigestReads(db: D1Database, win: DigestWindow, log?
   const proposals = w1.add<ProposalRow>(SQL.proposals, []);
   const govClaims = w1.add<ClaimRow>(SQL.govClaims, [from, to]);
   const vdDays = w1.add<VdDayRow>(SQL.vdDays, [today, baseDay]);
+  const depthHour = w1.add<DepthHourRow>(SQL.depthHour, [AGGREGATE_POOL_ID, now]);
+  const depthDay = w1.add<DepthDayRow>(SQL.depthDay, [AGGREGATE_POOL_ID, from, to]);
   await w1.run();
 
   // the header part: without the anchors or the epoch nothing is built this tick
@@ -464,6 +491,8 @@ export async function collectDigestReads(db: D1Database, win: DigestWindow, log?
     vdMoves: ans(vd?.moves, 'no snapshot days'),
     vdSets: ans(vd?.sets, 'no snapshot days'),
     vdStates: ans(vd?.states, 'no snapshot days'),
+    depthHour: depthHour.answer,
+    depthDay: depthDay.answer,
     vdCompared,
   };
 }
@@ -503,6 +532,7 @@ export function shapeDigestFigures(r: DigestReads, win: DigestWindow): DigestFig
     holders: section(SOURCES.balanceListing, () => shapeHolders(r, win, anchors)),
     governance: section(SOURCES.proposals, () => shapeGovernance(r, win, anchors)),
     validators: section(SOURCES.validatorDaily, () => shapeValidators(r, win)),
+    depth: section(SOURCES.depthStore, () => shapeDepth(r, win)),
   };
 }
 
@@ -757,6 +787,43 @@ export function shapeTrades(r: DigestReads, win: DigestWindow, a: Anchors): Figu
     },
     stamp: a.osmosis.stamp,
   };
+}
+
+// ---- the depth lines (depth plan section 6)
+
+/** A stored hour's figure is shown while its last minute is within HOURLY_BOUND_MS of T, as the other hourly keys are. */
+export const DEPTH_HOUR_NOT_STORED = "no hour of this site's depth store is on record yet";
+export const depthFigureMissing = (note: string | null): string => `the hour's row carries no figure for it${note ? ` (${note})` : ''}`;
+
+export function shapeDepth(r: DigestReads, win: DigestWindow): Figure<Depth> {
+  const src = SOURCES.depthStore;
+  const row = firstRow(rowsOf(r.depthHour, src));
+  const sizeNam = DEPTH_QUOTABLE_SIZE, withinPct = DEPTH_OFFSETS_PCT[OFFSET_10_INDEX];
+  if (!row) {
+    const nr = notRead(src, null, DEPTH_HOUR_NOT_STORED);
+    return { value: { sizeNam, withinPct, sell: nr, bids: nr }, stamp: { source: src, at: win.now, status: 'stale', note: DEPTH_HOUR_NOT_STORED } };
+  }
+  const stale = win.now - row.at > HOURLY_BOUND_MS;
+  const line = (v: number | null): Figure<DepthLine> => {
+    if (stale) return notRead(src, row.at, staleReason(row.at, win.now));
+    if (v == null || !Number.isFinite(v)) return notRead(src, row.at, depthFigureMissing(row.note));
+    return { value: { usd: v, hour: row.hour, at: row.at, height: row.height }, stamp: { source: src, at: row.at, height: row.height, status: 'live' } };
+  };
+  const sellLine = line(row.sell_10k);
+  let sell: Depth['sell'];
+  if (isNotRead(sellLine)) sell = sellLine;
+  else {
+    // the window's extremes come from the hours' own lowest and highest, counted over the hours that carry one (an
+    // hour whose reference pool was not read has no figure and is among the stored rows only); a window whose rows
+    // carry none has no range
+    const dayAnswer = r.depthDay.ok ? firstRow(r.depthDay.rows) : null;
+    const window = dayAnswer && dayAnswer.lo != null && dayAnswer.hi != null && Number.isFinite(dayAnswer.lo) && Number.isFinite(dayAnswer.hi) && dayAnswer.n > 0
+      ? { lo: dayAnswer.lo, hi: dayAnswer.hi, hours: dayAnswer.n, stored: dayAnswer.stored } : null;
+    sell = { value: { ...sellLine.value, window }, stamp: sellLine.stamp };
+  }
+  const bids = line(row.bid_10);
+  const stamp: Stamp = isNotRead(sell) ? (isNotRead(bids) ? { source: src, at: row.at, height: row.height, status: 'stale', note: sell.reason } : bids.stamp) : sell.stamp;
+  return { value: { sizeNam, withinPct, sell, bids }, stamp };
 }
 
 // ---- 5.6 the bridge

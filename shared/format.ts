@@ -189,6 +189,14 @@ export const fmtDayMonthYear = (ts: number | null | undefined): string => {
   return `${d.getUTCDate()} ${MON[d.getUTCMonth()]} ${d.getUTCFullYear()}`;
 };
 
+/** "Oct 2026" from a "YYYY-MM" month key (the depth store's budget month); null when the key is not one. */
+export const fmtMonthYear = (month: string | null | undefined): string | null => {
+  const m = typeof month === 'string' ? /^(\d{4})-(\d{2})$/.exec(month) : null;
+  if (!m) return null;
+  const i = Number(m[2]) - 1;
+  return i >= 0 && i < 12 ? `${MON[i]} ${m[1]}` : null;
+};
+
 /** "17 Oct, 10:00 UTC" (chart readout). */
 export const fmtDayClock = (ts: number | null | undefined): string => (!ok(ts) ? '—' : `${fmtDayMonth(ts)}, ${fmtUtcClock(ts)}`);
 

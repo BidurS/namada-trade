@@ -129,6 +129,9 @@ export function readsFromSurvey(kind: 'daily' | 'weekly'): DigestReads {
     vdMoves: answered(fx.validators.moves.slice(0, 5)),
     vdSets: answered(fx.validators.sets),
     vdStates: answered(fx.validators.states),
+    // the depth store did not exist on 2026-10-23: no hour on record
+    depthHour: answered([]),
+    depthDay: answered([{ lo: null, hi: null, n: 0, first_hour: null, last_hour: null }]),
     vdCompared: days.length === 2 ? { day, baseDay, noListingToday: false, baseIsOldest: false } : null,
   };
 }

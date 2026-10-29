@@ -486,6 +486,10 @@ Sections in order, each a titled panel: **Alert rules** (Switch rows, thresholds
 
 Not found: H1 "That page does not exist", the six tabs as links, server 404 plus `noindex` unchanged. Update banner as section 8. Loading: skeletons only, never the word "Loading…".
 
+### 9.10 Depth (`/depth`; aliases `/orderbook`, `/book`) — reference: `build-shots/depth-375.png`, `depth-1280.png`
+
+H1 "What rests at every price for NAM?", the Trade tab lit. Four views, each a band: **the answer** (yellow: Sell / Buy, the four stored sizes as chips and a field for any size, the hero "selling 10,000 NAM fetches $x" with its ProvChip, the split by pool, the six-figure fact strip, the router's own estimate beside it, and three when-not-to-act sentences computed from the stored minute, never typed), **the book** (black: a ladder of ½ / 1 / 2½ % bands around the reference price with each band's pools and fees, and the cumulative curve with the week's trades as marks; Levels | Curve tabs on phones, a split from 1024 px), **over time** (black: the heat of resting USD by price band and time on a five-step ordinal ramp, the executable line of what 10,000 NAM fetched at every stored minute with the hour's range shaded and every outage left as a gap, the change rows), and **who holds it** (the owners of every position and order, the address control with its label, the share, the hour's three checks). Every figure is read from the chain each minute by `worker/src/depth/` and served from the store (`/api/depth`, `/api/depth/quote`, `/history`, `/heat`, `/owners`, `/changes`); a figure not read is a dash with the reason; Rewind shows the stored minute and says what the store does not hold for it (no split, no marginal, no book). Words live in `shared/depth.ts`; the ramp and the bid and ask hues are tokens validated by the dataviz checks (`test/depth-palette.test.ts`). The daily digest carries two of these figures from the hour rows (what 10,000 NAM fetched, with the day's lowest and highest, and the USD of bids within 10 %), each with its source and hour, "not read" when the hour has no row.
+
 ---
 
 ## 10. Home copy deck (final)

@@ -385,10 +385,21 @@ export function toMessageFigures(f: ReadFigures, x: AdapterExtras = {}): Message
     };
   });
 
+  // the depth lines: each line's own figure, the not-read reason kept in the message's words
+  const D = f.depth;
+  const depth: MessageFigures['depth'] = isNotRead(D) ? nr(D) : {
+    value: {
+      sizeNam: D.value.sizeNam, withinPct: D.value.withinPct,
+      sell: isNotRead(D.value.sell) ? nr(D.value.sell) : D.value.sell.value,
+      bids: isNotRead(D.value.bids) ? nr(D.value.bids) : D.value.bids.value,
+    },
+    prov: D.stamp,
+  };
+
   return {
     kind: f.kind, now: f.now, from: f.from, to: f.to,
     anchors: anchorsOf(f),
-    staked, requests, pipeline, rewards, price, trades, bridge, masp, holders, governance, validators,
+    staked, requests, pipeline, rewards, price, trades, bridge, masp, holders, governance, validators, depth,
     charts: x.charts ?? [],
   };
 }

@@ -472,13 +472,9 @@ export const cutByCap = (n: number) => `past the cap of ${n} pools read a minute
 /** The realised check leaves out a trade with an order-book leg, and says so. */
 export const BOOK_LEG_LEFT_OUT = 'took part of its coins from an order-book order since gone: the book is not on the chain’s tick map and cannot be rebuilt';
 
-/** The titles of the four checks on the Status page (checks table rows). */
-export const DEPTH_CHECK_TITLES = {
-  depth_vs_chain_estimate: 'Depth vs the chain’s own swap estimate (the reference pool, the smallest size)',
-  depth_vs_route_quote: 'Depth vs the quote service’s direct quote in the reference pool',
-  depth_vs_executed: 'Depth vs the trades that settled (walked on the minute before each)',
-  depth_budget: 'Depth store within its caps (rows this month, database size, archive puts)',
-} as const;
+/** The titles of the four checks on the Status page live in shared/depth-checks.ts (the UI's initial bundle takes them from there) and are re-exported here. */
+import { DEPTH_CHECK_TITLES } from './depth-checks';
+export { DEPTH_CHECK_TITLES, type DepthCheckKey } from './depth-checks';
 
 /** An empty side, and why it is possible. */
 export const NO_BIDS = 'no bids: nothing is resting to buy into on this side, which a pool emptied of its counter coin or a book with no buy orders allows';
