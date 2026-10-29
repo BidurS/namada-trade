@@ -625,7 +625,7 @@ async function postOnce(url: string, body: Record<string, unknown>, files: PostF
 }
 
 /** Adds `n` posts not sent for `what` to kv `alerts.skipped` (the cron's health view shows the last). */
-async function recordSkipped(db: D1Database | undefined, n: number, what: string) {
+export async function recordSkipped(db: D1Database | undefined, n: number, what: string) {
   if (!db) return;
   const cur = (await kvGetJson<AlertsSkipped>(db, 'alerts.skipped').catch(() => null)) ?? { total: 0, last: { what, n: 0, at: 0 } };
   await kvSet(db, 'alerts.skipped', { total: cur.total + n, last: { what, n, at: Date.now() } }).catch(() => {});

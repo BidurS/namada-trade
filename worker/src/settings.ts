@@ -539,20 +539,27 @@ export function applyUpdate(cur: StoredSettings, body: any): StoredSettings | st
       if (n.channels.discord.webhookUrl !== cur.channels.discord.webhookUrl || !cur.channels.discord.enabled) delete n.channels.discord.notice;
     }
   }
-  // Telegram: the page turns sending on or off, or disconnects the chat; it never sets a chat (only the bot's handshake
-  // does: worker/src/telegram-bot.ts).
   const t = body.channels?.telegram;
   if (t) {
-    const cur = telegramOf(n);
-    if (t.disconnect === true) n.channels.telegram = { enabled: false, chatId: null, kind: null, title: null, linkedAt: null };
-    else if (typeof t.enabled === 'boolean') {
-      if (t.enabled && cur.chatId == null) return 'connect a Telegram chat first';
-      n.channels.telegram = { ...cur, enabled: t.enabled };
-    }
+    const tg = telegramUpdate(telegramOf(n), t);
+    if (typeof tg === 'string') return tg;
+    n.channels.telegram = tg;
   }
   n.updatedAt = Date.now();
   if (new TextEncoder().encode(JSON.stringify(n)).length > SETTINGS_MAX_BYTES) return 'these settings are too large to save';
   return n;
+}
+
+/**
+ * The page's change `t` to a row's Telegram channel `cur`: sending on or off, or the chat disconnected; it never sets a
+ * chat (only the bot's handshake does: worker/src/telegram-bot.ts). api.ts applies it again to the channel as stored
+ * just before the save, so a chat the bot unlinked meanwhile is not put back.
+ */
+export function telegramUpdate(cur: StoredTelegram, t: any): StoredTelegram | string {
+  if (t.disconnect === true) return { enabled: false, chatId: null, kind: null, title: null, linkedAt: null };
+  if (typeof t.enabled !== 'boolean') return cur;
+  if (t.enabled && cur.chatId == null) return 'connect a Telegram chat first';
+  return { ...cur, enabled: t.enabled };
 }
 
 // ---------------------------------------------------------------- Telegram rows
@@ -565,6 +572,11 @@ const TELEGRAM_ROWS = `${USER_ROWS} AND json_extract(value, '$.tg') = 1`;
  * inside about 8 seconds at Telegram's pace. The bot refuses a link past it (telegram-bot.ts).
  */
 export const TELEGRAM_CHATS_MAX = 200;
+/**
+ * What a wallet is told when TELEGRAM_CHATS_MAX refused the save that turns its paused chat on again: the row is then
+ * saved with sending still paused (api.ts), so every other change is kept.
+ */
+export const TELEGRAM_FULL = `Telegram alerts are full: this site sends to ${TELEGRAM_CHATS_MAX} chats and all are taken. Your changes were saved with sending to Telegram paused; turn it on later, when a chat has been freed.`;
 
 /** How many distinct chats have Telegram on, other than `chatId`'s (the bot's cap on a new link). */
 export async function telegramChatsOther(db: D1Database, secret: string, chatId: number): Promise<number> {
@@ -597,7 +609,12 @@ export async function readTelegram(db: D1Database, secret: string | undefined): 
   return { users, unserved };
 }
 
-/** The rows linked to Telegram chat `chatId`, on or off, opened (the bot's /stop, a blocked bot, a group left). */
+/**
+ * The rows linked to Telegram chat `chatId`, on or off, opened: the bot's /status and /stop, a blocked bot or a group
+ * left (unlinkChat), a group made a supergroup (moveChat), a test message to a chat that is gone. On migration 0014's
+ * index kv_user_telegram_chat (the chat's digest over the user: range, whose terms this WHERE repeats), so a /status
+ * from anyone reads that chat's rows only.
+ */
 export async function rowsOfChat(db: D1Database, secret: string, chatId: number): Promise<StoredSettings[]> {
   const rows = (await db.prepare(`SELECT value FROM kv WHERE ${USER_ROWS} AND json_extract(value, '$.tgc') = ?1`)
     .bind(chatDigest(secret, chatId)).all<{ value: string }>()).results ?? [];
@@ -626,11 +643,20 @@ export async function writeTelegram(db: D1Database, secret: string, s: StoredSet
   return Number(r.meta?.changes ?? 0) > 0;
 }
 
-/** Unlinks every row of chat `chatId` (`reason`: the person blocked the bot, the bot left the group, or /stop); how many rows. */
+/**
+ * Unlinks every row of chat `chatId` (`reason`: the person blocked the bot, the bot left the group, or /stop); how many
+ * rows. A row a Settings save wrote after it was read is read again, up to three times (as the bot's link does), so the
+ * save cannot keep a chat that asked to stop.
+ */
 export async function unlinkChat(db: D1Database, secret: string, chatId: number, reason: 'blocked' | 'removed' | 'stop', at = Date.now()): Promise<number> {
   let n = 0;
-  for (const s of await rowsOfChat(db, secret, chatId)) {
-    if (await writeTelegram(db, secret, s, () => ({ enabled: false, chatId: null, kind: null, title: null, linkedAt: null, stopped: { reason, at } }))) n++;
+  for (let i = 0; i < 3; i++) {
+    let missed = 0;
+    for (const s of await rowsOfChat(db, secret, chatId)) {
+      if (await writeTelegram(db, secret, s, () => ({ enabled: false, chatId: null, kind: null, title: null, linkedAt: null, stopped: { reason, at } }))) n++;
+      else missed++;
+    }
+    if (!missed) break;
   }
   return n;
 }

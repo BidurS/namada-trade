@@ -39,7 +39,7 @@ import { NAM_AMOUNT, NOT_LEGACY_TWIN as NOT_TWIN } from './flows-query';
 import { INTERNAL_ADDRESSES } from '../../shared/alerts';
 import { alertRules, DEFAULT_THRESHOLDS, type AlertThresholds } from '../../shared/alerts';
 import { issueNonce, login, logout, sessionFromRequest, createPairCode, claimPairCode, listSessions, revokeSession, revokeAllSessions, createSession, tokenHash } from './auth';
-import { loadSettings, saveSettings, deleteSettings, defaultPrefs, publicView, applyUpdate, requireKey, refusalOf, noteSettingsRefused, hookOkStmt, linkProven, channelsFull, stopChannelStmt, telegramOf, unlinkChat, SETTINGS_FULL, CHANNELS_FULL, type StoredSettings } from './settings';
+import { loadSettings, saveSettings, deleteSettings, defaultPrefs, publicView, applyUpdate, requireKey, refusalOf, noteSettingsRefused, hookOkStmt, linkProven, channelsFull, stopChannelStmt, telegramOf, telegramUpdate, telegramChatsOther, unlinkChat, SETTINGS_FULL, CHANNELS_FULL, TELEGRAM_CHATS_MAX, TELEGRAM_FULL, type StoredSettings } from './settings';
 import { clampLimit, prefixRange, decodeHolderCursor, encodeHolderCursor, encodeFlowCursor, parseBeforeParam, type HolderCursor, type BeforeParam, type FlowCursor } from '../../shared/paging';
 import { parse, isWholeAddress, INPUT_MAX, type Parsed } from '../../shared/search-grammar';
 import { EXPLORERS, NAMADA as NAMADA_SHARED } from '../../shared/config';
@@ -1474,11 +1474,23 @@ app.put('/api/me/settings', async (c) => {
       }
     }
   }
-  // The Telegram chat as stored now, unless this save changes it: the bot may have linked or unlinked it while this
-  // request ran (the connection notice above can take seconds), and the save must not put the old one back.
-  if (!body.channels?.telegram) {
-    const fresh = await loadSettings(c.env.DB, r.key, address).catch(() => null);
-    if (fresh) next.channels.telegram = fresh.channels.telegram;
+  // The Telegram chat as stored now, with this save's own change (pause, resume, disconnect) applied to it: the bot may
+  // have linked or unlinked it while this request ran (the connection notice above can take seconds), and the save must
+  // not put back a chat it read earlier, nor resume one that sent /stop. A chat resumed here takes a place under
+  // TELEGRAM_CHATS_MAX as a new link does (telegram-bot.ts): past it the row is saved with sending still paused (409).
+  const fresh = await loadSettings(c.env.DB, r.key, address).catch(() => null);
+  if (fresh) {
+    const tg = body.channels?.telegram ? telegramUpdate(telegramOf(fresh), body.channels.telegram) : fresh.channels.telegram;
+    if (typeof tg === 'string') return c.json({ error: tg }, 400);
+    next.channels.telegram = tg;
+  }
+  const tgWas = telegramOf(fresh ?? cur);
+  const tgNow = telegramOf(next);
+  let tgFull = false;
+  if (tgNow.enabled && tgNow.chatId != null && !(tgWas.enabled && tgWas.chatId === tgNow.chatId)
+    && (await telegramChatsOther(c.env.DB, r.key, tgNow.chatId)) >= TELEGRAM_CHATS_MAX) {
+    next.channels.telegram = { ...tgNow, enabled: false };
+    tgFull = true;
   }
   // Refused when the save would give a new address a row past USER_ROWS_MAX (503: nothing of the wallet is stored),
   // or turn Discord on while the site already has DELIVERABLE_MAX channels on (409: the row is saved with the channel
@@ -1496,14 +1508,15 @@ app.put('/api/me/settings', async (c) => {
   // A notice Discord took is a successful post to the saved link, on or off: the row records it, so the link needs no
   // post of its own when the channel is next turned on.
   if (sent.ok) await hookOkStmt(c.env.DB, r.key, address, url!, now).run().catch((e) => console.error('settings: the connection notice was not recorded', e));
-  // A Telegram chat disconnected here is told so, once (it may be shared by another wallet's row, whose alerts go on).
-  const wasChat = telegramOf(cur).chatId;
+  // A Telegram chat disconnected here is told so, once (it may be shared by another wallet's row, whose alerts go on);
+  // one the bot unlinked meanwhile is not.
+  const wasChat = tgWas.chatId;
   if (wasChat != null && telegramOf(next).chatId == null) {
     forgetTelegramUsers(c.env.DB);
     if (sendsTelegram(c.env)) await tgSend(c.env.TELEGRAM_BOT_TOKEN!, wasChat, { html: `NamadaTrade alerts for <code>${fmtAddr(address)}</code> were disconnected from this chat in Settings.` }).catch(() => {});
-  } else if (telegramOf(next).enabled !== telegramOf(cur).enabled) forgetTelegramUsers(c.env.DB);
+  } else if (telegramOf(next).enabled !== tgWas.enabled) forgetTelegramUsers(c.env.DB);
   const view = await viewOf(c.env.DB, r.key, next);
-  return full ? c.json({ error: CHANNELS_FULL, settings: view }, 409) : c.json({ settings: view });
+  return full || tgFull ? c.json({ error: full ? CHANNELS_FULL : TELEGRAM_FULL, settings: view }, 409) : c.json({ settings: view });
 });
 
 /** What the preview of the digest answers when the digest could not be built: nothing was posted. */
@@ -1610,7 +1623,7 @@ app.post('/api/me/telegram/link', async (c) => {
   const r = await me(c); if (r instanceof Response) return r;
   if (!sendsTelegram(c.env)) return c.json({ error: TELEGRAM_OFF }, 503);
   const now = Date.now();
-  const k = await createLinkCode(c.env.DB, r.s!.address, now);
+  const k = await createLinkCode(c.env.DB, r.key, r.s!.address, tokenHash(r.s!.token), now);
   // `now`: the server's time, which the page compares the link's time with (a browser's clock may be off)
   return c.json({ chat: k.chat, group: k.group, expiresAt: k.expiresAt, now });
 });

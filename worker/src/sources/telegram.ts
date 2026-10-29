@@ -22,7 +22,7 @@ import { chatDigest, inQuietHours, moveChat, readTelegram, thresholdsOf, unlinkC
 import { kvSet } from '../db';
 import { readMoveContext, type MoveContext } from './discord-context';
 import {
-  alertsOn, claimDiscordAlert, claimEach, crossingOf, releaseClaims, fits, forumCard, govCard, moveCard, operatorMove, settingsFields,
+  alertsOn, claimDiscordAlert, claimEach, crossingOf, releaseClaims, fits, forumCard, govCard, moveCard, operatorMove, recordSkipped, settingsFields,
   CARD_WORDS, type Card, type Embed, type GovContext, type TestExample,
 } from './discord';
 
@@ -140,6 +140,8 @@ export const tgSend = (token: string, chat: number | string, m: TgMessage) => tg
 
 /** Settings are read at most once per this long per database (a link or a change takes effect within it). */
 export const TG_USERS_CACHE_MS = 15_000;
+/** kv `alerts.skipped` label for Telegram subscribers a read of the settings did not serve. */
+export const TG_UNSERVED_WHAT = 'Telegram subscribers left unread (past the chat cap, or settings that do not open)';
 const usersCache = new WeakMap<D1Database, { at: number; users: StoredSettings[] }>();
 /** The rows with Telegram on, or null when they could not be read now (never an empty match). */
 async function telegramUsers(env: TelegramEnv): Promise<StoredSettings[] | null> {
@@ -147,8 +149,12 @@ async function telegramUsers(env: TelegramEnv): Promise<StoredSettings[] | null>
   if (c && Date.now() - c.at < TG_USERS_CACHE_MS) return c.users;
   try {
     const { users, unserved } = await readTelegram(env.DB, env.SETTINGS_KEY);
-    if (unserved) console.warn(`telegram: ${unserved} rows with Telegram on were not served (past the cap, or not opening)`);
     usersCache.set(env.DB, { at: Date.now(), users });
+    // Rows the read left out are recorded once a read, as Discord's are, so the health view shows them.
+    if (unserved) {
+      console.warn(`telegram: ${unserved} rows with Telegram on were not served (past the cap, or not opening)`);
+      await recordSkipped(env.DB, unserved, TG_UNSERVED_WHAT);
+    }
     return users;
   } catch (e) {
     console.error('telegram: the subscribers could not be read', e);

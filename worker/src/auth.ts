@@ -259,6 +259,15 @@ async function liveSession(db: D1Database, hash: string, address: string): Promi
   return !!p && !p.token && p.address === address && p.via !== 'api' && p.expiresAt >= Date.now();
 }
 
+/**
+ * A session or API key of `address`, by its token hash, still live: what made a Telegram connect code
+ * (telegram-bot.ts), which an API key may make too, so a code made during a revoke links nothing.
+ */
+export async function makerLive(db: D1Database, hash: string, address: string): Promise<boolean> {
+  const p = await kvGetJson<Stored>(db, `session:${hash}`).catch(() => null);
+  return !!p && !p.token && p.address === address && p.expiresAt >= Date.now();
+}
+
 /** createSession for a device sign-in, which the caps never refuse. */
 async function newDeviceSession(db: D1Database, address: string, chain: Chain, via: 'namada' | 'keplr'): Promise<Session> {
   const r = await createSession(db, address, chain, via);
@@ -279,7 +288,8 @@ export async function listSessions(db: D1Database, address: string, currentToken
 }
 
 /**
- * End the sessions of `address` whose id (a prefix of the token hash) is `id`, and the pair codes they made.
+ * End the sessions of `address` whose id (a prefix of the token hash) is `id`, and the pair codes and Telegram connect
+ * codes they made.
  * `byApiKey`: the request came with an API key, which may end API keys only (never a signed-in or paired
  * device): otherwise a leaked key could end every session its owner signs in with, before the owner reaches
  * Revoke, and keep the owner out (the key is then ended from a device the key cannot touch).
@@ -292,14 +302,19 @@ export async function revokeSession(db: D1Database, address: string, id: string,
   }
   const r = await db.prepare(`DELETE FROM ${SESSIONS_OF} AND key LIKE ?`).bind(address, `session:${id}%`).run().catch(() => null);
   await db.prepare(`DELETE FROM kv WHERE ${keyPrefix('pair')} AND json_extract(value, '$.address') = ? AND json_extract(value, '$.by') LIKE ?`).bind(address, `${id}%`).run().catch(() => {});
+  await db.prepare(`DELETE FROM kv WHERE ${keyPrefix('tglink')} AND json_extract(value, '$.address') = ? AND json_extract(value, '$.by') LIKE ?`).bind(address, `${id}%`).run().catch(() => {});
   return Number(r?.meta?.changes ?? 0) > 0;
 }
 
-/** Every session, API key and pending pair code of the address, wherever it was made, plus the old per-address index row. */
+/**
+ * Every session, API key, pending pair code and Telegram connect code of the address, wherever it was made, plus the
+ * old per-address index row.
+ */
 export async function revokeAllSessions(db: D1Database, address: string) {
   // No catch on these two: DELETE /api/me answers success only once they are gone (a failure is a 500 to retry).
   await db.prepare(`DELETE FROM ${SESSIONS_OF}`).bind(address).run();
   await db.prepare(`DELETE FROM kv WHERE ${keyPrefix('pair')} AND json_extract(value, '$.address') = ?`).bind(address).run();
+  await db.prepare(`DELETE FROM kv WHERE ${keyPrefix('tglink')} AND json_extract(value, '$.address') = ?`).bind(address).run().catch(() => {});
   await db.prepare('DELETE FROM kv WHERE key = ?').bind(`sessions:${address}`).run().catch(() => {});
 }
 
@@ -352,6 +367,9 @@ export async function logout(db: D1Database, token: string) {
   // The row from before hashing goes only when it holds this token (see sessionFromRequest).
   await db.prepare(`DELETE FROM kv WHERE key = ? OR (key = ? AND json_extract(value, '$.token') = ?)`).bind(sessionKey(token), `session:${token}`, token).run().catch(() => {});
   await db.prepare(`DELETE FROM kv WHERE ${keyPrefix('pair')} AND json_extract(value, '$.by') = ?`).bind(tokenHash(token)).run().catch(() => {});
+  // Its Telegram connect codes (telegram-bot.ts). The `tglinkby:` row naming one then names nothing: the next code
+  // replaces it, and the sweep deletes it within the hour.
+  await db.prepare(`DELETE FROM kv WHERE ${keyPrefix('tglink')} AND json_extract(value, '$.by') = ?`).bind(tokenHash(token)).run().catch(() => {});
 }
 
 // ---------------------------------------------------------------- pairing

@@ -8,11 +8,11 @@ import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { testD1, type TestD1 } from './d1-sqlite';
 import { app } from '../worker/src/api';
-import { createSession, sweepAuth, type Session } from '../worker/src/auth';
-import { applyUpdate, defaultPrefs, loadSettings, readTelegram, saveSettings, stopChannelStmt, type StoredSettings } from '../worker/src/settings';
+import { createSession, sweepAuth, tokenHash, type Session } from '../worker/src/auth';
+import { applyUpdate, chatDigest, defaultPrefs, loadSettings, readTelegram, rowsOfChat, saveSettings, stopChannelStmt, TELEGRAM_CHATS_MAX, TELEGRAM_FULL, type StoredSettings } from '../worker/src/settings';
 import { configureAlerts, moveCard } from '../worker/src/sources/discord';
-import { cardMessage, embedHtml, forgetTelegramUsers, mdToHtml, sendTelegramMove, telegramRun } from '../worker/src/sources/telegram';
-import { LINK_CODE_MS, secretMatches } from '../worker/src/telegram-bot';
+import { cardMessage, embedHtml, forgetTelegramUsers, mdToHtml, sendTelegramMove, telegramRun, TG_UNSERVED_WHAT } from '../worker/src/sources/telegram';
+import { LINK_CODE_MS, linkKey, secretMatches } from '../worker/src/telegram-bot';
 import { rowToFlow } from '../worker/src/analytics';
 import type { Flow } from '../shared/types';
 
@@ -285,6 +285,11 @@ describe('review fixes', () => {
     const l = await linkCode(db, s);
     await start(db, l.code, GROUP, true);
     expect(tg.sent(GROUP)[0].body.text).toContain('Only an admin');
+    expect(tg.sent(GROUP)[0].body.text).toContain('no longer works');
+    expect((await getSettings(db, s)).channels.telegram.linked).toBe(false);
+    // the code was sent where the group's members may read it: it is spent, so none of them can link it elsewhere
+    await start(db, l.code, CHAT + 60);
+    expect(tg.sent(CHAT + 60)[0].body.text).toContain('does not work');
     expect((await getSettings(db, s)).channels.telegram.linked).toBe(false);
     telegram();
     const l2 = await linkCode(db, s);
@@ -401,6 +406,205 @@ describe('review fixes', () => {
     const r = await update(db, { message: { chat: { id: CHAT, type: 'private' }, text: 'ж'.repeat(4096).replace(/ж/g, '\\u0436') } });
     expect(r.status).toBe(200);
     expect(tg.sent(CHAT)).toHaveLength(1);
+  });
+});
+
+// External audit (2026-10-29), as verified: a connect code is spent by a refusal in a group, kept as an HMAC and bound
+// to the session that made it; the rows of a chat are read on an index; a resumed chat takes a place under the chat
+// cap; and a /stop is not undone by a Settings save that ran beside it.
+describe('external audit fixes', () => {
+  async function linked(db: TestD1, i: number, chat: number) {
+    const s = await signIn(db, addr(i));
+    const l = await linkCode(db, s);
+    await start(db, l.code, chat, chat < 0);
+    forgetTelegramUsers(db as any);
+    return s;
+  }
+  /** `n` rows of other wallets with Telegram on, each its own chat, as the site's chat cap counts them. */
+  const otherChats = (db: TestD1, n: number, from = 0) => {
+    const ins = db.raw.prepare('INSERT INTO kv (key, value, updated_at) VALUES (?, ?, ?)');
+    for (let i = from; i < from + n; i++) ins.run(`user:tnam1qother${String(i).padStart(4, '0')}`, JSON.stringify({ tg: true, tgc: `other${i}` }), 1);
+  };
+  const dropOtherChats = (db: TestD1, n: number) => db.raw.prepare("DELETE FROM kv WHERE key IN (SELECT key FROM kv WHERE key >= 'user:tnam1qother' AND key < 'user:tnam1qothes' LIMIT ?)").run(n);
+  const put = (db: TestD1, s: Session, body: object) => app.request('/api/me/settings', authed(s, { method: 'PUT', body: JSON.stringify(body) }), env(db));
+  const codeRows = (db: TestD1) => db.raw.prepare("SELECT key, value FROM kv WHERE key >= 'tglink' AND key < 'tglinl'").all() as { key: string; value: string }[];
+
+  it('a full site spends no code sent in a private chat, but spends one sent in a group', async () => {
+    const db = testD1();
+    const tg = telegram();
+    otherChats(db, TELEGRAM_CHATS_MAX);
+    const s = await signIn(db, addr(50));
+    const l = await linkCode(db, s);
+    await start(db, l.code, CHAT);
+    expect(tg.sent(CHAT)[0].body.text).toContain('cannot send alerts to more Telegram chats');
+    dropOtherChats(db, 1);
+    await start(db, l.code, CHAT);
+    expect((await getSettings(db, s)).channels.telegram).toMatchObject({ linked: true, kind: 'private' });
+    otherChats(db, 1, TELEGRAM_CHATS_MAX);
+    const l2 = await linkCode(db, s);
+    await start(db, l2.code, GROUP, true);
+    expect(tg.sent(GROUP)[0].body.text).toContain('no longer works');
+    dropOtherChats(db, 5);
+    await start(db, l2.code, CHAT + 61);
+    expect(tg.sent(CHAT + 61)[0].body.text).toContain('does not work');
+    expect((await getSettings(db, s)).channels.telegram).toMatchObject({ linked: true, kind: 'private' });
+  });
+
+  it('a code is stored as an HMAC under the secret, never as itself, and names the session that made it', async () => {
+    const db = testD1();
+    telegram();
+    const s = await signIn(db, addr(51));
+    const l = await linkCode(db, s);
+    const rows = db.raw.prepare('SELECT key, value FROM kv').all() as { key: string; value: string }[];
+    expect(rows.filter((r) => r.key.includes(l.code) || r.value.includes(l.code))).toEqual([]);
+    const row = rows.find((r) => r.key === linkKey(KEY, l.code))!;
+    expect(JSON.parse(row.value)).toMatchObject({ address: addr(51), by: tokenHash(s.token) });
+    expect(rows.find((r) => r.key === `tglinkby:${addr(51)}`)!.value).toBe(linkKey(KEY, l.code).slice('tglink:'.length));
+    await start(db, l.code);
+    expect((await getSettings(db, s)).channels.telegram.linked).toBe(true);
+    expect(codeRows(db)).toEqual([]);
+  });
+
+  it('signing out, revoking the key that made a code or deleting the account ends its code; an API key\'s code links', async () => {
+    const db = testD1();
+    const tg = telegram();
+    const s = await signIn(db, addr(52));
+    const out = await linkCode(db, s);
+    await app.request('/api/auth/logout', authed(s, { method: 'POST', body: '{}' }), env(db));
+    expect(codeRows(db).filter((r) => r.key.startsWith('tglink:'))).toEqual([]);
+    await start(db, out.code, CHAT + 70);
+    expect(tg.sent(CHAT + 70)[0].body.text).toContain('does not work');
+
+    const device = await signIn(db, addr(52));
+    const key = (await createSession(db as any, addr(52), 'namada', 'api', null, tokenHash(device.token))) as Session;
+    const byKey = await linkCode(db, key);
+    expect((await app.request(`/api/me/sessions/${tokenHash(key.token).slice(0, 8)}`, authed(device, { method: 'DELETE' }), env(db))).status).toBe(200);
+    await start(db, byKey.code, CHAT + 71);
+    expect(tg.sent(CHAT + 71)[0].body.text).toContain('does not work');
+    // a code whose maker was ended while it was being made (its row outlived the revoke) links nothing either
+    const key2 = (await createSession(db as any, addr(52), 'namada', 'api', null, tokenHash(device.token))) as Session;
+    const late = await linkCode(db, key2);
+    db.raw.prepare('DELETE FROM kv WHERE key = ?').run(`session:${tokenHash(key2.token)}`);
+    await start(db, late.code, CHAT + 72);
+    expect(tg.sent(CHAT + 72)[0].body.text).toContain('was signed out');
+    expect((await getSettings(db, device)).channels.telegram.linked).toBe(false);
+    // a live API key's code links (an API key may connect a chat)
+    const key3 = (await createSession(db as any, addr(52), 'namada', 'api', null, tokenHash(device.token))) as Session;
+    await start(db, (await linkCode(db, key3)).code, CHAT + 73);
+    expect((await getSettings(db, device)).channels.telegram).toMatchObject({ linked: true, enabled: true });
+
+    await linkCode(db, device);
+    expect((await app.request('/api/me', authed(device, { method: 'DELETE' }), env(db))).status).toBe(200);
+    expect(codeRows(db)).toEqual([]);
+  });
+
+  it('the rows of a chat are read on migration 0014\'s index, paused rows too', async () => {
+    const db = testD1();
+    telegram();
+    otherChats(db, 50);
+    const s = await linked(db, 53, CHAT);
+    await linked(db, 54, CHAT + 80);
+    await put(db, s, { channels: { telegram: { enabled: false } } });
+    const seen: string[] = [];
+    const prepare = db.prepare.bind(db);
+    vi.spyOn(db, 'prepare').mockImplementation((sql: string) => { seen.push(sql); return prepare(sql); });
+    expect((await rowsOfChat(db as any, KEY, CHAT)).map((r) => [r.address, r.channels.telegram?.enabled])).toEqual([[addr(53), false]]);
+    const sql = seen.find((q) => q.includes("'$.tgc'"))!;
+    const plan = (db.raw.prepare(`EXPLAIN QUERY PLAN ${sql}`).all(chatDigest(KEY, CHAT)) as { detail: string }[]).map((r) => r.detail).join(' | ');
+    expect(plan).toMatch(/USING (COVERING )?INDEX kv_user_telegram_chat\b/);
+    expect(plan).not.toMatch(/SCAN kv\b/);
+  });
+
+  it('a paused chat resumed in Settings takes a place under the chat cap: past it the row is saved still paused', async () => {
+    const db = testD1();
+    telegram();
+    const a = await linked(db, 55, CHAT);
+    otherChats(db, TELEGRAM_CHATS_MAX - 1);
+    expect((await put(db, a, { channels: { telegram: { enabled: false } } })).status).toBe(200);
+    const b = await linked(db, 56, CHAT + 90);
+    expect((await getSettings(db, b)).channels.telegram.enabled).toBe(true);
+    const r = await put(db, a, { notifications: { forumAndGov: true }, channels: { telegram: { enabled: true } } });
+    expect(r.status).toBe(409);
+    const j = (await r.json()) as any;
+    expect(j.error).toBe(TELEGRAM_FULL);
+    expect(j.settings.channels.telegram).toMatchObject({ linked: true, enabled: false });
+    expect(j.settings.notifications.forumAndGov).toBe(true);
+    expect((await readTelegram(db as any, KEY)).users.map((u) => u.address)).not.toContain(addr(55));
+    // a save that keeps a chat on takes no new place
+    expect((await put(db, b, { notifications: { forumAndGov: true } })).status).toBe(200);
+    // a place freed is taken
+    expect((await put(db, b, { channels: { telegram: { enabled: false } } })).status).toBe(200);
+    expect((await put(db, a, { channels: { telegram: { enabled: true } } })).status).toBe(200);
+    expect((await getSettings(db, a)).channels.telegram.enabled).toBe(true);
+  });
+
+  it('rows the dispatcher\'s read leaves out are recorded with the posts not sent, as Discord\'s are', async () => {
+    const db = testD1();
+    telegram();
+    await linked(db, 60, CHAT);
+    otherChats(db, 3);
+    await sendTelegramMove(env(db), moveFromWatched(60));
+    const skipped = JSON.parse((db.raw.prepare("SELECT value FROM kv WHERE key = 'alerts.skipped'").get() as { value: string }).value);
+    expect(skipped).toMatchObject({ total: 3, last: { what: TG_UNSERVED_WHAT, n: 3 } });
+  });
+
+  it('a /stop that lands while a Settings save runs is not undone by it, either way round', async () => {
+    const db = testD1();
+    const tg = telegram();
+    const stop = () => update(db, { message: { chat: { id: CHAT, type: 'private' }, from: { id: 42 }, text: '/stop' } });
+    const prepare = db.prepare.bind(db);
+    /** Runs `then` once, right after the statement matching `sql` bound to `param` has run (`first`) or right before (`run`). */
+    const between = (sql: RegExp, param: unknown, how: 'first' | 'run', then: () => Promise<unknown>) => {
+      let once = true;
+      vi.spyOn(db, 'prepare').mockImplementation((q: string) => {
+        const st = prepare(q);
+        if (!sql.test(q)) return st;
+        const bind = st.bind.bind(st);
+        (st as any).bind = (...p: unknown[]) => {
+          const b = bind(...p);
+          if (once && (param === undefined || p[0] === param)) {
+            const orig = (b as any)[how].bind(b);
+            (b as any)[how] = async (...a: unknown[]) => {
+              if (!once) return orig(...a);
+              once = false;
+              if (how === 'run') { await then(); return orig(...a); }
+              const res = await orig(...a);
+              await then();
+              return res;
+            };
+          }
+          return b;
+        };
+        return st;
+      });
+    };
+
+    // The save read the row before the /stop (the switch's body always names Telegram): resuming is refused, a pause
+    // keeps the chat unlinked.
+    const s = await linked(db, 57, CHAT);
+    await put(db, s, { channels: { telegram: { enabled: false } } });
+    between(/^SELECT value FROM kv WHERE key=\?$/, `user:${addr(57)}`, 'first', stop);
+    expect((await put(db, s, { channels: { telegram: { enabled: true } } })).status).toBe(400);
+    vi.mocked(db.prepare).mockRestore();
+    expect((await loadSettings(db as any, KEY, addr(57)))!.channels.telegram).toMatchObject({ chatId: null, stopped: { reason: 'stop' } });
+    const s2 = await linked(db, 58, CHAT);
+    between(/^SELECT value FROM kv WHERE key=\?$/, `user:${addr(58)}`, 'first', stop);
+    const paused = await put(db, s2, { channels: { telegram: { enabled: false } } });
+    expect(paused.status).toBe(200);
+    vi.mocked(db.prepare).mockRestore();
+    expect(((await paused.json()) as any).settings.channels.telegram).toMatchObject({ linked: false, stopped: { reason: 'stop' } });
+    // nor is the chat told it was disconnected in Settings
+    expect(tg.sent(CHAT).filter((c) => c.body.text.includes('disconnected from this chat in Settings'))).toHaveLength(0);
+
+    // The save wrote the row after the /stop read it: the /stop reads it again and unlinks it.
+    const s3 = await linked(db, 59, CHAT);
+    between(/^UPDATE kv SET value = json_set\(\?1, '\$\.onAt'/, undefined, 'run', async () => { t += 1000; await put(db, s3, { notifications: { forumAndGov: true } }); });
+    await stop();
+    vi.mocked(db.prepare).mockRestore();
+    expect(tg.sent(CHAT).at(-1)!.body.text).toContain('Stopped');
+    const row = (await loadSettings(db as any, KEY, addr(59)))!;
+    expect(row.channels.telegram).toMatchObject({ chatId: null, stopped: { reason: 'stop' } });
+    expect(row.notifications.forumAndGov).toBe(true);
   });
 });
 
