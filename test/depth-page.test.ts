@@ -14,7 +14,9 @@
 // main-thread time through the chart's own performance measure, the legend's five steps and its blank floor, the
 // honest start, the executable line broken at the outage, the change rows worded with their owners, the cost line and
 // what was left out) and the owners band (the owners of the fixtures' hour with a disclosure per owner, "replaced this
-// week" from the change rows, the address control). Skipped, with the reason,
+// week" from the change rows, the address control). A pointer swept over the curve, the heat and the executable line at
+// 320, 375, 640 and 1280 px, at a 16 px and a 20 px root font, reads each into its readout, moves no plot (the readouts keep one
+// height, depth.css) and never clips the curve's pools line. Skipped, with the reason,
 // without the build or a browser, except under CI, where the missing build or browser fails the file.
 // With DEPTH_SHOTS=1 it also writes docs/design/build-shots/depth-375.png and depth-1280.png (full page, dark).
 import { describe, it, expect, beforeAll, afterAll } from 'vitest';
@@ -25,7 +27,7 @@ import { chromium, type Browser, type Locator, type Page } from '@playwright/tes
 import { depthFixtureText } from './depth-fixtures';
 import { BANNED } from './banned-words';
 import { routeById } from '../shared/routes';
-import { GAPS_NONE, HEAT_EDGES, HEAT_HOW, OWNERS_REWIND, REWIND_NO_BOOK, REWIND_NO_SPLIT, recordedSince, sellQuotableLead, tradesInView, type DepthChangeRow } from '../shared/depth';
+import { EXEC_READING, GAPS_NONE, HEAT_EDGES, HEAT_HOW, OWNERS_REWIND, REWIND_NO_BOOK, REWIND_NO_SPLIT, recordedSince, sellQuotableLead, tradesInView, type DepthChangeRow } from '../shared/depth';
 import { fmtUtcLong } from '../shared/format';
 
 const ROOT = join(__dirname, '..');
@@ -220,6 +222,37 @@ beforeAll(async () => {
 /** Two boxes overlap when neither is wholly beside or above the other. */
 const overlaps = (a: { x: number; y: number; width: number; height: number }, b: { x: number; y: number; width: number; height: number }) =>
   a.x < b.x + b.width && b.x < a.x + a.width && a.y < b.y + b.height && b.y < a.y + a.height;
+/** A pointer swept across a plot: the readout above it reads every point passed (the longest text seen is returned), and the
+ *  plot's top is recorded before the sweep, at every point and once the pointer has left, so a readout that changed height
+ *  would show as a second top; every text read is returned too, the readout's heights for the message, and `clipped` says whether a one-line
+ *  row of the readout (.readout__d, the curve's pools) was ever wider than its box. The plot is scrolled into view first;
+ *  nothing else scrolls during the sweep. */
+async function sweep(page: Page, plotSel: string, readoutSel: string) {
+  const plot = page.locator(plotSel).first();
+  await plot.scrollIntoViewIfNeeded();
+  await page.mouse.move(2, 2);
+  // the page scrolls smoothly: wait until the plot stands still before reading its top
+  let box = (await plot.boundingBox())!;
+  for (let k = 0; k < 40; k++) { await page.waitForTimeout(50); const b = (await plot.boundingBox())!; if (b.y === box.y) break; box = b; }
+  const top0 = box.y;
+  const tops = new Set<number>();
+  const heights = new Set<number>();
+  let read = '';
+  const reads = new Set<string>();
+  let clipped = false;
+  for (let k = 0; k <= 16; k++) {
+    await page.mouse.move(box.x + 52 + ((box.width - 64) * k) / 16, box.y + box.height / 2);
+    tops.add((await plot.boundingBox())!.y);
+    heights.add((await page.locator(readoutSel).first().boundingBox())!.height);
+    const t = ((await page.locator(readoutSel).first().textContent()) ?? '').replace(/\s+/g, ' ').trim();
+    if (t.length > read.length) read = t;
+    reads.add(t);
+    if (await page.locator(`${readoutSel} .readout__d`).evaluateAll((els) => els.some((e) => e.scrollWidth > e.clientWidth))) clipped = true;
+  }
+  await page.mouse.move(2, 2);
+  tops.add((await plot.boundingBox())!.y);
+  return { top0, tops: [...tops], heights: [...heights], read, reads: [...reads], clipped };
+}
 
 // Under CI the file must run: a missing build or browser is a failure there, not a silent skip.
 if (process.env.CI) {
@@ -386,6 +419,38 @@ describe.skipIf(!ready)('the depth page, built, on the fixtures (375, 320 and 12
       await ctx.close();
     }
   }, 60_000);
+
+  for (const [w, h] of [[375, 812], [320, 700], [640, 900], [1280, 800]] as const) {
+    it(`${w} x ${h}: a pointer over the curve, the heat and the executable line reads each into its readout, no plot moves under the pointer and the pools line is whole, at a 16 px and a 20 px root font`, async () => {
+      const { page, ctx } = await open(w, h);
+      try {
+        await settled(page);
+        if (w < 1024) await page.getByRole('radio', { name: 'Curve' }).click();
+        await seen(page.locator('.dp-chart__plot svg'));
+        const over = page.locator('.dp-over');
+        await seen(over.locator('.dph-plot canvas'));
+        await seen(over.locator('.dp-exec__plot svg'));
+        for (const root of [16, 20]) {
+          if (root !== 16) await page.addStyleTag({ content: `html { font-size: ${root}px }` });
+          const at = `at a ${root} px root`;
+          const curve = await sweep(page, '.dp-chart__plot', '.dp-chart .readout');
+          expect(curve.read, at).toMatch(/selling|buying/);
+          // the pools line after the words, with a space between: at least one named, at most three, the rest counted, and never wider than its box
+          expect(curve.read, at).toMatch(/ here (pool|order book) \d+(, (pool|order book) \d+){0,2}( and \d+ more)?$/);
+          expect(curve.clipped, `the pools line unclipped ${at}`).toBe(false);
+          expect(curve.tops, `the curve plot held its top ${at} (readout heights ${curve.heights.join(', ')})`).toEqual([curve.top0]);
+          const heat = await sweep(page, '.dph-plot', '.dph .readout');
+          expect(heat.read, at).toMatch(/UTC: /);
+          expect(heat.tops, `the heat plot held its top ${at} (readout heights ${heat.heights.join(', ')})`).toEqual([heat.top0]);
+          const exec = await sweep(page, '.dp-exec__plot', '.dp-exec .readout');
+          expect(exec.reads.some((t) => t.startsWith(`${EXEC_READING} `)), `a minute read ${at}: ${exec.reads.join(' | ')}`).toBe(true);
+          expect(exec.tops, `the executable line held its top ${at} (readout heights ${exec.heights.join(', ')})`).toEqual([exec.top0]);
+        }
+      } finally {
+        await ctx.close();
+      }
+    }, 90_000);
+  }
 
   it('rewound: the stored minute’s figures with the reference pool named from the history answer (never an empty pool), no split, the field off, no ladder or curve', async () => {
     const { page, ctx, errors } = await open(375, 812, `/depth?at=${REWIND_AT}`);

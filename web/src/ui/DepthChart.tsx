@@ -6,9 +6,12 @@
 // as a hairline in --c-mark; the y axis is sized to hold every mark and every trade priced inside the window, so what
 // the sentence under the chart counts is what is drawn. Log x on the wide ranges, said in the axis label. Press and drag, or the arrow keys,
 // read the nearest curve point into a fixed readout above the plot (price, USD, coins, the pools at that price);
-// never a tooltip over the data. Container-measured SVG (ticks exactly 11 px); a table view of the same points.
+// never a tooltip over the data. The readout keeps one height whatever it shows (depth.css reserves its lines), so
+// the plot never moves under the pointer as the words change: the pools sit on a line of their own that names the
+// largest, at most READOUT_POOLS_NAMED and as many as the measured width holds in the readout's code font, and counts
+// the rest, so the line is complete at every width and browser font size and never wraps. Container-measured SVG (ticks exactly 11 px); a table view of the same points.
 import { useId, useMemo, useState } from 'react';
-import { AXIS_USD, CHART_GROUP_LABEL, NO_POINT_IN_WINDOW, READOUT_AT, READOUT_NONE, axisPrice, chartAria, chartSummary, keyAsks, keyBids, keyRef, keyTrades, readoutWords, sizeMark, tradeTitle } from '../../../shared/depth';
+import { AXIS_USD, CHART_GROUP_LABEL, NO_POINT_IN_WINDOW, READOUT_AT, READOUT_NONE, READOUT_POOLS_NAMED, axisPrice, chartAria, chartSummary, keyAsks, keyBids, keyRef, keyTrades, readoutPools, readoutWords, sizeMark, tradeTitle } from '../../../shared/depth';
 import { fmtCoin, fmtDayClock, fmtNamRule, fmtSig, fmtUsdRule } from '../lib/format';
 import { niceTicks, pathOf, stackBoxes, tickLabel, type LabelBox } from './chartMath';
 import { useSize } from './useSize';
@@ -58,6 +61,10 @@ const CHAR = 6.6;
 const TABLE_ROWS_MAX = 60;
 /** A mark's label sits this far from its dot, and the rows of stacked labels are this far apart. */
 const LABEL_DX = 6, LABEL_DY = 6, ROW_H = 13;
+/** The pools line's glyph: the readout's code font is 0.75 rem (--t-12) and advances 0.6 em, so its width follows the root
+ *  font size (a browser set to a larger default font gets wider glyphs and fewer names). */
+const POOLS_GLYPH_REM = 0.75 * 0.6;
+const rootPx = () => (typeof document === 'undefined' ? 16 : parseFloat(getComputedStyle(document.documentElement).fontSize) || 16);
 
 export function DepthChart(p: DepthChartProps) {
   const { price, bidUsd, bidNam, askUsd, askNam, refUsd, window: win, symbol, marks, trades, poolsAt, poolName } = p;
@@ -126,6 +133,15 @@ export function DepthChart(p: DepthChartProps) {
   const selUsd = sel == null ? null : selSide === 'bid' ? bidUsd[sel] : askUsd[sel];
   const selNam = sel == null ? null : selSide === 'bid' ? bidNam[sel] : askNam[sel];
   const selPools = sel != null && selSide ? poolsAt(selSide, price[sel]) : [];
+  // the pools line: the largest named, as many as fit the readout's width (the plot's, the same grid column), the rest counted
+  const poolsLine = (() => {
+    if (!selPools.length) return null;
+    const fit = Math.floor((w - 2) / (rootPx() * POOLS_GLYPH_REM));
+    let n = Math.min(READOUT_POOLS_NAMED, selPools.length);
+    const line = (k: number) => readoutPools(selPools.slice(0, k).map(poolName), selPools.length - k);
+    while (n > 1 && line(n).length > fit) n--;
+    return line(n);
+  })();
   const step = (dir: 1 | -1) => {
     if (!inWin.length) return;
     const k = sel == null ? (dir > 0 ? 0 : inWin.length - 1) : Math.max(0, Math.min(inWin.length - 1, inWin.indexOf(sel) + dir));
@@ -146,7 +162,8 @@ export function DepthChart(p: DepthChartProps) {
           <>
             <span className="readout__k">{READOUT_AT}</span>{' '}
             <b data-num="" className="readout__v">{fmtSig(price[sel])}</b>{' '}
-            <span className="readout__t">{readoutWords(selSide, fmtUsdRule(selUsd), fmtNamRule(selNam), symbol)}{selPools.length ? ` · ${selPools.map(poolName).join(', ')}` : ''}</span>
+            <span className="readout__t">{readoutWords(selSide, fmtUsdRule(selUsd), fmtNamRule(selNam), symbol)}</span>{' '}
+            {poolsLine ? <span className="readout__t readout__d dpc-pools">{poolsLine}</span> : null}
           </>
         ) : (
           <span className="readout__k">{READOUT_NONE}</span>

@@ -645,6 +645,11 @@ export const tradesCut = (n: number, days: number) => `the newest ${n} stored tr
 export const readoutWords = (side: 'bid' | 'ask', usd: string, nam: string, symbol: string) =>
   side === 'bid' ? `${usd} received selling ${nam} ${symbol} down to here` : `${usd} paid buying ${nam} ${symbol} up to here`;
 export const READOUT_AT = 'at';
+/** The readout's pools line names the pools whose figure grows at the price, the largest first, at most so many by name (fewer when the
+ *  width holds fewer, DepthChart), and counts the rest ("pool 3005, pool 3368, pool 3015 and 10 more"): one complete line whatever the
+ *  price, so the readout keeps one height and the plot never moves. */
+export const READOUT_POOLS_NAMED = 3;
+export const readoutPools = (names: string[], more: number) => (more > 0 ? `${names.join(', ')} and ${more} more` : names.join(', '));
 export const READOUT_NONE = 'Press or use the arrow keys to read the curve at a price.';
 /** The chart's own words: the figure's caption, the plot's group label, a trade's title, the summary for a screen reader. */
 export const chartAria = (scale: 'log' | 'linear', lo: string, hi: string, symbol: string, marks: number, trades: number) =>
@@ -887,7 +892,7 @@ export const DEPTH_PAGE_WORDS: readonly string[] = [
   foldFar('ask', 1171, '50%', '198.57', '1,322,018 NAM'), foldFar('bid', 12, '50%', '0.0000001', '$12.40'), foldMid('ask', 31, '10%', '50%', '371,945 NAM'), foldMid('bid', 4, '10%', '50%', '$95.10'), hideFold('ask', 'above +50%'),
   poolFeeChip('pool 3005', '0.2%'), bookChip('order book 3008'), rangesWords(1), rangesWords(3), ordersWords(1), ordersWords(2), takerOnEvery('0.1%'), sellDownWords('0.0010098', '$1.41'), buyUpWords('0.0010301', '$2.12'), markedBand('10,000', 'NAM'),
   curveLead('NAM'), axisPrice('NAM', true), axisPrice('NAM', false), keyBids('NAM'), keyAsks('NAM'), keyTrades(7), keyRef('3005'), sizeMark('10k', '$9.92'), tradesInView(387, 389, 7), tradesNone(7), tradesCut(300, 7),
-  readoutWords('bid', '$9.92', '10,000', 'NAM'), readoutWords('ask', '$10.37', '10,000', 'NAM'), updatedAgo('12 s ago'), readingOf('02:56 UTC'), rewindMinute('02:56 UTC'),
+  readoutWords('bid', '$9.92', '10,000', 'NAM'), readoutWords('ask', '$10.37', '10,000', 'NAM'), readoutPools(['pool 3005', 'pool 3368', 'pool 3015'], 10), readoutPools(['pool 3005'], 0), updatedAgo('12 s ago'), readingOf('02:56 UTC'), rewindMinute('02:56 UTC'),
   sellQuotable('10,000', 'NAM', '$9.92'), bidQuotable('$26.43', '10%'), sellQuotableLead('10,000', 'NAM'), bidQuotableTail('10%'), factAskUsdWithin('10%'),
   sideWord('ask'), sideWord('bid'), openBandAria('bid', '0.0010098', '0.0010199', '$1.41', '−1.0%'), sheetTitle('ask', '0.0010199', '0.0010301'), distFromPrice('−1.0%'),
   chartAria('linear', '0.00051', '0.00204', 'NAM', 8, 3), chartAria('log', '0.000102', '0.0102', 'NAM', 8, 4), tradeTitle('buy', '400', 'NAM', '0.001025', '$0.41', '28 Oct, 02:56 UTC'), tradeTitle('sell', '10,000', 'NAM', '0.00099', '$9.90', '28 Oct, 02:56 UTC'),

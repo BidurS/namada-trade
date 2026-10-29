@@ -109,6 +109,22 @@
   /* ---------- the curve ---------- */
   .dp-chart { display: grid; gap: var(--s-3); margin: 0; min-width: 0; }
   .dp-chart__plot { height: 232px; }
+  /* The readout above a plot keeps one height whether it shows its idle sentence or a reading, so the plot never moves
+     under the pointer as the words change (the owner saw the curve jump as the mouse moved, 2026-10-29). The curve's
+     reserve is the figure's line, the words' own line on a phone (from 640 px they fit beside the figure) and the pools
+     line, which never wraps: DepthChart names as many of the largest as the width holds and counts the rest. The heat's
+     and the executable line's readouts reserve the lines their longest sentence takes, measured in the page test's
+     browser on 2026-10-29 at a 16 px root (the curve 90 px on a phone and 48 px from 640 px; the heat 80 px at 375 px,
+     100 px at 320 px, 60 px at 640 px and 40 px at 1280 px; the executable line 26 px read and 48 px when its last reading wraps at
+     320 px). The reserves are in rem: the readout's text is rem-sized on fixed 20 px lines, so a larger browser font
+     wraps it to more lines in step with the root size.
+     test/depth-page.test.ts sweeps a pointer over each plot at 320, 375, 640 and 1280 px, at a 16 px and a 20 px root,
+     holds its top and holds the pools line unclipped. */
+  .dp-chart .readout { min-height: calc(var(--lh-18) + 4rem); }
+  .dp-chart .readout__d { flex-basis: 100%; min-width: 0; overflow: hidden; white-space: nowrap; }
+  .dph .readout { min-height: 5rem; }
+  .dp-exec .readout { min-height: 3rem; }
+  @media (max-width: 359px) { .dph .readout { min-height: 6.25rem; } }   /* the heat's both-sides sentence takes five lines at 320 px */
   .dpc-bid { fill: none; stroke: var(--buy); stroke-width: 2; stroke-linejoin: round; }
   .dpc-ask { fill: none; stroke: var(--sell); stroke-width: 2; stroke-linejoin: round; }
   .dpc-bid-area { fill: var(--buy); opacity: .12; stroke: none; }
@@ -138,6 +154,9 @@
   @media (min-width: 640px) {
     .dp-answer { padding-block: var(--s-7) var(--s-8); }
     .dp-chart__plot { height: 288px; }
+    .dp-chart .readout { min-height: calc(var(--lh-18) + 2.5rem); }   /* one line of slack: at a 20 px root the words wrap at 640 px */
+    .dph .readout { min-height: 3.75rem; }
+    .dp-exec .readout { min-height: 1.75rem; }
     .dp-ctl .seg--range { width: max-content; }
   }
   @media (min-width: 1024px) {
