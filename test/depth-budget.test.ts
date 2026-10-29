@@ -10,8 +10,8 @@ import { NAM_DEPTH, DEPTH_CAPS, type DepthConfig } from '../worker/src/depth/con
 import { budgetFor, freshBudget, gate, monthOf, recordWrites, recordBytes, recordR2Put, recordCapHit, storeHealth, budgetCheckStmt, killSwitchOff, STORE_HEALTH, type DepthBudget } from '../worker/src/depth/budget';
 import { counterInfo, counterDenoms, listPools, liveSet, isDust } from '../worker/src/depth/pools';
 import { Requests, readText } from '../worker/src/depth/read';
-import { deleteOldMinutesStmt } from '../worker/src/depth/sql';
-import { cutByCap, UNPRICED_DUST, UNPRICED_EMPTY, UNPRICED_NO_PRICE, DEPTH_CHECK_TITLES } from '../shared/depth';
+import { deleteOldMinutesStmts } from '../worker/src/depth/sql';
+import { cutByCap, dustWords, UNPRICED_EMPTY, UNPRICED_NO_PRICE, DEPTH_CHECK_TITLES } from '../shared/depth';
 import type { SourceHealth } from '../shared/types';
 import { depthNetwork, bookKvFromFixture, paramsKvFromFixture, priceListFromFixture, SQS_POOLS, TOKEN_META } from './depth-minute-net';
 
@@ -58,7 +58,7 @@ describe('C1: the pool cap', () => {
     expect(full.unpriced.map((u) => u.pool.id)).toEqual(['3020']);
     expect(full.unpriced[0].why).toBe(UNPRICED_NO_PRICE);
     expect(full.leftOut.filter((x) => x.why === UNPRICED_EMPTY).map((x) => x.pool.id).sort()).toEqual(['3016', '3021']);
-    expect(full.leftOut.filter((x) => x.why === UNPRICED_DUST)).toHaveLength(10);
+    expect(full.leftOut.filter((x) => x.why === dustWords(1, 'NAM'))).toHaveLength(10);
     // largest counter value first: pool 3005's 187 USDC, then the OSMO pool 3368, the book last among the live
     expect(full.live.slice(0, 2).map((p) => p.id)).toEqual(['3005', '3368']);
     expect(full.live[full.live.length - 1].id).toBe('3008');
@@ -125,7 +125,7 @@ describe('C3: rows a month', () => {
     expect(warn.why).toContain('80 % of the cap of 5,000,000');
     const stop = gate({ ...b, rowsWritten: 4_999_980 }, DEPTH_CAPS, 30);
     expect(stop).toMatchObject({ writes: false, level: 'fail' });
-    expect(stop.why).toContain('inserts stopped, deletes go on');
+    expect(stop.why).toContain('inserts stopped; the deletes, the check row and this counter go on');
     expect(gate({ ...b, rowsWritten: 4_999_980 }, DEPTH_CAPS, 20).writes).toBe(true);
     expect(DEPTH_CAPS.rowsMonthMax).toBe(5_000_000);
     expect(DEPTH_CAPS.rowsWarn).toBe(4_000_000);
@@ -142,7 +142,7 @@ describe('C3: rows a month', () => {
     expect(c.status).toBe('warn');
     expect(c.detail).toMatchObject({ month: '2026-10', rowsMonthMax: 5_000_000, rowsWarn: 4_000_000, writes: true });
     expect(c.detail.rowsWritten).toBe(4_100_000); // the check row goes in the batch it counts, so it carries the count before it
-    expect(kv(db, 'depth.budget').rowsWritten).toBe(4_100_000 + 23);
+    expect(kv(db, 'depth.budget').rowsWritten).toBe(4_100_000 + 23 + 1); // the rows, the kv answers, the checks, and the budget row itself
   });
   it('at the cap: nothing is read, no depth row or kv answer is written, the check fails, the health row says so, and the retention delete still runs', async () => {
     const db = seeded({ rowsWritten: 5_000_000 });
@@ -154,9 +154,11 @@ describe('C3: rows a month', () => {
     expect(kv(db, 'depth.latest')).toBeNull();
     expect(check(db, 'depth_budget')!.status).toBe('fail');
     expect(check(db, 'depth_budget')!.detail.lastCapHit).toMatchObject({ at: T });
-    expect(rowOf(health, DEPTH_HEALTH.pools)!.note).toMatch(/^Not read this minute: 5,000,000 rows written this month, at the cap of 5,000,000: inserts stopped, deletes go on$/);
+    expect(rowOf(health, DEPTH_HEALTH.pools)!.note).toMatch(/^Not read this minute: 5,000,000 rows written this month, at the cap of 5,000,000: inserts stopped; the deletes, the check row and this counter go on$/);
     expect(rowOf(health, STORE_HEALTH)!.ok).toBe(false);
-    const s = deleteOldMinutesStmt(MINUTE - cfg.caps.retentionMs, cfg.caps.deleteLimit);
+    // the two rows that go on past the cap are counted: the check row and the budget row
+    expect(kv(db, 'depth.budget').rowsWritten).toBe(5_000_000 + 2);
+    const [s] = deleteOldMinutesStmts(['all'], MINUTE - cfg.caps.retentionMs, cfg.caps.deleteLimit);
     expect(db.raw.prepare(s.sql).run(...s.params).changes).toBe(1);
     expect(cfg.caps.deleteLimit).toBe(5_000);
     expect(cfg.caps.retentionMs).toBe(30 * 86_400_000);

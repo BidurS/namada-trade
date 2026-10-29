@@ -185,14 +185,24 @@ export const stmt = {
   }),
 };
 
-/** Execute statements in D1 batches (D1 batch is atomic per call). Returns how many rows they changed. */
-export async function runBatch(db: D1Database, stmts: Stmt[], size = 80): Promise<number> {
-  let changes = 0;
+/** What D1 answers per statement of a batch, as far as the callers read it. */
+export interface BatchMeta { meta?: { changes?: number; rows_written?: number; rows_read?: number; size_after?: number } }
+
+/** Execute statements in D1 batches (D1 batch is atomic per call), each statement's answer kept (the depth budget sums rows_written and keeps size_after). */
+export async function runBatchMeta(db: D1Database, stmts: Stmt[], size = 80): Promise<BatchMeta[]> {
+  const out: BatchMeta[] = [];
   for (let i = 0; i < stmts.length; i += size) {
     const slice = stmts.slice(i, i + size);
     const res = await db.batch(slice.map((s) => db.prepare(s.sql).bind(...s.params)));
-    for (const r of res ?? []) changes += Number((r as { meta?: { changes?: number } })?.meta?.changes ?? 0);
+    for (const r of res ?? []) out.push(r as BatchMeta);
   }
+  return out;
+}
+
+/** Execute statements in D1 batches. Returns how many rows they changed. */
+export async function runBatch(db: D1Database, stmts: Stmt[], size = 80): Promise<number> {
+  let changes = 0;
+  for (const r of await runBatchMeta(db, stmts, size)) changes += Number(r?.meta?.changes ?? 0);
   return changes;
 }
 

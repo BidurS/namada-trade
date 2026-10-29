@@ -73,6 +73,23 @@ export function testD1(): TestD1 {
   return d1;
 }
 
+/**
+ * testD1 with D1's own parameter path: the binding sends bound parameters as JSON (the Worker runs without the
+ * d1_binding_jsrpc flag), so a number that is not finite arrives as NULL and fails a NOT NULL column for the whole batch.
+ * A job whose figures must be finite or NULL is run through this (test/osmosis-hourly-finite.test.ts, test/depth-minute.test.ts).
+ */
+export function d1Json(): TestD1 {
+  const db = testD1();
+  const prepare = db.prepare.bind(db);
+  (db as any).prepare = (sql: string) => {
+    const s: any = prepare(sql);
+    const bind = s.bind.bind(s);
+    s.bind = (...p: unknown[]) => bind(...JSON.parse(JSON.stringify(p)));
+    return s;
+  };
+  return db;
+}
+
 /** Insert rows into a table from plain objects. */
 export function insert(d1: TestD1, table: string, rows: Record<string, unknown>[]) {
   for (const r of rows) {

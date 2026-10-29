@@ -1,0 +1,36 @@
+// 2026-10-29T02:12:33.408Z GET https://osmosis-rest.publicnode.com/osmosis/concentratedliquidity/v1beta1/params
+// status 200 bytes 626 ms 258 content-encoding br ratelimit 
+{
+ "params": {
+  "authorized_tick_spacing": [
+   "1",
+   "10",
+   "100",
+   "1000"
+  ],
+  "authorized_spread_factors": [
+   "0.000000000000000000",
+   "0.000100000000000000",
+   "0.000500000000000000",
+   "0.001000000000000000",
+   "0.002000000000000000",
+   "0.003000000000000000",
+   "0.005000000000000000",
+   "0.010000000000000000",
+   "0.025000000000000000"
+  ],
+  "balancer_shares_reward_discount": "0.050000000000000000",
+  "authorized_quote_denoms": [],
+  "authorized_uptimes": [
+   "0.000000001s",
+   "60s",
+   "3600s",
+   "86400s"
+  ],
+  "is_permissionless_pool_creation_enabled": true,
+  "unrestricted_pool_creator_whitelist": [
+   "osmo1k396geqx70uyyqf6kcvsz27n2c80fduagnhswxj3smny582pyyusf5qf6j"
+  ],
+  "hook_gas_limit": "2000000"
+ }
+}

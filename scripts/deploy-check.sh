@@ -61,6 +61,11 @@ for i in 1 2 3 4 5; do out=$(npx wrangler d1 execute namada-trade-db --remote --
 echo "$out" | python3 -c "
 import sys,json; r=json.load(sys.stdin)[0]['results'][0]; print('0013 tables and index:', r)
 sys.exit(0 if r['tables'] == 3 and r['n'] == 1 else 1)" || { echo "FAIL migration 0013 is not in place: not deploying"; exit 1; }
+# the depth archive bucket (wrangler.jsonc r2_buckets DEPTH_R2): wrangler refuses to upload a Worker bound to a bucket
+# that does not exist, so the bucket is created once by hand before the first deploy of the binding (the code tolerates
+# the binding missing; the deploy does not)
+for i in 1 2 3 4 5; do out=$(npx wrangler r2 bucket list 2>&1) && ! echo "$out" | grep -q 7403 && break; echo "retrying (Cloudflare 7403)"; sleep 6; done
+echo "$out" | grep -q 'namada-trade-depth' && echo "depth bucket: namada-trade-depth" || { echo "FAIL the depth archive bucket is missing: create it first (npx wrangler r2 bucket create namada-trade-depth), then deploy"; exit 1; }
 
 echo "== 2. deploy"
 npm run deploy 2>&1 | grep -E "Current Version ID|Deployed|rror"

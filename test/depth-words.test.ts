@@ -4,7 +4,7 @@
 // from a read or the configuration, never from these words.
 import { describe, it, expect } from 'vitest';
 import { BANNED } from './banned-words';
-import { DEPTH_WORDS, DEPTH_FIXED_WORDS, DEPTH_BUILT_WORDS, DEPTH_SOURCES, bookSource, counterUsdHow, HEAT_EDGES, HEAT_BANDS, HEAT_TOP_RATIO, HEAT_RANGE_WORDS, DEPTH_SIZES, DEPTH_OFFSETS_PCT, DEPTH_TOUCH_SIZE } from '../shared/depth';
+import { DEPTH_WORDS, DEPTH_FIXED_WORDS, DEPTH_BUILT_WORDS, DEPTH_SOURCES, bookSource, counterUsdHow, dustWords, HEAT_EDGES, HEAT_BANDS, HEAT_TOP_RATIO, HEAT_RANGE_WORDS, DEPTH_SIZES, DEPTH_OFFSETS_PCT, DEPTH_TOUCH_SIZE } from '../shared/depth';
 
 describe('the depth words', () => {
   it('none carries a banned word', () => {
@@ -17,7 +17,9 @@ describe('the depth words', () => {
     expect(Object.keys(DEPTH_SOURCES)).not.toContain('book');
   });
   it('the built sentences carry only the figure passed in: the book’s pool from the configuration, a coin’s price, a clock', () => {
-    expect(DEPTH_BUILT_WORDS.length).toBe(5);
+    expect(DEPTH_BUILT_WORDS.length).toBe(6);
+    expect(dustWords(1, 'NAM')).toBe('holds under 1 NAM and almost none of the other coin, so the pool is listed and not read');
+    expect(dustWords(1, 'NAM').match(/\d+/g)).toEqual(['1']);
     expect(bookSource('3008')).toBe('Osmosis order book contract (pool 3008)');
     expect(bookSource('3008').match(/\d+/g)).toEqual(['3008']);
     expect(bookSource('12').match(/\d+/g)).toEqual(['12']);

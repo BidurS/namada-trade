@@ -1,7 +1,9 @@
 // The depth store's caps (plan section 7, cost.txt section 6) and the kv depth.budget accounting. Each cap is checked
 // BEFORE a write: C3 rows written this month (the counter resets on the first tick of a UTC month; the store row is not
-// ok and the check warns at the warn mark; at the cap inserts stop and deletes continue), C4 the database size (any
-// statement's size_after past the cap stops inserts), C6 the archive puts (step S3 writes them; the counter is here),
+// ok and the check warns at the warn mark; at the cap the depth rows and the kv answers stop while the deletes, the
+// depth_budget check row and this kv counter go on: a few rows a minute past the cap, counted here, so the Status page
+// keeps saying the store is stopped and why), C4 the database size (any statement's size_after past the cap stops
+// inserts), C6 the archive puts (step S3 writes them; the counter is here),
 // C8 the kill switch kv depth.on = '0', read first by the minute. C1, C2, C5 and C7 live where the pools are cut, the
 // requests are counted, the delete runs and the routes read; the caps' figures are in config.ts DepthCaps.
 import type { DepthCaps } from './config';
@@ -37,6 +39,9 @@ export function budgetFor(prev: unknown, now: number): DepthBudget {
   return { month: p.month, rowsWritten: n(p.rowsWritten), rowsRead: n(p.rowsRead), r2Puts: n(p.r2Puts), r2Bytes: n(p.r2Bytes), bytesIn: n(p.bytesIn), sizeAfter: typeof p.sizeAfter === 'number' && Number.isFinite(p.sizeAfter) ? p.sizeAfter : null, lastCapHit: p.lastCapHit && typeof p.lastCapHit === 'object' ? p.lastCapHit : null, at: n(p.at) };
 }
 
+/** What stops at a cap and what goes on (the few rows that go on are counted). */
+export const STOPPED_WORDS = 'inserts stopped; the deletes, the check row and this counter go on';
+
 export interface BudgetGate {
   /** Whether inserts may go ahead. */
   writes: boolean;
@@ -53,8 +58,8 @@ export interface BudgetGate {
  */
 export function gate(b: DepthBudget, caps: DepthCaps, pending: number): BudgetGate {
   const pct = (b.rowsWritten / caps.rowsMonthMax) * 100;
-  if (b.sizeAfter != null && b.sizeAfter > caps.d1SizeMax) return { writes: false, level: 'fail', why: `the database is ${(b.sizeAfter / 1e9).toFixed(2)} GB, past the ${(caps.d1SizeMax / 1e9).toFixed(0)} GB cap: inserts stopped, deletes go on`, pct };
-  if (b.rowsWritten >= caps.rowsMonthMax || b.rowsWritten + pending > caps.rowsMonthMax) return { writes: false, level: 'fail', why: `${b.rowsWritten.toLocaleString('en-US')} rows written this month, at the cap of ${caps.rowsMonthMax.toLocaleString('en-US')}: inserts stopped, deletes go on`, pct };
+  if (b.sizeAfter != null && b.sizeAfter > caps.d1SizeMax) return { writes: false, level: 'fail', why: `the database is ${(b.sizeAfter / 1e9).toFixed(2)} GB, past the ${(caps.d1SizeMax / 1e9).toFixed(0)} GB cap: ${STOPPED_WORDS}`, pct };
+  if (b.rowsWritten >= caps.rowsMonthMax || b.rowsWritten + pending > caps.rowsMonthMax) return { writes: false, level: 'fail', why: `${b.rowsWritten.toLocaleString('en-US')} rows written this month, at the cap of ${caps.rowsMonthMax.toLocaleString('en-US')}: ${STOPPED_WORDS}`, pct };
   if (b.rowsWritten >= caps.rowsWarn) return { writes: true, level: 'warn', why: `${b.rowsWritten.toLocaleString('en-US')} rows written this month, ${pct.toFixed(0)} % of the cap of ${caps.rowsMonthMax.toLocaleString('en-US')}`, pct };
   return { writes: true, level: 'ok', why: null, pct };
 }
@@ -75,6 +80,8 @@ export function recordWrites(b: DepthBudget, results: readonly WriteMeta[] | nul
   return next;
 }
 export const recordBytes = (b: DepthBudget, bytesIn: number): DepthBudget => ({ ...b, bytesIn: b.bytesIn + Math.max(0, bytesIn | 0) });
+/** The kv depth.budget row itself, one row a minute: counted before it is written, since its own answer comes back after the counter is in it. */
+export const withBudgetRow = (b: DepthBudget): DepthBudget => ({ ...b, rowsWritten: b.rowsWritten + 1 });
 export const recordCapHit = (b: DepthBudget, what: string, at: number): DepthBudget => ({ ...b, lastCapHit: { at, what } });
 /** An archive object written (C6, step S3). */
 export const recordR2Put = (b: DepthBudget, bytes: number): DepthBudget => ({ ...b, r2Puts: b.r2Puts + 1, r2Bytes: b.r2Bytes + Math.max(0, bytes | 0) });

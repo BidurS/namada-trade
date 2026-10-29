@@ -34,6 +34,8 @@ export interface DepthCaps {
   /** C7: rows one history answer may read, and rows one heat answer may read. */
   historyRowsMax: number;
   heatRowsMax: number;
+  /** Plan 1.5: kv depth.owners stays under this many bytes of JSON; over it, the smallest owners' items are left out and the row says so. */
+  ownersKvMax: number;
 }
 
 export interface DepthConfig {
@@ -53,11 +55,16 @@ export interface DepthConfig {
   heat: { edges: readonly number[]; pct: number };
   /**
    * The floor under which a pool that holds something is listed as dust and not read: the research prototype's live
-   * rule (proto/snapshot.mjs: at least one whole base coin, or at least this many base units of the other coin), which
-   * is what plan 1.2 a counted (16 live pools of 28 listed on 2026-10-29). Ten pools held a few hundred base units of
-   * each coin that day; reading their tick maps every minute would cost requests for no depth.
+   * rule (proto/snapshot.mjs: at least one whole base coin, or at least a hundredth of a six-decimal counter coin),
+   * which is what plan 1.2 a counted (16 live pools of 28 listed on 2026-10-29). Ten pools held a few hundred base
+   * units of each coin that day; reading their tick maps every minute would cost requests for no depth. A pool is dust
+   * only when BOTH sides are under the floor: under `baseWhole` whole base coins and under `counterWhole` whole counter
+   * coins through the coin's decimals once they are known (the configuration's or the metadata read's); before they
+   * are known, under `counterUnits` base units of it.
    */
-  dust: { baseUnits: number; counterUnits: number };
+  dust: { baseWhole: number; counterWhole: number; counterUnits: number };
+  /** The `chain` the stored swaps carry in the flows table, for the realised check (plan section 5, check 3). */
+  swapsChain: string;
   read: DepthReadRules;
   checks: DepthCheckRules;
 }
@@ -110,6 +117,7 @@ export const DEPTH_CAPS: DepthCaps = {
   r2ObjectMax: 1_000_000,
   historyRowsMax: 43_200,
   heatRowsMax: 2_016,
+  ownersKvMax: 200_000,
 };
 
 export const DEPTH_READ_RULES: DepthReadRules = {
@@ -153,7 +161,8 @@ export const NAM_DEPTH: DepthConfig = {
   offsetsPct: DEPTH_OFFSETS_PCT,
   touchSize: DEPTH_TOUCH_SIZE,
   heat: { edges: HEAT_EDGES, pct: HEAT_BAND_PCT },
-  dust: { baseUnits: 1_000_000, counterUnits: 10_000 },
+  dust: { baseWhole: 1, counterWhole: 0.01, counterUnits: 10_000 },
+  swapsChain: 'osmosis',
   read: DEPTH_READ_RULES,
   checks: DEPTH_CHECK_RULES,
 };

@@ -41,13 +41,17 @@ export const DEPTH_LATEST_MAX_BYTES = 150_000;
 export type DepthPoolType = 'concentrated' | 'balancer' | 'stableswap' | 'cosmwasm';
 export type DepthSide = 'bid' | 'ask';
 
-/** One read behind a figure: where, when, at what height, how big and how long. */
+/**
+ * One read behind a figure: where, when, at what height, and, when the module made the request itself, how big, how
+ * long and with what status. A pool whose figures come from the pool list the tick had already read carries the list's
+ * URL and time only: its size, time and status were not seen by the module, so they are left out rather than typed.
+ */
 export interface DepthRead {
   url: string;
   at: number;
   height: number | null;
-  bytes: number;
-  ms: number;
+  bytes?: number;
+  ms?: number;
   status?: number | string;
 }
 export interface DepthReadError {
@@ -129,12 +133,15 @@ export interface DepthBookLevel {
   price: number;
   /** Bids rest in the counter coin, asks in the base coin (whole coins). */
   amount: number;
-  orders: number;
+  /** Orders resting at the tick, or null while the minute has not read them (the tick's orders are read only when its totals change, within the request cap). */
+  orders: number | null;
 }
 export interface DepthPoolBook {
   bids: DepthBookLevel[];
   asks: DepthBookLevel[];
-  orders: number;
+  /** Orders resting in the book, or null while any live tick's count is not read; `ordersUnknown` says how many ticks that is. */
+  orders: number | null;
+  ordersUnknown: number;
   bestBid: number | null;
   bestAsk: number | null;
   state: { url: string; at: number };
@@ -160,6 +167,8 @@ export interface DepthPool {
   counter: number | null;
   /** The pool's counter coin at counterUsd, in USD. */
   counterValueUsd: number | null;
+  /** When the two balances were read: the pool list's time, which is the tick's own read, not the chain read behind `read`. */
+  balancesAt: number;
   read: DepthRead | DepthReadError;
   cl?: DepthPoolCl;
   book?: DepthPoolBook;
@@ -182,9 +191,10 @@ export interface DepthCurve {
 }
 
 export interface DepthChecks {
-  /** Base units of the counter coin: the chain's own estimate and ours for `nam` whole base coins in the reference pool. */
-  estimate: { nam: number; chainUusdc: number; ours: number; diffPct: number; url: string; at: number; height: number | null } | null;
-  route: { nam: number; routerUsdc: number; ours: number; diffPct: number; at: number } | null;
+  /** Base units of the reference pool's counter coin: the chain's own estimate (`chainOut`) and ours for `nam` whole base coins. */
+  estimate: { nam: number; chainOut: number; ours: number; diffPct: number; url: string; at: number; height: number | null } | null;
+  /** The quote service's direct quote in the reference pool (`routerOut`, base units of its counter coin) and ours. */
+  route: { nam: number; routerOut: number; ours: number; diffPct: number; at: number } | null;
   realised: { n: number; within1pct: number; lastAt: number | null };
 }
 
@@ -281,6 +291,12 @@ export interface DepthOwnerItem {
   since: number | null;
   remaining?: number;
   placed?: number;
+  /** A position's liquidity as the chain gives it (an 18-decimal string), so two hours' readings compare exactly. */
+  liquidity?: string;
+  /** An order's remaining quantity in base units as the contract gives it (the coin the order rests in), for the same exact comparison. */
+  quantity?: string;
+  /** A position whose range holds the pool's price (it gives both coins), from the hourly read. */
+  inRange?: boolean;
 }
 export interface DepthOwner {
   address: string;
@@ -303,6 +319,14 @@ export interface DepthOwnersResponse {
   prov: DepthProv[];
 }
 
+/**
+ * One row of depth_changes: liquidity that appeared, left or filled, as the diff of two readings (worker/src/depth/diff.ts).
+ * `ref` names what changed: a tick range of a concentrated pool ('rng:<lo>:<hi>', compared by its liquidity, which only a
+ * position event moves), a weighted or stable pool's reserves ('res', a row only when both reserves moved the same way:
+ * a swap moves them apart and is a trade, not a change of liquidity), a position ('pos:<id>') or an order ('ord:<id>'),
+ * the last two from the hourly read with the owner. `nam` and `usd` are the size that changed: what was added, what left,
+ * what filled, or how much the item grew or shrank by.
+ */
 export interface DepthChangeRow {
   ts: number;
   pool: string;
@@ -354,7 +378,12 @@ export const HONEST_START = 'Depth has been recorded since the first stored minu
 
 /** Why a listed pool is not read: nothing inside, or too little to be worth a read every minute. */
 export const UNPRICED_EMPTY = 'empty on both sides, so the pool is listed and not read';
-export const UNPRICED_DUST = 'holds less than one whole coin on either side, so the pool is listed and not read';
+/**
+ * The dust floor as the module's configuration sets it (worker/src/depth/config.ts dust): a pool under `baseWhole` whole
+ * base coins AND under a hundredth of a whole counter coin (a fixed number of base units before the coin's decimals are
+ * read) is listed and not read. Both sides must be under the floor: a pool that holds one of the two is read.
+ */
+export const dustWords = (baseWhole: number, baseSymbol: string) => `holds under ${baseWhole} ${baseSymbol} and almost none of the other coin, so the pool is listed and not read`;
 export const UNPRICED_NO_META = 'the quote service’s token metadata does not name this coin, so the pool is listed and not counted';
 /** A pool past the cap on pools read a minute: `n` is the cap, from the configuration. */
 export const cutByCap = (n: number) => `past the cap of ${n} pools read a minute (the largest by counter value are read), so the pool is listed and not read`;
@@ -374,16 +403,28 @@ export const DEPTH_CHECK_TITLES = {
 export const NO_BIDS = 'no bids: nothing is resting to buy into on this side, which a pool emptied of its counter coin or a book with no buy orders allows';
 export const NO_ASKS = 'no asks: nothing is resting to sell into on this side';
 
+/** The three facts the hourly owners job holds the chain's answers to (plan section 5); each is the note's words when it holds and when it does not. */
+export const INVARIANT_WORDS = {
+  inRange: 'the positions in range add up to the pool’s current liquidity',
+  tickStore: 'the tick store walked equals the gateway’s liquidity per tick range',
+  bookTotals: 'each tick’s total equals what its orders have left',
+} as const;
+/** The hourly owners job and what it left out, in words. */
+export const OWNERS_NO_ARCHIVE = 'no archive bucket is bound, so the raw state was not archived';
+export const BOOK_NOT_READ_CLOSING = 'the order book’s orders were not read: the hour’s window is closing';
+export const OWNERS_NO_MINUTE = 'no stored minute yet, so there is no live set to read the owners of';
+
 /** A read that did not answer this minute: the last reading is shown dimmed with this. */
 export const notReadSince = (clock: string, why: string) => `not read since ${clock}, ${why}`;
 
 /** Every fixed sentence above, for test/depth-words.test.ts: none may carry a figure. */
 export const DEPTH_FIXED_WORDS: readonly string[] = [
-  ...Object.values(DEPTH_SOURCES), ...Object.values(DEPTH_CHECK_TITLES), HEAT_RANGE_WORDS, CL_LEVEL_WORDS, UNPRICED_NO_PRICE, UNPRICED_NO_TAKER, UNPRICED_EMPTY, UNPRICED_DUST, UNPRICED_NO_META,
+  ...Object.values(DEPTH_SOURCES), ...Object.values(DEPTH_CHECK_TITLES), HEAT_RANGE_WORDS, CL_LEVEL_WORDS, UNPRICED_NO_PRICE, UNPRICED_NO_TAKER, UNPRICED_EMPTY, UNPRICED_NO_META,
   BOOK_LEG_LEFT_OUT, USDC_AS_ONE, SELL_INTO_POOLS, HONEST_START, NO_BIDS, NO_ASKS,
+  ...Object.values(INVARIANT_WORDS), OWNERS_NO_ARCHIVE, BOOK_NOT_READ_CLOSING, OWNERS_NO_MINUTE,
 ];
 /** The sentences built from a read or the configuration, with sample arguments: the only figures they carry are the ones passed in. */
 export const DEPTH_BUILT_WORDS: readonly string[] = [
-  bookSource('3008'), UNPRICED_NOT_READ('status 429'), counterUsdHow('OSMO', 0.0529, '02:56 UTC'), notReadSince('02:56 UTC', 'status 429'), cutByCap(40),
+  bookSource('3008'), UNPRICED_NOT_READ('status 429'), counterUsdHow('OSMO', 0.0529, '02:56 UTC'), notReadSince('02:56 UTC', 'status 429'), cutByCap(40), dustWords(1, 'NAM'),
 ];
 export const DEPTH_WORDS: readonly string[] = [...DEPTH_FIXED_WORDS, ...DEPTH_BUILT_WORDS];

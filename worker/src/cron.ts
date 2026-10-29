@@ -1734,10 +1734,15 @@ export async function runCron(env: Env) {
     //     tick that reads no chain listing unless the window is closing. The two run side by side, so their outside
     //     requests (the Osmosis data API's two reads, the validator list) overlap instead of adding up, and neither
     //     starts one once the tick is late.
+    //     The depth hour (worker/src/depth/index.ts hourly, depth plan 1.3) runs beside them in the same window with the
+    //     same gates (never on a late tick, not on a listing tick unless the window is closing), inside its own request
+    //     budget; its writes wait for the depth minute of this tick (writeAfter), since both jobs keep kv depth.budget
+    //     and depth.params; its failure costs the tick nothing but its own health row.
     const seriesCtx = { health, signal, late, listingTick: which !== null };
     await Promise.all([
       series.hourly(env, now, { ...seriesCtx, pools: poolRes.pools, poolsAt: poolRes.at }).catch((e) => { console.error('series hourly', e); health.push({ name: 'Series (hourly)', ok: false, at: now, note: String(e).slice(0, 160) }); }),
       series.daily(env, now, seriesCtx).catch((e) => { console.error('series daily', e); health.push({ name: 'Series (daily snapshot)', ok: false, at: now, note: String(e).slice(0, 160) }); }),
+      depth.hourly(env, now, { ...seriesCtx, writeAfter: depthRun }).catch((e) => { console.error('depth hourly', e); health.push({ name: depth.DEPTH_HEALTH.owners, ok: false, at: now, note: String(e).slice(0, 160) }); }),
     ]);
 
     // 4. Integrity checks. Each compares two independent sources.

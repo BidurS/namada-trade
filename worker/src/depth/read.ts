@@ -5,8 +5,8 @@
 // smart queries, the quote service for the pool list, the price list and the token metadata. Nothing here names a
 // coin or a pool: the configuration passes them in.
 import type { DepthConfig } from './config';
-import { batchBody, parseBatch, type AbciAnswer, type AbciQuery } from './proto';
-import type { BookAsk, BookBid, ClPoolState, ClRange } from './model';
+import { batchBody, decodePosition, decodePositionIndex, parseBatch, positionByIdQuery, positionIndexQuery, type AbciAnswer, type AbciQuery, type PositionWire } from './proto';
+import { tickToPrice, type BookAsk, type BookBid, type ClPoolState, type ClRange } from './model';
 import { bytesToBase64 } from '../util';
 import type { DepthProv } from '../../../shared/depth';
 
@@ -97,8 +97,65 @@ export async function rpcBatch(req: Requests, cfg: DepthConfig, queries: AbciQue
   return answers.flat();
 }
 
+/** A position as the hourly read keeps it: the chain's answer with the POST's height and time. */
+export interface PositionRead extends PositionWire { height: number | null; at: number }
+
+/**
+ * The positions of the concentrated pools (plan 1.3 a): the pool-to-position index of each pool in one batch (beside
+ * `extra` queries the caller wants at the same height), then PositionById in batches of the node's size. A pool whose
+ * index did not answer is named in `missing` with the reason; a position that did not decode likewise.
+ */
+export async function readPositions(req: Requests, cfg: DepthConfig, poolIds: string[], extra: AbciQuery[] = []): Promise<{ positions: PositionRead[]; extra: BatchAnswer[]; missing: { pool: string; why: string }[]; indexHeight: number | null; ids: Record<string, string[]> }> {
+  const answers = await rpcBatch(req, cfg, [...poolIds.map((id) => positionIndexQuery(id)), ...extra]);
+  const missing: { pool: string; why: string }[] = [];
+  const ids: Record<string, string[]> = {};
+  let indexHeight: number | null = null;
+  poolIds.forEach((pool, i) => {
+    const a = answers[i];
+    if (!a || a.code !== 0 || !isOk(a.read)) { missing.push({ pool, why: a && !isOk(a.read) ? a.read.error : `chain node code ${a?.code ?? -1}${a?.log ? `: ${a.log.slice(0, 60)}` : ''}` }); return; }
+    try { ids[pool] = decodePositionIndex(a.value); indexHeight = indexHeight ?? a.height; } catch (e) { missing.push({ pool, why: `index unreadable: ${String((e as Error)?.message ?? e).slice(0, 60)}` }); }
+  });
+  const want = Object.entries(ids).flatMap(([pool, list]) => list.map((id) => ({ pool, id })));
+  const byId = want.length ? await rpcBatch(req, cfg, want.map((w) => positionByIdQuery(w.id))) : [];
+  const positions: PositionRead[] = [];
+  want.forEach((w, i) => {
+    const a = byId[i];
+    if (!a || a.code !== 0 || !isOk(a.read) || !a.value.length) { missing.push({ pool: w.pool, why: `position ${w.id}: ${a && !isOk(a.read) ? a.read.error : a?.log || 'no value'}` }); return; }
+    try { positions.push({ ...decodePosition(a.value), height: a.height, at: a.read.at }); } catch (e) { missing.push({ pool: w.pool, why: `position ${w.id} unreadable: ${String((e as Error)?.message ?? e).slice(0, 60)}` }); }
+  });
+  return { positions, extra: answers.slice(poolIds.length), missing, indexHeight, ids };
+}
+
 // ---------------------------------------------------------------------------------------------------- the REST gateway
 const enc = encodeURIComponent;
+
+/** The gateway's liquidity per tick range of one pool (the hourly invariant's one read). */
+export async function readTickRanges(req: Requests, cfg: DepthConfig, poolId: string): Promise<Read<ClRange[]>> {
+  const r = await readJson<{ liquidity: ClRange[] }>(req, `pool ${poolId} ranges (gateway)`, `${cfg.hosts.rest}/osmosis/concentratedliquidity/v1beta1/liquidity_per_tick_range?pool_id=${poolId}`);
+  return isOk(r) ? { ...r, value: Array.isArray(r.value?.liquidity) ? r.value.liquidity : [] } : r;
+}
+
+/** A weighted or stable pool's own object from the chain (plan 1.3 c): weights, swap fee, scaling factors, as the gateway serves it. */
+export interface GammPoolWire {
+  '@type'?: string;
+  id?: string;
+  pool_params?: { swap_fee?: string; exit_fee?: string };
+  pool_assets?: { token: { denom: string; amount: string }; weight: string }[];
+  pool_liquidity?: { denom: string; amount: string }[];
+  scaling_factors?: string[];
+  total_weight?: string;
+}
+export async function readGammPool(req: Requests, cfg: DepthConfig, poolId: string): Promise<Read<GammPoolWire>> {
+  const r = await readJson<{ pool: GammPoolWire }>(req, `pool ${poolId} parameters (gateway)`, `${cfg.hosts.rest}/osmosis/gamm/v1beta1/pools/${poolId}`);
+  if (!isOk(r)) return r;
+  return r.value?.pool ? { ...r, value: r.value.pool } : { error: 'no pool in the answer', url: r.url, at: r.at, ms: r.ms, status: r.status };
+}
+/** The concentrated-liquidity module's parameters (tick spacings, spread factors), which governance alone changes. */
+export async function readClParams(req: Requests, cfg: DepthConfig): Promise<Read<Record<string, unknown>>> {
+  const r = await readJson<{ params: Record<string, unknown> }>(req, 'concentrated-liquidity parameters (gateway)', `${cfg.hosts.rest}/osmosis/concentratedliquidity/v1beta1/params`);
+  if (!isOk(r)) return r;
+  return r.value?.params ? { ...r, value: r.value.params } : { error: 'no params in the answer', url: r.url, at: r.at, ms: r.ms, status: r.status };
+}
 
 /** A concentrated pool from the gateway, the fallback of plan 1.2 c: the pool object and its liquidity per tick range (two GETs). */
 export async function readClPoolLcd(req: Requests, cfg: DepthConfig, poolId: string): Promise<{ pool: Read<ClPoolState>; ranges: Read<ClRange[]> }> {
@@ -184,8 +241,74 @@ export interface BookRead {
   changed: number[];
 }
 
-const liq = (v: TickValues | undefined): string => { const n = Number(v?.total_amount_of_liquidity ?? 0); return Number.isFinite(n) && n > 0 ? String(v!.total_amount_of_liquidity) : '0'; };
-const tickPrice = (tick: number, exp = -6): number => { if (tick === 0) return 1; const per = 9 * 10 ** -exp; const geo = Math.floor(tick / per); return 10 ** geo + (tick - geo * per) * 10 ** (exp + geo); };
+/** The whole book as the hourly job reads it (plan 1.3 b): every live tick from all_ticks, and every order resting at them. */
+export interface BookFullRead {
+  state: Read<BookState>;
+  /** The live ticks (a side's total above zero), or the error of the page that failed. */
+  ticks: Read<TickRow[]>;
+  pages: number;
+  /** Each live tick's orders, by tick id; a tick whose read failed carries the error. */
+  orders: Record<string, Read<OrderRow[]>>;
+  /** Live ticks whose orders were not asked for, the request cap reached. */
+  notAsked: number[];
+}
+
+/**
+ * The book in full: orderbook_state, all_ticks in pages until a short page, then orders_by_tick for every live tick,
+ * `parallel` at a time, as far as the request cap allows. A list cut by the cap is an error, never a live set.
+ */
+export async function readBookFull(req: Requests, cfg: DepthConfig, contract: string, parallel = 6): Promise<BookFullRead> {
+  const out: BookFullRead = { state: { error: 'not asked', url: '', at: req.clock(), ms: 0 }, ticks: { error: 'not asked', url: '', at: req.clock(), ms: 0 }, pages: 0, orders: {}, notAsked: [] };
+  out.state = await smartQuery<BookState>(req, cfg, contract, { orderbook_state: {} }, 'order book state');
+  const listed = await listAllTicks(req, cfg, contract);
+  out.pages = listed.pages;
+  if (listed.ticks) out.ticks = listed.ticks;
+  if (!listed.live) return out;
+  const live = listed.live;
+  for (let i = 0; i < live.length; i += parallel) {
+    const chunk = live.slice(i, i + parallel);
+    if (req.made >= req.max) { out.notAsked.push(...live.slice(i).map((t) => t.tick_id)); break; }
+    await Promise.all(chunk.map(async (t) => {
+      if (req.made >= req.max) { out.notAsked.push(t.tick_id); return; }
+      const r = await smartQuery<{ orders: OrderRow[] }>(req, cfg, contract, { orders_by_tick: { tick_id: t.tick_id, limit: 200 } }, `order book orders at tick ${t.tick_id}`);
+      out.orders[String(t.tick_id)] = isOk(r) ? { ...r, value: Array.isArray(r.value?.orders) ? r.value.orders : Array.isArray(r.value) ? (r.value as unknown as OrderRow[]) : [] } : r;
+    }));
+  }
+  return out;
+}
+
+export const liq = (v: TickValues | undefined): string => { const n = Number(v?.total_amount_of_liquidity ?? 0); return Number.isFinite(n) && n > 0 ? String(v!.total_amount_of_liquidity) : '0'; };
+
+/** What listing the whole tick list gave: the live ticks (a side's total above zero) when the list completed, else null with the read that ended it. */
+export interface TickListing {
+  live: TickRow[] | null;
+  /** The last page's read with the live ticks as its value, or the error of the page that failed, or the cut list as an error; null when no page was asked. */
+  ticks: Read<TickRow[]> | null;
+  pages: number;
+}
+
+/**
+ * The contract's whole tick list, all_ticks a page at a time until a short page, as far as the request cap allows (the
+ * minute's discovery and the hour's book read share it). A list cut by the cap is an error, never a live set.
+ */
+export async function listAllTicks(req: Requests, cfg: DepthConfig, contract: string): Promise<TickListing> {
+  const all: TickRow[] = [];
+  let start: number | null = null, complete = false, last: Read<{ ticks: TickRow[] }> | null = null, pages = 0;
+  for (let page = 0; page < 20; page++) {
+    const r: Read<{ ticks: TickRow[] }> = await smartQuery<{ ticks: TickRow[] }>(req, cfg, contract, { all_ticks: { start_from: start, limit: cfg.read.bookPageSize } }, `order book ticks, page ${page + 1}`);
+    last = r; pages++;
+    if (!isOk(r)) break;
+    const got: TickRow[] = Array.isArray(r.value?.ticks) ? r.value.ticks : [];
+    all.push(...got.filter((t) => start === null || t.tick_id !== start));
+    if (got.length < cfg.read.bookPageSize) { complete = true; break; }
+    start = got[got.length - 1].tick_id;
+  }
+  if (!last) return { live: null, ticks: null, pages };
+  if (!isOk(last)) return { live: null, ticks: last, pages };
+  if (!complete) return { live: null, ticks: { error: 'the tick list was cut by the request cap', url: last.url, at: last.at, ms: last.ms, status: last.status }, pages };
+  const live = all.filter((t) => liq(t.tick_state?.bid_values) !== '0' || liq(t.tick_state?.ask_values) !== '0');
+  return { live, ticks: { ...last, value: live }, pages };
+}
 
 /**
  * The book each minute (plan 1.2 e): orderbook_state, then the live ticks by id when the known set is fresh and holds
@@ -210,19 +333,9 @@ export async function readBook(req: Requests, cfg: DepthConfig, contract: string
     } else { rows = []; out.how = 'by id'; }
   } else {
     // list every tick, a page at a time, as far as the cap allows; a cut list is not kept as the live set
-    const all: TickRow[] = [];
-    let start: number | null = null, complete = false, last: Read<unknown> | null = null;
-    for (let page = 0; page < 20; page++) {
-      const r: Read<{ ticks: TickRow[] }> = await smartQuery<{ ticks: TickRow[] }>(req, cfg, contract, { all_ticks: { start_from: start, limit: cfg.read.bookPageSize } }, `order book ticks, page ${page + 1}`);
-      last = r;
-      if (!isOk(r)) break;
-      const got: TickRow[] = Array.isArray(r.value?.ticks) ? r.value.ticks : [];
-      all.push(...got.filter((t) => start === null || t.tick_id !== start));
-      if (got.length < cfg.read.bookPageSize) { complete = true; break; }
-      start = got[got.length - 1].tick_id;
-    }
-    if (complete && last && isOk(last)) { rows = all.filter((t) => liq(t.tick_state?.bid_values) !== '0' || liq(t.tick_state?.ask_values) !== '0'); out.how = 'listed'; out.ticks = { ...last, value: rows }; }
-    else if (last) out.ticks = isOk(last) ? { error: 'the tick list was cut by the request cap', url: last.url, at: last.at, ms: last.ms, status: last.status } : last;
+    const listed = await listAllTicks(req, cfg, contract);
+    if (listed.ticks) out.ticks = listed.ticks;
+    if (listed.live) { rows = listed.live; out.how = 'listed'; }
   }
   if (!rows) return out;
   const next: BookKv = { contract, ticks: {}, listedAt: out.how === 'listed' ? now : have?.listedAt ?? now, at: now, next: stateNext ?? have?.next };
@@ -243,7 +356,7 @@ export async function readBook(req: Requests, cfg: DepthConfig, contract: string
     if (isOk(out.orders[String(tick)])) next.ticks[String(tick)].orders = (out.orders[String(tick)] as ReadOk<OrderRow[]>).value.length;
   }
   for (const [id, t] of Object.entries(next.ticks)) {
-    const tick = Number(id), price = tickPrice(tick);
+    const tick = Number(id), price = tickToPrice(tick);
     if (t.bid !== '0') out.bids.push({ price, quote: Number(t.bid), orders: t.orders });
     if (t.ask !== '0') out.asks.push({ price, base: Number(t.ask), orders: t.orders });
   }

@@ -9,7 +9,7 @@
 // poolPriceStmts writes a point only when all its values are finite; pool_hourly's summary columns are finite or NULL.
 import { describe, it, expect } from 'vitest';
 import { readFileSync } from 'node:fs';
-import { testD1, insert, type TestD1 } from './d1-sqlite';
+import { d1Json, insert, type TestD1 } from './d1-sqlite';
 import { parsePairSummary, parsePairChart, type PairSummary, type PairChartPoint } from '../worker/src/sources/osmosis-data';
 import { hourly, poolPriceStmts, poolHourlyStmts, summaryHealth, JOB_WINDOW_MS } from '../worker/src/series';
 import { NAM } from '../worker/src/config';
@@ -21,19 +21,6 @@ const all = (db: TestD1, sql: string, ...p: unknown[]) => db.raw.prepare(sql).al
 const metric = (db: TestD1, key: string) => all(db, 'SELECT ts, value FROM metrics WHERE key = ? ORDER BY ts', key);
 const kv = (db: TestD1, key: string) => all(db, 'SELECT value FROM kv WHERE key = ?', key).map((r) => JSON.parse(r.value))[0];
 const osmo = (i: number) => `osmo1${String(i).padStart(38, '0')}`;
-
-/** testD1 with D1's own parameter path: the binding sends parameters as JSON, so a number that is not finite arrives as NULL. */
-function d1Json(): TestD1 {
-  const db = testD1();
-  const prepare = db.prepare.bind(db);
-  (db as any).prepare = (sql: string) => {
-    const s: any = prepare(sql);
-    const bind = s.bind.bind(s);
-    s.bind = (...p: unknown[]) => bind(...JSON.parse(JSON.stringify(p)));
-    return s;
-  };
-  return db;
-}
 
 const POOLS: PoolInfo[] = [
   { id: '3005', type: 'concentrated', address: osmo(9001), pair: 'NAM / USDC', counterDenom: 'ibc/x', counterSymbol: 'USDC', namReserve: 601_916, counterReserve: 214, liquidityUsd: 916, spreadFactor: 0.002 },

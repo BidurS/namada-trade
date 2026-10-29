@@ -7,14 +7,14 @@
 // pools not read), the gateway fallback, nothing written when the tick is late or the kill switch is off, the three
 // checks' rows, and the compute's time under 500 ms (plan 1.4).
 import { describe, it, expect } from 'vitest';
-import { testD1, insert, type TestD1 } from './d1-sqlite';
+import { testD1, d1Json, insert, type TestD1 } from './d1-sqlite';
 import { minute, modelOfState, executedCheck, DEPTH_HEALTH, type DepthStates, type MinuteCtx, type Realised } from '../worker/src/depth/index';
 import { NAM_DEPTH } from '../worker/src/depth/config';
 import { aggregate, buildGrid, executeSell, executeBuyUsd, unpackF32, type PricedPool } from '../worker/src/depth/model';
-import { minuteStmt, DEPTH_MINUTE_COLUMNS, deleteOldMinutesStmt, type DepthMinuteRow } from '../worker/src/depth/sql';
-import { DEPTH_LATEST_MAX_BYTES, CURVE_POINTS_MAX, CURVE_POOL_POINTS_MAX, HEAT_BANDS, UNPRICED_NO_PRICE, UNPRICED_NO_TAKER, UNPRICED_DUST, UNPRICED_EMPTY, BOOK_LEG_LEFT_OUT, type DepthResponse } from '../shared/depth';
+import { minuteStmt, DEPTH_MINUTE_COLUMNS, deleteOldMinutesStmts, SWAPS_SQL, type DepthMinuteRow } from '../worker/src/depth/sql';
+import { DEPTH_LATEST_MAX_BYTES, CURVE_POINTS_MAX, CURVE_POOL_POINTS_MAX, HEAT_BANDS, UNPRICED_NO_PRICE, UNPRICED_NO_TAKER, UNPRICED_EMPTY, BOOK_LEG_LEFT_OUT, dustWords, type DepthResponse } from '../shared/depth';
 import type { SourceHealth } from '../shared/types';
-import { depthNetwork, bookKvFromFixture, paramsKvFromFixture, LATEST, SQS_POOLS, REF_HEIGHT, type NetOptions } from './depth-minute-net';
+import { depthNetwork, bookKvFromFixture, paramsKvFromFixture, LATEST, SQS_POOLS, BOOK, REF_HEIGHT, type NetOptions } from './depth-minute-net';
 import { NAM_DENOM, depthFixtureHeader } from './depth-fixtures';
 
 const cfg = NAM_DEPTH;
@@ -27,10 +27,14 @@ const kvText = (db: TestD1, key: string): string | null => all(db, 'SELECT value
 const checks = (db: TestD1) => Object.fromEntries(all(db, 'SELECT key, status, detail FROM checks').map((r) => [r.key, { status: r.status, detail: JSON.parse(r.detail) }]));
 const rowOf = (h: SourceHealth[], name: string) => h.filter((x) => x.name === name).pop();
 const rows = (db: TestD1, m = MINUTE) => all(db, 'SELECT * FROM depth_minute WHERE minute = ? ORDER BY CASE pool_id WHEN \'all\' THEN 0 ELSE 1 END, CAST(pool_id AS INTEGER)', m);
+/** A read pool's row note: its two balances are the pool list's, read by the tick 1.5 s before the minute (run() passes poolsAt), not the chain read behind `at`. */
+const BALANCES_NOTE = 'balances from the pool list read at 02:56 UTC';
+const UNPRICED_DUST = dustWords(1, 'NAM');
+/** The orders resting at the book's live ticks in the fixture (43 over 34 ticks on 2026-10-29). */
+const BOOK_ORDERS: number = BOOK.live_ticks.reduce((n: number, t: any) => n + BOOK.orders.filter((o: any) => o.tick_id === t.tick_id).length, 0);
 
 /** A seeded database: the parameters and the book as the minute before would have left them, so this minute is a steady one. */
-function seeded(opts: { params?: boolean; book?: boolean } = {}) {
-  const db = testD1();
+function seeded(opts: { params?: boolean; book?: boolean } = {}, db: TestD1 = testD1()) {
   const before = T - 60_000;
   if (opts.params !== false) insert(db, 'kv', [{ key: 'depth.params', value: JSON.stringify(paramsKvFromFixture(before)), updated_at: before }]);
   if (opts.book !== false) insert(db, 'kv', [{ key: 'depth.book', value: JSON.stringify(bookKvFromFixture(before)), updated_at: before }]);
@@ -62,8 +66,27 @@ describe('a steady minute on the saved answers', () => {
     expect(pools.ok).toBe(true);
     expect(pools.note).toMatch(/^14 of 14 pools read at height 73429291, \d+ bytes over 6 requests/);
     expect(rowOf(health, DEPTH_HEALTH.book)).toMatchObject({ ok: true });
-    expect(rowOf(health, DEPTH_HEALTH.book)!.note).toMatch(/^3 bid levels, 31 ask levels, 0 changed; state at 02:56 UTC; Osmosis order book contract \(pool 3008\)$/);
+    expect(rowOf(health, DEPTH_HEALTH.book)!.note).toBe(`3 bid levels, 31 ask levels, ${BOOK_ORDERS} orders, 0 changed; state at 02:56 UTC; Osmosis order book contract (pool 3008)`);
+    expect(BOOK_ORDERS).toBe(43);
     expect(rowOf(health, DEPTH_HEALTH.store)).toMatchObject({ ok: true });
+    // the book's order counts are the ones read: every live tick's, so the total is known
+    const book = res.latest!.pools.find((p) => p.id === '3008')!.book!;
+    expect(book).toMatchObject({ orders: BOOK_ORDERS, ordersUnknown: 0 });
+    expect(book.bids.every((l) => typeof l.orders === 'number') && book.asks.every((l) => typeof l.orders === 'number')).toBe(true);
+    // a weighted pool's figures come from the pool list the tick handed in: its read record carries the list's URL and time and no size, time or status the module never saw
+    const weighted = res.latest!.pools.find((p) => p.id === '3439')!;
+    expect(weighted.type).toBe('balancer');
+    expect(weighted.read).toEqual({ url: `${cfg.hosts.sqs}/pools?filter[denom]=${encodeURIComponent(cfg.base.denom)}`, at: T - 1500, height: null });
+    expect(weighted.balancesAt).toBe(T - 1500);
+  });
+
+  it('the same minute through D1’s own parameter path (parameters as JSON, a figure that is not finite would be NULL): the 17 rows and the kv rows land', async () => {
+    const { db, res } = await run(seeded({}, d1Json()));
+    expect(res.written).toBe(true);
+    expect(rows(db)).toHaveLength(17);
+    expect(kv(db, 'depth.latest')).not.toBeNull();
+    expect(kv(db, 'depth.states')).not.toBeNull();
+    expect(kv(db, 'depth.budget')!.rowsWritten).toBe(24);
   });
 
   it('writes 17 rows: the aggregate with its heat bands, the 15 priced pools, and pool 3020 with the reason its coin has no price', async () => {
@@ -92,7 +115,26 @@ describe('a steady minute on the saved answers', () => {
     expect(book.spot_usd).toBeNull();
     expect(book.bid_usd).toBeCloseTo(174.700606, 4);
     expect(book.ask_nam).toBeCloseTo(810665.411525, 3);
-    expect(book.note).toBeNull();
+    // every read pool's row says its balances are the list's, read before the chain read behind `at`
+    expect(book.note).toBe(BALANCES_NOTE);
+    expect(book.at).toBeGreaterThan(T - 1500);
+    // a weighted or stable pool's figures and balances are all the list's at one time: no second time to say
+    for (const p of r.filter((x) => x.pool_id !== 'all' && x.pool_id !== '3020')) expect(p.note, p.pool_id).toBe(p.height != null ? BALANCES_NOTE : null);
+    expect(r.filter((x) => x.note === BALANCES_NOTE)).toHaveLength(8); // the seven concentrated pools and the book
+  });
+
+  it('the gateway two blocks ahead of the chain node (the book’s height is the gateway’s): the all row’s height is NULL with the range in its note, the pools row stays ok and says the heights', async () => {
+    const { db, health } = await run(seeded(), { restHeight: REF_HEIGHT + 2 });
+    const a = rows(db)[0];
+    expect(a.pool_id).toBe('all');
+    expect(a.height).toBeNull();
+    expect(a.note).toBe(`pools read at heights ${REF_HEIGHT} to ${REF_HEIGHT + 2}`);
+    expect(rows(db).find((x) => x.pool_id === '3008')!.height).toBe(REF_HEIGHT + 2);
+    expect(rows(db).find((x) => x.pool_id === '3005')!.height).toBe(REF_HEIGHT);
+    const pools = rowOf(health, DEPTH_HEALTH.pools)!;
+    expect(pools.ok).toBe(true);
+    expect(pools.note).toContain(`14 of 14 pools read at heights ${REF_HEIGHT} to ${REF_HEIGHT + 2}`);
+    expect(kv<DepthResponse>(db, 'depth.latest')!.note).toBe(a.note);
   });
 
   it('the aggregate figures are the prototype’s minute within what the four re-derived small pools allow: 10,000 NAM sells for 9.9245 USDC, USD of bids within 10 % 26.88', async () => {
@@ -173,7 +215,7 @@ describe('a steady minute on the saved answers', () => {
     expect(kv(db, 'depth.prev')).toBeNull();
     const budget = kv(db, 'depth.budget')!;
     expect(budget.month).toBe('2026-10');
-    expect(budget.rowsWritten).toBe(17 + 2 + 4); // the rows, the two kv rows written (latest, states; prev had nothing to copy, the book and the parameters did not change), the four check rows
+    expect(budget.rowsWritten).toBe(17 + 2 + 4 + 1); // the rows, the two kv rows written (latest, states; prev had nothing to copy, the book and the parameters did not change), the four check rows, the budget row itself
     expect(budget.bytesIn).toBe(res.bytes);
     expect(kv(db, 'depth.book')!.listedAt).toBe(T - 60_000);
     // the second minute: depth.prev is the first minute's states, the book unchanged, the rows of both minutes kept
@@ -181,7 +223,7 @@ describe('a steady minute on the saved answers', () => {
     expect(kv<DepthStates>(db2, 'depth.prev')!.minute).toBe(MINUTE);
     expect(kv<DepthStates>(db2, 'depth.states')!.minute).toBe(MINUTE + 60_000);
     expect(all(db2, 'SELECT COUNT(*) n FROM depth_minute')[0].n).toBe(34);
-    expect(kv(db2, 'depth.budget')!.rowsWritten).toBe(23 + 17 + 3 + 4); // then the rows, latest, the copy to prev, states, the checks
+    expect(kv(db2, 'depth.budget')!.rowsWritten).toBe(24 + 17 + 3 + 4 + 1); // then the rows, latest, the copy to prev, states, the checks, the budget row
   });
 
   it('the compute stays under 500 ms (plan 1.4; measured around the synchronous part with performance.now)', async () => {
@@ -193,7 +235,7 @@ describe('a steady minute on the saved answers', () => {
 
 describe('the first minute, with no parameters and no book known', () => {
   it('reads the token metadata, three taker fees (the rest next minutes), lists the book’s ticks and reads orders as far as the cap allows; pools whose taker fee is not yet read are unpriced with that reason', async () => {
-    const { db, net, health } = await run(seeded({ params: false, book: false }));
+    const { db, net, health, res } = await run(seeded({ params: false, book: false }));
     const paths = net.calls.map((c) => new URL(c.url).pathname);
     expect(paths.filter((p) => p === '/tokens/metadata')).toHaveLength(1);
     expect(paths.filter((p) => p.endsWith('/trading_pair_takerfee'))).toHaveLength(cfg.read.takerReadsPerMinute);
@@ -204,15 +246,24 @@ describe('the first minute, with no parameters and no book known', () => {
     const r = rows(db);
     const noTaker = r.filter((x) => x.note === UNPRICED_NO_TAKER).map((x) => x.pool_id);
     expect(noTaker.length).toBeGreaterThan(0);
-    expect(r.filter((x) => x.note == null).length + noTaker.length + 1).toBe(17);
+    expect(r.filter((x) => x.note == null || x.note === BALANCES_NOTE).length + noTaker.length + 1).toBe(17);
     const book = kv(db, 'depth.book');
     expect(book.listedAt).toBe(T);
     expect(Object.keys(book.ticks)).toHaveLength(34);
     expect(rowOf(health, DEPTH_HEALTH.book)!.note).toContain('(ticks listed anew)');
     expect(rowOf(health, DEPTH_HEALTH.pools)!.note).toContain(`over ${cfg.caps.requestsPerMinute} requests`);
     expect(net.calls.filter((c) => c.url.includes('/smart/')).length).toBeGreaterThanOrEqual(3); // the state, the list, at least one tick's orders before the cap
-    // the pool rows that were read carry no note; the price list's coins are the same as the steady minute's
-    expect(r.find((x) => x.pool_id === '3005')!.note).toBeNull();
+    // the pool rows that were read carry only the balances note; the price list's coins are the same as the steady minute's
+    expect(r.find((x) => x.pool_id === '3005')!.note).toBe(BALANCES_NOTE);
+    // the ticks whose orders the cap left unread carry null, never 0, and the total is not summed until every tick's count is known
+    const unread = Object.values<any>(book.ticks).filter((t) => t.orders == null).length;
+    expect(unread).toBeGreaterThan(0);
+    const served = res.latest!.pools.find((p) => p.id === '3008')!.book!;
+    expect(served.ordersUnknown).toBe(unread);
+    expect(served.orders).toBeNull();
+    expect([...served.bids, ...served.asks].filter((l) => l.orders === null).length).toBeGreaterThanOrEqual(unread);
+    expect([...served.bids, ...served.asks].some((l) => typeof l.orders === 'number')).toBe(true);
+    expect(rowOf(health, DEPTH_HEALTH.book)!.note).toContain(`orders not read for ${unread} of 34 ticks`);
   });
 });
 
@@ -241,7 +292,7 @@ describe('the phase budget and the fallback', () => {
     expect(paths).toContain('/osmosis/poolmanager/v1beta1/pools/3005');
     expect(paths).toContain('/osmosis/concentratedliquidity/v1beta1/liquidity_per_tick_range');
     const p = rows(db).find((x) => x.pool_id === '3005')!;
-    expect(p.note).toBeNull();
+    expect(p.note).toBe(BALANCES_NOTE);
     expect(Math.abs(pct(p.sell_1k, 1.01416))).toBeLessThan(0.02);
     expect(rowOf(health, DEPTH_HEALTH.pools)!.ok).toBe(true);
     const latest = kv<DepthResponse>(db, 'depth.latest')!;
@@ -295,10 +346,12 @@ describe('the three checks', () => {
     expect(c.detail).toMatchObject({ pool: '3005', nam: 1000, chainOut: '1014160', ours: '1014160', diffPct: 0, height: REF_HEIGHT, estimateHeight: REF_HEIGHT, okPct: 0.01 });
     expect(c.detail.url).toContain('/estimate/single_pool_swap_exact_amount_in');
     expect(depthFixtureHeader('lcd_pm_estimate_3005.json')[0]).toContain('02:19:22');
+    expect(kv<DepthResponse>(db, 'depth.latest')!.checks.estimate).toMatchObject({ nam: 1000, chainOut: 1014160, ours: 1014160, diffPct: 0, height: REF_HEIGHT });
   });
   it('check 2: the same walk against the direct quote the price read made (1,014,160 for 1,000 NAM, verify-router.json): ok; idle when the router was not asked', async () => {
     const { db } = await run(seeded());
     expect(checks(db).depth_vs_route_quote).toMatchObject({ status: 'ok', detail: { nam: 1000, routerOut: '1014160', ours: '1014160', diffPct: 0 } });
+    expect(kv<DepthResponse>(db, 'depth.latest')!.checks.route).toMatchObject({ nam: 1000, routerOut: 1014160, ours: 1014160, diffPct: 0 });
     const { db: db2 } = await run(seeded(), {}, { routeOut: null });
     expect(checks(db2).depth_vs_route_quote.status).toBe('idle');
     expect(checks(db2).depth_vs_route_quote.detail.note).toContain('not asked a direct quote');
@@ -374,12 +427,29 @@ describe('the three checks', () => {
 });
 
 describe('the retention delete (C5)', () => {
-  it('removes at most the limit of rows older than the window, oldest first by the primary key', async () => {
+  it('one statement per pool, each a range search on the primary key (pool_id, minute) that stops at the window, the run’s limit shared out; never a scan of the table', async () => {
     const db = seeded();
-    insert(db, 'depth_minute', Array.from({ length: 12 }, (_, i) => ({ minute: MINUTE - (12 - i) * 86_400_000, pool_id: 'all', at: T, ref_usd: 0.001 })));
-    const s = deleteOldMinutesStmt(MINUTE - 5 * 86_400_000, 4);
-    expect(db.raw.prepare(s.sql).run(...s.params).changes).toBe(4);
-    expect(all(db, 'SELECT COUNT(*) n FROM depth_minute WHERE minute < ?', MINUTE - 5 * 86_400_000)[0].n).toBe(3);
+    const plan = (sql: string, ...p: unknown[]) => all(db, `EXPLAIN QUERY PLAN ${sql}`, ...p).map((r) => r.detail).join(' | ');
+    const stmts = deleteOldMinutesStmts(['all', '3005', '3008', '3005'], MINUTE - 5 * 86_400_000, 12);
+    expect(stmts).toHaveLength(3); // the ids once each
+    expect(stmts.map((s) => s.params)).toEqual([['all', MINUTE - 5 * 86_400_000, 4], ['3005', MINUTE - 5 * 86_400_000, 4], ['3008', MINUTE - 5 * 86_400_000, 4]]);
+    const p = plan(stmts[0].sql, ...stmts[0].params);
+    expect(p).toMatch(/SEARCH depth_minute USING COVERING INDEX sqlite_autoindex_depth_minute_1 \(pool_id=\? AND minute<\?\)/);
+    expect(p).not.toMatch(/\bSCAN depth_minute\b/);
+    expect(p).not.toMatch(/TEMP B-TREE/);
+    // the swaps read of the realised check: the flows_kind index, not a scan
+    expect(plan(SWAPS_SQL, 'osmosis', 1, 2)).toMatch(/SEARCH flows USING INDEX flows_kind/);
+    // 12 old rows for 'all' and 12 for 3005 over 12 days, a window of 5 days: at most 4 a pool a run, oldest first
+    insert(db, 'depth_minute', ['all', '3005'].flatMap((id) => Array.from({ length: 12 }, (_, i) => ({ minute: MINUTE - (12 - i) * 86_400_000, pool_id: id, at: T, ref_usd: 0.001 }))));
+    let changes = 0;
+    for (const s of stmts) changes += db.raw.prepare(s.sql).run(...s.params).changes;
+    expect(changes).toBe(8);
+    expect(all(db, 'SELECT COUNT(*) n FROM depth_minute WHERE minute < ?', MINUTE - 5 * 86_400_000)[0].n).toBe(6);
+    expect(all(db, 'SELECT MIN(minute) m FROM depth_minute WHERE pool_id = ?', 'all')[0].m).toBe(MINUTE - 8 * 86_400_000);
+    // a second run clears the rest of the window and touches nothing inside it
+    for (const s of stmts) db.raw.prepare(s.sql).run(...s.params);
+    expect(all(db, 'SELECT COUNT(*) n FROM depth_minute WHERE minute < ?', MINUTE - 5 * 86_400_000)[0].n).toBe(0);
+    expect(all(db, 'SELECT COUNT(*) n FROM depth_minute')[0].n).toBe(10);
   });
 });
 

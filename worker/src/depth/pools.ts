@@ -9,7 +9,8 @@ import type { DepthConfig } from './config';
 import { quoteCoinOf } from './config';
 import type { WeightedAsset } from './model';
 import { poolSides, type PoolSides } from '../../../shared/pool-sides';
-import { USDC_AS_ONE, UNPRICED_DUST, UNPRICED_EMPTY, UNPRICED_NO_META, UNPRICED_NO_PRICE, UNPRICED_NO_TAKER, counterUsdHow, cutByCap, type DepthPoolType } from '../../../shared/depth';
+import { USDC_AS_ONE, UNPRICED_EMPTY, UNPRICED_NO_META, UNPRICED_NO_PRICE, UNPRICED_NO_TAKER, counterUsdHow, cutByCap, dustWords, type DepthPoolType } from '../../../shared/depth';
+import { fmtClock } from '../digest/types';
 
 /** One pool of the quote service's list, as the module keeps it before any chain read. Amounts are base units (Number: the balances fit). */
 export interface ListedPool {
@@ -64,8 +65,13 @@ export function listPools(cfg: DepthConfig, raw: unknown): ListedPool[] {
   return out;
 }
 
-/** A pool under the dust floor: nothing a minute's read would change (plan 1.2 a; config.dust). */
-export const isDust = (cfg: DepthConfig, p: ListedPool): boolean => p.baseBase < cfg.dust.baseUnits && p.counterBase < cfg.dust.counterUnits;
+/**
+ * A pool under the dust floor on both sides: nothing a minute's read would change (plan 1.2 a; config.dust). The
+ * counter side is measured in whole coins when the coin's decimals are known (`counterDecimals`), else in base units.
+ */
+export const isDust = (cfg: DepthConfig, p: ListedPool, counterDecimals: number | null = null): boolean =>
+  p.baseBase < cfg.dust.baseWhole * 10 ** cfg.base.decimals
+  && p.counterBase < (counterDecimals != null ? cfg.dust.counterWhole * 10 ** counterDecimals : cfg.dust.counterUnits);
 
 /** The counter coins the live candidates trade against, each once, in the order first seen. */
 export const counterDenoms = (pools: ListedPool[]): string[] => [...new Set(pools.map((p) => p.counterDenom).filter((d): d is string => !!d))];
@@ -91,8 +97,6 @@ export interface CounterInfo {
   why: string | null;
 }
 
-const clockUtc = (ms: number): string => `${new Date(ms).toISOString().slice(11, 16)} UTC`;
-
 /**
  * A counter coin on the USD axis: a configured coin worth a dollar is one; any other coin takes the price list's
  * figure (in the configured quote, read as USD) with the sentence that says so; its symbol and decimals come from the
@@ -107,7 +111,7 @@ export function counterInfo(cfg: DepthConfig, denom: string, priceList: { value:
   if (known?.usdFixed) { usd = 1; how = USDC_AS_ONE; }
   else if (priceList) {
     const v = Number(priceList.value?.[denom]?.[cfg.priceListQuote]);
-    if (Number.isFinite(v) && v > 0) { usd = v; usdAt = priceList.at; how = counterUsdHow(symbol, v, clockUtc(priceList.at)); }
+    if (Number.isFinite(v) && v > 0) { usd = v; usdAt = priceList.at; how = counterUsdHow(symbol, v, fmtClock(priceList.at)); }
   }
   const why = usd == null ? UNPRICED_NO_PRICE : decimals == null ? UNPRICED_NO_META : taker == null ? UNPRICED_NO_TAKER : null;
   return { denom, symbol, decimals, usd, how, usdAt, taker: taker?.fee ?? null, takerAt: taker?.at ?? null, why };
@@ -136,8 +140,8 @@ export function liveSet(cfg: DepthConfig, pools: ListedPool[], counters: Record<
   const unpriced: LiveSet['unpriced'] = [], leftOut: LiveSet['leftOut'] = [], candidates: ListedPool[] = [];
   for (const p of pools) {
     if (p.sides === 'empty') { leftOut.push({ pool: p, why: UNPRICED_EMPTY }); continue; }
-    if (isDust(cfg, p)) { leftOut.push({ pool: p, why: UNPRICED_DUST }); continue; }
     const c = p.counterDenom ? counters[p.counterDenom] : undefined;
+    if (isDust(cfg, p, c?.decimals ?? null)) { leftOut.push({ pool: p, why: dustWords(cfg.dust.baseWhole, cfg.base.symbol) }); continue; }
     if (!c || c.why) { unpriced.push({ pool: p, why: c?.why ?? UNPRICED_NO_PRICE }); continue; }
     candidates.push(p);
   }
