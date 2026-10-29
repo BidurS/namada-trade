@@ -407,6 +407,24 @@ describe('what the review found, fixed', () => {
     expect((await get('https://namada.trade/favicon.ico', { headers: { 'if-none-match': ETAG } })).status).toBe(304);
   });
 
+  it('a page whose scripts could not be hashed still forbids framing, and sends no script policy that would block its theme script (external audit, 2026-10-29)', async () => {
+    // a page text of its own, so the hashes are not read from the memo of an earlier test
+    const html = SHELL.replace('</head>', '<!-- unhashed --></head>');
+    const assets = { fetch: async () => new Response(html, { headers: { 'content-type': 'text/html' } }) };
+    const digest = vi.spyOn(crypto.subtle, 'digest').mockRejectedValueOnce(new Error('digest failed'));
+    const res = await worker.fetch(new Request('https://namada.trade/trade'), { ASSETS: assets }, ctx);
+    digest.mockRestore();
+    expect(res.status).toBe(200);
+    expect(res.headers.get('content-security-policy')).toBe("frame-ancestors 'none'; base-uri 'self'; object-src 'none'; form-action 'self'");
+    expect(res.headers.get('content-security-policy-report-only')).toBeNull();
+    expect(res.headers.get('x-frame-options')).toBe('DENY');
+    expect(res.headers.get('permissions-policy')).toContain('camera=()');
+    // hashed, the page has both
+    const ok = await get('https://namada.trade/trade');
+    expect(ok.headers.get('content-security-policy')).toMatch(/script-src 'self' 'sha256-[^;]+;.*frame-ancestors 'none'/);
+    expect(ok.headers.get('x-frame-options')).toBe('DENY');
+  });
+
   it('when the page rewrite fails, a path that is not a page is still a 404 and a page is not indexed', async () => {
     vi.stubGlobal('HTMLRewriter', class { constructor() { throw new Error('rewrite failed'); } });
     const junk = await get('https://namada.trade/wp-admin');

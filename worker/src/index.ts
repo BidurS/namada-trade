@@ -113,10 +113,12 @@ export default {
       }
     }
     const h = new Headers(res.headers);
-    if (isHtml && hashes) {
-      const p = pagePolicies(hashes, url);
+    if (isHtml) {
+      // The framing, base, plugin and form rules and the two headers below need no hash, so every page has them; the
+      // script policy only once the page's inline scripts are hashed (without the hash it would block the theme script).
+      const p = pagePolicies(hashes ?? [], url);
       h.set('Content-Security-Policy', p.enforce);
-      h.set(ENFORCE_SCRIPT_POLICY ? 'Content-Security-Policy' : 'Content-Security-Policy-Report-Only', p.scripts);
+      if (hashes) h.set(ENFORCE_SCRIPT_POLICY ? 'Content-Security-Policy' : 'Content-Security-Policy-Report-Only', p.scripts);
       h.set('X-Frame-Options', 'DENY');
       h.set('Permissions-Policy', 'camera=(), microphone=(), geolocation=(), payment=(), usb=()');
     }

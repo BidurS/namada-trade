@@ -54,6 +54,13 @@ for i in 1 2 3 4 5; do out=$(npx wrangler d1 execute namada-trade-db --remote --
 echo "$out" | python3 -c "
 import sys,json; n=json.load(sys.stdin)[0]['results'][0]['n']; print('0012 index:', n)
 sys.exit(0 if n == 1 else 1)" || { echo "FAIL migration 0012 is not in place: not deploying"; exit 1; }
+# 0013 (the settings rows with Telegram on) and 0014 (the settings rows by Telegram chat): the Telegram dispatcher's read
+# and the bot's /status, /stop and unlinks find those rows on them (settings.ts TELEGRAM_ROWS, rowsOfChat); without them
+# each goes through the whole user: range
+for i in 1 2 3 4 5; do out=$(npx wrangler d1 execute namada-trade-db --remote --json --command "SELECT COUNT(*) n FROM sqlite_master WHERE type='index' AND name IN ('kv_user_telegram','kv_user_telegram_chat')" 2>&1) && ! echo "$out" | grep -q 7403 && break; echo "retrying (Cloudflare 7403)"; sleep 6; done
+echo "$out" | python3 -c "
+import sys,json; n=json.load(sys.stdin)[0]['results'][0]['n']; print('0013 and 0014 indexes:', n)
+sys.exit(0 if n == 2 else 1)" || { echo "FAIL migrations 0013 and 0014 are not in place: not deploying"; exit 1; }
 
 # 0014 and 0015 (the depth tables and the two indexes of depth_changes): the depth minute writes depth_minute every tick
 # and reads kv rows beside it; without the three tables and the indexes the minute's batch fails on every tick and its
@@ -80,6 +87,8 @@ check "HEAD /api/overview sends no body" 0 "$(python3 -c "import http.client as 
 check "GET /api/overview has a body"   1 "$( [ "$(curl -s "$H/api/overview" | wc -c)" -gt 1000 ] && echo 1 || echo 0)"
 check "100 KB body is refused (413)"   413 "$(head -c 102400 /dev/zero | tr '\0' 'a' | curl -s -o /dev/null -w '%{http_code}' -X POST -H 'content-type: application/json' --data-binary @- "$H/api/auth/nonce")"
 check "plain GET /ws is 426"           426 "$(curl -s -o /dev/null -w '%{http_code}' "$H/ws")"
+# the zone's http-to-https redirect (Cloudflare, before the Worker runs): plain http goes to https on the same host
+check "plain http www is a 301 to https" "301 https://www.namada.trade/api/overview" "$(curl -s -o /dev/null -w '%{http_code} %{redirect_url}' "http://www.namada.trade/api/overview")"
 check "/api/auth/me is no-store"       1 "$(curl -s -D - -o /dev/null "$H/api/auth/me" | grep -ci 'cache-control: .*no-store' || true)"
 check "home is 200"                    200 "$(curl -s -o /dev/null -w '%{http_code}' "$H/")"
 check "unknown page is 404"            404 "$(curl -s -o /dev/null -w '%{http_code}' "$H/no-such-page")"
