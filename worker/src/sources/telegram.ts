@@ -95,6 +95,12 @@ export function mdToHtml(md: string, now = Date.now()): string {
   return out + text(t.slice(last));
 }
 
+/** The same markdown as plain text (X posts): a link becomes its words, a code span its content, a time stamp its words. */
+export function mdToPlain(md: string, now = Date.now()): string {
+  const t = hide(md).replace(/<t:(\d{1,12}):([a-zA-Z])>/g, (_, sec: string, style: string) => stamp(sec, style, now));
+  return unhide(t.replace(/\[([^\]\n]*)\]\((https?:\/\/[^\s)]+)\)/g, '$1').replace(/`([^`\n]*)`/g, '$1').replace(/\*\*([^*\n]+)\*\*/g, '$1'));
+}
+
 /**
  * One fitted embed as a Telegram message: why it reached this chat (the embed's author line) in italics, the title in
  * bold and linked, the text, each figure under its name, then the record and the move's time. Titles, names and the
