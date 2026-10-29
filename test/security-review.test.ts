@@ -6,7 +6,7 @@ import { ed25519 } from '@noble/curves/ed25519.js';
 import { sha256 } from '@noble/hashes/sha2.js';
 import { base64, hex } from '@scure/base';
 import { app, PAGE_MAX, TAGS_PER_AUTHOR, TAGS_PER_DAY, QUOTE_MAX_NAM, MAX_BODY_BYTES } from '../worker/src/api';
-import { cachedApi, rateLimited, isHeavy, isReplay, cacheKeyUrl, CACHEABLE_API, rewoundAt } from '../worker/src/http';
+import { cachedApi, rateLimited, isHeavy, isReplay, cacheKeyUrl, CACHEABLE_API, rewoundAt, BROWSER_CACHE } from '../worker/src/http';
 import { testD1, insert } from './d1-sqlite';
 import {
   createSession, issueNonce, login, loginMessage, verifyNamada, namadaImplicitAddress, createPairCode, claimPairCode, pairKey, sweepAuth, ALERT_CLAIM_KEEP_MS, type Session,
@@ -52,6 +52,21 @@ describe('C1: the edge cache cannot be slipped past', () => {
     const r = await cachedApi(new Request('https://namada.trade/api/overview', { headers: { Authorization: 'Bearer x' } }), {} as any, e.ctx, e.fetchApp);
     expect(r.status).toBe(200);
     expect(e.calls).toHaveLength(1);
+  });
+  it('the cross-checks and the donation addresses are kept at the edge, keyed on the path alone (external audit, 2026-10-29)', async () => {
+    for (const p of ['/api/integrity', '/api/donation']) {
+      const e = edge();
+      const db = testD1();
+      let reads = 0;
+      const fetchApp = (r: Request, en: any, c: any) => { reads++; return app.fetch(r, en, c); };
+      const first = await cachedApi(new Request(`https://namada.trade${p}`), env(db), e.ctx, fetchApp);
+      await e.settle();
+      const again = await cachedApi(new Request(`https://namada.trade${p}?r=${Math.random()}`, { headers: { Authorization: 'Bearer x' } }), env(db), e.ctx, fetchApp);
+      expect([first.status, again.status], p).toEqual([200, 200]);
+      expect(reads, p).toBe(1);
+      expect(again.headers.get('cache-control'), p).toBe(BROWSER_CACHE);
+      expect(await again.json(), p).toEqual(await first.json());
+    }
   });
   it('HEAD is answered from the GET entry with no body, and never stores an empty copy', async () => {
     const e = edge();

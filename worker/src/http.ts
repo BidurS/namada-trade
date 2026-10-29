@@ -5,7 +5,7 @@ import { DAY_MS, DAILY_DAYS, HISTORY_FETCH_DAYS } from '../../shared/history';
 import { TRADES_TAPE_LIMIT } from '../../shared/types';
 import { QUOTE_NAM_MIN, QUOTE_NAM_MAX, roundQuoteNam, HEAT_DAYS, CHANGES_LIMIT_MAX } from '../../shared/depth';
 
-export const CACHEABLE_API = /^\/api\/(overview|pools|pressure|blindspot|orderflow|flows|holders|search|metrics\/history|quote\/curve|alerts\/rules|alerts\/recent|intel|series|series\/changes|series\/volume|series\/pairs|series\/trades|series\/values|depth|depth\/quote|depth\/history|depth\/heat|depth\/owners|depth\/changes)$/;
+export const CACHEABLE_API = /^\/api\/(overview|pools|pressure|blindspot|orderflow|flows|holders|search|metrics\/history|quote\/curve|alerts\/rules|alerts\/recent|intel|series|series\/changes|series\/volume|series\/pairs|series\/trades|series\/values|depth|depth\/quote|depth\/history|depth\/heat|depth\/owners|depth\/changes|integrity|donation)$/;
 
 const THRESHOLDS = ['ibcInventory', 'unlock', 'bigSwap', 'unshield', 'bond'];
 /**
@@ -41,6 +41,9 @@ export const CACHE_PARAMS: Record<string, string[]> = {
   '/api/depth/heat': ['days', 'at'],
   '/api/depth/owners': [],
   '/api/depth/changes': ['pool', 'before', 'limit'],
+  // The cross-checks and the donation addresses: one kv read each, no parameter, no session
+  '/api/integrity': [],
+  '/api/donation': [],
   '/api/export/holders': ['chain', 'by', 'category', 'search', 'limit', 'format', 'min', 'max'],
   '/api/export/flows': ['chain', 'kind', 'whale', 'minNam', 'arb', 'pairs', 'search', 'at', 'limit', 'format', 'since', 'addr', 'hash', 'height'],
 };
