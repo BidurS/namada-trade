@@ -57,6 +57,18 @@ export const splitPrice = (n: number | null | undefined): { lead: string; sig: s
   return m ? { lead: m[1], sig: m[2] } : { lead: '', sig: s };
 };
 
+/**
+ * A price at `digits` significant digits with trailing zeros dropped, no $ sign: 0.0010199, 0.35, 198.57 (the depth
+ * page's ladder, its curve's axis and its readout, where a fixed six decimals would print the same "0.001020" for two
+ * bands a quarter percent apart). Never "0" for a value that is not zero.
+ */
+export const fmtSig = (n: number | null | undefined, digits = 5): string => {
+  if (!ok(n)) return '—';
+  if (n === 0) return '0';
+  const a = Number(Math.abs(n).toPrecision(digits));
+  return `${n < 0 ? MINUS : ''}${a.toLocaleString('en-US', { maximumFractionDigits: 20 })}`;
+};
+
 /** Price for a chart tick or pill: no $ sign, six decimals under 1 ("0.001012"). */
 export const fmtPriceBare = (n: number | null | undefined): string => {
   if (!ok(n)) return '—';
@@ -92,6 +104,12 @@ export const fmtCoin = (n: number | null | undefined, digits = 2): string => (!o
  * (1.49%, 4.80%); hero shares use one (4.4%). Unsigned.
  */
 export const fmtPctRule = (n: number | null | undefined, digits = 2): string => (!ok(n) ? '—' : `${nf(round(n, digits), digits)}%`);
+
+/**
+ * A share of a market or a side, in percent: whole from ten percent up, else two significant digits, so a share that
+ * is not zero never prints as zero ("25%", "2%", "0.58%", "0.00096%"); "0%" only for nothing at all.
+ */
+export const fmtSharePct = (n: number | null | undefined): string => (!ok(n) ? '—' : Math.abs(n) >= 10 ? fmtPctRule(n, 0) : `${fmtSig(n, 2)}%`);
 
 /** Signed percent, true minus, two decimals by default: "+0.87%", "−1.49%", "0.00%". */
 export const fmtPctSigned = (n: number | null | undefined, digits = 2): string => {
@@ -212,3 +230,11 @@ export const fmtUsdWhole = (n: number | null | undefined): string => {
   if (Math.abs(n) < 1) return fmtUsdRule(n);
   return `${n < 0 ? MINUS : ''}$${nf(Math.round(Math.abs(n)), 0)}`;
 };
+
+/** Parse a typed amount: "5,000", "5000", "12.5". null when it is not a positive number. */
+export function parseAmount(text: string): number | null {
+  const t = text.replace(/[,\s_]/g, '');
+  if (!/^\d*\.?\d+$|^\d+\.$/.test(t)) return null;
+  const n = Number(t);
+  return Number.isFinite(n) && n > 0 ? n : null;
+}

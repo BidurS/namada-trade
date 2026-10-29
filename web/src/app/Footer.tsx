@@ -1,8 +1,8 @@
 // The footer (system.md 9.1 item 8, seo-requirements Must 9): black, the dial and wordmark,
 // how current the data is, the data sources, the disclaimer sentence on every route, and the
 // links: How we know (Sources sheet), Settings, API, then the explainer pages under the names they
-// carry everywhere else (shared/routes.ts labels: Questions, Guides, Staking, Holders, NAM on Osmosis, How NAM
-// trading works; the same set as EXPLAINER_ROUTES, seo-requirements "New pages": link from the footer).
+// carry everywhere else (shared/routes.ts labels: Questions, Guides, Staking, Holders, NAM on Osmosis, Depth, How NAM
+// trading works; EXPLAINER_ROUTES plus the depth page, seo-requirements "New pages": link from the footer).
 // Then "Source code": the public repository (owner decision 4, SITE.repo), and "X", the site's account (SITE.x),
 // each opening in a new tab.
 import { ROUTES, SITE, type RouteId } from '../../../shared/routes';
@@ -17,7 +17,7 @@ import { useClock, useOverview } from './overview';
 import { useOverlays } from './overlays';
 import { useReplay } from './replay';
 
-const LINK_IDS: RouteId[] = ['settings', 'faq', 'guides', 'staking', 'holders', 'osmosis', 'learn'];
+const LINK_IDS: RouteId[] = ['settings', 'faq', 'guides', 'staking', 'holders', 'osmosis', 'depth', 'learn'];
 const LINKS: { to: string; label: string }[] = LINK_IDS.flatMap((id) => {
   const r = ROUTES.find((x) => x.id === id);
   return r ? [{ to: r.path, label: r.label }] : [];

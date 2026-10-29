@@ -11,6 +11,10 @@ import { GUIDES } from '../../shared/guides';
 import { citations, GUIDE_INDEPENDENCE, type GPara } from '../../shared/guide-types';
 import { metricAt, cachedChainParams, coverageOf, unbondingWait } from './analytics';
 import { holderFigureValues, listingTimes } from './holders';
+import { KV_KEYS } from './depth/sql';
+import { NAM_DEPTH } from './depth/config';
+import { DEPTH_OFFSETS_PCT, DEPTH_PLAIN_SOURCE, OFFSET_10_INDEX, bidQuotable, sellQuotable, type DepthResponse } from '../../shared/depth';
+import { fmtNamRule, fmtPctRule, fmtUsdRule } from '../../shared/format';
 
 export type { FactKey };
 export { BODY };
@@ -26,13 +30,13 @@ type Facts = Partial<Record<FactKey, Fact>>;
 /** The figures the server-rendered pages state, each with its source and time (cached 2 minutes at the edge). */
 export async function facts(env: Env): Promise<Facts> {
   const cache = caches.default;
-  const key = new Request(`${SITE.origin}/__seo/facts-v4`);
+  const key = new Request(`${SITE.origin}/__seo/facts-v5`);
   const hit = await cache.match(key).catch(() => null);
   if (hit) return hit.json();
   const db = env.DB;
   const now = Date.now();
   const listed = await listingTimes(db);
-  const [price, total, bonded, shielded, osmosis, liquidity, pools, holderFig, vol, cov, params] = await Promise.all([
+  const [price, total, bonded, shielded, osmosis, liquidity, pools, holderFig, vol, cov, params, depthLatest] = await Promise.all([
     // Staked: the chain's own total stake, not the staking account's balance (which also holds NAM on its way out).
     metricAt(db, 'price.usd', now), metricAt(db, 'supply.total', now), metricAt(db, 'supply.total_stake', now), metricAt(db, 'supply.masp_shielded', now),
     metricAt(db, 'supply.osmosis', now), metricAt(db, 'dex.liquidity_usd', now), metricAt(db, 'dex.pool_count', now),
@@ -43,6 +47,8 @@ export async function facts(env: Env): Promise<Facts> {
     coverageOf(db, now, false).catch(() => null),
     // The cached parameters only: a page never waits on the indexer (the cron refreshes them).
     cachedChainParams(db).catch(() => null),
+    // The newest depth minute (kv depth.latest, written in the same batch as its depth_minute rows): the two quotable figures.
+    db.prepare('SELECT value FROM kv WHERE key = ?1').bind(KV_KEYS.latest).first<{ value: string }>().then((r) => (r?.value ? (JSON.parse(r.value) as DepthResponse) : null)).catch(() => null),
   ]);
   const pct = (n: number) => (total ? `${((n / total.value) * 100).toFixed(1)}% of all NAM` : '');
   const f: Facts = {};
@@ -72,6 +78,15 @@ export async function facts(env: Env): Promise<Facts> {
   const wait = unbondingWait(params);
   if (params && wait) {
     f.unbonding = { text: `Unstaking wait: about ${wait.days.toFixed(1)} days (${wait.epochs} epochs of about ${num(wait.epochSec / 3600, 1)} h, the epoch length measured on the chain; at least ${num((wait.epochs * params.minEpochSec) / 86400, 1)} days)`, at: params.fetchedAt, source: 'Namada chain parameters' };
+  }
+  // The depth page's two quotable figures (depth plan 3.1): selling the quoted size across every pool, and the USD of bids
+  // within the quoted distance of the price, each from the newest stored minute with that minute's own time.
+  if (depthLatest?.answer && depthLatest.within && Number.isFinite(depthLatest.at)) {
+    const cfg = NAM_DEPTH;
+    const i = depthLatest.answer.sizes.indexOf(cfg.quotableSize);
+    const sell = i >= 0 ? depthLatest.answer.sell[i] : undefined;
+    if (sell?.complete && Number.isFinite(sell.usd)) f.depthSell = { text: sellQuotable(fmtNamRule(cfg.quotableSize), cfg.base.symbol, fmtUsdRule(sell.usd)), at: depthLatest.at, source: DEPTH_PLAIN_SOURCE };
+    if (Number.isFinite(depthLatest.within.bidUsd10)) f.depthBid = { text: bidQuotable(fmtUsdRule(depthLatest.within.bidUsd10), fmtPctRule(DEPTH_OFFSETS_PCT[OFFSET_10_INDEX], 0)), at: depthLatest.at, source: DEPTH_PLAIN_SOURCE };
   }
   if (params?.apr) f.apr = { text: `Staking rate reported by the network indexer: ${(params.apr * 100).toFixed(1)}% a year, before validator commission; it changes with the share staked and is not a promise`, at: params.fetchedAt, source: 'indexer.namada.net' };
   await cache.put(key, new Response(JSON.stringify(f), { headers: { 'content-type': 'application/json', 'cache-control': 'public, max-age=120' } })).catch(() => {});
@@ -337,11 +352,13 @@ const w3c = (ms: number) => new Date(ms).toISOString().replace(/\.\d{3}Z$/, 'Z')
 /**
  * The day or time a route's content last changed, or null when it is not known: a guide (and the guides' list) has
  * the day its text was checked; a page that states live figures changes with them, so its date is the time of the
- * newest figure it states. With no figure read, the date is left out rather than guessed.
+ * newest figure it states (or of the facts its copy lists as `dated`: the depth page is dated by its stored minute, not
+ * by the price it also quotes). With no figure read, the date is left out rather than guessed.
  */
 export function lastmodOf(route: RouteDef, f: Facts | null): string | null {
   if (route.updated) return route.updated;
-  const keys = [...(BODY[route.id]?.facts ?? []), ...(BODY[route.id]?.sections ?? []).flatMap((s) => s.facts ?? [])];
+  const body = BODY[route.id];
+  const keys = body?.dated ?? [...(body?.facts ?? []), ...(body?.sections ?? []).flatMap((s) => s.facts ?? [])];
   const times = keys.map((k) => f?.[k]?.at).filter((t): t is number => typeof t === 'number' && Number.isFinite(t));
   return times.length ? w3c(Math.max(...times)) : null;
 }
@@ -384,6 +401,7 @@ ${GUIDE_ROUTES.map(line).join('\n')}
 ## Data
 
 - [Overview (JSON)](${SITE.origin}/api/overview): the figures behind the home page, each with its source and time
+- [Depth (JSON)](${SITE.origin}/api/depth): every bid and ask for NAM on Osmosis as of the newest stored minute, with every read behind it
 
 ## Optional
 

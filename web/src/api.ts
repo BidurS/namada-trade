@@ -10,6 +10,7 @@ export type {
   SeriesResponse, PriceChangesResponse, VolumeResponse, PairsResponse, TradesResponse, ValuesResponse,
 };
 
+import type { DepthHistoryResponse, DepthQuoteResponse, DepthResponse } from '../../shared/depth';
 import { authFetch } from './lib/auth';
 import { encodeFlowCursor } from '../../shared/paging';
 import { filterFlows, plainNotes, serverIgnoredFlowFilter, withAddressReport, withFlow, withHolder, withOverview, withPressure } from './lib/compat';
@@ -491,6 +492,33 @@ export async function fetchMetricSeries(key: string, hours: number, asOf: number
   const r = await get<{ history: MetricPoint[]; bucketMs?: number }>(`/api/metrics/history${at(asOf, new URLSearchParams({ key, hours: String(hours) }))}`);
   return { history: r.history ?? [], bucketMs: typeof r.bucketMs === 'number' && r.bucketMs > 0 ? r.bucketMs : null };
 }
+
+// ---------------------------------------------------------------- depth (shared/depth.ts; worker/src/api-depth.ts)
+// The newest stored minute and a quote walked on it are live readings (no `at`); the history takes `at`, so a rewound
+// page reads the stored figures of that minute from it. Each rejects with an ApiError; isNotServed(e) on a server
+// without the routes.
+export const fetchDepth = (opts: RequestOpts = {}) => get<DepthResponse>('/api/depth', opts);
+export const fetchDepthQuote = (side: 'sell' | 'buy', nam: number, opts: RequestOpts = {}) => get<DepthQuoteResponse>(`/api/depth/quote?side=${side}&nam=${nam}`, opts);
+export interface DepthHistoryQuery {
+  pool?: string;
+  from?: number | string;
+  to?: number | string;
+  step?: '1m' | '1h';
+  asOf?: number | null;
+}
+export function depthHistoryParams(o: DepthHistoryQuery): URLSearchParams {
+  const q = new URLSearchParams();
+  if (o.pool) q.set('pool', o.pool);
+  if (o.from != null && o.from !== '') q.set('from', String(o.from));
+  if (o.to != null && o.to !== '') q.set('to', String(o.to));
+  if (o.step) q.set('step', o.step);
+  if (o.asOf) q.set('at', String(o.asOf));
+  return q;
+}
+export const fetchDepthHistory = (o: DepthHistoryQuery = {}, opts: RequestOpts = {}) => {
+  const q = depthHistoryParams(o).toString();
+  return get<DepthHistoryResponse>(`/api/depth/history${q ? `?${q}` : ''}`, opts);
+};
 
 export async function saveLabel(address: string, label: string, category = 'watch', note = ''): Promise<{ ok: boolean; error?: string }> {
   const res = await authFetch('/api/labels', { method: 'POST', body: JSON.stringify({ address, label, category, note }) });

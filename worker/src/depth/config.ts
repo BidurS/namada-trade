@@ -2,7 +2,7 @@
 // the base coin, its reference pool, the coins it trades against and the caps lives here, so a second Worker for
 // another Osmosis token runs the same module with another DepthConfig. Nothing else under worker/src/depth/ names NAM.
 import { NAM, OSMOSIS } from '../config';
-import { DEPTH_SIZES, DEPTH_OFFSETS_PCT, DEPTH_TOUCH_SIZE, HEAT_EDGES, HEAT_BAND_PCT } from '../../../shared/depth';
+import { DEPTH_SIZES, DEPTH_QUOTABLE_SIZE, DEPTH_OFFSETS_PCT, DEPTH_TOUCH_SIZE, HEAT_EDGES, HEAT_BAND_PCT } from '../../../shared/depth';
 
 /** A coin a pool may hold against the base coin, as the module knows it before any read. */
 export interface QuoteCoin {
@@ -50,6 +50,8 @@ export interface DepthConfig {
   hosts: { rpc: string; rest: string; sqs: string };
   caps: DepthCaps;
   sizes: readonly number[];
+  /** The size the two quotable lines name (Home, Trade and the server-rendered page): one of `sizes`, so the stored minute answers it. */
+  quotableSize: number;
   offsetsPct: readonly number[];
   touchSize: number;
   heat: { edges: readonly number[]; pct: number };
@@ -158,6 +160,7 @@ export const NAM_DEPTH: DepthConfig = {
   hosts: { rpc: OSMOSIS.publicRpc, rest: OSMOSIS.publicRest, sqs: OSMOSIS.sqs },
   caps: DEPTH_CAPS,
   sizes: DEPTH_SIZES,
+  quotableSize: DEPTH_QUOTABLE_SIZE,
   offsetsPct: DEPTH_OFFSETS_PCT,
   touchSize: DEPTH_TOUCH_SIZE,
   heat: { edges: HEAT_EDGES, pct: HEAT_BAND_PCT },

@@ -14,7 +14,9 @@
 import { decToScaled } from './proto';
 import { base64Bytes, bytesToBase64 } from '../util';
 import type { DepthFill, DepthLevel, DepthOffsets, DepthPoolType, DepthSplit, DepthTouch, DepthWithin } from '../../../shared/depth';
-import { GRID_COARSE_STEP, GRID_FINE_SPAN, GRID_FINE_STEP, HEAT_EDGES } from '../../../shared/depth';
+import { HEAT_EDGES } from '../../../shared/depth';
+// the grid and its thinning are shared with the page (shared/depth-grid.ts), which rebuilds the grid from the stored reference
+import { buildGrid, thinIndices } from '../../../shared/depth-grid';
 
 // ---------------------------------------------------------------------------------------------------- tick math
 /** x/concentrated-liquidity/math/tick.go: every power of ten is split into 9 x 10^(-exponent_at_price_one) equal additive steps; tick 0 is price 1. */
@@ -384,17 +386,8 @@ export const usdPerRaw = (p: { counterUsd: number; counterDecimals: number }, ba
 /** The fee factor on the coin in: a pool's spread and the pair's taker fee, charged once. */
 export const feeFactor = (p: { model: { spread: number }; taker: number }): number => (1 - p.model.spread) * (1 - p.taker);
 
-/** The price grid: fine steps within `fineSpan` of the centre each way, coarse beyond, from `lo` to `hi`, ascending. */
-export function buildGrid(center: number, { fineStep = GRID_FINE_STEP, fineSpan = GRID_FINE_SPAN, coarseStep = GRID_COARSE_STEP, lo = 1e-7, hi = 200 } = {}): number[] {
-  const g = [center];
-  let p = center;
-  while (p > center / fineSpan) { p *= 1 - fineStep; g.push(p); }
-  while (p > lo) { p *= 1 - coarseStep; g.push(p); }
-  p = center;
-  while (p < center * fineSpan) { p *= 1 + fineStep; g.push(p); }
-  while (p < hi) { p *= 1 + coarseStep; g.push(p); }
-  return g.sort((a, b) => a - b);
-}
+/** The price grid and its thinning for the page live in shared/depth-grid.ts (the page rebuilds the grid); re-exported for the module's callers. */
+export { buildGrid, thinIndices };
 
 export interface PoolCurve {
   bidNam: Float64Array;
@@ -537,12 +530,6 @@ export const unpackF32 = (s: string): Float32Array => {
   const dv = new DataView(b.buffer, b.byteOffset, b.byteLength);
   return Float32Array.from({ length: b.length >> 2 }, (_, i) => dv.getFloat32(i * 4, true));
 };
-/** The curve thinned to at most `max` points a side of the reference index (every k-th point, the ends kept). */
-export function thinIndices(n: number, refIndex: number, max: number): number[] {
-  const pick = (from: number, to: number) => { const len = to - from + 1; if (len <= max) return Array.from({ length: len }, (_, i) => from + i); const step = (len - 1) / (max - 1); return Array.from({ length: max }, (_, i) => Math.round(from + i * step)); };
-  return [...new Set([...pick(0, refIndex), ...pick(refIndex, n - 1)])].sort((a, b) => a - b);
-}
-
 /** Every pool's raw levels on the USD axis: a concentrated pool's ranges, the book's levels, a weighted pool's reserves. */
 export function levelsOf(pools: PricedPool[], baseDecimals: number, positionsInRange?: (poolId: string, loTick: number, hiTick: number) => number): DepthLevel[] {
   const out: DepthLevel[] = [];

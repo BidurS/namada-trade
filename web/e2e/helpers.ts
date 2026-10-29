@@ -26,7 +26,7 @@ export const ROUTE_PATHS = ROUTES.map((r) => r.path);
 
 /** /api paths that do not take ?at= (build-plan 6); the UI says so in words instead. */
 export const REWIND_EXEMPT = ['/api/holders', '/api/address/', '/api/search', '/api/integrity', '/api/export/', '/api/me', '/api/auth', '/api/labels'];
-export const REWIND_LIVE_ONLY = ['/api/quote', '/api/pools'];
+export const REWIND_LIVE_ONLY = ['/api/quote', '/api/pools', '/api/depth/quote'];
 const under = (path: string, p: string) => path === p.replace(/\/$/, '') || path.startsWith(p.endsWith('/') ? p : `${p}/`);
 export const isExempt = (path: string) => REWIND_EXEMPT.some((p) => under(path, p));
 export const isLiveOnly = (path: string) => REWIND_LIVE_ONLY.some((p) => under(path, p));

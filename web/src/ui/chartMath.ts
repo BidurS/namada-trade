@@ -85,6 +85,27 @@ export function stackLabels(items: { x: number; text: string }[], charW = 6.6, g
   });
 }
 
+/** A box a label occupies on the plot: from x0 to x1 at baseline y. */
+export interface LabelBox { x0: number; x1: number; y: number }
+/**
+ * Rows for labels whose anchors sit at different heights (the depth chart's size marks, each at its own USD): a label
+ * is lifted a row of `rowH` px at a time until it clears every label placed before it and every box in `taken` (the
+ * plot's own labels, such as the reference line's), two boxes clashing when they overlap sideways within `gap` and
+ * sit less than a row apart. The side of each label is chosen before this runs, so the box passed is the final one.
+ */
+export function stackBoxes(items: LabelBox[], rowH = 13, gap = 8, taken: LabelBox[] = []): number[] {
+  const placed: LabelBox[] = [...taken];
+  const clear = (b: LabelBox) => placed.every((p) => b.x1 + gap <= p.x0 || b.x0 >= p.x1 + gap || Math.abs(p.y - b.y) >= rowH);
+  return items.map((it) => {
+    for (let r = 0; r <= 8; r++) {
+      const b = { x0: it.x0, x1: it.x1, y: it.y - r * rowH };
+      if (clear(b)) { placed.push(b); return r; }
+    }
+    placed.push({ x0: it.x0, x1: it.x1, y: it.y - 9 * rowH });
+    return 9;
+  });
+}
+
 /** A takeaway calls a change smaller than this percent "less than" it rather than up or down. */
 export const FLAT_PCT = 0.05;
 

@@ -7,6 +7,7 @@
      screens/home/index.tsx      /            screens/trade/index.tsx     /trade
      screens/supply/index.tsx    /supply      screens/shielded/index.tsx  /shielded
      screens/activity/index.tsx  /activity and /holders (one component; props.view says which tab)
+     screens/depth/index.tsx     /depth
      screens/alerts/index.tsx    /alerts      screens/settings/index.tsx  /settings
      screens/seo/index.tsx       named exports Staking, Osmosis, Learn, Faq, NotFound
      screens/sheets/index.tsx    named exports SourcesSheet, AddressSheet, SignInSheet, AccountSheet
@@ -71,6 +72,7 @@ const seo = () => import('../screens/seo');
 const LOADERS: Partial<Record<ViewId, Loader>> = {
   home: () => import('../screens/home'),
   trade: () => import('../screens/trade'),
+  depth: () => import('../screens/depth'),
   supply: () => import('../screens/supply'),
   shielded: () => import('../screens/shielded'),
   activity: () => import('../screens/activity'),

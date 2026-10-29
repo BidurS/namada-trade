@@ -4,8 +4,8 @@
 //
 // Exempt endpoints (no `at` support on the server today): /api/holders, /api/address/*,
 // /api/search, /api/integrity (and the exports and account calls). The UI says so in words
-// for those and never shows them as if dated. Live-only endpoints (/api/quote*, /api/pools) are
-// not called at all while rewound; screens check `rewound` before calling them.
+// for those and never shows them as if dated. Live-only endpoints (/api/quote*, /api/pools, the depth
+// minute and its quote) are not called at all while rewound; screens check `rewound` before calling them.
 import React, { createContext, useContext, useMemo } from 'react';
 import { parseAt, setAt as routerSetAt, useLocation } from './router';
 import { fmtDayMonth, fmtUtcClock, fmtUtcLong } from '../lib/format';
@@ -13,7 +13,8 @@ import { fmtDayMonth, fmtUtcClock, fmtUtcLong } from '../lib/format';
 /** Paths that do not take `at` (prefix match). */
 export const REWIND_EXEMPT = ['/api/holders', '/api/address/', '/api/search', '/api/integrity', '/api/export/', '/api/me', '/api/auth', '/api/labels'] as const;
 /** Paths that are live-only: not requested at all while rewound. */
-export const REWIND_LIVE_ONLY = ['/api/quote', '/api/pools'] as const;
+/** `/api/depth` itself takes no `at` either (the page reads the stored minute from /api/depth/history while rewound), but as a prefix it would cover the history, so it is kept out of this list and never asked while rewound. */
+export const REWIND_LIVE_ONLY = ['/api/quote', '/api/pools', '/api/depth/quote'] as const;
 
 /** "/api/me" matches /api/me and /api/me/…, never /api/metrics. */
 const under = (path: string, p: string): boolean => path === p.replace(/\/$/, '') || path.startsWith(p.endsWith('/') ? p : `${p}/`);

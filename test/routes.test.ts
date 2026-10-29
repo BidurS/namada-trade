@@ -9,7 +9,7 @@ import {
   ROUTES, SITE, TABS, ROUTE_ALIASES, classifyPath, routeById, routeByPath, fullTitle, redirectLocation, legacyHashTarget,
 } from '../shared/routes';
 import { BODY, SITE as COPY_SITE, NOT_FOUND } from '../shared/copy';
-import { sitemapXml, robotsTxt, pageHtml, notFoundHtml, jsonLd } from '../worker/src/seo';
+import { sitemapXml, robotsTxt, pageHtml, notFoundHtml, jsonLd, llmsTxt } from '../worker/src/seo';
 
 const SUFFIX = ' · NamadaTrade'.length;
 
@@ -67,6 +67,23 @@ describe('search-facing route copy', () => {
     for (const id of ['staking', 'osmosis', 'learn', 'faq'] as const) expect(routeById(id)).toMatchObject({ index: true });
     expect(routeById('learn').path).toBe('/learn/how-nam-trading-works');
     expect(routeById('settings').index).toBe(false);
+  });
+
+  it('the depth page (step S5): its own route lighting Trade, indexable, no key, aliased from /orderbook and /book; the footer links it between NAM on Osmosis and How NAM trading works', () => {
+    const r = routeById('depth');
+    expect(r).toMatchObject({ path: '/depth', id: 'depth', label: 'Depth', tab: 'trade', index: true, h1: 'What rests at every price for NAM?', title: 'NAM order book and depth on Osmosis' });
+    expect(r.key).toBeUndefined();
+    expect(r.description.length).toBeLessThan(155);
+    expect(TABS.some((t) => t.id === 'depth' || t.path === '/depth')).toBe(false);
+    for (const p of ['/orderbook', '/book', '/Orderbook/', '/BOOK']) expect(classifyPath(p), p).toEqual({ kind: 'redirect', to: '/depth' });
+    expect(classifyPath('/depth')).toMatchObject({ kind: 'route', route: r });
+    const footer = readFileSync(join(__dirname, '..', 'web', 'src', 'app', 'Footer.tsx'), 'utf8');
+    const ids = /const LINK_IDS: RouteId\[\] = \[([^\]]+)\]/.exec(footer)![1].split(',').map((x) => x.trim().replace(/'/g, ''));
+    expect(ids.indexOf('depth')).toBe(ids.indexOf('osmosis') + 1);
+    expect(ids.indexOf('learn')).toBe(ids.indexOf('depth') + 1);
+    // the page copy names the two quotable figures and the price, never typing one
+    expect(BODY.depth.facts).toEqual(['depthSell', 'depthBid', 'price']);
+    expect(BODY.depth.paras.join(' ')).not.toMatch(/\d/);
   });
 
   it('resolves every id, and the old UI\'s view ids, to a route', () => {
@@ -230,6 +247,24 @@ describe('sitemap, robots and the server-rendered page', () => {
     expect(html).toContain('(Osmosis router quote, 2026-10-17 11:24 UTC)');
   });
 
+  it('the depth page’s server-rendered text carries the two quotable figures with the minute’s own time, and its data line is in llms.txt', async () => {
+    const at = Date.UTC(2026, 9, 29, 2, 56);
+    const f = {
+      depthSell: { text: 'Selling 10,000 NAM now fetches $9.92 across every Osmosis pool', at, source: 'Osmosis chain' },
+      depthBid: { text: '$26.88 of bids within 10% of the price', at, source: 'Osmosis chain' },
+    };
+    const html = pageHtml(routeById('depth'), f);
+    expect(html).toContain('>What rests at every price for NAM?</h1>');
+    expect(html.split('Selling 10,000 NAM now fetches $9.92').length - 1).toBe(1);
+    expect(html.split('$26.88 of bids within 10% of the price').length - 1).toBe(1);
+    expect(html).toContain('(Osmosis chain, 2026-10-29 02:56 UTC)');
+    expect(pageHtml(routeById('depth'), null)).not.toMatch(/<ul/);
+    const llms = await llmsTxt().text();
+    expect(llms).toContain(`- [Depth](${SITE.origin}/depth): `);
+    expect(llms).toContain(`- [Depth (JSON)](${SITE.origin}/api/depth): `);
+    expect(llms).not.toMatch(/\$\d|\d+(\.\d+)? ?NAM\b/);
+  });
+
   it('marks up the questions page as questions and answers', () => {
     const ld = jsonLd(routeById('faq'), null)!;
     const data = JSON.parse(ld.replace(/^<script[^>]*>|<\/script>$/g, ''));
@@ -262,7 +297,7 @@ describe('sitemap, robots and the server-rendered page', () => {
     const reads = ['/api/overview', '/api/metrics/history?key=price.usd&hours=720', '/api/pools', '/api/quote?amount=1000&side=sell', '/api/quote/curve',
       '/api/flows', '/api/holders', '/api/pressure', '/api/blindspot', '/api/alerts/recent', '/api/alerts/rules', '/api/intel', '/api/address/tnam1x',
       '/api/search?q=x', '/api/integrity', '/api/donation', '/api/series?key=price.usd&from=2026-10-01', '/api/series/changes', '/api/series/volume',
-      '/api/series/pairs', '/api/series/trades?limit=60', '/api/series/values', '/activity', '/holders', '/holders?what=genesis'];
+      '/api/series/pairs', '/api/series/trades?limit=60', '/api/series/values', '/api/depth', '/api/depth/quote?side=sell&nam=7300', '/api/depth/history', '/depth', '/activity', '/holders', '/holders?what=genesis'];
     for (const p of reads) for (const d of disallowed) expect(p.startsWith(d), `${d} blocks ${p}`).toBe(false);
     // the account endpoints stay out
     for (const p of ['/api/me/settings', '/api/me/sessions', '/api/auth/me', '/api/export/holders', '/api/labels']) expect(disallowed.some((d) => p.startsWith(d)), p).toBe(true);

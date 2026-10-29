@@ -4,7 +4,7 @@
 // gives null and the reason, never a stand-in.
 import type { Overview, PoolInfo, PriceQuote, Provenance, QuoteCurveResponse, SlippageCurvePoint } from '../../../../shared/types';
 import type { Stamp } from '../../lib/prov';
-import { fmtNamRule } from '../../lib/format';
+import { fmtNamRule, parseAmount } from '../../lib/format';
 import { poolSides } from '../../../../shared/pool-sides';
 
 export type Side = 'sell' | 'buy';
@@ -246,13 +246,8 @@ export function safeSize(c: QuoteCurveResponse | null, limitPct: 1 | 3): SafeSiz
   return { n: fin(server) ? server : null, how, ...around, smallestNam, smallestImpactPct };
 }
 
-/** Parse a typed amount: "5,000", "5000", "12.5". null when it is not a positive number. */
-export function parseAmount(text: string): number | null {
-  const t = text.replace(/[,\s_]/g, '');
-  if (!/^\d*\.?\d+$|^\d+\.$/.test(t)) return null;
-  const n = Number(t);
-  return Number.isFinite(n) && n > 0 ? n : null;
-}
+/** A typed amount is parsed by shared/format.ts parseAmount (the depth screen reads the same field the same way). */
+export { parseAmount };
 
 /** The three biggest price moves (by size) as chart markers: label like "+35.7%", placed where the move ended. */
 export function markerEvents(moves: { t1: number; pct: number }[], fmt: (pct: number) => string): { t: number; label: string }[] {

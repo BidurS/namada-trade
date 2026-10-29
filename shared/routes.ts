@@ -10,7 +10,7 @@ export { SITE };
 export type GuideRouteId = `guide-${GuideSlug}`;
 
 export type RouteId =
-  | 'home' | 'trade' | 'supply' | 'shielded' | 'activity' | 'holders' | 'alerts' | 'settings'
+  | 'home' | 'trade' | 'depth' | 'supply' | 'shielded' | 'activity' | 'holders' | 'alerts' | 'settings'
   | 'staking' | 'osmosis' | 'learn' | 'faq' | 'guides' | GuideRouteId;
 
 /** The six tabs, in this order everywhere (system.md section 3). */
@@ -60,6 +60,14 @@ export const ROUTES: RouteDef[] = [
     h1Alt: 'What would I pay to buy NAM now?',
     title: 'Trade NAM: live quote and price move',
     description: 'What selling or buying NAM on Osmosis returns right now, how far your own order moves the price, how deep the pools are and what trades paid.',
+  },
+  {
+    // The depth page lights Trade (as Holders lights Activity): its own route, since Trade is already five bands on a
+    // phone (owner decision 23); /orderbook and /book are the words people search for it (ROUTE_ALIASES).
+    path: '/depth', id: 'depth', label: 'Depth', tab: 'trade', index: true,
+    h1: 'What rests at every price for NAM?',
+    title: 'NAM order book and depth on Osmosis',
+    description: 'Every bid and ask for NAM on Osmosis in one ladder: the pools’ tick liquidity and the order book’s resting orders, and what a sale of any size fetches.',
   },
   {
     path: '/supply', id: 'supply', label: 'Supply', tab: 'supply', key: '3', index: true,
@@ -150,6 +158,7 @@ export const ROUTE_ALIASES: Record<string, string> = {
   blind: '/shielded', 'blind-spot': '/shielded',
   overview: '/', integrity: '/',
   pools: '/trade',
+  orderbook: '/depth', book: '/depth',
   flows: '/activity', tape: '/activity',
   intel: '/supply', pressure: '/supply',
   learn: '/learn/how-nam-trading-works',

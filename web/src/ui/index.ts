@@ -40,6 +40,7 @@ export { TradesTape, type TradesTapeProps, type TapeGroup } from './TradesTape';
 export { OrderflowChart, type OrderflowChartProps } from './OrderflowChart';
 export { SeriesChart, namTick, namShort, type SeriesChartProps, type SeriesRange } from './SeriesChart';
 export { OrderSizeCurve, type OrderSizeCurveProps } from './OrderSizeCurve';
+export { DepthChart, type DepthChartProps, type DepthChartMark, type DepthChartTrade } from './DepthChart';
 export { curveAt, fromApi, sliderToSize, sizeToSlider, logPos, type CurveQuote, type CurveReading } from './curveMath';
 export { niceTicks, takeaway } from './chartMath';
 export { Sparkline, type SparklineProps } from './Sparkline';

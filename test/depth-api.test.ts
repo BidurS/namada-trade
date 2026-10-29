@@ -313,6 +313,9 @@ describe('GET /api/depth/history: the stored rows by primary-key range', () => {
     expect(status).toBe(200);
     expect(queries).toBe(2);
     expect(body).toMatchObject({ pool: 'all', step: '1m', from: NOW - D, to: NOW, asOf: NOW, start: NOW - 2 * D, cut: false });
+    // the reference pool the rows' price is read from is the configuration's, named so a rewound page can say "Pool 3005 price"
+    expect(body.refPool).toBe(cfg.refPoolId);
+    expect(body.refPool).toBe('3005');
     expect(body.points).toHaveLength(1440 - 20);
     expect(body.points[0].t).toBe(NOW - D);
     expect(body.points[body.points.length - 1].t).toBe(NOW - MIN);

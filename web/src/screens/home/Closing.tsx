@@ -14,6 +14,8 @@ import { NBSP, fmtAge, fmtCoin, fmtNamRule, fmtPctSigned, fmtUsdRule, fmtUtcLong
 import { TICKET_NAM, type Res } from './data';
 import { checkDetail, checksStamp } from '../../lib/prov';
 import { MoreLink } from './bits';
+import { DepthLine } from '../depth/Line';
+import { SITE_SYMBOL } from '../../../../shared/depth';
 
 export interface ClosingProps {
   o: Overview | null;
@@ -125,6 +127,8 @@ function Ticket({ o, curve, curveP, quote, rewound }: ClosingProps) {
           ) : null}
         </>
       )}
+      {/* the two quotable depth figures of the newest stored minute, with their time, linking to /depth (depth plan 3.1) */}
+      <DepthLine live={!rewound} symbol={SITE_SYMBOL} className="ticket__depth" />
       <p className="more">
         <MoreLink to="/trade">Full quote</MoreLink>
       </p>

@@ -9,10 +9,15 @@
 
 /** The sizes answered each minute, in whole base coins: the executable figures of the Answer view. */
 export const DEPTH_SIZES = [1_000, 10_000, 100_000, 1_000_000] as const;
+/** The size the page opens with and the two quotable lines name (ux-principles 14): the second of the four, answered by every stored minute. */
+export const DEPTH_QUOTABLE_SIZE: (typeof DEPTH_SIZES)[number] = 10_000;
 /** The size the touch is read at, in whole base coins: the effective price of the first coins each way. */
 export const DEPTH_TOUCH_SIZE = 100;
 /** The price offsets stored per minute, in percent of the reference price, each side (bid_1 ... bid_50, ask_1 ... ask_50). */
 export const DEPTH_OFFSETS_PCT = [1, 2, 5, 10, 25, 50] as const;
+/** The index of the ten- and the fifty-percent offset in DEPTH_OFFSETS_PCT: the page's "within 10%" labels and the stored within.*10 / *50 figures are tied by these, never by a typed position. */
+export const OFFSET_10_INDEX: number = DEPTH_OFFSETS_PCT.indexOf(10);
+export const OFFSET_50_INDEX: number = DEPTH_OFFSETS_PCT.indexOf(50);
 /** The heat bands of the time view: one band every HEAT_BAND_PCT percent upward from a quarter of the reference price. */
 export const HEAT_BAND_PCT = 2.5;
 export const HEAT_LO_RATIO = 0.25;
@@ -287,6 +292,8 @@ export interface DepthHistoryPoint {
 }
 export interface DepthHistoryResponse {
   pool: string;
+  /** The reference pool of the configuration whose rows these are (each point's refUsd is that pool's own spot), so a rewound page can name it. */
+  refPool: string;
   step: '1m' | '1h';
   from: number;
   to: number;
@@ -508,12 +515,209 @@ export const historyRowsWords = (table: string, pool: string, rows: number, step
 export const heatRowsWords = (table: string, columns: number) => `${table} rows of the aggregate: ${columns} columns`;
 export const changesRowsWords = (pool: string | null, rows: number) => `depth_changes rows${pool ? ` of pool ${pool}` : ''}: ${rows}`;
 
+// ---------------------------------------------------------------------------------------------------- the page's words
+// Every sentence the depth page (web/src/screens/depth) and the two quotable lines on Home and Trade say, with the base
+// coin's symbol, the pool and every figure passed in from the reading or the configuration: nothing here types a figure.
+/** The ladder folds the rows further than this from the reference price (percent), and the rows between LADDER_MID_PCT and it. */
+export const LADDER_FOLD_PCT = 50;
+export const LADDER_MID_PCT = 10;
+/** The ladder's band widths, in percent of the reference price (the segmented control's three options). */
+export const LADDER_BAND_PCTS = [0.5, 1, 2.5] as const;
+/** The stored trades drawn over the curve: this many days back (the series route's own rows). */
+export const CURVE_TRADES_DAYS = 7;
+/** The page asks the minute again this often (the edge keeps it DEPTH_EDGE_SECONDS), and at once after a swap arrives on the live stream. */
+export const DEPTH_REFRESH_MS = 60_000;
+/** A quoted size typed into the field is asked after this pause; a chip asks at once. */
+export const QUOTE_DEBOUNCE_MS = 400;
+
+/** The base coin's symbol as the page says it (the module's configuration names it for the Worker: worker/src/depth/config.ts base.symbol). */
+export const SITE_SYMBOL = 'NAM';
+/** The router's direct quote and this page's walk agree within this percent (the check's own tolerance is the configuration's; this is the words' cut). */
+export const ROUTER_AGREE_PCT = 0.01;
+export const DEPTH_EYEBROW = 'If I trade now';
+export const BOOK_EYEBROW = 'The book';
+export const LADDER_H2 = 'Asks above the price, bids below, each level naming its pools';
+export const CURVE_H2 = 'What rests at each price, both sides, every pool together';
+export const HEAD_CUM = 'Cumulative';
+export const factAskUsdWithin = (pct: string) => `USD asked within ${pct}`;
+export const NOT_STORED_PER_MINUTE = 'not stored per minute';
+export const BOOK_WAITS = 'The ladder and the curve are drawn from the minute, so they are not shown until it answers.';
+export const ANSWER_WAITS = 'No figure can be shown until the minute answers.';
+export const ASKING_SIZE = 'asking for this size';
+export const SOURCE_LEVELS = 'Where the levels come from';
+export const SOURCE_CURVE = 'Where the curve comes from';
+export const depthLead = (symbol: string) =>
+  `One answer in money, from the chain’s own state of every pool holding ${symbol}: the concentrated-liquidity tick maps, the weighted and stable pools’ reserves and the order book’s resting orders, filled in the order the best price gives, after each pool’s fee and the chain’s taker fee.`;
+export const sideLabel = (side: 'sell' | 'buy', symbol: string) => (side === 'sell' ? `Sell ${symbol}` : `Buy ${symbol}`);
+/** 'pool 3005' or 'order book 3008': how a pool is named everywhere on the page. */
+export const poolWord = (id: string, type: DepthPoolType | null | undefined) => (type === 'cosmwasm' ? `order book ${id}` : `pool ${id}`);
+/** The hero's sentence: the exact figure, the side and the size. */
+export const heroWords = (side: 'sell' | 'buy', usd: string, nam: string, symbol: string) =>
+  side === 'sell' ? `${usd} USD for selling ${nam} ${symbol} now` : `${usd} USD to buy ${nam} ${symbol} now`;
+export const THROUGH = 'through';
+/** One split chip: 'pool 3005 9,242 NAM (92%)'. */
+export const splitWords = (pool: string, nam: string, symbol: string, pct: string) => `${pool} ${nam} ${symbol} (${pct})`;
+export const andMore = (n: number) => `and ${n} more`;
+export const FACT_AVG = 'Average price';
+export const factMarginal = (symbol: string) => `Last ${symbol} filled at`;
+export const factRef = (pool: string) => `Pool ${pool} price`;
+/** The reference row's label while the pool's id is not yet known (a rewound strip before the history answers). */
+export const FACT_REF_UNNAMED = 'Reference pool price';
+export const factTouch = (side: 'sell' | 'buy', n: string, symbol: string) => (side === 'sell' ? `Best bid for ${n} ${symbol}` : `Best ask for ${n} ${symbol}`);
+export const factBidWithin = (pct: string) => `USD bid within ${pct} of price`;
+export const factAskWithin = (pct: string, symbol: string) => `${symbol} for sale within ${pct}`;
+export const vsRefWords = (pct: string, pool: string) => `${pct} vs pool ${pool}’s price`;
+export const heightClock = (height: string, clock: string) => `height ${height}, ${clock}`;
+export const afterFees = (pool: string) => `${pool}, after fees`;
+export const withinAllWords = (all: string, far: string, farPct: string) => `all venues; ${all} in all, ${far} within ${farPct}`;
+export const toTakeAll = (usd: string) => `${usd} to take it all`;
+/** The router's own answer for the smallest size in the reference pool alone (the minute's check), beside this page's. */
+export const routerSays = (usd: string, nam: string, symbol: string, pool: string, clock: string) =>
+  `Osmosis’s router says ${usd} USD for selling ${nam} ${symbol} through ${pool} alone (${clock})`;
+export const routerOurs = (usd: string) => `this page’s math gives ${usd} USD for the same sale`;
+export const ROUTER_AGREE = 'The two agree.';
+export const routerDiffer = (pct: string) => `The two differ by ${pct}.`;
+export const ROUTER_IDLE = 'The router was not asked a quote in the reference pool this minute, so there is nothing to compare.';
+/** When not to act, computed from the reading (verify.txt C3: never typed). */
+export const cliffWords = (above: string, symbol: string, sizeA: string, pctA: string, sizeB: string, pctB: string) =>
+  `Above the first ${above} ${symbol} each extra ${symbol} fetches less: selling ${sizeA} averages ${pctA}, ${sizeB} averages ${pctB}.`;
+export const cliffBuyWords = (above: string, symbol: string, sizeA: string, pctA: string, sizeB: string, pctB: string) =>
+  `Above the first ${above} ${symbol} each extra ${symbol} costs more: buying ${sizeA} averages ${pctA}, ${sizeB} averages ${pctB}.`;
+export const bookBidUnder = (pct: string, book: string) => `The ${book}’s nearest bid is ${pct} under the pool price after fees: sell into the pools, not the book.`;
+/** The reading's share of what rests on its side: the bids' USD selling (`total` is a USD figure), the asks' coins buying (`total` is a coin figure with its symbol, since an ask side's USD would be read off the curve's far tail at prices that will never trade). */
+export const marketWords = (side: 'sell' | 'buy', total: string, nam: string, symbol: string, share: string) =>
+  side === 'sell' ? `This is a ${total} market on the bid side: selling ${nam} ${symbol} takes ${share} of it.` : `This is a ${total} market on the ask side: buying ${nam} ${symbol} takes ${share} of it.`;
+export const ladderLead = (symbol: string) => `Asks above the price, bids below, each level naming its pools; distance is from the reference pool’s price. A level of a concentrated pool is ${CL_LEVEL_WORDS}; the order book’s levels are real orders. Prices in USD per ${symbol}.`;
+export const bandHead = (symbol: string) => `Price band, USD per ${symbol}`;
+export const HEAD_RESTING = 'Resting';
+export const HEAD_FROM = 'From price';
+export const HEAD_POOLS = 'Where';
+export const bandWidthLabel = (pct: string) => `${pct} levels`;
+export const refRowWords = (pool: string, price: string) => `Pool ${pool} price ${price}`;
+export const bestWords = (side: 'bid' | 'ask', n: string, symbol: string, price: string, pool: string) => `best ${side} for ${n} ${symbol} ${price} (${pool})`;
+export const spreadWords = (pct: string) => `that spread is ${pct} after fees`;
+export const crossedWords = (n: string, symbol: string, pct: string, askPool: string, bidPool: string) =>
+  `crossed across pools: ${n} ${symbol} is ${pct} cheaper to buy in ${askPool} than it fetches in ${bidPool}, after fees`;
+export const foldFar = (side: 'ask' | 'bid', count: number, pct: string, price: string, amount: string) =>
+  side === 'ask' ? `${count} more ask levels above +${pct}, up to ${price} (${amount})` : `${count} more bid levels below −${pct}, down to ${price} (${amount})`;
+export const foldMid = (side: 'ask' | 'bid', count: number, from: string, to: string, amount: string) =>
+  side === 'ask' ? `${count} ask levels between +${from} and +${to} (${amount})` : `${count} bid levels between −${from} and −${to} (${amount})`;
+export const hideFold = (side: 'ask' | 'bid', what: string) => `hide the ${side}s ${what}`;
+export const poolFeeChip = (pool: string, feePct: string) => `${pool} · ${feePct} fee`;
+export const bookChip = (pool: string) => `${pool} · limit order, no fee`;
+export const rangesWords = (n: number) => `${n} tick ${n === 1 ? 'range' : 'ranges'}`;
+export const ordersWords = (n: number) => `${n} ${n === 1 ? 'order' : 'orders'}`;
+/** A weighted or stable pool's share of a band comes from its reserves (one point on the price axis), not from tick ranges or orders. */
+export const RESERVES_WORDS = 'from its reserves';
+export const sideWord = (side: 'ask' | 'bid') => (side === 'ask' ? 'Asks' : 'Bids');
+/** A ladder row's open button, for a screen reader: the side, the band, what rests and the distance. */
+export const openBandAria = (side: 'ask' | 'bid', lo: string, hi: string, amount: string, dist: string) => `${sideWord(side)} from ${lo} to ${hi}: ${amount}, ${dist} from the price. Open the band.`;
+export const sheetTitle = (side: 'ask' | 'bid', lo: string, hi: string) => `${sideWord(side)} ${lo} – ${hi}`;
+export const distFromPrice = (pct: string) => `${pct} from the price`;
+export const LADDER_TABLE_LABEL = 'Every level, both sides, every pool together';
+export const SOURCE_EVERY_LEVEL = 'Every level';
+export const LABEL_LEVEL_WIDTH = 'Level width';
+export const takerOnEvery = (pct: string) => `plus the ${pct} taker fee on every swap`;
+export const sellDownWords = (price: string, usd: string) => `selling down to ${price} fetches ${usd} in all`;
+export const buyUpWords = (price: string, usd: string) => `buying up to ${price} costs ${usd} in all`;
+export const markedBand = (nam: string, symbol: string) => `the last ${nam} ${symbol} of the picked size fills here`;
+export const curveLead = (symbol: string) =>
+  `Price across, in USD per ${symbol}; cumulative USD up. Left of the pool price: the USD you would receive selling down to that price. Right: what it would cost to buy up to it. The stored trades of the last week sit on the same axes, so quoted and realised can be compared.`;
+export const CURVE_RANGES = [
+  { value: 'near', label: '½× to 2×' },
+  { value: 'wide', label: '⅒× to 10×' },
+  { value: 'all', label: 'Everything resting' },
+] as const;
+export const axisPrice = (symbol: string, log: boolean) => `USD per ${symbol}${log ? ', log scale' : ''}`;
+export const AXIS_USD = 'cumulative USD';
+export const keyBids = (symbol: string) => `Bids: USD received selling ${symbol}`;
+export const keyAsks = (symbol: string) => `Asks: USD paid buying ${symbol}`;
+export const keyTrades = (days: number) => `Stored trade of the last ${days} days: its settle price and value`;
+export const keyRef = (pool: string) => `Pool ${pool} price`;
+export const sizeMark = (size: string, usd: string) => `${size} → ${usd}`;
+export const tradesInView = (n: number, total: number, days: number) => `${n} of the ${total} stored trades of the last ${days} days fall in this view`;
+export const tradesNone = (days: number) => `no stored trade in the last ${days} days`;
+export const tradesCut = (n: number, days: number) => `the newest ${n} stored trades of the last ${days} days`;
+export const readoutWords = (side: 'bid' | 'ask', usd: string, nam: string, symbol: string) =>
+  side === 'bid' ? `${usd} received selling ${nam} ${symbol} down to here` : `${usd} paid buying ${nam} ${symbol} up to here`;
+export const READOUT_AT = 'at';
+export const READOUT_NONE = 'Press or use the arrow keys to read the curve at a price.';
+/** The chart's own words: the figure's caption, the plot's group label, a trade's title, the summary for a screen reader. */
+export const chartAria = (scale: 'log' | 'linear', lo: string, hi: string, symbol: string, marks: number, trades: number) =>
+  `Cumulative USD by price, ${scale} scale from ${lo} to ${hi} USD per ${symbol}: the bid curve left of the pool price, the ask curve right of it, ${marks} size marks and ${trades} stored trades.`;
+export const CHART_GROUP_LABEL = 'The curve. Arrow keys read it point by point.';
+export const tradeTitle = (kind: 'buy' | 'sell', nam: string, symbol: string, price: string, usd: string, clock: string) => `${kind === 'buy' ? 'Bought' : 'Sold'} ${nam} ${symbol} at ${price}, ${usd}, ${clock}`;
+export const chartSummary = (bidUsd: string, lo: string, askUsd: string, hi: string) => `Bids: ${bidUsd} USD down to ${lo}. Asks: ${askUsd} USD up to ${hi}.`;
+export const NO_POINT_IN_WINDOW = 'No point in this window.';
+export const LABEL_PRICE_WINDOW = 'Price window';
+export const tradesToggle = (days: number) => `${days}-day trades`;
+export const SOURCE_THE_CURVE = 'The curve';
+export const SOURCE_STORED_TRADES = 'Stored trades';
+export const FLOW_INDEX_PLAIN = 'Flow index';
+export const TRADES_FAILED = 'The stored trades did not answer.';
+export const TRADES_NO_PAGE = 'no page answered';
+/** `ago` is the running-text age (shared/format.ts fmtAgo: 'just now', '32 s ago'). */
+export const updatedAgo = (ago: string) => `updated ${ago}`;
+export const readingOf = (clock: string) => `reading of ${clock}`;
+export const TABLE_VIEW = 'Table view';
+export const CHART_VIEW = 'Chart view';
+/** Rewind. */
+export const REWIND_NO_SPLIT = 'The split by pool was not stored, so it is not shown for a past minute.';
+export const REWIND_NO_BOOK = 'The ladder and the curve are built from the minute’s own tick maps, which are not stored, so they are not shown for a past minute. The stored figures of that minute are above.';
+export const rewindMinute = (clock: string) => `the stored minute of ${clock}`;
+export const REWIND_NO_MINUTE = 'No depth minute was stored around that time.';
+export const REWIND_FIELD_OFF = 'Only the stored sizes can be read for a past minute.';
+/** The page's own failure words (never a URL). */
+export const DEPTH_UNSERVED = 'This server does not serve the depth routes yet.';
+export const DEPTH_FAILED = 'The depth reading did not answer.';
+export const QUOTE_FAILED = 'The quote for this size did not answer.';
+export const DEPTH_ASKING = 'Asking now.';
+/** The answer band's labels and small sentences. */
+export const HERO_GET = 'You get';
+export const HERO_PAY = 'You pay';
+export const heroVerb = (side: 'sell' | 'buy') => (side === 'sell' ? HERO_GET : HERO_PAY);
+export const MINUTE_NOT_ANSWERED = 'The minute has not answered yet.';
+export const SPLIT_LABEL = 'Which pools fill it';
+export const NOT_AMOUNT = 'That is not an amount.';
+export const amountsAre = (symbol: string) => `Amounts are numbers of ${symbol}, written with digits.`;
+export const MINUTE_FIGURES = 'The minute’s figures';
+export const STORED_MINUTE_FIGURES = 'The stored minute’s figures';
+export const FETCHING_MINUTE = 'Fetching the minute';
+export const TAB_LEVELS = 'Levels';
+export const TAB_CURVE = 'Curve';
+export const LABEL_SIDE = 'Side';
+export const LABEL_SIZE = 'Size';
+export const LABEL_AMOUNT = 'Amount';
+export const LABEL_BOOK_VIEW = 'Book view';
+export const TRY_AGAIN = 'Try again';
+/** The quotable line's labels (Home and Trade). */
+export const LINE_SELL_LABEL = 'Selling the quoted size across every pool';
+export const LINE_BID_LABEL = 'USD of bids within the quoted distance of the price';
+export const LINE_DOT_LABEL = 'The depth minute';
+export const LINE_SOURCE = 'Osmosis depth';
+/** The two quotable lines (Home, Trade and the server-rendered page): the figures and the time come from the minute. */
+export const sellQuotableLead = (nam: string, symbol: string) => `Selling ${nam} ${symbol} now fetches`;
+export const SELL_QUOTABLE_TAIL = 'across every Osmosis pool';
+export const sellQuotable = (nam: string, symbol: string, usd: string) => `${sellQuotableLead(nam, symbol)} ${usd} ${SELL_QUOTABLE_TAIL}`;
+export const bidQuotableTail = (pct: string) => `of bids within ${pct} of the price`;
+export const bidQuotable = (usd: string, pct: string) => `${usd} ${bidQuotableTail(pct)}`;
+export const DEPTH_LINK = 'Every bid and ask';
+export const DEPTH_SOURCE_LABEL = 'Where the depth comes from';
+export const DEPTH_PLAIN_SOURCE = 'Osmosis chain';
+/** The plain words of each read's `what`, for the SourceLine; the raw `what` stays in the sheet. */
+export const provLabel = (what: string) => what;
+
 /** Every fixed sentence above, for test/depth-words.test.ts: none may carry a figure. */
 export const DEPTH_FIXED_WORDS: readonly string[] = [
   ...Object.values(DEPTH_SOURCES), ...Object.values(DEPTH_CHECK_TITLES), HEAT_RANGE_WORDS, CL_LEVEL_WORDS, UNPRICED_NO_PRICE, UNPRICED_NO_TAKER, UNPRICED_EMPTY, UNPRICED_NO_META,
   BOOK_LEG_LEFT_OUT, USDC_AS_ONE, SELL_INTO_POOLS, HONEST_START, NO_BIDS, NO_ASKS,
   ...Object.values(INVARIANT_WORDS), OWNERS_NO_ARCHIVE, BOOK_NOT_READ_CLOSING, OWNERS_NO_MINUTE,
   DEPTH_NOT_STORED, OWNERS_NOT_STORED, DEPTH_STALE_WORDS, GAP_MINUTE, GAP_HOUR, ...Object.values(HEAT_HOW), QUOTE_HOW_STATES, QUOTE_HOW_CURVE,
+  DEPTH_EYEBROW, BOOK_EYEBROW, LADDER_H2, CURVE_H2, HEAD_CUM, NOT_STORED_PER_MINUTE, BOOK_WAITS, ANSWER_WAITS, ASKING_SIZE, SOURCE_LEVELS, SOURCE_CURVE, THROUGH, FACT_AVG, ROUTER_AGREE, ROUTER_IDLE, HEAD_RESTING, HEAD_FROM, HEAD_POOLS, AXIS_USD, READOUT_AT, READOUT_NONE, TABLE_VIEW, CHART_VIEW,
+  REWIND_NO_SPLIT, REWIND_NO_BOOK, REWIND_NO_MINUTE, REWIND_FIELD_OFF, DEPTH_UNSERVED, DEPTH_FAILED, QUOTE_FAILED, DEPTH_ASKING, DEPTH_LINK, DEPTH_SOURCE_LABEL, DEPTH_PLAIN_SOURCE,
+  RESERVES_WORDS, LADDER_TABLE_LABEL, SOURCE_EVERY_LEVEL, LABEL_LEVEL_WIDTH, CHART_GROUP_LABEL, NO_POINT_IN_WINDOW, LABEL_PRICE_WINDOW, SOURCE_THE_CURVE, SOURCE_STORED_TRADES, FLOW_INDEX_PLAIN, TRADES_FAILED, TRADES_NO_PAGE,
+  HERO_GET, HERO_PAY, MINUTE_NOT_ANSWERED, SPLIT_LABEL, NOT_AMOUNT, MINUTE_FIGURES, STORED_MINUTE_FIGURES, FETCHING_MINUTE, TAB_LEVELS, TAB_CURVE, LABEL_SIDE, LABEL_SIZE, LABEL_AMOUNT, LABEL_BOOK_VIEW, TRY_AGAIN,
+  LINE_SELL_LABEL, LINE_BID_LABEL, LINE_DOT_LABEL, LINE_SOURCE, FACT_REF_UNNAMED,
 ];
 /** The sentences built from a read or the configuration, with sample arguments: the only figures they carry are the ones passed in. */
 export const DEPTH_BUILT_WORDS: readonly string[] = [
@@ -521,4 +725,23 @@ export const DEPTH_BUILT_WORDS: readonly string[] = [
   quoteIncomplete('sell', '1,234,567', 'NAM'), quoteIncomplete('buy', '1,234,567', 'NAM'), historyCut(43200), minuteRowsKept(30),
   historyRowsWords('depth_minute', 'all', 1420, 1440), heatRowsWords('depth_hourly', 720), changesRowsWords('3005', 200), changesRowsWords(null, 200),
 ];
-export const DEPTH_WORDS: readonly string[] = [...DEPTH_FIXED_WORDS, ...DEPTH_BUILT_WORDS];
+/** The page's sentences with sample arguments (the figures are the arguments and nothing else), checked the same way. */
+export const DEPTH_PAGE_WORDS: readonly string[] = [
+  depthLead('NAM'), sideLabel('sell', 'NAM'), sideLabel('buy', 'NAM'), poolWord('3005', 'concentrated'), poolWord('3008', 'cosmwasm'), heroWords('sell', '9.922965', '10,000', 'NAM'), heroWords('buy', '10.2', '10,000', 'NAM'),
+  splitWords('pool 3005', '9,242', 'NAM', '92%'), andMore(3), factMarginal('NAM'), factRef('3005'), factTouch('sell', '100', 'NAM'), factTouch('buy', '100', 'NAM'), factBidWithin('10%'), factAskWithin('10%', 'NAM'),
+  vsRefWords('−2.7%', '3005'), heightClock('73,428,670', '02:47 UTC'), afterFees('pool 3005'), withinAllWords('$506.80', '$121.53', '50%'), toTakeAll('$39.76'),
+  routerSays('1.014160', '1,000', 'NAM', 'pool 3005', '02:47 UTC'), routerOurs('1.014160'), routerDiffer('0.14%'),
+  cliffWords('1,000', 'NAM', '100,000', '−16.6%', '1,000,000', '−67.7%'), cliffBuyWords('1,000', 'NAM', '100,000', '+16.6%', '1,000,000', '+67.7%'), bookBidUnder('65.7%', 'order book 3008'), marketWords('sell', '$506.80', '10,000', 'NAM', '2%'), marketWords('buy', '1,726,372 NAM', '10,000', 'NAM', '0.58%'),
+  ladderLead('NAM'), bandHead('NAM'), bandWidthLabel('1%'), refRowWords('3005', '0.0010199'), bestWords('bid', '100', 'NAM', '0.0010168', 'pool 3005'), bestWords('ask', '100', 'NAM', '0.0009886', 'pool 3009'), spreadWords('−2.77%'), crossedWords('100', 'NAM', '2.77%', 'pool 3009', 'pool 3005'),
+  foldFar('ask', 1171, '50%', '198.57', '1,322,018 NAM'), foldFar('bid', 12, '50%', '0.0000001', '$12.40'), foldMid('ask', 31, '10%', '50%', '371,945 NAM'), foldMid('bid', 4, '10%', '50%', '$95.10'), hideFold('ask', 'above +50%'),
+  poolFeeChip('pool 3005', '0.2%'), bookChip('order book 3008'), rangesWords(1), rangesWords(3), ordersWords(1), ordersWords(2), takerOnEvery('0.1%'), sellDownWords('0.0010098', '$1.41'), buyUpWords('0.0010301', '$2.12'), markedBand('10,000', 'NAM'),
+  curveLead('NAM'), axisPrice('NAM', true), axisPrice('NAM', false), keyBids('NAM'), keyAsks('NAM'), keyTrades(7), keyRef('3005'), sizeMark('10k', '$9.92'), tradesInView(387, 389, 7), tradesNone(7), tradesCut(300, 7),
+  readoutWords('bid', '$9.92', '10,000', 'NAM'), readoutWords('ask', '$10.37', '10,000', 'NAM'), updatedAgo('12 s ago'), readingOf('02:56 UTC'), rewindMinute('02:56 UTC'),
+  sellQuotable('10,000', 'NAM', '$9.92'), bidQuotable('$26.43', '10%'), sellQuotableLead('10,000', 'NAM'), bidQuotableTail('10%'), factAskUsdWithin('10%'),
+  sideWord('ask'), sideWord('bid'), openBandAria('bid', '0.0010098', '0.0010199', '$1.41', '−1.0%'), sheetTitle('ask', '0.0010199', '0.0010301'), distFromPrice('−1.0%'),
+  chartAria('linear', '0.00051', '0.00204', 'NAM', 8, 3), chartAria('log', '0.000102', '0.0102', 'NAM', 8, 4), tradeTitle('buy', '400', 'NAM', '0.001025', '$0.41', '28 Oct, 02:56 UTC'), tradeTitle('sell', '10,000', 'NAM', '0.00099', '$9.90', '28 Oct, 02:56 UTC'),
+  chartSummary('506.80', '0.0000001', '1,083,780', '201.59'), tradesToggle(7), heroVerb('sell'), heroVerb('buy'), amountsAre('NAM'),
+  // the curve's three windows are input choices (as a chart's 24h / 7d / 30d), not figures
+  ...CURVE_RANGES.map((r) => r.label),
+];
+export const DEPTH_WORDS: readonly string[] = [...DEPTH_FIXED_WORDS, ...DEPTH_BUILT_WORDS, ...DEPTH_PAGE_WORDS];

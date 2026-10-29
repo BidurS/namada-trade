@@ -23,7 +23,9 @@ export type FactKey =
   | 'holders'    // holder counts on Namada and Osmosis, protocol accounts excluded
   | 'top10'      // share of all NAM held by the 10 largest Namada holders
   | 'unbonding'  // the unstaking wait, from the chain's own settings
-  | 'apr';       // the staking rate the network indexer reports
+  | 'apr'        // the staking rate the network indexer reports
+  | 'depthSell'  // what selling the depth page's quoted size fetches across every Osmosis pool, from the newest depth minute
+  | 'depthBid';  // USD of bids within the quoted distance of the price across every pool, from the same minute
 
 /**
  * What the two derived values on the Trade page count (no figures). The series API sends the same sentences with
@@ -56,6 +58,11 @@ export interface PageCopy {
   facts: FactKey[];
   /** Sections with their own H2 (the SEO pages). */
   sections?: CopySection[];
+  /**
+   * The facts whose times date the page in the sitemap, when they are not every fact it states: the depth page is
+   * dated by its newest stored minute alone, not by the price it also quotes.
+   */
+  dated?: FactKey[];
 }
 
 /** Plain-language text per route id (shared/routes.ts). Settings is private and has none. */
@@ -73,6 +80,14 @@ export const BODY: Record<string, PageCopy> = {
       'This page asks the Osmosis router what a sale or purchase of NAM would return right now, and shows how far that order moves the price. The pools hold little money, so a large order gets a worse average price than a small one.',
     ],
     facts: ['price', 'depth', 'osmosis'],
+  },
+  depth: {
+    paras: [
+      'Every bid and ask for NAM on Osmosis, read from the chain\'s own state each minute: the concentrated-liquidity pools\' tick maps, the weighted pools\' reserves and the order book\'s resting orders, merged into one ladder with each rung naming its pool and fee.',
+      'The first figure is what a sale or a purchase of a given size fetches right now across every pool, filled best price first after each pool\'s fee and the chain\'s taker fee. A level of a concentrated pool is a reading of its tick map, not a resting order; the order book\'s levels are real orders. Nothing here is advice and nothing is traded from this page.',
+    ],
+    facts: ['depthSell', 'depthBid', 'price'],
+    dated: ['depthSell', 'depthBid'],
   },
   supply: {
     paras: [

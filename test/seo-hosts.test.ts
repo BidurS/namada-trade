@@ -7,7 +7,11 @@ import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { canonicalRedirect, redirectStatus, ownershipFile, isClientPath } from '../worker/src/hosts';
 import { ROUTES, GUIDE_ROUTES, SITE, classifyPath, legacyHashTarget, routeByPath } from '../shared/routes';
-import { isListView, lastmodOf, guideHtml, jsonLd } from '../worker/src/seo';
+import { isListView, lastmodOf, guideHtml, jsonLd, facts } from '../worker/src/seo';
+import { testD1, insert } from './d1-sqlite';
+import { depthFixture } from './depth-fixtures';
+import { BODY } from '../shared/copy';
+import { sellQuotable, bidQuotable, type DepthResponse } from '../shared/depth';
 
 vi.mock('cloudflare:workers', () => ({ DurableObject: class {} }));
 const worker = (await import('../worker/src/index')).default as ExportedHandler<any> & { fetch: (r: Request, e: any, c: any) => Promise<Response> };
@@ -286,6 +290,56 @@ describe('the files crawlers read', () => {
     expect(lastmodOf(ROUTES.find((r) => r.id === 'faq')!, null)).toBeNull();
   });
 
+  it('the depth page’s date is its newest stored minute (the depth facts carry the minute’s own time), and /orderbook and /book 301 to it', async () => {
+    const t = Date.UTC(2026, 9, 29, 2, 56);
+    cached = { depthSell: { text: 's', at: t, source: 'Osmosis chain' }, depthBid: { text: 'b', at: t - 1, source: 'Osmosis chain' } };
+    const xml = await (await worker.fetch(new Request('https://namada.trade/sitemap.xml'), { ASSETS, DB: {} }, ctx)).text();
+    expect(xml).toContain(`<loc>${SITE.origin}/depth</loc><lastmod>2026-10-29T02:56:00Z</lastmod>`);
+    for (const p of ['/orderbook', '/book', '/Book/']) {
+      const r = await get(`https://namada.trade${p}?at=5`);
+      expect([r.status, r.headers.get('location')], p).toEqual([301, 'https://namada.trade/depth?at=5']);
+    }
+    const page = await get('https://namada.trade/depth');
+    expect(page.status).toBe(200);
+    const html = await page.text();
+    expect(html).toContain('<title>NAM order book and depth on Osmosis · NamadaTrade</title>');
+    expect(html).toContain('<h1 style="');
+    expect(html).toContain('What rests at every price for NAM?');
+  });
+
+  it('the depth page’s date stays its stored minute when the price it also quotes is newer (the copy lists the dated facts); the page itself still states the price', async () => {
+    const t = Date.UTC(2026, 9, 29, 2, 56);
+    cached = { depthSell: { text: 's', at: t, source: 'Osmosis chain' }, depthBid: { text: 'b', at: t - 1, source: 'Osmosis chain' }, price: { text: 'NAM price: $0.001020', at: t + 40 * 60_000, source: 'Osmosis router quote' } };
+    expect(BODY.depth.dated).toEqual(['depthSell', 'depthBid']);
+    expect(BODY.depth.facts).toContain('price');
+    const xml = await (await worker.fetch(new Request('https://namada.trade/sitemap.xml'), { ASSETS, DB: {} }, ctx)).text();
+    expect(xml).toContain(`<loc>${SITE.origin}/depth</loc><lastmod>2026-10-29T02:56:00Z</lastmod>`);
+    // Home is dated by every fact it states, the price among them
+    expect(xml).toContain(`<loc>${SITE.origin}/</loc><lastmod>2026-10-29T03:36:00Z</lastmod>`);
+    const html = await (await get('https://namada.trade/depth')).text();
+    expect(html).toContain('NAM price: $0.001020');
+  });
+
+  it('the two depth facts come from kv depth.latest itself: the fixture minute’s own figures, with its own time, reach the facts, the page and the sitemap', async () => {
+    const db = testD1();
+    const latest = depthFixture<DepthResponse>('api_depth_latest.json');
+    insert(db, 'kv', [{ key: 'depth.latest', value: JSON.stringify(latest), updated_at: latest.at }]);
+    const f = await facts({ DB: db } as any);
+    expect(f.depthSell).toEqual({ text: sellQuotable('10,000', 'NAM', '$9.92'), at: latest.at, source: 'Osmosis chain' });
+    expect(f.depthBid).toEqual({ text: bidQuotable('$26.88', '10%'), at: latest.at, source: 'Osmosis chain' });
+    expect(latest.within.bidUsd10).toBeCloseTo(26.88, 2);
+    expect(f.depthSell!.text).toBe('Selling 10,000 NAM now fetches $9.92 across every Osmosis pool');
+    expect(f.price).toBeUndefined(); // no metric row: the price is left out, never a stand-in
+    const xml = await (await worker.fetch(new Request('https://namada.trade/sitemap.xml'), { ASSETS, DB: db }, ctx)).text();
+    expect(xml).toContain(`<loc>${SITE.origin}/depth</loc><lastmod>${new Date(latest.at).toISOString().replace(/\.\d{3}Z$/, 'Z')}</lastmod>`);
+    const html = await (await worker.fetch(new Request('https://namada.trade/depth'), { ASSETS, DB: db }, ctx)).text();
+    expect(html).toContain('fetches $9.92 across every Osmosis pool');
+    // an unreadable row gives no depth fact
+    const empty = await facts({ DB: testD1() } as any);
+    expect(empty.depthSell).toBeUndefined();
+    expect(empty.depthBid).toBeUndefined();
+  });
+
   it('llms.txt names the site, says what it is not, and links every indexable page and guide', async () => {
     const res = await get('https://namada.trade/llms.txt');
     expect(res.status).toBe(200);
@@ -294,6 +348,7 @@ describe('the files crawlers read', () => {
     expect(txt.startsWith(`# ${SITE.name}\n`)).toBe(true);
     expect(txt).toContain(SITE.disclaimer);
     for (const r of ROUTES.filter((x) => x.index)) expect(txt, r.path).toContain(`](${SITE.origin}${r.path})`);
+    expect(txt).toContain(`](${SITE.origin}/api/depth)`);
     expect(txt).not.toMatch(/\$\d|\d+(\.\d+)? ?NAM\b/); // no figure typed
   });
 

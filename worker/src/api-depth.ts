@@ -264,7 +264,7 @@ export async function readHistory(db: D1Database, cfg: DepthConfig, ask: History
   const table = minute ? 'depth_minute' : 'depth_hourly';
   const notes = [minute ? minuteRowsKept(Math.round(cfg.caps.retentionMs / DAY_MS)) : null, cut ? historyCut(limit) : null, start == null ? `nothing is stored for pool ${pool} at this step` : start > from ? `stored from ${fmtUtcLong(start)}` : null].filter((x): x is string => !!x);
   return {
-    pool, step, from, to, asOf, points, gaps, start, cut, note: notes.length ? notes.join('; ') : null,
+    pool, refPool: cfg.refPoolId, step, from, to, asOf, points, gaps, start, cut, note: notes.length ? notes.join('; ') : null,
     prov: [storedProv(historyRowsWords(table, pool, points.length, Math.floor((to - 1) / stepMs) - Math.ceil(from / stepMs) + 1), table, { pool_id: pool, from, to, limit }, points, asOf)],
   };
 }

@@ -17,6 +17,8 @@ import type { Depth } from './model';
 import { pairName, splitPools } from './model';
 import { oneSidedWords, poolSides } from '../../../../shared/pool-sides';
 import type { HistoryLoad } from './data';
+import { DepthLine } from '../depth/Line';
+import { SITE_SYMBOL } from '../../../../shared/depth';
 
 export interface PoolsProps {
   rewound: boolean;
@@ -186,6 +188,8 @@ export function Pools({ rewound, pools, pairs, depth, overview }: PoolsProps) {
         <section className="tk-sec" aria-labelledby="h-pools">
           <h2 id="h-pools" className="h2">Where NAM trades</h2>
           {body}
+          {/* the two quotable depth figures of the newest stored minute, with their time, linking to /depth (depth plan 3.1) */}
+          <DepthLine live={!rewound} symbol={SITE_SYMBOL} className="tk-depthline" />
         </section>
       </div>
     </div>
