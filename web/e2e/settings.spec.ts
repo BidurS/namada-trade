@@ -9,7 +9,7 @@ import { expect, gotoRoute, layoutAudit, onlyIn, test } from './helpers';
 
 const ROUTE = ROUTES.find((r) => r.id === 'settings')!;
 const BANNED = /\b(SQS|IBC|DEX|PoS|MASP|ABCI|RPC|cron|webhooks?|npm|D[1-7])\b|Loading…/;
-const ORDER = ['Alert rules', 'Where alerts go', 'Watchlist', 'Quiet hours', 'Devices', 'For developers', 'Your data', 'Appearance'];
+const ORDER = ['Alert rules', 'Where alerts go', 'Telegram', 'Watchlist', 'Quiet hours', 'Devices', 'For developers', 'Your data', 'Appearance'];
 
 async function signIn(page: Page) {
   const now = Date.now();
