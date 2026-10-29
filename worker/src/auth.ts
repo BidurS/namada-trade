@@ -421,6 +421,8 @@ export async function sweepAuth(db: D1Database) {
   await db.prepare(`DELETE FROM kv WHERE ${keyPrefix('webhook:user')}`).run().catch(() => {});
   // Test-post cooldowns: one row per address that ever sent a test, which nothing deleted before.
   await db.prepare(`DELETE FROM kv WHERE ${keyPrefix('webhook_test')} AND updated_at < ?`).bind(now - WEBHOOK_TEST_KEEP_MS).run().catch(() => {});
+  // Telegram: test cooldowns, and connect codes (telegram-bot.ts, 15 minutes) with the rows naming them, kept an hour.
+  await db.prepare(`DELETE FROM kv WHERE (${keyPrefix('tg_test')} OR ${keyPrefix('tglink')} OR ${keyPrefix('tglinkby')}) AND updated_at < ?`).bind(now - WEBHOOK_TEST_KEEP_MS).run().catch(() => {});
   // Alert claims on migration 0011's claim-time index: the expired claims only. On the key range alone the delete read
   // every claim kept for 30 days on every tick (2,778 rows a run to delete none, 2026-10-22). A failure is logged, and
   // the claims it would have deleted are kept until the next tick deletes them (nothing else reads them).

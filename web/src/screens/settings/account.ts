@@ -16,6 +16,8 @@ export interface UserSettingsState {
   /** Send a partial update; resolves with the saved settings, rejects with the server's reason. */
   save: (patch: unknown) => Promise<UserSettings>;
   reload: () => void;
+  /** Shows settings read since (a Telegram chat the bot linked while the page waited). */
+  replace: (s: UserSettings) => void;
 }
 
 export function useUserSettings(session: Session | null): UserSettingsState {
@@ -58,6 +60,7 @@ export function useUserSettings(session: Session | null): UserSettingsState {
     }
   }, []);
   const reload = useCallback(() => setN((x) => x + 1), []);
+  const replace = useCallback((s: UserSettings) => setSettings(s), []);
 
-  return { settings, error, expired, save, reload };
+  return { settings, error, expired, save, reload, replace };
 }

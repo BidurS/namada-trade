@@ -1057,11 +1057,28 @@ export interface NotificationPrefs {
  */
 export interface DiscordChannel { enabled: boolean; webhookUrlMasked: string | null; hasUrl: boolean; stopped?: { status: number; at: number; reason?: 'notice'; savedAt?: number; tries?: number } | null; notice?: { status: number; at: number; tries?: { n: number; status: number; at: number } } | null }
 
+/**
+ * A Telegram chat the alerts go to (worker/src/telegram-bot.ts): linked only by the bot's own handshake (the owner
+ * opens the bot from Settings and presses Start, or adds it to a group), never by a chat id the page sends. `linked`:
+ * a chat is linked; `enabled`: alerts are sent to it; `kind`: a private chat with the bot, or a group; `title`: a
+ * group's name as Telegram gave it (null for a private chat); `stopped`: why the chat was unlinked though its owner did
+ * not press Disconnect (the person blocked the bot or sent /stop, or the bot was removed from the group).
+ */
+export interface TelegramChannel {
+  linked: boolean;
+  enabled: boolean;
+  kind: 'private' | 'group' | null;
+  title: string | null;
+  linkedAt: number | null;
+  stopped?: { reason: 'blocked' | 'removed' | 'stop'; at: number } | null;
+}
+
 /** What the API returns: secrets are never included, only whether they exist. */
 export interface UserSettings {
   address: string;
   notifications: NotificationPrefs;
-  channels: { discord: DiscordChannel };
+  /** `telegram` is absent from an answer of a server without the channel. */
+  channels: { discord: DiscordChannel; telegram?: TelegramChannel };
   createdAt: number;
   updatedAt: number;
 }

@@ -6,6 +6,7 @@ import { PRICE_HOW_KEY, priceHealth, priceHowStmt, type PriceHowLog } from './pr
 import { QUOTE_KEYS } from '../../shared/settle';
 import { namBalance, namTotalSupply, namTotalStake, namadaEpoch, namadaStatusAll, delegationsAt, answeringRpcs, listingHeads, QUICK, RpcBreaker, allNamBalances, allBonds, ListingTooLargeError, LISTING_MAX_VALUE_BYTES, type BalanceListing, type BondListing, type ReadOpts, type Rpc } from './sources/namada';
 import { fetchIntelChecked } from './sources/intel';
+import { sendTelegramForum, sendTelegramGov, telegramRun, TG_CRON_MS, TG_CRON_SENDS } from './sources/telegram';
 import { sendDiscordForumAlert, sendDiscordGovAlert, sendsAlerts, alertBudget, flushAlerts, sweepNoticeChannels, RUN_ALERT_POSTS, RUN_ALERT_WINDOW_MS, type GovContext } from './sources/discord';
 import { NAM, NAMADA, OSMOSIS } from './config';
 import { fetchJson, toNam, isRealAddress, FETCH_TEXT_MAX_BYTES } from './util';
@@ -91,6 +92,7 @@ async function syncIntelAndAlerts(env: Env, health: SourceHealth[]) {
   // alerts. The operator's channel is posted at once for every alert, whether its subscribers wait or not. The run's
   // shared records (invalid answers, posts not sent) are written once, when it ends.
   const budget = alertBudget(Date.now());
+  const tgRun = telegramRun(TG_CRON_SENDS, TG_CRON_MS, budget.deadline);
   try {
     const t0 = Date.now();
     // The digests due (the day's from 08:00 UTC, the week's on Mondays; digest/deliver.ts) are built from D1 alone
@@ -151,7 +153,11 @@ async function syncIntelAndAlerts(env: Env, health: SourceHealth[]) {
           if (prevStatus === prop.status) continue;
           // A proposal whose subscribers wait keeps its stored state, so the next run finds it new or changed again;
           // every later one is still offered, so the operator hears each at once (its subscribers wait too).
-          if ((await sendDiscordGovAlert(env.DISCORD_WEBHOOK_URL, prop, !prevStatus, env.DB, budget, await govContext())) === 'waiting') continue;
+          const discord = await sendDiscordGovAlert(env.DISCORD_WEBHOOK_URL, prop, !prevStatus, env.DB, budget, await govContext());
+          // Telegram after Discord, under its own claims and share of the run (sources/telegram.ts): a proposal whose
+          // Discord subscribers wait is offered again next run, and the claims keep Telegram from hearing it twice.
+          await sendTelegramGov(env, prop, !prevStatus, await govContext(), tgRun);
+          if (discord === 'waiting') continue;
           changed = true;
           prevState[String(prop.id)] = prop.status;
         }
@@ -190,7 +196,9 @@ async function syncIntelAndAlerts(env: Env, health: SourceHealth[]) {
           for (const post of newPosts) {
             // the topic's category, as the forum's topic list names it
             const category = intel.topics.find((t) => t.id === post.topicId)?.categoryName ?? null;
-            if ((await sendDiscordForumAlert(env.DISCORD_WEBHOOK_URL, post, env.DB, budget, category)) === 'waiting') waited = true;
+            const discord = await sendDiscordForumAlert(env.DISCORD_WEBHOOK_URL, post, env.DB, budget, category);
+            await sendTelegramForum(env, post, category, tgRun);
+            if (discord === 'waiting') waited = true;
             else if (!waited) done = post.id;
           }
           if (done > lastPostId) await kvSet(env.DB, 'forum.last_post_id', String(done));

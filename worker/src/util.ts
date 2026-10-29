@@ -12,6 +12,12 @@ export interface Env {
   ACCESS_AUD?: string;
   /** 32 bytes base64; encrypts per-user settings at rest */
   SETTINGS_KEY?: string;
+  /** The Telegram bot's token (@BotFather), a secret: without it nothing is sent to Telegram (sources/telegram.ts) */
+  TELEGRAM_BOT_TOKEN?: string;
+  /** The secret Telegram sends with each update to the webhook (setWebhook secret_token; telegram-bot.ts) */
+  TELEGRAM_WEBHOOK_SECRET?: string;
+  /** The public channel of the site's own alerts ("@name" or its id), the bot an admin there; unset: none */
+  TELEGRAM_CHANNEL?: string;
   WHALE_OSMOSIS_NAM?: string;
   WHALE_NAMADA_NAM?: string;
   /** Workers rate limiting (wrangler.jsonc `ratelimits`) for the requests that read many rows or write for anyone (worker/src/http.ts) */

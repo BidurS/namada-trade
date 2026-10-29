@@ -12,7 +12,7 @@
 // is being dispatched. (An operator who changes this code can of course read anything; that is true of
 // every hosted service and is said plainly in the Privacy section of the UI.)
 import { base64 } from '@scure/base';
-import type { AlertRuleId, NotificationPrefs, UserSettings } from '../../shared/types';
+import type { AlertRuleId, NotificationPrefs, TelegramChannel, UserSettings } from '../../shared/types';
 import { DEFAULT_THRESHOLDS, type AlertThresholds } from '../../shared/alerts';
 import { kvGetJson } from './db';
 import { hmac } from '@noble/hashes/hmac.js';
@@ -41,10 +41,22 @@ export interface StoredSettings {
    * Cleared when the owner saves a link or turns the channel on; shown by the API only while the row records no
    * successful post (publicView `proven`).
    */
-  channels: { discord: { enabled: boolean; webhookUrl: string | null; stopped?: StoppedChannel; notice?: NoticeNotTaken } };
+  channels: { discord: { enabled: boolean; webhookUrl: string | null; stopped?: StoppedChannel; notice?: NoticeNotTaken }; telegram?: StoredTelegram };
   createdAt: number;
   updatedAt: number;
 }
+/**
+ * The Telegram chat a row's alerts go to (worker/src/telegram-bot.ts). `chatId` is set only by the bot's handshake (a
+ * one-time code the owner's Settings page made, sent back by Telegram when the owner pressed Start), never by the page;
+ * it is cleared, with `stopped` saying why, when Telegram says the person blocked the bot or the bot left the group, or
+ * someone in the chat sent /stop. A row saved before the channel existed has no `telegram`.
+ */
+export interface StoredTelegram { enabled: boolean; chatId: number | null; kind: 'private' | 'group' | null; title: string | null; linkedAt: number | null; stopped?: TelegramChannel['stopped'] }
+/** A row's Telegram channel, as stored or, for a row saved before it existed, unlinked. */
+export const telegramOf = (s: StoredSettings): StoredTelegram =>
+  s.channels.telegram ?? { enabled: false, chatId: null, kind: null, title: null, linkedAt: null };
+/** Alerts go to the row's Telegram chat: a chat is linked and sending is on. */
+export const telegramOn = (s: StoredSettings): boolean => !!(s.channels.telegram?.enabled && s.channels.telegram.chatId != null);
 /**
  * Why a channel is off: Discord's answer that the link is dead (`status` 404 or 401, no `reason`), or the connection
  * notice the save posts was not taken (`reason` 'notice'; `status` is Discord's answer, or 0 when it gave none); with
@@ -173,6 +185,9 @@ const OTHER_LINKS = (self: string) => `(SELECT COUNT(DISTINCT ${LINK}) FROM kv W
 const SHARED_LINK = (self: string, hook: string) => `EXISTS (SELECT 1 FROM kv WHERE ${DELIVERABLE_ROWS} AND key <> ${self} AND json_extract(value, '$.hook') = ${hook})`;
 const deliverable = (s: StoredSettings) => !!(s.channels.discord.enabled && s.channels.discord.webhookUrl);
 const enc = new TextEncoder();
+/** Which Telegram chat a row is linked to, as stored beside the sealed blob (`tgc`): an HMAC of the chat id under the settings secret, cut to 128 bits. */
+export const chatDigest = (secret: string, chatId: number): string =>
+  bytesToHex(hmac(sha256, enc.encode(secret.trim()), enc.encode(`telegram-chat:${chatId}`))).slice(0, 32);
 /**
  * Which channel a Discord link is, as stored beside the sealed blob: an HMAC of the link under the settings secret,
  * cut to 128 bits. Rows that share a link have the same digest, and a copy of the database without the secret cannot
@@ -186,13 +201,16 @@ export const hookDigest = (secret: string, url: string): string =>
  * saveSettings while the row keeps the link; for a new row, now when it is on) and, for a channel on with the
  * connection notice's note, when it was saved so or the notice was last posted again (`noticeAt`, which trialsDue
  * reads). `okAt`, the last successful post to the link, is written by hookOkStmt only and kept the same way.
+ * For Telegram: `tg`, whether alerts go to the row's chat (telegramOn), and `tgc`, the linked chat's digest (on or
+ * off), so the bot finds the rows of a chat that sent /stop or blocked it without opening every row.
  */
 const rowValue = async (secret: string, s: StoredSettings, at = Date.now()) => {
   const on = deliverable(s);
   const url = s.channels.discord.webhookUrl;
   const notice = s.channels.discord.notice;
   const noticeAt = on && notice ? notice.tries?.at ?? notice.at : null;
-  return JSON.stringify({ blob: await seal(secret, s), updatedAt: s.updatedAt, createdAt: s.createdAt, on, hook: url ? hookDigest(secret, url) : null, onAt: on ? at : null, noticeAt });
+  const chat = s.channels.telegram?.chatId;
+  return JSON.stringify({ blob: await seal(secret, s), updatedAt: s.updatedAt, createdAt: s.createdAt, on, hook: url ? hookDigest(secret, url) : null, onAt: on ? at : null, noticeAt, tg: telegramOn(s), tgc: chat != null ? chatDigest(secret, chat) : null });
 };
 
 /**
@@ -390,9 +408,11 @@ export async function noticeTriedStmt(db: D1Database, secret: string, s: StoredS
     .bind(await rowValue(secret, n), `user:${s.address}`, s.updatedAt);
 }
 
-/** The address's settings, any plaintext settings from before sign-in, and its test-post cooldown. */
+/** The address's settings, any plaintext settings from before sign-in, its test-post cooldowns and its Telegram link code. */
 export async function deleteSettings(db: D1Database, address: string): Promise<void> {
-  await db.prepare('DELETE FROM kv WHERE key IN (?, ?, ?)').bind(`user:${address}`, `webhook:user:${address}`, `webhook_test:${address}`).run();
+  const code = await db.prepare('SELECT value FROM kv WHERE key = ?').bind(`tglinkby:${address}`).first<{ value: string }>().catch(() => null);
+  await db.prepare('DELETE FROM kv WHERE key IN (?, ?, ?, ?, ?, ?)')
+    .bind(`user:${address}`, `webhook:user:${address}`, `webhook_test:${address}`, `tg_test:${address}`, `tglinkby:${address}`, `tglink:${code?.value ?? ''}`).run();
 }
 
 /**
@@ -452,10 +472,17 @@ export function publicView(s: StoredSettings, proven = false): UserSettings {
   return {
     address: s.address,
     notifications: s.notifications,
-    channels: { discord: { enabled: d.enabled, hasUrl: !!url, webhookUrlMasked: url ? `${url.slice(0, 38)}••••${url.slice(-4)}` : null, stopped: d.stopped ?? null, notice: d.notice && !proven ? d.notice : null } },
+    channels: { discord: { enabled: d.enabled, hasUrl: !!url, webhookUrlMasked: url ? `${url.slice(0, 38)}••••${url.slice(-4)}` : null, stopped: d.stopped ?? null, notice: d.notice && !proven ? d.notice : null }, telegram: telegramView(s) },
     createdAt: s.createdAt,
     updatedAt: s.updatedAt,
   };
+}
+
+/** The Telegram channel's public view: never the chat id. */
+export function telegramView(s: StoredSettings): TelegramChannel {
+  const t = telegramOf(s);
+  const linked = t.chatId != null;
+  return { linked, enabled: linked && t.enabled, kind: linked ? t.kind : null, title: linked ? t.title : null, linkedAt: linked ? t.linkedAt : null, stopped: t.stopped ?? null };
 }
 
 /**
@@ -512,7 +539,103 @@ export function applyUpdate(cur: StoredSettings, body: any): StoredSettings | st
       if (n.channels.discord.webhookUrl !== cur.channels.discord.webhookUrl || !cur.channels.discord.enabled) delete n.channels.discord.notice;
     }
   }
+  // Telegram: the page turns sending on or off, or disconnects the chat; it never sets a chat (only the bot's handshake
+  // does: worker/src/telegram-bot.ts).
+  const t = body.channels?.telegram;
+  if (t) {
+    const cur = telegramOf(n);
+    if (t.disconnect === true) n.channels.telegram = { enabled: false, chatId: null, kind: null, title: null, linkedAt: null };
+    else if (typeof t.enabled === 'boolean') {
+      if (t.enabled && cur.chatId == null) return 'connect a Telegram chat first';
+      n.channels.telegram = { ...cur, enabled: t.enabled };
+    }
+  }
   n.updatedAt = Date.now();
   if (new TextEncoder().encode(JSON.stringify(n)).length > SETTINGS_MAX_BYTES) return 'these settings are too large to save';
   return n;
+}
+
+// ---------------------------------------------------------------- Telegram rows
+
+/** The user: rows whose Telegram chat is on, the exact WHERE of migration 0013's partial index kv_user_telegram. */
+const TELEGRAM_ROWS = `${USER_ROWS} AND json_extract(value, '$.tg') = 1`;
+/**
+ * The most Telegram chats the dispatcher sends to, site-wide: the chats of the rows linked first. It is the live hub's
+ * share of messages per invocation (sources/telegram.ts TG_LIVE_SENDS), so one alert to every chat fits one invocation,
+ * inside about 8 seconds at Telegram's pace. The bot refuses a link past it (telegram-bot.ts).
+ */
+export const TELEGRAM_CHATS_MAX = 200;
+
+/** How many distinct chats have Telegram on, other than `chatId`'s (the bot's cap on a new link). */
+export async function telegramChatsOther(db: D1Database, secret: string, chatId: number): Promise<number> {
+  const r = await db.prepare(`SELECT COUNT(DISTINCT json_extract(value, '$.tgc')) n FROM kv WHERE ${TELEGRAM_ROWS} AND json_extract(value, '$.tgc') <> ?1`)
+    .bind(chatDigest(secret, chatId)).first<{ n: number }>();
+  return Number(r?.n ?? 0);
+}
+
+/**
+ * The rows the Telegram dispatcher serves: every row with Telegram on, opened, those of the first TELEGRAM_CHATS_MAX
+ * chats (first linked first), and how many rows were left out (past the cap, or not opening under the key).
+ */
+export async function readTelegram(db: D1Database, secret: string | undefined): Promise<{ users: StoredSettings[]; unserved: number }> {
+  if (!secret) return { users: [], unserved: 0 };
+  const rows = (await db.prepare(`SELECT key, value FROM kv WHERE ${TELEGRAM_ROWS} ORDER BY COALESCE(json_extract(value, '$.createdAt'), updated_at), key`)
+    .all<{ key: string; value: string }>()).results ?? [];
+  const users: StoredSettings[] = [];
+  const chats = new Set<number>();
+  let unserved = 0;
+  for (const r of rows) {
+    try {
+      const s = (await open(secret, JSON.parse(r.value).blob)) as StoredSettings;
+      if (!telegramOn(s)) continue;
+      const chat = s.channels.telegram!.chatId!;
+      if (!chats.has(chat) && chats.size >= TELEGRAM_CHATS_MAX) { unserved++; continue; }
+      chats.add(chat);
+      users.push(s);
+    } catch { unserved++; }
+  }
+  return { users, unserved };
+}
+
+/** The rows linked to Telegram chat `chatId`, on or off, opened (the bot's /stop, a blocked bot, a group left). */
+export async function rowsOfChat(db: D1Database, secret: string, chatId: number): Promise<StoredSettings[]> {
+  const rows = (await db.prepare(`SELECT value FROM kv WHERE ${USER_ROWS} AND json_extract(value, '$.tgc') = ?1`)
+    .bind(chatDigest(secret, chatId)).all<{ value: string }>()).results ?? [];
+  const out: StoredSettings[] = [];
+  for (const r of rows) {
+    try {
+      const s = (await open(secret, JSON.parse(r.value).blob)) as StoredSettings;
+      if (s.channels.telegram?.chatId === chatId) out.push(s);
+    } catch { /* a row that does not open is left as it is */ }
+  }
+  return out;
+}
+
+/**
+ * Writes `s` with its Telegram chat changed by `change`, only over the row as it was read (the same updatedAt), so a
+ * save its owner made since is never overwritten; it keeps the Discord link's first-on time (`onAt`) and last success
+ * (`okAt`). It moves updatedAt on, so a write from a copy read before it (the Discord dispatcher's cached rows, a
+ * Settings save in flight) is refused instead of bringing the old chat back. False when the row changed meanwhile.
+ */
+export async function writeTelegram(db: D1Database, secret: string, s: StoredSettings, change: (t: StoredTelegram) => StoredTelegram): Promise<boolean> {
+  const n = structuredClone(s);
+  n.channels.telegram = change(telegramOf(n));
+  n.updatedAt = Math.max(Date.now(), s.updatedAt + 1);
+  const r = await db.prepare(`UPDATE kv SET value = json_set(?1, '$.onAt', json_extract(value, '$.onAt'), '$.okAt', json_extract(value, '$.okAt')) WHERE key = ?2 AND json_extract(value, '$.updatedAt') = ?3`)
+    .bind(await rowValue(secret, n), `user:${s.address}`, s.updatedAt).run();
+  return Number(r.meta?.changes ?? 0) > 0;
+}
+
+/** Unlinks every row of chat `chatId` (`reason`: the person blocked the bot, the bot left the group, or /stop); how many rows. */
+export async function unlinkChat(db: D1Database, secret: string, chatId: number, reason: 'blocked' | 'removed' | 'stop', at = Date.now()): Promise<number> {
+  let n = 0;
+  for (const s of await rowsOfChat(db, secret, chatId)) {
+    if (await writeTelegram(db, secret, s, () => ({ enabled: false, chatId: null, kind: null, title: null, linkedAt: null, stopped: { reason, at } }))) n++;
+  }
+  return n;
+}
+
+/** Moves every row of a group Telegram turned into a supergroup (its id changes: `migrate_to_chat_id`) to the new id. */
+export async function moveChat(db: D1Database, secret: string, from: number, to: number): Promise<void> {
+  for (const s of await rowsOfChat(db, secret, from)) await writeTelegram(db, secret, s, (t) => ({ ...t, chatId: to }));
 }

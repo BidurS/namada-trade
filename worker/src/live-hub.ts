@@ -15,6 +15,7 @@ import { admitSocket } from './ws-admit';
 import { fetchNamPools } from './sources/sqs';
 import { HubQuote, askQuoteService, storedQuoteReader } from './live-quote';
 import { priceRouteAt, stampPriceRoute } from './price-how';
+import { sendTelegramMove, telegramRun, TG_LIVE_MS, TG_LIVE_SENDS } from './sources/telegram';
 import { alarmBudget, configureAlerts, fanoutBudget, flushAlerts, isNamWhale, noteNotSent, offeredForAlerts, sendDiscordWhaleAlert, sendsAlerts, spentOut, FANOUT_DEADLINE_MS, UsersUnreadError, WEBHOOK_TIMEOUT_MS, type AlertBudget, type PendingAlert } from './sources/discord';
 import { fetchJson, FETCH_TEXT_MAX_BYTES, ReadBudgetError, ResponseTooLargeError, type ReadBudget } from './util';
 
@@ -498,6 +499,7 @@ export class LiveHub extends DurableObject<Env> {
   }
 
   private async alertEach(flows: Flow[], threshold: number, minNam: number, budget: AlertBudget) {
+    const offered: Flow[] = [];
     for (const f of flows) {
       if (isNamWhale(f, threshold)) f.whale = true;
       if (offeredForAlerts(f, minNam)) {
@@ -505,7 +507,15 @@ export class LiveHub extends DurableObject<Env> {
         // quote for its minute is never valued at today's
         const left = await sendDiscordWhaleAlert(this.env.DISCORD_WEBHOOK_URL, f, this.env.DB, threshold, budget);
         if (left) await this.defer(left, budget);
+        offered.push(f);
       }
+    }
+    // The same moves to Telegram, after Discord's, claimed apart and under their own share of the invocation's
+    // messages and time (sources/telegram.ts TgRun), never past the dispatch's deadline; it never throws.
+    if (offered.length) {
+      const run = telegramRun(TG_LIVE_SENDS, TG_LIVE_MS, budget.deadline);
+      for (const f of offered) await sendTelegramMove(this.env, f, threshold, run);
+      if (run.skipped) console.warn(`telegram: ${run.skipped} messages not sent (the invocation's share was spent)`);
     }
   }
 

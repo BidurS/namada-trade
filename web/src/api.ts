@@ -533,6 +533,12 @@ export async function updateSettings(patch: unknown): Promise<UserSettings> {
 export const testDiscord = () => meJson<{ success: boolean }>('/api/me/settings/test', { method: 'POST', body: '{}' });
 /** Posts the daily digest as it would look now, with this wallet's watchlist, to the saved channel (the test route's checks and cooldown). */
 export const previewDigest = () => meJson<{ success: boolean }>('/api/me/settings/test', { method: 'POST', body: JSON.stringify({ preview: 'digest' }) });
+/** A one-time link to the bot that connects the chat (`chat`) or a group (`group`) where Start is pressed; it works 15 minutes. */
+export const telegramLink = () => meJson<{ chat: string; group: string; expiresAt: number; now: number }>('/api/me/telegram/link', { method: 'POST', body: '{}' });
+/** Cancel: the open connect link links nothing any more. */
+export const cancelTelegramLink = () => meJson<{ success: boolean }>('/api/me/telegram/link', { method: 'DELETE' });
+/** Sends the rules and an example card to the connected Telegram chat; `settings` comes back when Telegram said the chat is gone and it was disconnected. */
+export const testTelegram = () => meJson<{ success: boolean; settings?: UserSettings }>('/api/me/telegram/test', { method: 'POST', body: '{}' });
 export const fetchSessions = () => meJson<{ sessions: SessionInfo[] }>('/api/me/sessions').then((r) => r.sessions);
 export const revokeSession = (id: string) => meJson<{ success: boolean }>(`/api/me/sessions/${id}`, { method: 'DELETE' });
 export const createApiKey = () => meJson<{ token: string; expiresAt: number }>('/api/me/apikey', { method: 'POST', body: '{}' });

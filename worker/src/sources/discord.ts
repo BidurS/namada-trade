@@ -1049,7 +1049,7 @@ export async function claimDiscordAlert(
  * those of the batches after it count as claimed (the memory lock let them through), while a key an earlier batch
  * found claimed stays refused (another record of the same crossing has posted to that channel).
  */
-async function claimEach(db: D1Database | undefined, keys: string[], now = Date.now()): Promise<Set<string>> {
+export async function claimEach(db: D1Database | undefined, keys: string[], now = Date.now()): Promise<Set<string>> {
   const fresh = keys.filter((k) => checkMemoryLock([k]));
   if (!db || !fresh.length) return new Set(fresh);
   const won = new Set<string>();
@@ -1073,7 +1073,7 @@ async function claimEach(db: D1Database | undefined, keys: string[], now = Date.
  * a later run can take them. A key whose delete D1 does not answer stays claimed, and its channel goes without that
  * period's digest, as a claim taken and not posted always did; the caller records it.
  */
-async function releaseClaims(db: D1Database, keys: string[]): Promise<number> {
+export async function releaseClaims(db: D1Database, keys: string[]): Promise<number> {
   for (const k of keys) memoryAlertCache.delete(k);
   let freed = 0;
   for (let i = 0; i < keys.length; i += 80) {
@@ -1297,7 +1297,7 @@ export interface Embed {
  */
 interface Part { text: string; sep: string; role?: 'before' | 'abstract' | 'excerpt' | 'authors' | 'means'; shorten?: (max: number) => string }
 /** A card before it is fitted: its embed without a description, and the description's parts. */
-interface Card { embed: Omit<Embed, 'description'>; parts: Part[] }
+export interface Card { embed: Omit<Embed, 'description'>; parts: Part[] }
 /**
  * What fits() trims first, until the card is inside the limits: the "Before this" line shortened, the abstract, the
  * excerpt, the authors, then the "Before this" line and the "what this means" line dropped; past all of them the
@@ -1687,7 +1687,7 @@ export function govCard(p: GovernanceProposal, isNew: boolean, g: GovContext = {
 // ---------------------------------------------------------------- the Settings test message and the connection notice
 
 /** The rules, watchlist, forum and digest switches and quiet hours a channel is connected with, in the words Settings shows. */
-function settingsFields(u: StoredSettings): Field[] {
+export function settingsFields(u: StoredSettings): Field[] {
   const p = u.notifications;
   const rules = alertRules(thresholdsOf(p));
   const isOn = (id: string) => !!p.rules[id as keyof typeof p.rules]?.on;
@@ -1707,7 +1707,7 @@ function settingsFields(u: StoredSettings): Field[] {
 }
 
 /** What every alert card holds, as the test message and the connection notice say it. */
-const CARD_WORDS = 'the amount and what happened in the title, who moved it with the names this site knows, the price with its source, and links to the mover’s page on NamadaTrade and to an explorer';
+export const CARD_WORDS = 'the amount and what happened in the title, who moved it with the names this site knows, the price with its source, and links to the mover’s page on NamadaTrade and to an explorer';
 
 /**
  * The Settings test message: the rules as saved, what the cards will hold, and, as a second embed, the newest move on

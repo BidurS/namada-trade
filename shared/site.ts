@@ -18,6 +18,12 @@ export const SITE = {
   /** "Buy me a coffee" in Zcash (owner, 2026-10-21): a mainnet unified address whose only receivers are Sapling and
    *  Orchard, both shielded, so a payment to it always lands shielded (test/donate-addresses.test.ts decodes it). */
   donateZcash: 'u1xpk2qkpfdu48myyvpm3rfqujkz94xfn0tsuwt3ql6mddutsvh92mt7g5h752xce7meeywx9gqad8m9g97ygz3x5jertlkj8kycv74wvh90v85ecxycakh24ggk077w8pzkg3xtw32nawyu00ns4ckeva7537f9f9navw5uhus5c5kxkd',
+  /**
+   * The site's Telegram bot (worker/src/telegram-bot.ts), which sends each subscriber's alerts to their own chat or
+   * group, and the public channel of the site's own alerts, without its @ (null until the owner makes it; the Worker's
+   * TELEGRAM_CHANNEL names the same channel for sending).
+   */
+  telegram: { bot: 'NamadaTrade_bot', channel: null as string | null },
   disclaimer: 'NamadaTrade reports public on-chain and exchange data. It is not investment advice and is not affiliated with Namada or the Anoma Foundation.',
   /** Footer, first sentence; the view appends how current the flow records are. */
   provenance: 'Every number shows its source and age.',

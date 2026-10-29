@@ -11,8 +11,11 @@ import { fetchNamPools, fetchNamPrice, quoteNamTrade, quoteSlippageCurve, priceS
 import { PRICE_HOW_KEY, livePriceProv, priceHowAt, storedPriceNote, storedPriceSource, type PriceHowLog } from './price-how';
 import { namBalance, namadaEpoch, delegationsAt, QUICK, type ReadOpts } from './sources/namada';
 import { fetchIntel } from './sources/intel';
-import { alertsOn, sendDiscordPreview, sendDiscordTestPost, testPostHeld, INVALID_WINDOW_MS, type TestPostAnswer, type WebhookPost } from './sources/discord';
+import { alertsOn, sendDiscordPreview, sendDiscordTestPost, testExample, testPostHeld, INVALID_WINDOW_MS, type TestPostAnswer, type WebhookPost } from './sources/discord';
 import { previewPosts } from './digest/deliver';
+import { forgetTelegramUsers, sendFollowing, sendsTelegram, tgSend, testMessages, chatGone } from './sources/telegram';
+import { createLinkCode, handleUpdate, revokeLinkCode, secretMatches, WEBHOOK_MAX_BYTES } from './telegram-bot';
+import { fmtAddr } from '../../shared/format';
 import { stmt, TAGS_PER_AUTHOR, TAGS_PER_DAY, kvGet, kvSet, kvGetJson } from './db';
 import { toNam, chainOf } from './util';
 import { OSMOSIS, INTERNAL_LABELS } from './config';
@@ -36,7 +39,7 @@ import { NAM_AMOUNT, NOT_LEGACY_TWIN as NOT_TWIN } from './flows-query';
 import { INTERNAL_ADDRESSES } from '../../shared/alerts';
 import { alertRules, DEFAULT_THRESHOLDS, type AlertThresholds } from '../../shared/alerts';
 import { issueNonce, login, logout, sessionFromRequest, createPairCode, claimPairCode, listSessions, revokeSession, revokeAllSessions, createSession, tokenHash } from './auth';
-import { loadSettings, saveSettings, deleteSettings, defaultPrefs, publicView, applyUpdate, requireKey, refusalOf, noteSettingsRefused, hookOkStmt, linkProven, channelsFull, stopChannelStmt, SETTINGS_FULL, CHANNELS_FULL, type StoredSettings } from './settings';
+import { loadSettings, saveSettings, deleteSettings, defaultPrefs, publicView, applyUpdate, requireKey, refusalOf, noteSettingsRefused, hookOkStmt, linkProven, channelsFull, stopChannelStmt, telegramOf, unlinkChat, SETTINGS_FULL, CHANNELS_FULL, type StoredSettings } from './settings';
 import { clampLimit, prefixRange, decodeHolderCursor, encodeHolderCursor, encodeFlowCursor, parseBeforeParam, type HolderCursor, type BeforeParam, type FlowCursor } from '../../shared/paging';
 import { parse, isWholeAddress, INPUT_MAX, type Parsed } from '../../shared/search-grammar';
 import { EXPLORERS, NAMADA as NAMADA_SHARED } from '../../shared/config';
@@ -59,7 +62,11 @@ app.use('*', cors());
 /** A request body is at most this long (the largest legitimate one, a settings update with a full watchlist, is under 7 KB). */
 export const MAX_BODY_BYTES = 16 * 1024;
 // A longer body is refused before it is read into memory or parsed.
-app.use('/api/*', bodyLimit({ maxSize: MAX_BODY_BYTES, onError: (c) => c.json({ error: 'Request body too large.' }, 413) }));
+const apiBodyLimit = bodyLimit({ maxSize: MAX_BODY_BYTES, onError: (c) => c.json({ error: 'Request body too large.' }, 413) });
+// Telegram's updates have a limit of their own (telegram-bot.ts WEBHOOK_MAX_BYTES): a long message in another script
+// is larger than 16 KB as JSON, and an update refused would be sent again.
+const webhookBodyLimit = bodyLimit({ maxSize: WEBHOOK_MAX_BYTES, onError: (c) => c.json({ ok: true }) });
+app.use('/api/*', (c, next) => (c.req.path === '/api/telegram/webhook' ? webhookBodyLimit(c, next) : apiBodyLimit(c, next)));
 // Every failure answers in the API's own JSON shape (the UI parses each answer as JSON), with nothing from the error itself.
 app.onError((e, c) => {
   console.error(e);
@@ -71,7 +78,8 @@ app.onError((e, c) => {
 // not cover (workers.dev), so ACCESS_AUD must never be relied on as a sign-in gate (docs/security-review.md A8).
 app.use('/api/*', async (c, next) => {
   const aud = c.env.ACCESS_AUD;
-  if (aud) {
+  // Telegram's updates carry no Access token; the webhook checks its own secret.
+  if (aud && c.req.path !== '/api/telegram/webhook') {
     const jwt = c.req.header('Cf-Access-Jwt-Assertion');
     if (!jwt) return c.json({ error: 'Unauthorized: Cloudflare Access JWT required' }, 401);
   }
@@ -1457,6 +1465,12 @@ app.put('/api/me/settings', async (c) => {
       }
     }
   }
+  // The Telegram chat as stored now, unless this save changes it: the bot may have linked or unlinked it while this
+  // request ran (the connection notice above can take seconds), and the save must not put the old one back.
+  if (!body.channels?.telegram) {
+    const fresh = await loadSettings(c.env.DB, r.key, address).catch(() => null);
+    if (fresh) next.channels.telegram = fresh.channels.telegram;
+  }
   // Refused when the save would give a new address a row past USER_ROWS_MAX (503: nothing of the wallet is stored),
   // or turn Discord on while the site already has DELIVERABLE_MAX channels on (409: the row is saved with the channel
   // off, so the link and the other changes are kept, and the owner is told, instead of a channel that would never be
@@ -1473,6 +1487,12 @@ app.put('/api/me/settings', async (c) => {
   // A notice Discord took is a successful post to the saved link, on or off: the row records it, so the link needs no
   // post of its own when the channel is next turned on.
   if (sent.ok) await hookOkStmt(c.env.DB, r.key, address, url!, now).run().catch((e) => console.error('settings: the connection notice was not recorded', e));
+  // A Telegram chat disconnected here is told so, once (it may be shared by another wallet's row, whose alerts go on).
+  const wasChat = telegramOf(cur).chatId;
+  if (wasChat != null && telegramOf(next).chatId == null) {
+    forgetTelegramUsers(c.env.DB);
+    if (sendsTelegram(c.env)) await tgSend(c.env.TELEGRAM_BOT_TOKEN!, wasChat, { html: `NamadaTrade alerts for <code>${fmtAddr(address)}</code> were disconnected from this chat in Settings.` }).catch(() => {});
+  } else if (telegramOf(next).enabled !== telegramOf(cur).enabled) forgetTelegramUsers(c.env.DB);
   const view = await viewOf(c.env.DB, r.key, next);
   return full ? c.json({ error: CHANNELS_FULL, settings: view }, 409) : c.json({ settings: view });
 });
@@ -1566,7 +1586,76 @@ app.get('/api/me/export', async (c) => {
   const r = await me(c); if (r instanceof Response) return r;
   const cur = await settingsOrDefault(c.env.DB, r.key, r.s!.address);
   const sessions = await listSessions(c.env.DB, r.s!.address, r.s!.token);
-  return c.json({ exportedAt: Date.now(), address: r.s!.address, settings: await viewOf(c.env.DB, r.key, cur), sessions, note: 'The Discord webhook URL is stored encrypted and is not included.' });
+  return c.json({ exportedAt: Date.now(), address: r.s!.address, settings: await viewOf(c.env.DB, r.key, cur), sessions, note: 'The Discord webhook URL and the Telegram chat are stored encrypted and are not included.' });
+});
+
+// ---------------------------------------------------------------- Telegram (worker/src/telegram-bot.ts, sources/telegram.ts)
+
+/** What a wallet is told when this Worker sends nothing to Telegram (alerts off, or no bot token). */
+export const TELEGRAM_OFF = 'Telegram alerts are off on this server, so a chat cannot be connected or tested.';
+/** One Telegram test message per wallet every 30 s. */
+export const TELEGRAM_TEST_COOLDOWN_MS = 30_000;
+
+/** A one-time link that opens the bot and connects the chat (or a group) where Start is pressed. */
+app.post('/api/me/telegram/link', async (c) => {
+  const r = await me(c); if (r instanceof Response) return r;
+  if (!sendsTelegram(c.env)) return c.json({ error: TELEGRAM_OFF }, 503);
+  const now = Date.now();
+  const k = await createLinkCode(c.env.DB, r.s!.address, now);
+  // `now`: the server's time, which the page compares the link's time with (a browser's clock may be off)
+  return c.json({ chat: k.chat, group: k.group, expiresAt: k.expiresAt, now });
+});
+
+/** Cancel on the page: the open connect link links nothing any more. */
+app.delete('/api/me/telegram/link', async (c) => {
+  const r = await me(c); if (r instanceof Response) return r;
+  await revokeLinkCode(c.env.DB, r.s!.address);
+  return c.json({ success: true });
+});
+
+/** The test: the rules as saved and an example card, to the linked chat; a chat Telegram says is gone is unlinked. */
+app.post('/api/me/telegram/test', async (c) => {
+  const r = await me(c); if (r instanceof Response) return r;
+  if (!sendsTelegram(c.env)) return c.json({ error: TELEGRAM_OFF }, 503);
+  const address = r.s!.address;
+  const cur = await settingsOrDefault(c.env.DB, r.key, address);
+  const chat = telegramOf(cur).chatId;
+  if (chat == null) return c.json({ error: 'Connect a Telegram chat first.' }, 400);
+  const now = Date.now();
+  const took = await c.env.DB.prepare(
+    `INSERT INTO kv (key, value, updated_at) VALUES (?1, ?2, ?2)
+     ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at WHERE CAST(kv.value AS INTEGER) <= ?3`,
+  ).bind(`tg_test:${address}`, now, now - TELEGRAM_TEST_COOLDOWN_MS).run();
+  if (!Number(took.meta?.changes ?? 0)) return c.json({ error: 'Wait 30 seconds before sending another test message.' }, 429);
+  const example = await testExample(c.env.DB, cur, now).catch(() => 'unread' as const);
+  let ok = true;
+  let to: number | string = chat;
+  for (const m of testMessages(cur, example, now)) {
+    const { a, chat: went } = await sendFollowing(c.env, to, m);
+    to = went;
+    if (a.ok) continue;
+    ok = false;
+    if (chatGone(a)) {
+      await unlinkChat(c.env.DB, r.key, Number(to), a.status === 403 && Number(to) > 0 ? 'blocked' : 'removed', now);
+      forgetTelegramUsers(c.env.DB);
+      const after = await settingsOrDefault(c.env.DB, r.key, address);
+      return c.json({ success: false, error: 'Telegram says this chat no longer takes messages from the bot (it was blocked, or removed from the group), so it was disconnected. Connect again from Settings.', settings: await viewOf(c.env.DB, r.key, after) });
+    }
+    break;
+  }
+  return c.json({ success: ok });
+});
+
+/**
+ * Telegram's updates (setWebhook with secret_token: scripts/telegram-setup.mjs). The secret header is checked first; a
+ * Worker without the secret answers 404. Every update is answered 200, even one the bot could not handle, so Telegram
+ * never sends it again.
+ */
+app.post('/api/telegram/webhook', async (c) => {
+  if (!c.env.TELEGRAM_WEBHOOK_SECRET || !secretMatches(c.req.header('x-telegram-bot-api-secret-token'), c.env.TELEGRAM_WEBHOOK_SECRET)) return c.json({ error: 'not found' }, 404);
+  const update = await jsonObject(c);
+  try { await handleUpdate(c.env, update); } catch (e) { console.error('telegram: an update was not handled', e); }
+  return c.json({ ok: true });
 });
 
 /** Delete everything: settings (incl. webhook), all sessions and API keys. */

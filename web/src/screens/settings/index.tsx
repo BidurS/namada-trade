@@ -15,7 +15,7 @@ import type { AlertRuleId, SessionInfo, UserSettings } from '../../../../shared/
 import { SITE } from '../../../../shared/copy';
 import type { ScreenProps } from '../../app/index';
 import { navigate, THEME_LABELS, useHeaderPrice, useLocation, useNow, useOverlays, useReplay, useSession, useTheme, type ThemePref } from '../../app/index';
-import { createApiKey, deleteMe, exportMe, fetchSessions, previewDigest, revokeSession, settingsOfRefusal, testDiscord } from '../../api';
+import { createApiKey, deleteMe, exportMe, fetchSessions, fetchSettings, previewDigest, revokeSession, settingsOfRefusal, cancelTelegramLink, telegramLink, testDiscord, testTelegram } from '../../api';
 import { DIGEST_HOUR_UTC } from '../../../../shared/alerts';
 import { Button, Derived, Field, Notice, Segmented, Skeleton, SourceLine, Switch, Tag, Term, type Stamp } from '../../ui/index';
 import { Icon } from '../../ui/Icon';
@@ -32,6 +32,7 @@ interface Section { id: string; label: string }
 const SIGNED_IN: Section[] = [
   { id: 'rules', label: 'Alert rules' },
   { id: 'delivery', label: 'Where alerts go' },
+  { id: 'telegram', label: 'Telegram' },
   { id: 'watchlist', label: 'Watchlist' },
   { id: 'quiet', label: 'Quiet hours' },
   { id: 'devices', label: 'Devices' },
@@ -185,7 +186,7 @@ export default function SettingsScreen({ route }: ScreenProps) {
                 </p>
               </Panel>
             ) : (
-              <SignedIn s={user.settings} save={user.save} onSignOutHere={signOutHere} />
+              <SignedIn s={user.settings} save={user.save} replace={user.replace} onSignOutHere={signOutHere} />
             )}
 
             <DataPanel s={user.settings} signedIn={!!session} onDeleted={signOutHere} />
@@ -198,13 +199,13 @@ export default function SettingsScreen({ route }: ScreenProps) {
 }
 
 // ---------------------------------------------------------------- signed in: the first six panels
-function SignedIn({ s, save, onSignOutHere }: { s: UserSettings | null; save: Save; onSignOutHere: () => void }) {
+function SignedIn({ s, save, replace, onSignOutHere }: { s: UserSettings | null; save: Save; replace: (s: UserSettings) => void; onSignOutHere: () => void }) {
   const { rules, stamp } = useAlertRules();
   const sessions = useSessions();
   if (!s) {
     return (
       <>
-        {SIGNED_IN.slice(0, 6).map((sec) => (
+        {SIGNED_IN.slice(0, 7).map((sec) => (
           <Panel key={sec.id} id={sec.id} title={sec.label}>
             <Skeleton rows={sec.id === 'rules' ? 5 : 2} heights={[sec.id === 'rules' ? 160 : 64]} label={sec.label.toLowerCase()} />
           </Panel>
@@ -216,6 +217,7 @@ function SignedIn({ s, save, onSignOutHere }: { s: UserSettings | null; save: Sa
     <>
       <RulesPanel s={s} save={save} rules={rules} rulesStamp={stamp} />
       <DeliveryPanel s={s} save={save} />
+      <TelegramPanel s={s} save={save} replace={replace} />
       <WatchlistPanel s={s} save={save} />
       <QuietPanel s={s} save={save} />
       <DevicesPanel sessions={sessions} onSignOutHere={onSignOutHere} />
@@ -497,7 +499,139 @@ export function DeliveryPanel({ s, save }: { s: UserSettings; save: Save }) {
         }
       />
       <StatusLine status={st.status ?? test.status} />
-      <p className="st-cap">Telegram and email are not available yet. When one is, it appears here.</p>
+      <p className="st-cap">Alerts can also go to Telegram (the next section). Email is not available yet.</p>
+    </Panel>
+  );
+}
+
+// ---------------------------------------------------------------- Telegram
+/** How often the page asks whether the bot has linked the chat, while a connect link is open. */
+const TG_POLL_MS = 3000;
+/** Why a chat was disconnected though its owner did not press Disconnect (worker/src/telegram-bot.ts). */
+const tgStoppedWords = (reason: 'blocked' | 'removed' | 'stop') =>
+  reason === 'blocked' ? 'Telegram said the bot was blocked in that chat'
+    : reason === 'removed' ? 'Telegram said the bot was removed from that group'
+    : 'someone sent /stop in that chat';
+
+/**
+ * "Telegram": connect a private chat or a group through the bot (a one-time link; the bot's Start links it), a test
+ * message, the sending switch and Disconnect. The rules, watchlist and quiet hours are the ones above.
+ */
+export function TelegramPanel({ s, save, replace }: { s: UserSettings; save: Save; replace: (s: UserSettings) => void }) {
+  const t = s.channels.telegram;
+  const st = useStatus();
+  const test = useStatus();
+  const now = useNow();
+  // `since`: the server's time when the link was made (the chat's linkedAt is the server's too); `skew`: how far the
+  // browser's clock is from it, so the minutes left are counted on the server's clock.
+  const [links, setLinks] = useState<{ chat: string; group: string; expiresAt: number; since: number; skew: number } | null>(null);
+  // While a connect link is open, ask every few seconds whether the bot linked a chat since it was made.
+  useEffect(() => {
+    if (!links) return;
+    let alive = true;
+    const id = setInterval(() => {
+      if (Date.now() + links.skew > links.expiresAt) { setLinks(null); return; }
+      void fetchSettings().then((next) => {
+        const nt = next.channels.telegram;
+        if (!alive || !nt?.linked || (nt.linkedAt ?? 0) < links.since) return;
+        replace(next);
+        setLinks(null);
+        st.setStatus({ ok: true, text: nt.kind === 'group' ? `Connected to the group ${nt.title ?? ''}. Alerts now go there.` : 'Connected. Alerts now go to your Telegram chat.' });
+      }).catch(() => {});
+    }, TG_POLL_MS);
+    return () => { alive = false; clearInterval(id); };
+  }, [links]);
+
+  if (!t) {
+    return (
+      <Panel id="telegram" title="Telegram">
+        <p className="st-text">Telegram alerts are not available on this server yet.</p>
+      </Panel>
+    );
+  }
+  const connect = () =>
+    void st.run(async () => {
+      const l = await telegramLink();
+      setLinks({ ...l, since: l.now - 1000, skew: l.now - Date.now() });
+    }, 'Waiting for Telegram. This page updates by itself once the chat is connected.');
+  const where = t.kind === 'group' ? <>the group <strong>{t.title ?? 'without a name'}</strong></> : 'your Telegram chat with the bot';
+
+  return (
+    <Panel id="telegram" title="Telegram" lead={`Alerts can also go to Telegram, to your own chat with @${SITE.telegram.bot} or to a group. They follow the same rules, watchlist and quiet hours as above; each is one message with the move, its figures and their sources, and a button back here. The daily digest goes to Discord only for now.`}>
+      <p className="st-state">
+        <i className="dot" data-status={t.linked && t.enabled ? 'fresh' : 'none'} aria-hidden="true" />
+        <span>
+          {t.linked
+            ? t.enabled ? <>Alerts go to {where}.</> : <>Connected to {where}, but sending is off.</>
+            : 'No Telegram chat is connected.'}
+        </span>
+      </p>
+      {!t.linked && t.stopped ? (
+        <Notice tone="warning" title="Telegram was disconnected">
+          {`Alerts stopped going to Telegram on ${fmtUtcLong(t.stopped.at)} because ${tgStoppedWords(t.stopped.reason)}. Connect again to start them.`}
+        </Notice>
+      ) : null}
+      {links ? (
+        <div className="st-form">
+          <p className="st-text">
+            Open the bot and press <strong>Start</strong>, or pick a group to add it to. The link works once, for{' '}
+            {Math.max(1, Math.round((links.expiresAt - Math.max(now + links.skew, links.since)) / 60_000))} more min.
+          </p>
+          <div className="st-btns">
+            <a className="btn btn--primary" href={links.chat} target="_blank" rel="noopener noreferrer">Open Telegram</a>
+            <a className="btn btn--secondary" href={links.group} target="_blank" rel="noopener noreferrer">Add to a group</a>
+            <Button onClick={() => { setLinks(null); void cancelTelegramLink().catch(() => {}); }}>Cancel</Button>
+          </div>
+        </div>
+      ) : (
+        <div className="st-btns">
+          <Button variant={t.linked ? 'secondary' : 'primary'} busy={st.busy} disabled={st.busy} onClick={connect}>
+            {t.linked ? 'Connect a different chat' : 'Connect Telegram'}
+          </Button>
+          {t.linked ? (
+            <>
+              <Button
+                disabled={test.busy}
+                busy={test.busy}
+                onClick={() =>
+                  void test.run(async () => {
+                    try {
+                      const r = await testTelegram();
+                      if (!r.success) throw new Error('Telegram did not take the test message. Try again in a minute.');
+                    } catch (e) {
+                      // The chat no longer takes the bot's messages: the server disconnected it; show that.
+                      if (e instanceof Error && /disconnected/i.test(e.message)) void fetchSettings().then(replace).catch(() => {});
+                      throw e;
+                    }
+                  }, 'A test message was sent to Telegram.')
+                }
+              >
+                Send a test message
+              </Button>
+              <Button onClick={() => void st.run(() => save({ channels: { telegram: { disconnect: true } } }), 'Disconnected. Alerts no longer go to Telegram.')}>
+                Disconnect
+              </Button>
+            </>
+          ) : null}
+        </div>
+      )}
+      {t.linked ? (
+        <Switch
+          label="Send alerts to Telegram"
+          description="Pausing keeps the chat connected."
+          checked={t.enabled}
+          disabled={st.busy}
+          onChange={(v) => void st.run(() => save({ channels: { telegram: { enabled: v } } }), v ? 'Sending to Telegram is on.' : 'Sending to Telegram is paused.')}
+        />
+      ) : null}
+      <StatusLine status={st.status ?? test.status} />
+      <p className="st-cap">To stop from Telegram, send /stop to the bot (in a group, an admin sends it). Blocking the bot or removing it from the group disconnects it too.</p>
+      {SITE.telegram.channel ? (
+        <p className="st-cap">
+          Without signing in, anyone can follow the site&rsquo;s own alerts of big moves, votes and forum posts in the public channel{' '}
+          <a href={`https://t.me/${SITE.telegram.channel}`} target="_blank" rel="noopener noreferrer">@{SITE.telegram.channel}</a>.
+        </p>
+      ) : null}
     </Panel>
   );
 }
@@ -720,6 +854,7 @@ function DataPanel({ s, signedIn, onDeleted }: { s: UserSettings | null; signedI
       <dl className="st-stored">
         <div><dt>Your address</dt><dd>Public on the chain anyway. It is the key for your settings and sessions.</dd></div>
         <div><dt>Alert choices, watchlist and quiet hours</dt><dd>Encrypted before they are stored, and decrypted only in memory while a new move is matched against them or the daily digest is sent.</dd></div>
+        <div><dt>Telegram chat</dt><dd>Encrypted before it is stored, with your alert choices. It is set only when you press Start in the bot from a link made here, and used only to send your alerts.</dd></div>
         <div><dt>Discord channel link</dt><dd>Encrypted before it is stored. The site never shows it again, only its last characters, and decrypts it only to post an alert.</dd></div>
         <div><dt>Sessions and keys</dt><dd>Random tokens with when they were made and last used. No IP address and no browser details are stored with them.</dd></div>
         <div><dt>Your tags on addresses</dt><dd>Public: every user sees them, signed with your address. The only thing you write that others see.</dd></div>
