@@ -77,7 +77,7 @@ export function Footer() {
             <a href={SITE.repo} target="_blank" rel="noopener noreferrer" title="NamadaTrade on GitHub (MIT licence), opens in a new tab">Source code</a>
           </li>
           <li>
-            <a href={SITE.x} target="_blank" rel="noopener noreferrer me" title="@namadatrade on X: big moves, votes and a daily recap; opens in a new tab">X</a>
+            <a className="foot__x" href={SITE.x} target="_blank" rel="noopener noreferrer me" title="@namadatrade on X: big moves, votes and a daily recap; opens in a new tab">X</a>
           </li>
         </ul>
       </div>

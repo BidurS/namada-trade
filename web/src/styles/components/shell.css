@@ -201,6 +201,9 @@
   .foot__links a, .foot__links button { position: relative; display: inline-flex; align-items: center; justify-content: flex-start; min-height: 44px; padding: 0; white-space: nowrap; background: none; border: 0; color: var(--c-ink); font-size: var(--t-15); line-height: 20px; font-weight: var(--w-medium); text-decoration: underline; text-decoration-thickness: 1.5px; text-underline-offset: 4px; }
   .foot__links a:hover, .foot__links button:hover { text-decoration-color: var(--accent-text); }
   .foot__links a::after, .foot__links button::after { content: ""; position: absolute; inset: 0 -11px; }
+  /* "X" is one letter, about 10 px: with the 11 px each side that is a 32 px target, so this link alone is
+     held to 22 px of text box (22 + 11 + 11 = 44) and starts its letter at the left like the others */
+  .foot__links .foot__x { min-width: 22px; }
   @media (min-width: 1024px) {
     .foot { padding-block: var(--s-8); }
     .foot__grid { grid-template-columns: repeat(12, minmax(0, 1fr)); column-gap: var(--s-5); align-items: start; }
