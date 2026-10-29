@@ -1,6 +1,6 @@
 // The depth API (depth plan section 2; step S4), a Hono sub-app mounted by one line in api.ts:
 // `app.route('/api/depth', depthApp)`. The contract is in shared/depth.ts; the rows it reads are the depth module's
-// (worker/src/depth/, migration 0013). Nothing here reaches outside the database: every figure is a stored read of the
+// (worker/src/depth/, migration 0014). Nothing here reaches outside the database: every figure is a stored read of the
 // minute or the hour, with that read's own time and height beside it in `prov`.
 //
 //   GET /api/depth                                   DepthResponse         the newest minute (kv depth.latest, one row read)
@@ -113,8 +113,8 @@ UNION ALL
 SELECT 'label', l.address, l.label, l.category, l.source, NULL FROM kv k, json_each(k.value, '$.owners') j JOIN labels l ON l.address = json_extract(j.value, '$.address') WHERE k.key = ?1`;
 
 /**
- * The changes read, newest first: over every pool on the ts index (depth_changes_ts, migration 0013), for one pool on
- * the (pool_id, ts) index (depth_changes_pool_ts, migration 0014), each named so the read is one range of that index
+ * The changes read, newest first: over every pool on the ts index (depth_changes_ts, migration 0014), for one pool on
+ * the (pool_id, ts) index (depth_changes_pool_ts, migration 0015), each named so the read is one range of that index
  * and never a sort, and a pool with few rows costs the rows it has, not a walk of every pool's (the primary key is
  * (pool_id, ref, ts), in ref order). Keyset on (ts, pool_id, ref): a page behind a cursor reads the rows of the cursor's
  * own millisecond in a second statement of the same round trip (a minute's rows share one ts) and keeps those after the

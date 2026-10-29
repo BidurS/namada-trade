@@ -1,4 +1,4 @@
-// The depth statements (migration 0013): the minute row, the hourly row and the rollup read behind it, the change row,
+// The depth statements (migration 0014): the minute row, the hourly row and the rollup read behind it, the change row,
 // the kv rows and the retention delete. Every REAL column is
 // a finite number or NULL (cron.ts phase 3's rule, test/osmosis-hourly-finite.test.ts: D1 sends parameters as JSON, so
 // a figure that is not finite would arrive as NULL and fail a NOT NULL column for the whole batch); the three NOT NULL

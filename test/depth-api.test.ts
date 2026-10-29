@@ -753,7 +753,7 @@ describe('query plans: every statement the routes run', () => {
     expect(plan(db, A.HEAT_HOUR_SQL)).toBe('SEARCH depth_hourly USING INDEX sqlite_autoindex_depth_hourly_1 (pool_id=? AND hour>? AND hour<?)');
     // the owners: the kv row by key, the addresses out of its JSON, each label by the table's primary key
     expect(plan(db, A.OWNERS_SQL)).toMatch(/SEARCH kv USING INDEX sqlite_autoindex_kv_1 \(key=\?\)[\s\S]*SEARCH k USING INDEX sqlite_autoindex_kv_1 \(key=\?\) \| SCAN j VIRTUAL TABLE INDEX \d+: \| SEARCH l USING INDEX sqlite_autoindex_labels_1 \(address=\?\)/);
-    // the changes: every pool on the ts index; one pool on the (pool_id, ts) index of migration 0014, so a pool with few rows never walks the others' rows and nothing is sorted
+    // the changes: every pool on the ts index; one pool on the (pool_id, ts) index of migration 0015, so a pool with few rows never walks the others' rows and nothing is sorted
     expect(plan(db, A.changesSql({ pool: false, tie: false }))).toBe('SEARCH depth_changes USING INDEX depth_changes_ts (ts<?)');
     expect(plan(db, A.changesSql({ pool: false, tie: true }))).toBe('SEARCH depth_changes USING INDEX depth_changes_ts (ts=?)');
     expect(plan(db, A.changesSql({ pool: true, tie: false }))).toBe('SEARCH depth_changes USING INDEX depth_changes_pool_ts (pool_id=? AND ts<?)');

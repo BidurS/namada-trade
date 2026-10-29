@@ -32,8 +32,8 @@
   // The depth archive (docs: depth plan 1.6): one gzipped object per live pool per hour, written by the hourly depth
   // job (step S3). Created once by the owner with `wrangler r2 bucket create namada-trade-depth` BEFORE the first deploy
   // of this binding: wrangler refuses to upload a Worker bound to a bucket that does not exist (scripts/deploy-check.sh
-  // checks it beside migration 0013). The code tolerates the binding missing (worker/src/util.ts Env.DEPTH_R2 is
-  // optional) and then writes no archive and says so. Deploy order: the bucket, migration 0013, the Worker.
+  // checks it beside migration 0014). The code tolerates the binding missing (worker/src/util.ts Env.DEPTH_R2 is
+  // optional) and then writes no archive and says so. Deploy order: the bucket, migration 0014, the Worker.
   "r2_buckets": [{ "binding": "DEPTH_R2", "bucket_name": "namada-trade-depth" }],
 
   "durable_objects": {
