@@ -54,13 +54,13 @@ for i in 1 2 3 4 5; do out=$(npx wrangler d1 execute namada-trade-db --remote --
 echo "$out" | python3 -c "
 import sys,json; n=json.load(sys.stdin)[0]['results'][0]['n']; print('0012 index:', n)
 sys.exit(0 if n == 1 else 1)" || { echo "FAIL migration 0012 is not in place: not deploying"; exit 1; }
-# 0013 (the settings rows with Telegram on) and 0014 (the settings rows by Telegram chat): the Telegram dispatcher's read
+# 0013 (the settings rows with Telegram on) and 0016 (the settings rows by Telegram chat): the Telegram dispatcher's read
 # and the bot's /status, /stop and unlinks find those rows on them (settings.ts TELEGRAM_ROWS, rowsOfChat); without them
 # each goes through the whole user: range
 for i in 1 2 3 4 5; do out=$(npx wrangler d1 execute namada-trade-db --remote --json --command "SELECT COUNT(*) n FROM sqlite_master WHERE type='index' AND name IN ('kv_user_telegram','kv_user_telegram_chat')" 2>&1) && ! echo "$out" | grep -q 7403 && break; echo "retrying (Cloudflare 7403)"; sleep 6; done
 echo "$out" | python3 -c "
-import sys,json; n=json.load(sys.stdin)[0]['results'][0]['n']; print('0013 and 0014 indexes:', n)
-sys.exit(0 if n == 2 else 1)" || { echo "FAIL migrations 0013 and 0014 are not in place: not deploying"; exit 1; }
+import sys,json; n=json.load(sys.stdin)[0]['results'][0]['n']; print('0013 and 0016 indexes:', n)
+sys.exit(0 if n == 2 else 1)" || { echo "FAIL migrations 0013 and 0016 are not in place: not deploying"; exit 1; }
 
 # 0014 and 0015 (the depth tables and the two indexes of depth_changes): the depth minute writes depth_minute every tick
 # and reads kv rows beside it; without the three tables and the indexes the minute's batch fails on every tick and its

@@ -498,7 +498,7 @@ describe('external audit fixes', () => {
     expect(codeRows(db)).toEqual([]);
   });
 
-  it('the rows of a chat are read on migration 0014\'s index, paused rows too', async () => {
+  it('the rows of a chat are read on migration 0016\'s index, paused rows too', async () => {
     const db = testD1();
     telegram();
     otherChats(db, 50);

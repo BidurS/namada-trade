@@ -611,7 +611,7 @@ export async function readTelegram(db: D1Database, secret: string | undefined): 
 
 /**
  * The rows linked to Telegram chat `chatId`, on or off, opened: the bot's /status and /stop, a blocked bot or a group
- * left (unlinkChat), a group made a supergroup (moveChat), a test message to a chat that is gone. On migration 0014's
+ * left (unlinkChat), a group made a supergroup (moveChat), a test message to a chat that is gone. On migration 0016's
  * index kv_user_telegram_chat (the chat's digest over the user: range, whose terms this WHERE repeats), so a /status
  * from anyone reads that chat's rows only.
  */
