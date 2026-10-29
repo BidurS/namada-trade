@@ -12,7 +12,7 @@
 import { useMemo, useState } from 'react';
 import type { DepthChangeRow, DepthResponse } from '../../../../shared/depth';
 import {
-  CHANGES_LEAD, CHANGES_NONE, CHANGES_H3, CHANGE_NO_SIZE, CHANGE_VERBS, CHART_VIEW, COST_CAPS, COST_LABEL, CURVE_TRADES_DAYS, DEPTH_QUOTABLE_SIZE, FLOW_INDEX_PLAIN, GAPS_NONE, HEAT_HOW, HEAT_NONE, HEAT_RANGES, HEAT_STEP_WORDS, HEAT_WAITS, HEAT_EDGES, LABEL_WINDOW, LEFT_OUT_LABEL, LEFT_OUT_NONE, OVER_H2, PHONE_FIVE, RESERVES_WHAT, SOURCE_CHANGES, SOURCE_EXEC, SOURCE_HEAT, SOURCE_HOURS, SOURCE_OVER, SOURCE_STORED_TRADES, TABLE_VIEW, BY_WORD,
+  CHANGES_LEAD, CHANGES_NONE, CHANGES_H3, CHANGE_NO_SIZE, CHANGE_VERBS, CHART_VIEW, COST_CAPS, COST_LABEL, CURVE_TRADES_DAYS, DEPTH_QUOTABLE_SIZE, FLOW_INDEX_PLAIN, GAPS_NONE, HEAT_HOW, HEAT_NONE, HEAT_RANGES, HEAT_STEP_WORDS, HEAT_WAITS, HEAT_EDGES, LABEL_WINDOW, LEFT_OUT_LABEL, LEFT_OUT_NONE, OVER_H2, RESERVES_WHAT, SOURCE_CHANGES, SOURCE_EXEC, SOURCE_HEAT, SOURCE_HOURS, SOURCE_OVER, SOURCE_STORED_TRADES, TABLE_VIEW, BY_WORD,
   changeHead, changesAtLeast, changesInWindow, changesListed, columnsWords, gapsWords, execH2, execUnit, leftOutNamada, leftOutPool, minuteCostWords, notReadPool, orderWhat, pairUnnamed, poolWord, positionWhat, rangeWhat, recordedSince, sizeWords,
 } from '../../../../shared/depth';
 import { HEAT_STEP_MS, decodeHeat, slotColumns, type LinePoint } from '../../../../shared/depth-heat';
@@ -126,7 +126,7 @@ export function Over({ d, stamp, symbol, at, trades, changes, headingId }: OverP
         columns.length ? (
           <>
             <HeatChart columns={columns} stepMs={stepMs} from={from} to={to} edges={HEAT_EDGES} symbol={symbol} refPool={hist.data?.refPool ?? d?.ref.pool ?? ''} trades={tw ? marks : null} tradesDays={CURVE_TRADES_DAYS} table={table} />
-            <p className="cap dp-over__cols">{columnsWords(slots.length, HEAT_STEP_WORDS[step], blank)}; {how}.{!wide && apiStep === '1m' ? ` ${PHONE_FIVE}` : ''}</p>
+            <p className="cap dp-over__cols">{columnsWords(slots.length, HEAT_STEP_WORDS[step], blank)}; {how}.</p>
           </>
         ) : (
           <Notice tone="info" title={HEAT_NONE} />

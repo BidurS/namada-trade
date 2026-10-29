@@ -2,7 +2,10 @@
 // bands of ½ / 1 / 2½ % of the reference price read off the minute's cumulative curves (model.ts ladderOf, the
 // research prototype's rule), each row with the price band at significant digits, what rests in it (NAM and USD,
 // both), its distance from the price, a cumulative bar behind it (the bid hue one way, the ask hue the other) and
-// chips naming its pools with their fee. Rows further than LADDER_FOLD_PCT from the price are folded, and so are the
+// chips naming its pools with their fee where the container is 720 px or wider; under that (a phone, the desktop
+// split's left column) the row is one line with a chevron, the chips are left off (the same pools rest in every near
+// level, so they said nothing from row to row while doubling the ladder's height; owner, 2026-10-29) and one sentence
+// above the rows names the pools every near level shares. Rows further than LADDER_FOLD_PCT from the price are folded, and so are the
 // rows between LADDER_MID_PCT and it, each fold a button that says what it hides. The band the picked size's last
 // coin fills in is marked. A row tap opens a Sheet (never a hover box off the page edge): the pools in the band with
 // each one's NAM, USD and tick ranges or orders, and what selling down to (or buying up to) the band comes to.
@@ -10,7 +13,7 @@
 import { Fragment, useMemo, useState } from 'react';
 import type { DepthResponse } from '../../../../shared/depth';
 import {
-  CHART_VIEW, HEAD_CUM, HEAD_FROM, LABEL_LEVEL_WIDTH, LADDER_H2, LADDER_TABLE_LABEL, RESERVES_WORDS, SOURCE_EVERY_LEVEL, SOURCE_LEVELS, HEAD_POOLS, HEAD_RESTING, LADDER_BAND_PCTS, LADDER_FOLD_PCT, LADDER_MID_PCT, TABLE_VIEW, bandHead, bandWidthLabel, bestWords, bookChip, buyUpWords, crossedWords, distFromPrice, foldFar, foldMid, hideFold, ladderLead,
+  CHART_VIEW, HEAD_CUM, HEAD_FROM, LABEL_LEVEL_WIDTH, LADDER_H2, LADDER_TABLE_LABEL, RESERVES_WORDS, SOURCE_EVERY_LEVEL, SOURCE_LEVELS, HEAD_POOLS, HEAD_RESTING, LADDER_BAND_PCTS, LADDER_FOLD_PCT, LADDER_MID_PCT, TABLE_VIEW, bandHead, bandWidthLabel, bestWords, bookChip, buyUpWords, crossedWords, distFromPrice, foldFar, foldMid, hideFold, ladderLead, ladderShared, LADDER_SHARED_NAMED,
   markedBand as markedWords, openBandAria, ordersWords, poolFeeChip, rangesWords, refRowWords, sellDownWords, sheetTitle, spreadWords, takerOnEvery,
 } from '../../../../shared/depth';
 import { Button, Segmented, Sheet, SourceLine, type Stamp } from '../../ui/index';
@@ -70,8 +73,9 @@ export function Ladder({ d, symbol, stamp, reading, headingId }: LadderProps) {
             <span key={p.id} className="dp-chip">{isBook(p.type) ? bookChip(poolName(d, p.id)) : poolFeeChip(poolName(d, p.id), fmtPctRule(p.feePct, p.feePct % 1 ? 2 : 0))}</span>
           ))}
           {b.pools.length > 3 ? <span className="dp-chip dp-chip--n">+{b.pools.length - 3}</span> : null}
-          {mark ? <span className="dp-lrow__mark">{markedWords(fmtNamRule(reading!.nam), symbol)}</span> : null}
         </span>
+        <span className="dp-lrow__chev" aria-hidden="true">›</span>
+        {mark ? <span className="dp-lrow__mark" role="cell">{markedWords(fmtNamRule(reading!.nam), symbol)}</span> : null}
       </div>
     );
   };
@@ -102,6 +106,9 @@ export function Ladder({ d, symbol, stamp, reading, headingId }: LadderProps) {
     </>
   );
   const total = ladder.asks.length + ladder.bids.length + 1;
+  // the pools in every near level, in the first near ask's order (its largest first), for the narrow ladder's one sentence
+  const near = [...nearA, ...nearB];
+  const shared = near.length ? near[0].pools.filter((p) => near.every((b) => b.pools.some((q) => q.id === p.id))).map((p) => poolName(d, p.id)) : [];
 
   return (
     <div className="dp-ladder" data-prov-scope="" data-view={table ? 'table' : 'ladder'}>
@@ -111,6 +118,7 @@ export function Ladder({ d, symbol, stamp, reading, headingId }: LadderProps) {
         <Segmented label={LABEL_LEVEL_WIDTH} variant="range" value={width} onChange={setWidth} options={WIDTHS} />
         <Button size="sm" aria-pressed={table} onClick={() => setTable((v) => !v)}>{table ? CHART_VIEW : TABLE_VIEW}</Button>
       </div>
+      <p className="cap dp-ladder__shared">{ladderShared(shared.slice(0, LADDER_SHARED_NAMED), Math.max(0, shared.length - LADDER_SHARED_NAMED))}</p>
       <div className="dp-rows" role="table" aria-label={LADDER_TABLE_LABEL} aria-rowcount={total}>
         <div className="dp-lrow dp-lrow--head" role="row">
           <span role="columnheader">{bandHead(symbol)}</span>

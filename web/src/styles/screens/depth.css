@@ -61,18 +61,24 @@
 
   /* ---------- the ladder ---------- */
   .dp-rows { display: grid; border-top: 2px solid var(--c-ink); min-width: 0; }
-  .dp-lrow { position: relative; display: grid; grid-template-columns: minmax(0, 1.4fr) minmax(0, 1fr) 56px; grid-template-areas: "band rest dist" "pools pools pools"; column-gap: var(--s-3); row-gap: 4px; align-items: center; min-height: 44px; padding: 8px 8px; margin-inline: -8px; border-bottom: 1px solid var(--c-line); font-size: var(--t-13); line-height: 18px; isolation: isolate; }
-  .dp-lrow--head { min-height: 32px; padding-block: 6px; color: var(--c-ink-2); font-size: var(--t-11); line-height: 16px; font-weight: var(--w-medium); letter-spacing: var(--track-caps); text-transform: uppercase; grid-template-areas: "band rest dist" "pools pools pools"; }
+  /* Under a 720 px container (a phone, the desktop split's left column) a row is one line, band, resting, distance and a
+     chevron, with no pool chips and the marked row's words on a second line; from 720 px the chips have their own column
+     and the sentence naming the shared pools (.dp-ladder__shared) goes. */
+  .dp-lrow { position: relative; display: grid; grid-template-columns: minmax(0, 1.45fr) minmax(0, 1fr) auto 10px; grid-template-areas: "band rest dist chev"; column-gap: var(--s-2); row-gap: 4px; align-items: center; min-height: 44px; padding: 8px 8px; margin-inline: -8px; border-bottom: 1px solid var(--c-line); font-size: var(--t-13); line-height: 18px; isolation: isolate; }
+  .dp-lrow--head { min-height: 32px; padding-block: 6px; color: var(--c-ink-2); font-size: var(--t-11); line-height: 16px; font-weight: var(--w-medium); letter-spacing: var(--track-caps); text-transform: uppercase; grid-template-areas: "band rest dist chev"; }
   .dp-lrow--head > span:nth-child(1) { grid-area: band; }
   .dp-lrow--head > span:nth-child(2) { grid-area: rest; }
   .dp-lrow--head > span:nth-last-child(2) { grid-area: dist; text-align: right; }
-  .dp-lrow--head > span:last-child { grid-area: pools; }
+  .dp-lrow--head > span:last-child { display: none; grid-area: pools; }
+  /* only the marked row has a second line, so an unmarked row is one centred line (a declared empty track would take its gap and half the slack) */
+  .dp-lrow.is-mark { grid-template-areas: "band rest dist chev" "mark mark mark mark"; }
   .dp-lrow__bar { position: absolute; top: 0; bottom: 0; z-index: -1; pointer-events: none; }
   .dp-lrow--ask .dp-lrow__bar { right: 0; background: color-mix(in srgb, var(--sell) 18%, transparent); }
   .dp-lrow--bid .dp-lrow__bar { right: 0; background: color-mix(in srgb, var(--buy) 18%, transparent); }
-  .dp-lrow__band { grid-area: band; font-family: var(--font-code); font-size: var(--t-12); overflow-wrap: anywhere; }
+  .dp-lrow__band { grid-area: band; font-family: var(--font-code); font-size: var(--t-11); }   /* 11 px under 720 px so the band fits one line at 375 px; 12 px from 720 px */
+  .dp-lrow__band [data-num] { white-space: nowrap; }   /* a band that does not fit wraps at its dash, never inside a number */
   .dp-lrow__to { color: var(--c-ink-2); }
-  .dp-lrow__open { position: absolute; inset: 0; z-index: 1; width: 100%; height: 100%; padding: 0; border: 0; background: none; color: inherit; cursor: pointer; }
+  .dp-lrow__open { position: absolute; inset: 0 0 -1px; z-index: 1;   padding: 0;   /* over the row's bottom border too: a one-line row is 44 px with its border, so the target is 44 px */ border: 0; background: none; color: inherit; cursor: pointer; }
   .dp-lrow__open:focus-visible { outline: none; }
   .dp-lrow:has(.dp-lrow__open:focus-visible) { outline: var(--ring-w) solid var(--c-focus); outline-offset: -2px; }
   .dp-lrow:has(.dp-lrow__open:hover) { background: var(--c-hover); }
@@ -81,11 +87,12 @@
   .dp-lrow__rest small { font-size: var(--t-11); line-height: 16px; color: var(--c-ink-2); white-space: nowrap; }
   .dp-lrow__cum { grid-area: cum; text-align: right; color: var(--c-ink-2); white-space: nowrap; }
   .dp-lrow__dist { grid-area: dist; text-align: right; font-family: var(--font-code); font-size: var(--t-12); white-space: nowrap; }
-  .dp-lrow__pools { grid-area: pools; display: flex; flex-wrap: wrap; align-items: center; gap: 4px 6px; min-width: 0; }
-  .dp-lrow__pools:empty { display: none; }
+  .dp-lrow__pools { grid-area: pools; display: none; flex-wrap: wrap; align-items: center; gap: 4px 6px; min-width: 0; }
+  .dp-lrow__chev { grid-area: chev; color: var(--c-ink-2); font-size: var(--t-18); line-height: 18px; text-align: right; }
+  .dp-ladder__shared { margin: 0; }
   .dp-chip { display: inline-flex; align-items: center; height: 22px; padding: 0 8px; border: 1px solid var(--c-line-strong); border-radius: var(--r-pill); font: var(--w-medium) var(--t-11) / 16px var(--font-code); color: var(--c-ink); white-space: nowrap; }
   .dp-chip--n { color: var(--c-ink-2); }
-  .dp-lrow__mark { font-size: var(--t-12); line-height: 16px; font-weight: var(--w-medium); color: var(--c-ink); }
+  .dp-lrow__mark { grid-area: mark; font-size: var(--t-12); line-height: 16px; font-weight: var(--w-medium); color: var(--c-ink); }
   .dp-lrow.is-mark { box-shadow: inset 3px 0 0 var(--c-mark); }
   .dp-lrow--ref { grid-template-columns: minmax(0, 1fr); grid-template-areas: "band"; min-height: 44px; background: var(--c-sel-bg); color: var(--c-sel-ink); margin-inline: -8px; }
   .dp-lrow--ref > span { grid-area: band; font-size: var(--t-13); line-height: 18px; overflow-wrap: anywhere; }
@@ -94,12 +101,25 @@
   .dp-fold:hover { background: var(--c-hover); color: var(--c-ink); }
   .dp-fold:focus-visible { outline: var(--ring-w) solid var(--c-focus); outline-offset: -2px; }
   .dp-fold__t { font-family: var(--font-code); }
-  .dp-ladder[data-view="table"] .dp-lrow { grid-template-columns: minmax(0, 1.4fr) minmax(0, 1fr) minmax(0, 1fr) 56px; grid-template-areas: "band rest cum dist" "pools pools pools pools"; }
-  .dp-ladder[data-view="table"] .dp-lrow--head > span:nth-child(3) { grid-area: cum; text-align: right; }
+  /* the table view under 720 px: five figures do not fit one line at 375 px, so the cumulative figure sits on a second line
+     under the resting one, in the head row too */
+  .dp-ladder[data-view="table"] .dp-lrow, .dp-ladder[data-view="table"] .dp-lrow--head { grid-template-columns: minmax(0, 1.45fr) minmax(0, 1fr) auto 10px; grid-template-areas: "band rest dist chev" "cum cum dist chev"; }
+  .dp-ladder[data-view="table"] .dp-lrow.is-mark { grid-template-areas: "band rest dist chev" "cum cum dist chev" "mark mark mark mark"; }
+  .dp-ladder[data-view="table"] .dp-lrow__cum, .dp-ladder[data-view="table"] .dp-lrow--head > span:nth-child(3) { text-align: left; }
+  .dp-ladder[data-view="table"] .dp-lrow--head > span:nth-child(3) { grid-area: cum; }
   @container dpbook (min-width: 720px) {
-    .dp-lrow, .dp-lrow--head { grid-template-columns: minmax(0, 1.5fr) minmax(0, 1.1fr) 64px minmax(0, 1.6fr); grid-template-areas: "band rest dist pools"; }
-    .dp-ladder[data-view="table"] .dp-lrow { grid-template-columns: minmax(0, 1.5fr) minmax(0, 1.1fr) minmax(0, 1fr) 64px minmax(0, 1.6fr); grid-template-areas: "band rest cum dist pools"; }
+    .dp-lrow, .dp-lrow--head { grid-template-columns: minmax(0, 1.5fr) minmax(0, 1.1fr) auto minmax(0, 1.6fr); grid-template-areas: "band rest dist pools"; }
+    .dp-lrow.is-mark { grid-template-areas: "band rest dist pools" "mark mark mark mark"; }
+    .dp-ladder[data-view="table"] .dp-lrow, .dp-ladder[data-view="table"] .dp-lrow--head { grid-template-columns: minmax(0, 1.5fr) minmax(0, 1.1fr) auto auto minmax(0, 1.6fr); grid-template-areas: "band rest cum dist pools"; }
+    .dp-ladder[data-view="table"] .dp-lrow__cum, .dp-ladder[data-view="table"] .dp-lrow--head > span:nth-child(3) { text-align: right; }
+    .dp-ladder[data-view="table"] .dp-lrow.is-mark { grid-template-areas: "band rest cum dist pools" "mark mark mark mark mark"; }
+    .dp-lrow--ref, .dp-ladder[data-view="table"] .dp-lrow--ref { grid-template-columns: minmax(0, 1fr); grid-template-areas: "band"; }   /* the reference row stays one cell: the row rules above would give it the four columns */
+    .dp-lrow--head > span:last-child { display: block; }
+    .dp-lrow__pools { display: flex; }
+    .dp-lrow__chev, .dp-ladder__shared { display: none; }
     .dp-lrow__rest { flex-direction: column; align-items: flex-start; gap: 0; }
+    .dp-lrow__band { font-size: var(--t-12); }
+    .dp-lrow, .dp-lrow--head { column-gap: var(--s-3); }
   }
   .dp-sheet__pools { display: grid; gap: var(--s-2); list-style: none; padding: 0 var(--s-4) var(--s-3); margin: 0; }
   .dp-sheet__pools li { display: flex; flex-wrap: wrap; align-items: center; gap: var(--s-2) var(--s-3); font-size: var(--t-13); line-height: 20px; }

@@ -540,7 +540,7 @@ export const SITE_SYMBOL = 'NAM';
 export const ROUTER_AGREE_PCT = 0.01;
 export const DEPTH_EYEBROW = 'If I trade now';
 export const BOOK_EYEBROW = 'The book';
-export const LADDER_H2 = 'Asks above the price, bids below, each level naming its pools';
+export const LADDER_H2 = 'Asks above the price, bids below';
 export const CURVE_H2 = 'What rests at each price, both sides, every pool together';
 export const HEAD_CUM = 'Cumulative';
 export const factAskUsdWithin = (pct: string) => `USD asked within ${pct}`;
@@ -591,7 +591,17 @@ export const bookBidUnder = (pct: string, book: string) => `The ${book}’s near
 /** The reading's share of what rests on its side: the bids' USD selling (`total` is a USD figure), the asks' coins buying (`total` is a coin figure with its symbol, since an ask side's USD would be read off the curve's far tail at prices that will never trade). */
 export const marketWords = (side: 'sell' | 'buy', total: string, nam: string, symbol: string, share: string) =>
   side === 'sell' ? `This is a ${total} market on the bid side: selling ${nam} ${symbol} takes ${share} of it.` : `This is a ${total} market on the ask side: buying ${nam} ${symbol} takes ${share} of it.`;
-export const ladderLead = (symbol: string) => `Asks above the price, bids below, each level naming its pools; distance is from the reference pool’s price. A level of a concentrated pool is ${CL_LEVEL_WORDS}; the order book’s levels are real orders. Prices in USD per ${symbol}.`;
+/** The lead under the ladder's heading: the heading says where asks and bids sit, so the lead does not say it again. */
+export const ladderLead = (symbol: string) => `Distance is from the reference pool’s price. A level of a concentrated pool is ${CL_LEVEL_WORDS}; the order book’s levels are real orders. Prices in USD per ${symbol}.`;
+/** Under a narrow ladder (a phone, or the desktop split's left column) the rows carry no pool chips: the same three pools rest in
+ *  every level near the price, so the chips said nothing from row to row while doubling the ladder's height (owner, 2026-10-29).
+ *  One sentence names the pools every near level shares (the largest LADDER_SHARED_NAMED by name, the rest counted), and the row's sheet names all of a level's pools. */
+export const ladderShared = (names: string[], more: number) =>
+  (names.length ? `${more > 0 ? `${names.join(', ')} and ${more} more` : joinAnd(names)} ${names.length === 1 && more <= 0 ? 'rests' : 'rest'} in every level near the price; tap a level for all of its pools.` : LADDER_TAP);
+/** The shared-pools sentence names at most so many, the largest first; the rest are counted. */
+export const LADDER_SHARED_NAMED = 3;
+export const LADDER_TAP = 'Tap a level for its pools.';
+const joinAnd = (xs: string[]) => (xs.length > 1 ? `${xs.slice(0, -1).join(', ')} and ${xs[xs.length - 1]}` : xs[0] ?? '');
 export const bandHead = (symbol: string) => `Price band, USD per ${symbol}`;
 export const HEAD_RESTING = 'Resting';
 export const HEAD_FROM = 'From price';
@@ -732,7 +742,6 @@ export const HEAT_RANGES = [
 export const HEAT_STEP_WORDS: Record<'1m' | '5m' | '1h', string> = { '1m': 'minute', '5m': 'five minutes', '1h': 'hour' };
 /** 'one column per five minutes, 288 of them, 3 blank' */
 export const columnsWords = (n: number, step: string, blank: number) => `one column per ${step}, ${n} of them${blank ? `, ${blank} blank` : ''}`;
-export const PHONE_FIVE = 'On a narrow screen the day is drawn in five-minute columns, the last stored minute of each five.';
 export const HEAT_LEGEND_LABEL = 'USD resting in a band';
 export const legendStep = (lo: string, hi: string) => `${lo} – ${hi}`;
 export const legendTop = (lo: string) => `${lo} and above`;
@@ -866,11 +875,11 @@ export const DEPTH_FIXED_WORDS: readonly string[] = [
   DEPTH_NOT_STORED, OWNERS_NOT_STORED, DEPTH_STALE_WORDS, GAP_MINUTE, GAP_HOUR, ...Object.values(HEAT_HOW), QUOTE_HOW_STATES, QUOTE_HOW_CURVE,
   DEPTH_EYEBROW, BOOK_EYEBROW, LADDER_H2, CURVE_H2, HEAD_CUM, NOT_STORED_PER_MINUTE, BOOK_WAITS, ANSWER_WAITS, ASKING_SIZE, SOURCE_LEVELS, SOURCE_CURVE, THROUGH, FACT_AVG, ROUTER_AGREE, ROUTER_IDLE, HEAD_RESTING, HEAD_FROM, HEAD_POOLS, AXIS_USD, READOUT_AT, READOUT_NONE, TABLE_VIEW, CHART_VIEW,
   REWIND_NO_SPLIT, REWIND_NO_BOOK, REWIND_NO_MINUTE, REWIND_FIELD_OFF, DEPTH_UNSERVED, DEPTH_FAILED, QUOTE_FAILED, DEPTH_ASKING, DEPTH_LINK, DEPTH_SOURCE_LABEL, DEPTH_PLAIN_SOURCE,
-  RESERVES_WORDS, LADDER_TABLE_LABEL, SOURCE_EVERY_LEVEL, LABEL_LEVEL_WIDTH, CHART_GROUP_LABEL, NO_POINT_IN_WINDOW, LABEL_PRICE_WINDOW, SOURCE_THE_CURVE, SOURCE_STORED_TRADES, FLOW_INDEX_PLAIN, TRADES_FAILED, TRADES_NO_PAGE,
+  RESERVES_WORDS, LADDER_TABLE_LABEL, SOURCE_EVERY_LEVEL, LABEL_LEVEL_WIDTH, LADDER_TAP, CHART_GROUP_LABEL, NO_POINT_IN_WINDOW, LABEL_PRICE_WINDOW, SOURCE_THE_CURVE, SOURCE_STORED_TRADES, FLOW_INDEX_PLAIN, TRADES_FAILED, TRADES_NO_PAGE,
   HERO_GET, HERO_PAY, MINUTE_NOT_ANSWERED, SPLIT_LABEL, NOT_AMOUNT, MINUTE_FIGURES, STORED_MINUTE_FIGURES, FETCHING_MINUTE, TAB_LEVELS, TAB_CURVE, LABEL_SIDE, LABEL_SIZE, LABEL_AMOUNT, LABEL_BOOK_VIEW, TRY_AGAIN,
   LINE_SELL_LABEL, LINE_BID_LABEL, LINE_DOT_LABEL, LINE_SOURCE, FACT_REF_UNNAMED,
   // step S6: the time view, the change rows, the cost line and the owners
-  OVER_EYEBROW, OVER_H2, LABEL_WINDOW, ...Object.values(HEAT_STEP_WORDS), PHONE_FIVE, HEAT_LEGEND_LABEL, KEY_GAP, HEAT_READOUT_NONE, HEAT_GROUP_LABEL, HEAT_TABLE_LABEL, HEAT_TABLE_ALL, GAPS_NONE, HEAD_TIME, HEAD_REF_PRICE, HEAD_BID_MOST, HEAD_ASK_MOST, HEAD_BID_ALL, HEAD_ASK_ALL, HEAT_NO_COLUMN, HEAT_WAITS, HEAT_NONE,
+  OVER_EYEBROW, OVER_H2, LABEL_WINDOW, ...Object.values(HEAT_STEP_WORDS), HEAT_LEGEND_LABEL, KEY_GAP, HEAT_READOUT_NONE, HEAT_GROUP_LABEL, HEAT_TABLE_LABEL, HEAT_TABLE_ALL, GAPS_NONE, HEAD_TIME, HEAD_REF_PRICE, HEAD_BID_MOST, HEAD_ASK_MOST, HEAD_BID_ALL, HEAD_ASK_ALL, HEAT_NO_COLUMN, HEAT_WAITS, HEAT_NONE,
   EXEC_NONE, KEY_BAND_HOUR, KEY_EXEC, EXEC_LOW, EXEC_HIGH, EXEC_LAST, EXEC_READING, EXEC_READOUT_NONE, EXEC_GROUP_LABEL, SOURCE_OVER, SOURCE_HEAT, SOURCE_EXEC, SOURCE_HOURS, SOURCE_CHANGES,
   CHANGES_H3, CHANGES_NONE, CHANGES_LEAD, ...Object.values(CHANGE_VERBS), RESERVES_WHAT, CHANGE_NO_SIZE, BY_WORD, COST_LABEL, COST_CAPS, LEFT_OUT_LABEL, LEFT_OUT_NONE,
   WHO_EYEBROW, WHO_H2, HEAD_OWNER, HEAD_USD_RESTING, HEAD_SHARE, HEAD_HOLDS, HEAD_SINCE, OWNERS_NONE_LABELLED, OWNERS_SOURCE_LABEL, SOURCE_OWNERS, OWNERS_REWIND, OWNERS_WAITS, ITEMS_LABEL, INVARIANTS_LABEL, INV_OK, INV_NOT, INV_NONE, ORDERS_CARRIED, FULL_RANGE, ORDER_BID_UNIT,
@@ -888,7 +897,7 @@ export const DEPTH_PAGE_WORDS: readonly string[] = [
   vsRefWords('−2.7%', '3005'), heightClock('73,428,670', '02:47 UTC'), afterFees('pool 3005'), withinAllWords('$506.80', '$121.53', '50%'), toTakeAll('$39.76'),
   routerSays('1.014160', '1,000', 'NAM', 'pool 3005', '02:47 UTC'), routerOurs('1.014160'), routerDiffer('0.14%'),
   cliffWords('1,000', 'NAM', '100,000', '−16.6%', '1,000,000', '−67.7%'), cliffBuyWords('1,000', 'NAM', '100,000', '+16.6%', '1,000,000', '+67.7%'), bookBidUnder('65.7%', 'order book 3008'), marketWords('sell', '$506.80', '10,000', 'NAM', '2%'), marketWords('buy', '1,726,372 NAM', '10,000', 'NAM', '0.58%'),
-  ladderLead('NAM'), bandHead('NAM'), bandWidthLabel('1%'), refRowWords('3005', '0.0010199'), bestWords('bid', '100', 'NAM', '0.0010168', 'pool 3005'), bestWords('ask', '100', 'NAM', '0.0009886', 'pool 3009'), spreadWords('−2.77%'), crossedWords('100', 'NAM', '2.77%', 'pool 3009', 'pool 3005'),
+  ladderLead('NAM'), ladderShared(['pool 3005', 'pool 3368', 'pool 3402'], 6), ladderShared(['pool 3005', 'pool 3368', 'pool 3402'], 0), ladderShared(['pool 3005'], 0), bandHead('NAM'), bandWidthLabel('1%'), refRowWords('3005', '0.0010199'), bestWords('bid', '100', 'NAM', '0.0010168', 'pool 3005'), bestWords('ask', '100', 'NAM', '0.0009886', 'pool 3009'), spreadWords('−2.77%'), crossedWords('100', 'NAM', '2.77%', 'pool 3009', 'pool 3005'),
   foldFar('ask', 1171, '50%', '198.57', '1,322,018 NAM'), foldFar('bid', 12, '50%', '0.0000001', '$12.40'), foldMid('ask', 31, '10%', '50%', '371,945 NAM'), foldMid('bid', 4, '10%', '50%', '$95.10'), hideFold('ask', 'above +50%'),
   poolFeeChip('pool 3005', '0.2%'), bookChip('order book 3008'), rangesWords(1), rangesWords(3), ordersWords(1), ordersWords(2), takerOnEvery('0.1%'), sellDownWords('0.0010098', '$1.41'), buyUpWords('0.0010301', '$2.12'), markedBand('10,000', 'NAM'),
   curveLead('NAM'), axisPrice('NAM', true), axisPrice('NAM', false), keyBids('NAM'), keyAsks('NAM'), keyTrades(7), keyRef('3005'), sizeMark('10k', '$9.92'), tradesInView(387, 389, 7), tradesNone(7), tradesCut(300, 7),

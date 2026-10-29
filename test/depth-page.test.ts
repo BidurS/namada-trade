@@ -313,6 +313,11 @@ describe.skipIf(!ready)('the depth page, built, on the fixtures (375, 320 and 12
           const cu = await page.locator('.dp-book__b').boundingBox();
           expect(la && cu && la.x + la.width <= cu.x + 1).toBe(true);
           await hidden(page.locator('.dp-tabs'));
+          // the ladder column is under 720 px at 1280 (five twelfths of the page), so its rows are the narrow one-line rows there too
+          const col = (await page.locator('.dp-book__a').boundingBox())!;
+          expect(col.width).toBeLessThan(720);
+          await expect.poll(() => page.locator('.dp-rows .dp-lrow .dp-chip').evaluateAll((els) => els.filter((e) => (e as HTMLElement).offsetParent != null).length), { timeout: T }).toBe(0);
+          await seen(page.locator('.dp-ladder__shared'));
           await seen(page.locator('.dp-chart__plot svg'));
           // the size marks' labels and the reference line's label sit clear of one another
           // (the marks priced inside ½x to 2x: six of the eight on the fixtures, the million-coin fills fall outside; plus the reference label)
@@ -370,6 +375,16 @@ describe.skipIf(!ready)('the depth page, built, on the fixtures (375, 320 and 12
     try {
       await settled(page);
       await count(page.locator('.dp-rows .dp-lrow--ref')).toBe(1);
+      // the phone ladder: no pool chips on the rows, a chevron on each, the shared pools named once above the rows, and every unmarked near row one line
+      await expect.poll(() => page.locator('.dp-rows .dp-lrow .dp-chip').evaluateAll((els) => els.filter((e) => (e as HTMLElement).offsetParent != null).length), { timeout: T }).toBe(0);
+      await seen(page.locator('.dp-lrow--ask .dp-lrow__chev'));
+      await text(page.locator('.dp-ladder__shared')).toMatch(/^pool 3005(, pool \d+){0,2}( and (pool \d+|\d+ more))? rest in every level near the price; tap a level for all of its pools\.$/);
+      const nearHeights = await page.locator('.dp-rows .dp-lrow--ask:not(.is-mark), .dp-rows .dp-lrow--bid:not(.is-mark)').evaluateAll((els) => els.map((e) => Math.round(e.getBoundingClientRect().height)));
+      expect(nearHeights.length).toBeGreaterThan(5);
+      expect(Math.max(...nearHeights), `row heights ${nearHeights.join(', ')}`).toBeLessThanOrEqual(48);
+      // a one-line row's text is centred in it: the band's top is half the slack, within a pixel
+      const centred = await page.locator('.dp-rows .dp-lrow--ask:not(.is-mark)').first().evaluate((e) => { const r = e.getBoundingClientRect(); const b = e.querySelector('.dp-lrow__band')!.getBoundingClientRect(); return { row: r.height, top: b.top - r.top, band: b.height }; });
+      expect(Math.abs(centred.top - (centred.row - centred.band) / 2), `band at ${centred.top} in a ${centred.row} row`).toBeLessThanOrEqual(1);
       await text(page.locator('.dp-lrow--ref')).toContain('Pool 3005 price 0.0010199');
       await text(page.locator('.dp-lrow--ref')).toContain('best bid for 100 NAM');
       await count(page.locator('.dp-lrow.is-mark')).toBe(1);
@@ -393,6 +408,9 @@ describe.skipIf(!ready)('the depth page, built, on the fixtures (375, 320 and 12
       await page.getByRole('button', { name: 'Table view' }).first().click();
       await count(page.locator('.dp-fold')).toBe(0);
       await seen(page.locator('.dp-ladder[data-view="table"]'));
+      // no figure runs out of its cell in the table view, where every band is unfolded and the far rows' distances are long
+      const spilt = await page.locator('.dp-rows .dp-lrow__cum, .dp-rows .dp-lrow__dist, .dp-rows .dp-lrow__rest').evaluateAll((els) => els.filter((e) => e.scrollWidth > e.clientWidth + 1).map((e) => `${e.className}: ${e.textContent}`));
+      expect(spilt).toEqual([]);
       // the curve
       await page.getByRole('radio', { name: 'Curve' }).click();
       await seen(page.locator('.dp-chart__plot svg'));
@@ -452,6 +470,24 @@ describe.skipIf(!ready)('the depth page, built, on the fixtures (375, 320 and 12
     }, 90_000);
   }
 
+  it('820 wide (a tablet; the desktop split keeps its ladder column under 720 px at any width): the ladder is 720 px or wider, so the rows carry their pool chips in their own column and the shared-pools sentence goes', async () => {
+    const { page, ctx } = await open(820, 1100);
+    try {
+      await settled(page);
+      await seen(page.locator('.dp-tabs'));
+      const col = (await page.locator('.dp-book__a').boundingBox())!;
+      expect(col.width).toBeGreaterThanOrEqual(720);
+      await expect.poll(() => page.locator('.dp-rows .dp-lrow .dp-chip').evaluateAll((els) => els.filter((e) => (e as HTMLElement).offsetParent != null).length), { timeout: T }).toBeGreaterThan(20);
+      await hidden(page.locator('.dp-ladder__shared'));
+      await hidden(page.locator('.dp-lrow__chev'));
+      await count(page.locator('.dp-rows .dp-lrow--ref')).toBe(1);
+      const ref = (await page.locator('.dp-lrow--ref').boundingBox())!;
+      expect(ref.width).toBeGreaterThan(col.width - 40);
+    } finally {
+      await ctx.close();
+    }
+  }, 60_000);
+
   it('rewound: the stored minute’s figures with the reference pool named from the history answer (never an empty pool), no split, the field off, no ladder or curve', async () => {
     const { page, ctx, errors } = await open(375, 812, `/depth?at=${REWIND_AT}`);
     try {
@@ -487,9 +523,9 @@ describe.skipIf(!ready)('the depth page, built, on the fixtures (375, 320 and 12
         await settled(page);
         const over = page.locator('.dp-over');
         await seen(over.locator('.dph-plot canvas'));
-        // the phone opens on the day drawn in five-minute columns; the desktop on the week
-        await text(over.locator('.dp-over__cols')).toContain(w < 1024 ? 'one column per five minutes' : 'one column per five minutes');
-        if (w < 1024) await text(over.locator('.dp-over__cols')).toContain('five-minute columns');
+        // the phone opens on the day drawn in five-minute columns; the desktop on the week; the five-minute rule is said once (the count and the how), never a third time
+        await text(over.locator('.dp-over__cols')).toContain('one column per five minutes');
+        await text(over.locator('.dp-over__cols')).not.toContain('narrow screen');
         await text(over.locator('.dp-over__cols')).toMatch(/\d+ blank/);
         // the hairline is more than one path: broken at the outage (and at the failed minute)
         await count(over.locator('.dph-plot svg .dph-ref')).toBeGreaterThanOrEqual(2);
