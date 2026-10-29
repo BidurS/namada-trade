@@ -7,6 +7,7 @@ import { QUOTE_KEYS } from '../../shared/settle';
 import { namBalance, namTotalSupply, namTotalStake, namadaEpoch, namadaStatusAll, delegationsAt, answeringRpcs, listingHeads, QUICK, RpcBreaker, allNamBalances, allBonds, ListingTooLargeError, LISTING_MAX_VALUE_BYTES, type BalanceListing, type BondListing, type ReadOpts, type Rpc } from './sources/namada';
 import { fetchIntelChecked } from './sources/intel';
 import { sendTelegramForum, sendTelegramGov, telegramRun, TG_CRON_MS, TG_CRON_SENDS } from './sources/telegram';
+import { postForumOnX, postGovOnX, postRecapOnX } from './sources/x';
 import { sendDiscordForumAlert, sendDiscordGovAlert, sendsAlerts, alertBudget, flushAlerts, sweepNoticeChannels, RUN_ALERT_POSTS, RUN_ALERT_WINDOW_MS, type GovContext } from './sources/discord';
 import { NAM, NAMADA, OSMOSIS } from './config';
 import { fetchJson, toNam, isRealAddress, FETCH_TEXT_MAX_BYTES } from './util';
@@ -157,6 +158,7 @@ async function syncIntelAndAlerts(env: Env, health: SourceHealth[]) {
           // Telegram after Discord, under its own claims and share of the run (sources/telegram.ts): a proposal whose
           // Discord subscribers wait is offered again next run, and the claims keep Telegram from hearing it twice.
           await sendTelegramGov(env, prop, !prevStatus, await govContext(), tgRun);
+          await postGovOnX(env, prop, !prevStatus, await govContext());
           if (discord === 'waiting') continue;
           changed = true;
           prevState[String(prop.id)] = prop.status;
@@ -198,6 +200,7 @@ async function syncIntelAndAlerts(env: Env, health: SourceHealth[]) {
             const category = intel.topics.find((t) => t.id === post.topicId)?.categoryName ?? null;
             const discord = await sendDiscordForumAlert(env.DISCORD_WEBHOOK_URL, post, env.DB, budget, category);
             await sendTelegramForum(env, post, category, tgRun);
+            await postForumOnX(env, post, category);
             if (discord === 'waiting') waited = true;
             else if (!waited) done = post.id;
           }
@@ -216,6 +219,14 @@ async function syncIntelAndAlerts(env: Env, health: SourceHealth[]) {
       console.warn(`alerts: forum or governance ${why}`);
       health.push({ ...forumRow, at: Date.now(), note: `${forumRow.note}; forum or governance ${why}`.slice(0, 160) });
     }
+    // The day's recap on X, once, from 13:00 UTC (sources/x.ts), read from the overview the site answers (imported
+    // here, not at the top: api.ts imports this module).
+    await postRecapOnX(env, async () => {
+      const { app } = await import('./api');
+      const r = await app.request('/api/overview', {}, env);
+      if (!r.ok) throw new Error(`overview ${r.status}`);
+      return r.json();
+    });
   } catch (err) {
     console.error('syncIntelAndAlerts error:', err);
   } finally {

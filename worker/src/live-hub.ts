@@ -16,6 +16,7 @@ import { fetchNamPools } from './sources/sqs';
 import { HubQuote, askQuoteService, storedQuoteReader } from './live-quote';
 import { priceRouteAt, stampPriceRoute } from './price-how';
 import { sendTelegramMove, telegramRun, TG_LIVE_MS, TG_LIVE_SENDS } from './sources/telegram';
+import { postMoveOnX } from './sources/x';
 import { alarmBudget, configureAlerts, fanoutBudget, flushAlerts, isNamWhale, noteNotSent, offeredForAlerts, sendDiscordWhaleAlert, sendsAlerts, spentOut, FANOUT_DEADLINE_MS, UsersUnreadError, WEBHOOK_TIMEOUT_MS, type AlertBudget, type PendingAlert } from './sources/discord';
 import { fetchJson, FETCH_TEXT_MAX_BYTES, ReadBudgetError, ResponseTooLargeError, type ReadBudget } from './util';
 
@@ -516,6 +517,8 @@ export class LiveHub extends DurableObject<Env> {
       const run = telegramRun(TG_LIVE_SENDS, TG_LIVE_MS, budget.deadline);
       for (const f of offered) await sendTelegramMove(this.env, f, threshold, run);
       if (run.skipped) console.warn(`telegram: ${run.skipped} messages not sent (the invocation's share was spent)`);
+      // and on X, the moves the site's own channel hears of (sources/x.ts: capped a day, fresh moves only)
+      for (const f of offered) await postMoveOnX(this.env, f, threshold);
     }
   }
 

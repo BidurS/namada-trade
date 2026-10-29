@@ -136,6 +136,7 @@ export const MESSAGE_SOURCES: { file: string; names: Set<string> | null }[] = [
   // the Telegram bot's own messages (the alerts themselves are the cards above)
   { file: 'worker/src/sources/telegram.ts', names: new Set(['connectedMessage', 'testMessages', 'cardMessage', 'settingsButton']) },
   { file: 'worker/src/telegram-bot.ts', names: new Set(['WORDS', 'settingsButton', 'status']) },
+  { file: 'worker/src/sources/x.ts', names: new Set(['recapText', 'cardText']) },
 ];
 
 /** Is this literal inside one of `names` (a function declaration or a top-level constant)? */

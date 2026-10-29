@@ -18,6 +18,11 @@ export interface Env {
   TELEGRAM_WEBHOOK_SECRET?: string;
   /** The public channel of the site's own alerts ("@name" or its id), the bot an admin there; unset: none */
   TELEGRAM_CHANNEL?: string;
+  /** The owner's X app (OAuth 1.0a, Read and Write), secrets set by scripts/x-connect.sh: without all four nothing is posted on X (sources/x.ts) */
+  X_API_KEY?: string;
+  X_API_SECRET?: string;
+  X_ACCESS_TOKEN?: string;
+  X_ACCESS_SECRET?: string;
   WHALE_OSMOSIS_NAM?: string;
   WHALE_NAMADA_NAM?: string;
   /** Workers rate limiting (wrangler.jsonc `ratelimits`) for the requests that read many rows or write for anyone (worker/src/http.ts) */
