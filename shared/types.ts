@@ -208,10 +208,16 @@ export interface Holder {
  */
 export interface HoldersResponse {
   /**
-   * Holders the chain, category, size and search select. Without a search it comes from the counts the cron keeps
-   * (kv holders.counts, HolderCountsKv; stamped by `countsAt`); with a search it is counted in the request.
+   * Holders the chain, category, size and search select. Without a search or a size it comes from the counts the
+   * cron keeps (kv holders.counts, HolderCountsKv; stamped by `countsAt`); with one it is counted in the request, up
+   * to `totalOver`: null when more match than that (never 0, never the bound read as the count).
    */
-  total: number;
+  total: number | null;
+  /**
+   * When more holders match a size range than the request counts (worker/src/holders.ts WALK_COUNT_MAX, 10,000):
+   * `total` is null and this is the bound ("more than 10,000"). Absent otherwise.
+   */
+  totalOver?: number;
   /** the page these rows are (with `after`, the page the cursor's rank falls on) */
   page: number;
   limit: number;

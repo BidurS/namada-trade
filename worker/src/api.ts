@@ -25,7 +25,7 @@ import {
 } from './flows-query';
 import {
   LIQUID_STALE_MS, BALANCE_LISTING_SRC, BOND_LISTING_SRC, holderStatus, liquidChanges, chunks, listingTimes, confirmedAt,
-  holderFigureValues, readHolderCounts, readChainMarks, placeOn, walkCountSql, walkCategorySql, holderPageSql, holderCandidatesSql, holderOrder, holderAfter,
+  holderFigureValues, readHolderCounts, readChainMarks, placeOn, walkCountSql, walkCategorySql, WALK_COUNT_MAX, holderPageSql, holderCandidatesSql, holderOrder, holderAfter,
   labelWords, wordKeys, wordCond, labelMatches, labelMatch, SORT_COL, CANDIDATES_MAX, sqlWordKeys, wordCondCost, D1_MAX_PARAMS, HOLDER_CHAINS_OF,
   type ListingTimes, type HolderBaseRow, type HolderChain, type HolderSort, type HolderWalk, type WordKeys,
 } from './holders';
@@ -396,12 +396,19 @@ const ADDRESS_RUN = /^[02-9ac-hj-np-z]{8,}$/;
 /** A stored count by category: own keys only (`?category=constructor` must not read Object's own members). */
 const countOf = (byCategory: Record<string, number> | undefined, category: string): number | undefined =>
   byCategory && Object.hasOwn(byCategory, category) ? byCategory[category] : undefined;
-/** `?min=` / `?max=`: NAM on the sort's figure. A value that is not an amount is refused, never dropped (a size asked for is a filter the reader sees). */
+/**
+ * `?min=` / `?max=`: NAM on the sort's figure. A value that is not an amount is refused, never dropped (a size asked
+ * for is a filter the reader sees). `min=0` is no size: every figure is 0 or more and every listed holder holds some
+ * NAM, so it selects the whole list, which its stored counts answer, never a walk (own audit 2026-10-29, M2).
+ */
 function holderSize(raw: string | undefined, name: string): number | null | { error: string } {
   if (raw == null || raw.trim() === '') return null;
   const n = Number(raw);
-  return Number.isFinite(n) && n >= 0 ? n : { error: `${name} must be an amount of NAM (a number of 0 or more).` };
+  if (!(Number.isFinite(n) && n >= 0)) return { error: `${name} must be an amount of NAM (a number of 0 or more).` };
+  return name === 'min' && n === 0 ? null : n;
 }
+/** A cursor deeper than WALK_COUNT_MAX on a walk: its place would be a count past the bound, so it is not served. */
+const DEEP_CURSOR_WORDS = `This cursor is more than ${WALK_COUNT_MAX.toLocaleString('en-US')} holders down the list, further than this site's server counts to place it; ask for that part of the list by page number (page=) instead.`;
 /**
  * The stake a holder row shows: the chain's figure; the flow estimate only while no bond listing has gone through
  * (the same rule as the stored stake, holders.ts stakeNum). The estimate itself is always carried beside it.
@@ -436,7 +443,9 @@ interface HolderSelection {
   firstRank: number;
   /** the page these rows fall on */
   page: number;
-  total: number;
+  /** null: more than `over` match (a walk's count stops there, WALK_COUNT_MAX) */
+  total: number | null;
+  over?: number;
   next: string | null;
   countsAt: number | null;
   categories: HoldersResponse['categories'];
@@ -452,7 +461,7 @@ const categoriesOf = (total: number, tally: Record<string, number>): NonNullable
  * grammar (shared/search-grammar.ts, list 'holders'): an address start or end and words of a name select rows; a chain,
  * a group ("foundation") and sizes (">100k") narrow, joined with the parameters (a conflict selects nothing).
  */
-async function selectHolders(db: D1Database, ask: HolderAsk, pg: { page: number; limit: number; after: HolderCursor | null }, now: number): Promise<HolderSelection | { error: string }> {
+async function selectHolders(db: D1Database, ask: HolderAsk, pg: { page: number; limit: number; after: HolderCursor | null }, now: number, tally = true): Promise<HolderSelection | { error: string }> {
   const none = (): HolderSelection => ({ rows: [], firstRank: 1, page: pg.page, total: 0, next: null, countsAt: null, categories: { total: 0, counts: [] } });
   const p = ask.search ? parse(ask.search, { list: 'holders', now }) : null;
   let chain = ask.chain;
@@ -466,7 +475,9 @@ async function selectHolders(db: D1Database, ask: HolderAsk, pg: { page: number;
     const ac = address.startsWith('osmo1') ? 'osmosis' : 'namada';
     if (chain === 'all') chain = ac; else if (chain !== ac) empty = true;
   }
-  const min = maxOf(ask.min, p?.min ?? null);
+  // a size of 0 or less from the search text (">0") is no size, as `min=0` (holderSize)
+  const minAsked = maxOf(ask.min, p?.min ?? null);
+  const min = minAsked != null && minAsked <= 0 ? null : minAsked;
   const max = minOf(ask.max, p?.max ?? null);
   if (min != null && max != null && min > max) empty = true;
   if (empty) return none();
@@ -525,7 +536,7 @@ async function selectHolders(db: D1Database, ask: HolderAsk, pg: { page: number;
     const last = rows[rows.length - 1];
     let categories: HoldersResponse['categories'] = categoriesOf(sizedRows.length, tally);
     // A category on its own: the chips are the chain's (the stored counts, or a pass over the size range).
-    if (smallCategory) categories = sized ? await walkCategories(db, { chain, by: ask.by, min, max }, counts) : storedCategories(counts, chain);
+    if (smallCategory) categories = sized ? tally ? await walkCategories(db, { chain, by: ask.by, min, max }, counts) : null : storedCategories(counts, chain);
     return {
       rows, firstRank: start + 1, page: Math.floor(start / pg.limit) + 1, total: all.length,
       next: last && start + rows.length < all.length ? encodeHolderCursor({ value: Number(last[col as keyof HolderBaseRow]) || 0, address: last.address, rank: start + rows.length }) : null,
@@ -537,22 +548,30 @@ async function selectHolders(db: D1Database, ask: HolderAsk, pg: { page: number;
   const w: HolderWalk = { chain, by: ask.by, min, max, category };
   let rankBase = (pg.page - 1) * pg.limit;
   if (pg.after) {
-    // The cursor's position is read again on the index (rows at or ahead of it), so a rank is never taken from the URL.
-    rankBase = (await db.prepare(walkCountSql(w, pg.after).sql).bind(...walkCountSql(w, pg.after).params).first<{ n: number }>())?.n ?? 0;
+    // The cursor's position is read again on the index (rows at or ahead of it), so a rank is never taken from the URL;
+    // that count stops at WALK_COUNT_MAX, and a cursor further down is not placed (DEEP_CURSOR_WORDS), never guessed.
+    const ahead = walkCountSql(w, pg.after);
+    const n = Number((await db.prepare(ahead.sql).bind(...ahead.params).first<{ n: number }>())?.n ?? 0);
+    if (n > WALK_COUNT_MAX) return { error: DEEP_CURSOR_WORDS };
+    rankBase = n;
   }
   const pageSql = holderPageSql(w, { after: pg.after, limit: pg.limit + 1, offset: pg.after ? 0 : rankBase });
   const stored = counts && !sized ? counts.byChain[chain] : null;
+  const countQ = stored ? null : walkCountSql(w);
   const [rowsRes, countRes, categories] = await Promise.all([
     db.prepare(pageSql.sql).bind(...pageSql.params).all<HolderBaseRow>(),
-    stored ? Promise.resolve(null) : db.prepare(walkCountSql(w).sql).bind(...walkCountSql(w).params).first<{ n: number }>(),
-    stored ? Promise.resolve(storedCategories(counts, chain)) : walkCategories(db, { chain, by: ask.by, min, max }, counts),
+    countQ ? db.prepare(countQ.sql).bind(...countQ.params).first<{ n: number }>() : Promise.resolve(null),
+    stored ? Promise.resolve(storedCategories(counts, chain)) : tally ? walkCategories(db, { chain, by: ask.by, min, max }, counts) : Promise.resolve(null),
   ]);
   const got = (rowsRes.results || []).sort(order);
   const rows = got.slice(0, pg.limit);
-  const total = stored ? (category === 'none' ? stored.none : category ? countOf(stored.byCategory, category) ?? 0 : stored.all) : Number(countRes?.n ?? 0);
+  // a walk's count past WALK_COUNT_MAX is "more than that" (`over`), never the bound read as the count
+  const counted = Number(countRes?.n ?? 0);
+  const over = !stored && counted > WALK_COUNT_MAX;
+  const total = stored ? (category === 'none' ? stored.none : category ? countOf(stored.byCategory, category) ?? 0 : stored.all) : over ? null : counted;
   const last = rows[rows.length - 1];
   return {
-    rows, firstRank: rankBase + 1, page: Math.floor(rankBase / pg.limit) + 1, total,
+    rows, firstRank: rankBase + 1, page: Math.floor(rankBase / pg.limit) + 1, total, ...(over ? { over: WALK_COUNT_MAX } : {}),
     next: last && got.length > pg.limit ? encodeHolderCursor({ value: Number(last[col as keyof HolderBaseRow]) || 0, address: last.address, rank: rankBase + rows.length }) : null,
     countsAt: stored ? counts!.at : null, categories,
   };
@@ -563,7 +582,11 @@ function storedCategories(counts: HolderCountsKv | null, chain: HolderChain): Ho
   const c = counts?.byChain[chain];
   return c ? categoriesOf(c.all, { ...c.byCategory, none: c.none }) : null;
 }
-/** The chips' counts over a walk (a size range, or no stored counts): one pass, one sum per category. */
+/**
+ * The chips' counts over a walk (a size range, or no stored counts): one pass, one sum per category, over at most
+ * WALK_COUNT_MAX + 1 entries. A walk that holds more is not counted (null): the chips then count the rows loaded and
+ * say so, never a part of the walk read as all of it.
+ */
 async function walkCategories(db: D1Database, w: HolderWalk, counts: HolderCountsKv | null): Promise<HoldersResponse['categories']> {
   const cats = Object.keys(counts?.byChain.all.byCategory ?? {}).filter((c) => /^[a-z_]{1,24}$/.test(c));
   const list = cats.length ? cats : DEFAULT_CATEGORIES;
@@ -576,7 +599,7 @@ async function walkCategories(db: D1Database, w: HolderWalk, counts: HolderCount
     tally.none += Number(r.c_none ?? 0);
     list.forEach((c, i) => { tally[c] = (tally[c] ?? 0) + Number(r[`c${i}`] ?? 0); });
   }
-  return categoriesOf(total, tally);
+  return total > WALK_COUNT_MAX ? null : categoriesOf(total, tally);
 }
 
 /** A list row as the API sends it. */
@@ -662,7 +685,7 @@ app.get('/api/holders', async (c) => {
   }
   const supplyTotal = supplyRow?.value ?? null;
   const holders = raw.map((r, i) => holderOut(r, sel.firstRank + i, listed, supplyTotal, now, changes, linksMap));
-  const res: HoldersResponse = { total: sel.total, page: sel.page, limit, holders, next: sel.next, asOf: now, countsAt: sel.countsAt, categories: sel.categories };
+  const res: HoldersResponse = { total: sel.total, ...(sel.over != null ? { totalOver: sel.over } : {}), page: sel.page, limit, holders, next: sel.next, asOf: now, countsAt: sel.countsAt, categories: sel.categories };
   return c.json(res);
 });
 
@@ -1766,12 +1789,14 @@ app.get('/api/export/holders', async (c) => {
   const now = Date.now();
   // The same rows and order as /api/holders: the first `limit` of the list, one walk of the sort's index.
   const ask: HolderAsk = { chain, by, category: holderCategory(c.req.query('category')), search: (c.req.query('search') || '').trim(), min: min as number | null, max: max as number | null };
+  // no chips in a file: the category tally is not read
   const [sel, supplyRow, listed] = await Promise.all([
-    selectHolders(db, ask, { page: 1, limit, after: null }, now),
+    selectHolders(db, ask, { page: 1, limit, after: null }, now, false),
     metricAt(db, 'supply.total', now),
     listingTimes(db),
   ]);
   if ('error' in sel) return c.json({ error: sel.error }, 400);
+  // null: more than WALK_COUNT_MAX match (a size range), not counted further; `next` then says whether the file is cut
   const matching = sel.total;
   const total = supplyRow?.value ?? null;
   const list = sel.rows.map((r, idx) => {
@@ -1789,14 +1814,14 @@ app.get('/api/export/holders', async (c) => {
       stakeCheckedAt: isoOrBlank(confirmedAt(r.bonded_verified_at, r.bonded_src, BOND_LISTING_SRC, listed.bond)),
     };
   });
-  const cut = list.length < matching;
-  const name = `namada-trade-holders-${chain}-${cut ? `first-${list.length}-of-${matching}-` : ''}${now}`;
-  if (format === 'json') return c.json({ count: list.length, total: matching, truncated: cut, supplyTotal: total, by, holders: list }, 200, { 'X-Total-Count': String(matching), 'X-Truncated': String(cut) });
+  const cut = matching != null ? list.length < matching : sel.next != null;
+  const name = `namada-trade-holders-${chain}-${cut ? `first-${list.length}-${matching != null ? `of-${matching}-` : ''}` : ''}${now}`;
+  if (format === 'json') return c.json({ count: list.length, total: matching, ...(sel.over != null ? { totalOver: sel.over } : {}), truncated: cut, supplyTotal: total, by, holders: list }, 200, { ...(matching != null ? { 'X-Total-Count': String(matching) } : {}), 'X-Truncated': String(cut) });
   const csv = csvOf(
     ['rank', 'chain', 'address', 'spendable_nam', 'staked_nam', 'staked_is_estimate', 'total_nam', 'pct_total_supply', 'label', 'category', 'label_source', 'spendable_checked_at', 'stake_checked_at'],
     list.map((r) => [r.rank, r.chain, r.address, r.spendableNam, r.stakedNam ?? '', r.stakedIsEstimate ? 'yes' : '', r.totalNam, r.pctTotalSupply, r.label, r.category, r.labelSource, r.spendableCheckedAt, r.stakeCheckedAt]),
   );
-  return new Response(csv, { headers: exportHeaders('text/csv; charset=utf-8', `${name}.csv`, matching, list.length) });
+  return new Response(csv, { headers: exportHeaders('text/csv; charset=utf-8', `${name}.csv`, matching, list.length, cut) });
 });
 
 // ---------------------------------------------------------------- GET /api/export/flows
