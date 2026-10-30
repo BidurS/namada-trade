@@ -12,12 +12,16 @@ import { readFileSync, readdirSync, statSync } from 'node:fs';
 import { join } from 'node:path';
 
 vi.mock('cloudflare:workers', () => ({ DurableObject: class {} }));
-import { LiveHub, OSMOSIS_QUERIES } from '../worker/src/live-hub';
+/** The router's NAM pools as fetchNamPools gives them (refreshPools). */
+const router = vi.hoisted(() => ({ pools: [] as { id: string; address: string; pair: string }[] }));
+vi.mock('../worker/src/sources/sqs', async (actual) => ({ ...(await actual<object>()), fetchNamPools: async () => ({ pools: router.pools, at: 0 }) }));
+import { LiveHub, OSMOSIS_POOL_SWEEP_PAGES, OSMOSIS_QUERIES, POOL_PROBE_BATCH } from '../worker/src/live-hub';
 import { HubQuote } from '../worker/src/live-quote';
 import { normFromTxSearch, osmoAssets, parseOsmosisTx, poolLegsOf, type NormTx } from '../worker/src/parse/osmosis';
 import { osmosisPoolQueries } from '../worker/src/sources/osmosis';
 import { OSMOSIS, NAM } from '../worker/src/config';
 import { testD1, type TestD1 } from './d1-sqlite';
+import { bech32 } from '@scure/base';
 
 afterEach(() => vi.unstubAllGlobals());
 
@@ -135,25 +139,43 @@ describe('the stream keeps its four subscriptions', () => {
 
 describe('the catch-up search: each pool\'s address both ways', () => {
   const CURSOR = 73_379_000, HEAD = 73_490_000;
-  /** The node: the stream's four queries find nothing new; 3005's sends hold the withdrawal, 3008's receipts the bid. */
-  function osmosis(db: TestD1) {
-    const reads: { q: string; per: number; page: number }[] = [];
-    const lists: Record<string, any[]> = {
+  interface Read { q: string; per: number; page: number; batch: boolean }
+  /**
+   * The node: the stream's four queries find nothing new unless `lists` says so; 3005's sends hold the withdrawal,
+   * 3008's receipts the bid. Each list is newest first. A tx_search is asked by GET or in a JSON-RPC batch of up to
+   * ten (POST to the node's root, as the public node answers one); `refuseBatch` answers a batch with one error.
+   */
+  function osmosis(db: TestD1, opts: { lists?: Record<string, any[]>; refuseBatch?: boolean } = {}) {
+    const reads: Read[] = [];
+    const lists: Record<string, any[]> = opts.lists ?? {
       [`transfer.sender='${P3005}'`]: [withdraw],
       [`transfer.recipient='${P3008}'`]: [bid],
       // a quiet pool: its newest transaction is below the cursor
       [`transfer.recipient='${P3368}'`]: [{ ...swaps[2], height: String(CURSOR - 10) }],
     };
-    vi.stubGlobal('fetch', vi.fn(async (u: string) => {
+    const answer = (q: string, page: number, per: number) => {
+      const list = lists[q] ?? [];
+      return { txs: list.slice((page - 1) * per, page * per), total_count: String(list.length) };
+    };
+    vi.stubGlobal('fetch', vi.fn(async (u: string, init?: RequestInit) => {
       const url = new URL(String(u));
+      if (init?.method === 'POST') {
+        const calls = JSON.parse(String(init.body));
+        if (opts.refuseBatch || calls.length > 10) return Response.json({ jsonrpc: '2.0', id: -1, error: { code: -32600, message: 'Invalid Request', data: `batch request exceeds maximum (${opts.refuseBatch ? 1 : 10}) allowed number of requests` } });
+        return Response.json(calls.map((c: any) => {
+          expect(c.method).toBe('tx_search');
+          expect(c.params.order_by).toBe('desc');
+          reads.push({ q: c.params.query, per: Number(c.params.per_page), page: Number(c.params.page), batch: true });
+          return { jsonrpc: '2.0', id: c.id, result: answer(c.params.query, Number(c.params.page), Number(c.params.per_page)) };
+        }));
+      }
       if (url.pathname.endsWith('/status')) return Response.json({ result: { sync_info: { latest_block_height: String(HEAD) } } });
       if (url.pathname.endsWith('/block')) return Response.json({ result: { block: { header: { time: new Date(Date.UTC(2026, 9, 28) + Number(url.searchParams.get('height')) % 1000).toISOString() } } } });
       if (!url.pathname.endsWith('/tx_search')) throw new Error(`unexpected ${url}`);
       const q = (url.searchParams.get('query') ?? '').slice(1, -1);
       const per = Number(url.searchParams.get('per_page')), page = Number(url.searchParams.get('page'));
-      reads.push({ q, per, page });
-      const list = lists[q] ?? [];
-      return Response.json({ result: { txs: list.slice((page - 1) * per, page * per), total_count: String(list.length) } });
+      reads.push({ q, per, page, batch: false });
+      return Response.json({ result: answer(q, page, per) });
     }));
     void db;
     return reads;
@@ -164,6 +186,12 @@ describe('the catch-up search: each pool\'s address both ways', () => {
     return db;
   }
   const cursorOf = (db: TestD1) => JSON.parse((db.raw.prepare("SELECT value FROM kv WHERE key='osmosis.cursor'").get() as any).value);
+  const hashOf = (i: number) => `AB${i.toString(16).toUpperCase().padStart(62, '0')}`;
+  /** A deposit of 5 base units of USDC into `pool` by a trader: a leg, and no NAM row. */
+  const usdcIn = (i: number, pool: string, height: number) => ({
+    hash: hashOf(i), height: String(height),
+    tx_result: { code: 0, events: [{ type: 'transfer', attributes: [{ key: 'recipient', value: pool }, { key: 'sender', value: 'osmo1qqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqq9t' }, { key: 'amount', value: `5${USDC}` }] }] },
+  });
 
   it('the withdrawal and the bid are stored as pool legs at their block\'s time, with no NAM row, no broadcast and no alert; the cursor moves', async () => {
     const db = await seeded();
@@ -181,42 +209,117 @@ describe('the catch-up search: each pool\'s address both ways', () => {
     expect(namRows(db)).toEqual({ flows: [], moves: [] });
     expect(sent).toEqual([]);
     expect(hub.alerted).toEqual([]);
-    expect(cursorOf(db)).toMatchObject({ height: HEAD });
+    expect(cursorOf(db)).toMatchObject({ height: HEAD, pools: 4 });
     expect(cursorOf(db).error).toBeUndefined();
-    // every pool's two queries were asked; a quiet one only for its newest transaction (one, newest first)
+    // every pool's two queries were asked for their newest transaction in one batch; a quiet one no more
     const asked = [...pools().keys()].flatMap(osmosisPoolQueries);
     expect(asked.length).toBe(8);
-    for (const q of asked) expect(reads.some((r) => r.q === q && r.per === 1)).toBe(true);
+    expect(reads.filter((r) => r.batch).map((r) => r.q)).toEqual(asked);
     for (const q of [`transfer.recipient='${P3368}'`, `transfer.sender='${P3368}'`, `transfer.recipient='${P3005}'`, `transfer.sender='${P3008}'`]) {
       expect(reads.filter((r) => r.q === q).map((r) => r.per)).toEqual([1]);
     }
     expect(reads.filter((r) => r.q === `transfer.sender='${P3005}'` && r.per === 50).length).toBe(1);
     // the stream's four queries are read as before
-    for (const q of OSMOSIS_QUERIES) expect(reads.some((r) => r.q === q && r.per === 50)).toBe(true);
+    for (const q of OSMOSIS_QUERIES) expect(reads.some((r) => r.q === q && r.per === 50 && !r.batch)).toBe(true);
     // a second search finds both stored or seen: nothing written again
     await hub.sweepOsmosis();
     expect(legRows(db).length).toBe(2);
   });
 
-  it('a database without pool_legs: the legs are logged as not written, and the cursor still moves', async () => {
+  it('a node that refuses the batch: each pool query is asked for its newest transaction on its own, and the search ends the same', async () => {
+    const db = await seeded();
+    const reads = osmosis(db, { refuseBatch: true });
+    await hubOn(db).sweepOsmosis();
+    expect(legRows(db).length).toBe(2);
+    expect(cursorOf(db)).toMatchObject({ height: HEAD });
+    for (const q of [...pools().keys()].flatMap(osmosisPoolQueries)) expect(reads.some((r) => r.q === q && r.per === 1 && !r.batch)).toBe(true);
+  });
+
+  it(`26 pools are probed in ${Math.ceil(52 / POOL_PROBE_BATCH)} reads, not 52`, async () => {
+    const db = await seeded();
+    const reads = osmosis(db, { lists: {} });
+    // 22 more pool accounts (32 bytes, as a pool's or a contract's address is)
+    const more = Array.from({ length: 22 }, (_, i) => [bech32.encode('osmo', bech32.toWords(Uint8Array.from({ length: 32 }, (_, k) => (i * 31 + k * 7 + 1) & 0xff)), 90), String(4000 + i)] as [string, string]);
+    const hub = hubOn(db, new Map([...pools(), ...more]));
+    expect(hub.osmoCtx.poolAddrs.size).toBe(26);
+    await hub.sweepOsmosis();
+    const n = 52;
+    expect(reads.filter((r) => r.batch).length).toBe(n);
+    // POST reads: one a batch
+    expect((fetch as any).mock.calls.filter((c: any[]) => c[1]?.method === 'POST').length).toBe(Math.ceil(n / POOL_PROBE_BATCH));
+    // batches of at most ten: the stub refuses more, and none fell back to a read of its own
+    expect(reads.filter((r) => !r.batch && r.per === 1).length).toBe(0);
+    expect(cursorOf(db)).toMatchObject({ height: HEAD, pools: n / 2 });
+  });
+
+  it(`a backlog in the pools' queries is read through over several searches, at most ${OSMOSIS_POOL_SWEEP_PAGES} of their pages a search, every leg stored`, async () => {
+    const db = await seeded();
+    // three pools took 120 deposits each since the cursor and 3368 took 300: 660 in all, 15 pages of 50
+    const lists: Record<string, any[]> = {};
+    let i = 0;
+    for (const [addr] of pools()) {
+      const n = addr === P3368 ? 300 : 120;
+      lists[`transfer.recipient='${addr}'`] = Array.from({ length: n }, (_, k) => usdcIn(i++, addr, HEAD - 5 - k));
+    }
+    const reads = osmosis(db, { lists });
+    const hub = hubOn(db);
+    const pages: number[] = [];
+    let last: Read[] = [];
+    for (let s = 0; s < 6 && (s === 0 || cursorOf(db).height !== HEAD); s++) {
+      const before = reads.length;
+      await hub.sweepOsmosis();
+      last = reads.slice(before);
+      pages.push(reads.slice(before).filter((r) => r.per === 50 && r.q.startsWith('transfer.') && !OSMOSIS_QUERIES.includes(r.q)).length);
+    }
+    expect(pages.length).toBeGreaterThan(1);
+    expect(Math.max(...pages)).toBeLessThanOrEqual(OSMOSIS_POOL_SWEEP_PAGES);
+    expect(cursorOf(db)).toMatchObject({ height: HEAD });
+    expect(cursorOf(db).resume).toBeUndefined();
+    expect(legRows(db).length).toBe(660);
+    // a query read down to the cursor in an earlier search, with nothing newer than its place, is asked only its newest
+    expect(last.filter((r) => r.q === `transfer.recipient='${P3005}'`).map((r) => r.per)).toEqual([1]);
+  });
+
+  it('a transaction in a pool\'s other coin alone needs no quote: a quote read that fails holds back neither its write nor the cursor', async () => {
+    const db = await seeded();
+    osmosis(db);
+    const hub = hubOn(db);
+    hub.quote = { quoteFor: async () => { throw new Error('D1 down'); }, current: () => null };
+    await hub.sweepOsmosis();
+    expect(legRows(db).length).toBe(2);
+    expect(cursorOf(db)).toMatchObject({ height: HEAD });
+    expect(cursorOf(db).error).toBeUndefined();
+  });
+
+  it('a database without pool_legs: the legs are logged as not written, the cursor still moves, and the next search writes them once the table exists', async () => {
     const db = await seeded();
     db.exec('DROP TABLE pool_legs');
     osmosis(db);
     const errors = vi.spyOn(console, 'error').mockImplementation(() => {});
     const hub = hubOn(db);
     await hub.sweepOsmosis();
-    expect(errors.mock.calls.filter((c) => /pool legs of .* not written/.test(String(c[0]))).length).toBe(2);
+    expect(errors.mock.calls.filter((c) => /pool legs of .* not written:/.test(String(c[0]))).length).toBe(2);
     errors.mockRestore();
     expect(cursorOf(db)).toMatchObject({ height: HEAD });
     expect(cursorOf(db).error).toBeUndefined();
+    // migration 0018 applied: the next search writes the two transactions' legs it kept, though it reads neither again
+    db.exec(readFileSync(join(__dirname, '..', 'migrations', '0018_pool_legs.sql'), 'utf8'));
+    await hub.sweepOsmosis();
+    expect(legRows(db).map((r: any) => r.tx_hash).sort()).toEqual([withdraw.hash, bid.hash].sort());
   });
 
-  it('with no pool known (the router not read yet) the search asks only the stream\'s four queries, as before', async () => {
+  it('with no pool known (the router not read yet) the search asks only the stream\'s four queries, as before, and says no pool was searched; the router read again adds them', async () => {
     const db = await seeded();
     const reads = osmosis(db);
-    await hubOn(db, new Map()).sweepOsmosis();
+    const hub = hubOn(db, new Map());
+    await hub.sweepOsmosis();
     expect(new Set(reads.map((r) => r.q))).toEqual(new Set(OSMOSIS_QUERIES));
     expect(legRows(db)).toEqual([]);
+    expect(cursorOf(db)).toMatchObject({ height: HEAD, pools: 0 });
+    router.pools = [{ id: '3008', address: P3008, pair: 'NAM / USDC' }];
+    await hub.refreshPools();
+    expect([...hub.osmoCtx.poolAddrs]).toEqual([[P3008, '3008']]);
+    expect(hub.poolsAt).toBeGreaterThan(0);
   });
 });
 
