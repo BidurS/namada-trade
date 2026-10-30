@@ -15,7 +15,7 @@
 // Rows read per call are noted beside each statement (production, 2026-10-20 22:15 UTC, `meta.rows_read`).
 import type { Env } from './util';
 import type {
-  Provenance, Sourced, PoolInfo, SeriesStep, SeriesUnit, SeriesAgg, SeriesSample, SeriesSource, SeriesGap, SeriesResponse,
+  Provenance, Sourced, SeriesStep, SeriesUnit, SeriesAgg, SeriesSample, SeriesSource, SeriesGap, SeriesResponse,
   PriceChange, PriceChangeWindow, PoolChangeWindow, PriceChangesResponse, PriceReading, VolumeWindow, ExecutedVolume, VolumeResponse,
   PairRow, PairsResponse, TradeRow, TradeGroup, TradesResponse, TradePattern, ValueInput, ValueFigure, ValuesResponse,
 } from '../../shared/types';

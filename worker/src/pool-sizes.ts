@@ -56,7 +56,7 @@ export interface StoredPools {
 
 const fin = (x: number | null | undefined): x is number => x != null && Number.isFinite(x);
 const usdWords = (v: number) => (v >= 1 ? `$${v.toLocaleString('en-US', { maximumFractionDigits: 2 })}` : `$${Number(v.toPrecision(3))}`);
-const coins = (v: number) => v.toLocaleString('en-US', { maximumFractionDigits: v >= 100 ? 0 : 6 });
+const coins = (v: number) => v.toLocaleString('en-US', { maximumFractionDigits: v >= 10_000 ? 0 : v >= 1 ? 2 : 6 });
 
 /** The words of a pool that cannot be priced: what is missing, and that it is left out of the total. */
 export const notPricedWords = (why: string) => `Not priced: ${why}, so the pool is left out of the total.`;

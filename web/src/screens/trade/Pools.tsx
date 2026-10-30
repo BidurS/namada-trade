@@ -42,7 +42,7 @@ function PairsBody({ r, osmosisLine }: { r: PairsResponse; osmosisLine: ReactNod
   const anyHere = r.pairs.some((p) => p.here24h.value);
   const share = shown[0] && total > 0 && shown[0].liquidityUsd != null ? (shown[0].liquidityUsd / total) * 100 : null;
   const items: ScopeItem[] = [
-    { label: 'Pool sizes, the coins inside and fee', p: stamp },
+    { label: 'Pool depth, the coins inside and fee', p: stamp },
     { label: 'Dollars traded per pool (Osmosis pair summary)', p: osmoStamp },
     ...(hereStamp ? [{ label: 'Trades recorded here per pool', p: hereStamp }] : []),
   ];
@@ -146,7 +146,7 @@ export function Pools({ rewound, pools, pairs, depth, overview }: PoolsProps) {
             </PoolRestRow>
           ) : null}
         </DataList>
-        <SourceLine items={[{ label: 'Pool sizes and the coins inside', p: stamp }, ...(osmosis ? [{ label: 'NAM held on Osmosis', p: osmosis.prov }] : [])]} label="Where the pool figures come from" />
+        <SourceLine items={[{ label: 'Pool depth and the coins inside', p: stamp }, ...(osmosis ? [{ label: 'NAM held on Osmosis', p: osmosis.prov }] : [])]} label="Where the pool figures come from" />
       </ProvScope>
     );
   } else if (!rewound && pools.loading) {

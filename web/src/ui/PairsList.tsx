@@ -1,6 +1,6 @@
 // PairsList (F4, screener-plan 2.4): the NAM pools on Osmosis with their volume, in the DataList grid rules
 // (role="table", no <table>, no display: contents; cells are direct children of their row). Phones: a row of
-// four short lines (the pair and its size; the pool number, kind and since when, with its share of all
+// four short lines (the pair and its depth; the pool number, kind and since when, with its share of all
 // depth; the Osmosis data API's dollars traded in 24 h and 7 d, with the trades this site recorded through
 // the pool; the coins inside and the fee). From a 720 px container the cells line up as an eight-column table.
 //
@@ -87,7 +87,7 @@ export function PairsList({ pairs, rest, oneSided = [], totalUsd, pairName, labe
       <div className="pa" role="table" aria-label={label} aria-rowcount={pairs.length + oneSided.length + (rest.length ? 2 : 1)} data-pairs={all.length}>
         <div className="pa__head" role="row">
           <span role="columnheader">Pool</span>
-          <span role="columnheader" className="r">Size</span>
+          <span role="columnheader" className="r">Depth</span>
           <span role="columnheader" className="r">Share</span>
           <span role="columnheader" className="r">Osmosis 24 h</span>
           <span role="columnheader" className="r">Osmosis 7 days</span>
