@@ -5,14 +5,16 @@
 // them under the site's name.
 //
 // X's API is paid per call (https://docs.x.com/x-api/getting-started/pricing: $0.015 a post, $0.20 a post with a
-// link, checked 2026-10-29), so only the recap carries a link; an alert names the move, its figures and their source
-// in words, and the profile links the site. Posts a day are capped (X_DAILY_MAX), and a move older than X_MAX_AGE_MS
-// when it is offered (a catch-up search, a late scan) is not posted: the account reads as live.
+// link, checked 2026-10-29), so only the recap carries the site's link; an alert names the move, its figures and their
+// source in words, and the profile links the site. A proposal's post names its source, indexer.namada.net, which X
+// makes a link. Posts a day are capped (X_DAILY_MAX), and a move older than X_MAX_AGE_MS when it is offered (a
+// catch-up search, a late scan) is not posted: the account reads as live.
 //
 // Each post is claimed once (`alert:x:` keys, swept with the other claims: auth.ts sweepAuth). An answer that is no
 // answer, a 5xx or a 429 gives the claim back, so the alert offered again is posted; a refusal (401/403: the keys, 402:
 // no credits, 400: the text) is not tried again, and kv `x.last` records it for the health view. Text an outsider
-// wrote (a label, a proposal) never mentions anyone: an @ is written as "(at)".
+// wrote (a label, a proposal, a validator's name) carries no link and mentions no one (xSafe): a link or bare domain is
+// "[link removed]", an @ "(at)".
 //
 // The keys are the owner's X app's (OAuth 1.0a, Read and Write): X_API_KEY, X_API_SECRET, X_ACCESS_TOKEN,
 // X_ACCESS_SECRET, set by scripts/x-connect.sh at hidden prompts. Without all four nothing is posted.
@@ -46,12 +48,35 @@ export const postsOnX = (env: XEnv): boolean => alertsOn() && !!(env.X_API_KEY &
 
 /** One character's weight as X counts it (twitter-text v3: these ranges weigh 1, everything else 2). */
 const weight = (cp: number) => (cp <= 4351 || (cp >= 8192 && cp <= 8205) || (cp >= 8208 && cp <= 8223) || (cp >= 8242 && cp <= 8247) ? 1 : 2);
-/** A text's length as X counts it; a link counts 23 whatever its length. */
+
+/**
+ * A full stop between a domain's parts: the ASCII one, the three a browser maps to it (UTS 46: 。．｡), and two that
+ * only look like one (․ ﹒).
+ */
+const DOT = '[.\\u2024\\u3002\\uFE52\\uFF0E\\uFF61]';
+/** A part of a domain, in any script (an address may be written in Cyrillic or Chinese). */
+const PART = '[\\p{L}\\p{N}\\p{M}_-]+';
+/**
+ * A link as X makes one, and more: any scheme ("https://…"), or a bare domain with or without a path ("claim-nam.xyz",
+ * "www.claim.xyz/airdrop", "пример.рф", "xn--e1afmkfd.xn--p1ai"). Its last part starts with two letters, so a number
+ * ("1.5", "v0.45.1") is not one; a word that only looks like a domain ("cap.Then", "x.co1") is read as one too, which
+ * costs a word, never a link, and means no cut of a text it left can end in one ("x.co…").
+ */
+const LINK = new RegExp(`[a-z][a-z0-9+.-]*:\\/\\/\\S*|${PART}(?:${DOT}${PART})*${DOT}(?:xn--[a-z0-9-]+|\\p{M}*\\p{L}[\\p{L}\\p{M}]+)(?::\\d+)?(?:[/?#]\\S*)?`, 'giu');
+/**
+ * Characters that show nothing (zero-width spaces and joiners, direction marks), one of which could hide a link from
+ * LINK, and the two X refuses a post for (U+FFFE, U+FFFF): a post that holds one is never made.
+ */
+const INVISIBLE = /[\p{Cf}\uFFFE\uFFFF]/gu;
+
+/**
+ * A text's length as X counts it, or more, never less: X counts the text's NFC form (a few characters take more code
+ * points there: "क़" is two), a link counts 23 whatever its length, and so does whatever else LINK reads as one (a
+ * bare domain, and a word that only looks like one).
+ */
 export function xLength(s: string): number {
   let n = 0;
-  const urls = s.match(/https?:\/\/\S+/g) ?? [];
-  let rest = s;
-  for (const u of urls) { rest = rest.replace(u, ''); n += 23; }
+  const rest = s.normalize('NFC').replace(LINK, () => { n += 23; return ''; });
   for (const ch of rest) n += weight(ch.codePointAt(0)!);
   return n;
 }
@@ -65,12 +90,23 @@ export function cutX(s: string, max = X_MAX): string {
   }
   return out.trimEnd() + '…';
 }
-/** No one is mentioned or tagged by text an outsider wrote. */
-const noMentions = (s: string) => s.replace(/@/g, '(at)');
+/** What a link left out of a post reads as. */
+export const X_LINK_WORDS = '[link removed]';
+/**
+ * Text an outsider wrote (a proposal's title, a wallet's tag, a validator's name, a bridge receiver's free text) as a
+ * post carries it: no link and no bare domain (each is X_LINK_WORDS, the punctuation after it kept), and no one
+ * mentioned (an @ and its wide form ＠, which X reads as one, and the small ﹫, which only looks like one, are written
+ * "(at)"). Invisible characters go first, then the text is put in the NFC form X counts.
+ */
+export function xSafe(s: string): string {
+  return s.replace(INVISIBLE, '').normalize('NFC')
+    .replace(LINK, (m) => X_LINK_WORDS + (/[.,;:!?'")\]}»”’]+$/.exec(m)?.[0] ?? ''))
+    .replace(/[@＠﹫]/g, '(at)');
+}
 
 /**
  * A card as a post: the title, the first paragraph (who moved it and the price, or a proposal's votes) and the record
- * it comes from, without links, in X's 280.
+ * it comes from, in X's 280. Only the record may hold a domain (a proposal's source), the site's own words.
  */
 export function cardText(card: Card, now = Date.now()): string {
   const e = fits(card);
@@ -78,11 +114,13 @@ export function cardText(card: Card, now = Date.now()): string {
   const record = (e.footer?.text ?? '').replace(/^NamadaTrade · /, '');
   const when = e.timestamp ? new Date(e.timestamp).toISOString().slice(0, 16).replace('T', ' ') + ' UTC' : '';
   const tail = [when, record].filter(Boolean).join(' · ');
+  // the tail is kept whole: the opening words give way first, then the title. A cut inside the tail could leave a
+  // part of its domain that is another one ("indexer.namada.ne…", "indexer.na…").
+  const tailRoom = tail ? xLength(tail) + 2 : 0;
   // $NAM once, in the title (a cashtag: X lists the post under the coin)
-  const head = noMentions(e.title ?? '').replace(/(^|\s)NAM\b/, '$1$$NAM');
-  const body = noMentions(first);
-  // the tail is kept whole; the opening words give way first
-  const room = X_MAX - xLength(head) - (tail ? xLength(tail) + 2 : 0) - 2;
+  const head = cutX(xSafe(e.title ?? '').replace(/(^|\s)NAM\b/, '$1$$NAM'), X_MAX - tailRoom);
+  const body = xSafe(first);
+  const room = X_MAX - xLength(head) - tailRoom - 2;
   return cutX([head, room > 20 && body ? cutX(body, room) : '', tail].filter(Boolean).join('\n\n'));
 }
 

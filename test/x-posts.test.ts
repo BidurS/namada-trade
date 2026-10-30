@@ -6,10 +6,10 @@ import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { createHmac } from 'node:crypto';
 import { testD1, type TestD1 } from './d1-sqlite';
-import { configureAlerts, moveCard } from '../worker/src/sources/discord';
-import { cardText, cutX, oauthHeader, postMoveOnX, postOnce, postRecapOnX, recapChart, repostNamada, recapText, xLength, X_DAILY_MAX, X_MAX_AGE_MS, X_RECAP_HOUR_UTC } from '../worker/src/sources/x';
+import { configureAlerts, govCard, moveCard } from '../worker/src/sources/discord';
+import { cardText, cutX, oauthHeader, postMoveOnX, postOnce, postRecapOnX, recapChart, repostNamada, recapText, xLength, xSafe, X_DAILY_MAX, X_MAX_AGE_MS, X_RECAP_HOUR_UTC } from '../worker/src/sources/x';
 import { rowToFlow } from '../worker/src/analytics';
-import type { Flow } from '../shared/types';
+import type { Flow, GovernanceProposal } from '../shared/types';
 
 const KEYS = { X_API_KEY: 'ck', X_API_SECRET: 'cs', X_ACCESS_TOKEN: 'at', X_ACCESS_SECRET: 'as' };
 const env = (db: TestD1, extra: object = {}) => ({ DB: db, ...KEYS, ...extra }) as any;
@@ -41,6 +41,13 @@ describe('the text', () => {
   it('counts as X does: a link 23, most Latin text 1, other scripts and the ellipsis 2', () => {
     expect(xLength('abc')).toBe(3);
     expect(xLength('see https://namada.trade/very/long/path?x=1')).toBe(4 + 23);
+    // a bare domain is a link to X too (twitter-text 3.1.0 counts "indexer.namada.net" 23, not 18)
+    expect(xLength('read from indexer.namada.net')).toBe(10 + 23);
+    expect(xLength('v0.45.1 and 1.5M NAM')).toBe(20);
+    // X counts the NFC form, where a few characters take more code points: क़ (U+0958) is two, and U+1D15E is two
+    // of weight 2
+    expect(xLength('\u0958')).toBe(2);
+    expect(xLength('\u{1D15E}')).toBe(4);
     expect(xLength('…')).toBe(2);
     expect(xLength('日本')).toBe(4);
     const cut = cutX('a'.repeat(300));
@@ -52,12 +59,75 @@ describe('the text', () => {
     const rows: Record<string, any> = JSON.parse(readFileSync(join(__dirname, 'fixtures', 'discord-rows.json'), 'utf8')).rows;
     for (const k of Object.keys(rows)) {
       const f = rowToFlow(rows[k]);
-      const text = cardText(moveCard({ ...f, fromLabel: '@someone' } as Flow, { whaleNam: 10000 }));
+      const tag = '@someone ＠other claim-nam.xyz';
+      const text = cardText(moveCard({ ...f, fromLabel: tag, fromLabelPlain: tag, toLabel: tag, toLabelPlain: tag } as Flow, { whaleNam: 10000, validatorName: 'stake-nam.io ﹫val' }));
       expect(xLength(text), k).toBeLessThanOrEqual(280);
       expect(text, k).not.toMatch(/https?:\/\//);
-      expect(text, k).not.toMatch(/@\w/);
+      expect(text, k).not.toMatch(/claim-nam|stake-nam/);
+      expect(text, k).not.toMatch(/[@＠﹫]\w/);
       expect(text, k).toMatch(/UTC/);
     }
+  });
+
+  it('text an outsider wrote keeps no link X would make and mentions no one; numbers and short forms stay', () => {
+    const out: [string, string][] = [
+      ['Claim at https://claim-nam.xyz/airdrop now', 'Claim at [link removed] now'],
+      ['Visit claim-nam.xyz/airdrop.', 'Visit [link removed].'],
+      ['(www.claim.xyz), then vote', '([link removed]), then vote'],
+      ['CLAIM.XYZ:8080/a?b=c', '[link removed]'],
+      ['ftp://claim.xyz and http://1.2.3.4/x', '[link removed] and [link removed]'],
+      // the forms a browser reads as a full stop, two that only look like one, and a domain in other scripts or in
+      // punycode
+      ['claim。xyz claim．xyz claim｡xyz claim․xyz claim﹒xyz', Array(5).fill('[link removed]').join(' ')],
+      ['пример.рф 例子.中国 xn--e1afmkfd.xn--p1ai ｃｌａｉｍ．ｘｙｚ', Array(4).fill('[link removed]').join(' ')],
+      // a character that shows nothing cannot hide one
+      ['claim​.xyz claim.⁠xyz cl‍aim.xyz ‮zyx.mialc claim.͏xyz', Array(5).fill('[link removed]').join(' ')],
+      ['@namada ＠namada ﹫namada user@claim.xyz', '(at)namada (at)namada (at)namada user(at)[link removed]'],
+      ['claim.xyz…', '[link removed]…'],
+      // a word that only looks like a domain goes too, so that no cut of what is left can end in one ("x.co…")
+      ['x.co1 and cap.Then', '[link removed]1 and [link removed]'],
+      ['Raise the cap to 1,500,000.5 NAM in v0.45.1, e.g. 1.5M by a.m. U.S.A. time', 'Raise the cap to 1,500,000.5 NAM in v0.45.1, e.g. 1.5M by a.m. U.S.A. time'],
+      ['Tag by tnam1qauthor…', 'Tag by tnam1qauthor…'],
+    ];
+    for (const [s, want] of out) expect(xSafe(s), s).toBe(want);
+    // the two characters X refuses a post for go with the invisible ones, and the text is left in the form X counts
+    expect(xSafe('Whale \uFFFF\uFFFE')).toBe('Whale ');
+    expect(xSafe('\u0958'.repeat(3))).toBe('\u0915\u093C'.repeat(3));
+  });
+
+  it('a proposal\'s title, a wallet\'s tag, a validator\'s name and a bridge receiver\'s text reach X without their links', () => {
+    const prop = (title: string) => ({ id: 42, title, authors: null, abstract: null, type: 'default', status: 'votingPeriod', startEpoch: 1, endEpoch: 9, activationEpoch: 10, yayNam: 1_000_000, nayNam: 2_000, abstainNam: 0, discussionsUrl: null }) as GovernanceProposal;
+    const gov = cardText(govCard(prop('Claim your NAM at claim-nam.xyz ＠namada'), true));
+    expect(gov).toContain('Claim your $NAM at [link removed] (at)namada');
+    expect(gov).not.toMatch(/claim-nam|＠/);
+    // the record's source is the site's own words, and X counts its domain 23: a long title still fits as X counts
+    expect(gov).toContain('indexer.namada.net');
+    // a title of characters X counts longer (NFC) still fits as X counts, and is posted in that form
+    for (const title of ['\u095C'.repeat(250), '\u{1D15E}'.repeat(125)]) {
+      const text = cardText(govCard(prop(title), true));
+      expect(text, title.slice(0, 2)).toBe(text.normalize('NFC'));
+      expect(xLength(text), title.slice(0, 2)).toBeLessThanOrEqual(280);
+    }
+    // a long title gives way, never the record: a cut there could leave another domain ("indexer.namada.ne…")
+    for (let n = 150; n <= 250; n++) {
+      const text = cardText(govCard(prop('A'.repeat(n)), true));
+      expect(xLength(text), String(n)).toBeLessThanOrEqual(280);
+      expect(text.endsWith('status and votes as read from indexer.namada.net'), String(n)).toBe(true);
+    }
+
+    const staker = 'tnam1qstaker' + '0'.repeat(35);
+    const unbond = { id: 'namada:U:0', chain: 'namada', height: 5, ts: t - 60_000, txHash: 'U', kind: 'unbond', from: 'tnam1qgqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqc8j2fp', to: staker, amount: 50_000, meta: { validator: 'tnam1qvalidator' }, toLabel: 'Airdrop at claim-nam.xyz', toLabelPlain: 'Airdrop at claim-nam.xyz', toLabelSource: 'user', toLabelAuthor: 'tnam1qauthor…' } as unknown as Flow;
+    const move = cardText(moveCard(unbond, { whaleNam: 10000, validatorName: 'Stake at stake-nam.io' }));
+    expect(move).toContain('By Airdrop at [link removed]');
+    expect(move).toContain('Tag by tnam1qauthor…');
+    expect(move).toContain('from validator Stake at [link removed]');
+    expect(move).not.toMatch(/claim-nam|stake-nam/);
+
+    // an Osmosis receiver is free text: a domain typed there is shown as text that is no address, and still no link
+    const out = { id: 'namada:B:0', chain: 'namada', height: 6, ts: t - 60_000, txHash: 'B', kind: 'ibc_out', from: staker, to: 'claim-nam.xyz', amount: 50_000, meta: null } as unknown as Flow;
+    const crossing = cardText(moveCard(out, { whaleNam: 10000 }));
+    expect(crossing).toContain('[link removed] (not an address)');
+    expect(crossing).not.toMatch(/claim-nam/);
   });
 
   it('the recap gives only the figures it was given, with the day\'s one link', () => {
