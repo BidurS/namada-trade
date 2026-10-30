@@ -122,7 +122,10 @@ const dailyFlowKey = (unit: SeriesUnit, what: string): SeriesKeyDef => ({
  */
 export const SERIES_KEYS: Record<string, SeriesKeyDef> = {
   'price.usd': minuteKey('usd_per_nam', 'Osmosis SQS (stored)', 'The quoted price (the Osmosis router, NAM against USDC)'),
-  'dex.liquidity_usd': { ...minuteKey('usd', `${POOLS_SOURCE} (stored)`, 'Money in the Osmosis NAM pools (each pool\'s coins at their own prices, the pools that can be priced)'), sizeBasis: true },
+  'dex.liquidity_usd': {
+    ...minuteKey('usd', `${POOLS_SOURCE} (stored)`, 'Money in the Osmosis NAM pools (each pool\'s coins at their own prices, the pools that can be priced)'), sizeBasis: true,
+    gapWhy: 'No total was stored: the minute reader was not running, the pool list did not answer, or the pools that could be priced held under 90% of the NAM in the pools, too little for a total.',
+  },
   'supply.total_stake': minuteKey('nam', 'Namada RPC abci_query', 'NAM staked with validators (the chain\'s total stake)'),
   'supply.masp_shielded': minuteKey('nam', 'Namada RPC (MASP balance)', 'NAM in the shielded pool'),
   'price.swap_1h': {

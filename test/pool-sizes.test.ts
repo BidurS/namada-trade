@@ -14,7 +14,7 @@ import { OSMOSIS } from '../worker/src/config';
 import {
   POOLS_KEY, CURVE_KEY, POOLS_STALE_MS, MINUTE_STALE_MS, SIZE_SOURCE, PRICED_KEY, CURVE_HEALTH_NAME,
   sizePools, poolsTotal, storedPoolsStmts, storedPoolsProv, storedTotalProv, storedCurve, storeCurve, storePools, curveWithPools, counterDecimals, notPricedWords, NO_NAM_PRICE, noCoinPrice, noCoinDecimals,
-  NOT_READ, type StoredPools,
+  NOT_READ, NOT_KNOWN_KEY, notKnownThenWords, type StoredPools,
 } from '../worker/src/pool-sizes';
 import { fetchNamPools } from '../worker/src/sources/sqs';
 import { readFileSync } from 'node:fs';
@@ -132,8 +132,9 @@ describe('a pool\'s size from its reserves', () => {
     const t = poolsTotal(pools);
     expect(t.usd).toBeNull();
     expect(t.priced).toBeGreaterThan(0);
-    // no dex.liquidity_usd, no dex.pools_priced: the list alone
-    expect(storedPoolsStmts(row, T).map((s) => s.params[0] === POOLS_KEY ? POOLS_KEY : s.params[1])).toEqual([POOLS_KEY]);
+    // no dex.liquidity_usd, no dex.pools_priced: the list, and the minute's mark that no total stood (0% of the NAM priced)
+    expect(storedPoolsStmts(row, T).map((s) => s.params[0] === POOLS_KEY ? POOLS_KEY : s.params[1])).toEqual([POOLS_KEY, NOT_KNOWN_KEY]);
+    expect(storedPoolsStmts(row, T)[1].params[2]).toBe(0);
     // the overview's stamp of the total is missing, with the rule's words and the missing NAM price
     const p = storedTotalProv(row, T + MIN);
     expect(p.status).toBe('missing');
@@ -185,7 +186,7 @@ describe('the stored pool list', () => {
     expect(stmts[1].params[2]).toBeCloseTo(1_000, 9);
     expect(stmts[2].params[2]).toBe(1);
     const none = storedPoolsStmts({ ...row, pools: row.pools.map((p) => ({ ...p, liquidityUsd: null })) }, T);
-    expect(none.map((s) => s.params[1])).toEqual([JSON.stringify({ ...row, pools: row.pools.map((p) => ({ ...p, liquidityUsd: null })) })]);
+    expect(none.map((s) => s.params[1])).toEqual([JSON.stringify({ ...row, pools: row.pools.map((p) => ({ ...p, liquidityUsd: null })) }), NOT_KNOWN_KEY]);
   });
 
   it('is fresh for ten minutes, then old with its age; says where the NAM was priced and which pools are left out', () => {
@@ -417,6 +418,28 @@ describe('what visitors read: the stored rows, never the router', () => {
     expect(after.dex.prov).toEqual({ source: 'Osmosis pool reserves (stored)', at: now - 3_600_000, status: 'live', note: 'This total counts the 5 pools that could be priced then.' });
     expect(after.dex.pricedPools).toBeNull();
     expect(before.dex.pricedPools).toBeNull();
+  });
+
+  it('under Rewind, a minute stored after the last total with none of its own says the money was not known then (merged stage 1 review)', async () => {
+    const now = Date.now();
+    const db = testD1();
+    noNetwork();
+    // a total at 14:04, then from 14:05 the depth minute priced only 3005 and 3008, 88.3% of the NAM: no total
+    insert(db, 'metrics', [
+      { ts: now - 3_600_000, key: 'dex.liquidity_usd', value: 2_004 }, { ts: now - 3_600_000, key: PRICED_KEY, value: 15 },
+      { ts: now - 50 * MIN, key: NOT_KNOWN_KEY, value: 0.883 },
+    ]);
+    const o = await get<Overview>(db, `/api/overview?at=${now - 30 * MIN}`);
+    expect(o.dex.liquidityUsd).toBeNull();
+    expect(o.dex.prov).toEqual({ source: 'Osmosis pool reserves (stored)', at: now - 50 * MIN, status: 'missing', note: 'The money in the pools was not known then: the pools that could be priced held 88% of the NAM in the pools, under the 90% a total needs.' });
+    // before that minute, the total of its time
+    expect((await get<Overview>(db, `/api/overview?at=${now - 55 * MIN}`)).dex.liquidityUsd).toBe(2_004);
+    expect(notKnownThenWords(0)).toBe('The money in the pools was not known then: the pools that could be priced, if any, held none of the NAM in the pools.');
+    // the cron stores that minute: a list with no total writes the share its priced pools held, and no total
+    const few = sizePools({ pools: [listed('3005', USDC, 'USDC', 1_000_000, 100, 101), listed('3402', 'uosmo', 'OSMO', 9_000_000, 5, null)], poolsAt: now, depth: null, price: null });
+    const stmts = storedPoolsStmts({ at: now, pools: few, price: null, depth: null }, now);
+    expect(stmts.some((x) => x.params.includes('dex.liquidity_usd'))).toBe(false);
+    expect(stmts.find((x) => x.params.includes(NOT_KNOWN_KEY))?.params).toEqual([now, NOT_KNOWN_KEY, expect.any(Number)]);
   });
 
   it('under Rewind the total says how many pools it left out, and the Trade page can count them', async () => {

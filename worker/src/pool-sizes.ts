@@ -292,14 +292,29 @@ export const routerCapNote = (from: number | null) => from == null
   ? 'Every stored reading so far is the Osmosis router\'s own figure, which counts NAM at nothing while it gives NAM no price.'
   : `Readings before ${fmtDay(from)} ${fmtClock(from)} are the Osmosis router's own figure, which counted NAM at nothing while it gave NAM no price; from then on, the pools' coins at their own prices.`;
 
+/**
+ * The metric stored in a minute whose pool list was stored with no total (poolsTotal: the priced pools hold too little
+ * of the NAM): the share (0 to 1) of the NAM in the pools the priced pools held. Under Rewind, a minute of it newer
+ * than the last total says the money in the pools was not known then, rather than serving that older total as the
+ * time's (api.ts overview).
+ */
+export const NOT_KNOWN_KEY = 'dex.liquidity_not_known';
+/** Why the money in the pools was not known in a minute of NOT_KNOWN_KEY, from its stored share. */
+export function notKnownThenWords(share: number | null): string {
+  if (share == null || !fin(share) || share <= 0) return 'The money in the pools was not known then: the pools that could be priced, if any, held none of the NAM in the pools.';
+  const pct = share * 100;
+  return `The money in the pools was not known then: the pools that could be priced held ${pct >= 10 ? Math.round(pct) : Number(pct.toPrecision(2))}% of the NAM in the pools, under the 90% a total needs.`;
+}
+
 /** The statements that store the sized list and its totals (dex.liquidity_usd, dex.ref_pool_liquidity_usd, dex.pools_priced). */
 export function storedPoolsStmts(row: StoredPools, now: number): Stmt[] {
   const t = poolsTotal(row.pools);
   const ref = row.pools.find((p) => p.id === OSMOSIS.refPoolId);
   const out: Stmt[] = [stmt.kvSet(POOLS_KEY, JSON.stringify(row), now)];
   // A total stands only when the priced pools hold the NAM a total needs (poolsTotal); how many pools it counts is stored
-  // beside it, so a past minute says it too.
+  // beside it, so a past minute says it too. A minute with none says so (NOT_KNOWN_KEY).
   if (t.usd != null) out.push(stmt.metric(now, 'dex.liquidity_usd', t.usd), stmt.metric(now, PRICED_KEY, t.priced));
+  else out.push(stmt.metric(now, NOT_KNOWN_KEY, t.priced ? Math.max(0, Math.min(1, 1 - (t.namLeftOut ?? 0))) : 0));
   if (ref && fin(ref.liquidityUsd)) out.push(stmt.metric(now, 'dex.ref_pool_liquidity_usd', ref.liquidityUsd));
   return out;
 }

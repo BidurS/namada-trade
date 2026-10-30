@@ -9,7 +9,7 @@ import type {
 } from '../../shared/types';
 import { quoteNamTrade, priceSourceName } from './sources/sqs';
 import { PRICE_HOW_KEY, priceHowAt, storedPriceNote, storedPriceSource, type PriceHowLog } from './price-how';
-import { MINUTE_STALE_MS, NOT_READ, NOT_STORED, POOLS_SOURCE, POOLS_STALE_MS, PRICED_KEY, poolsTotal, readPoolsRow, readStoredCurve, routerCapNote, storedCurve, storedPoolsProv, storedTotalProv } from './pool-sizes';
+import { MINUTE_STALE_MS, NOT_KNOWN_KEY, NOT_READ, NOT_STORED, POOLS_SOURCE, POOLS_STALE_MS, PRICED_KEY, notKnownThenWords, poolsTotal, readPoolsRow, readStoredCurve, routerCapNote, storedCurve, storedPoolsProv, storedTotalProv } from './pool-sizes';
 import { OSMOSIS_GAP_NOTE, OSMOSIS_GAP_UNTIL, osmosisGapCounts, reachesOsmosisGap, withOsmosisGap } from '../../shared/osmosis-gap';
 import { namBalance, namadaEpoch, delegationsAt, QUICK, type ReadOpts } from './sources/namada';
 import { fetchIntel } from './sources/intel';
@@ -161,7 +161,7 @@ app.get('/api/overview', async (c) => {
 
   // Latest stored metrics as of `asOf`
   // supply.pos_bonded is the staking account's balance; supply.total_stake is what is staked (the chain's figure).
-  const keys = ['price.usd', 'price.swap_1h', 'dex.pool_count', 'supply.total', 'supply.pos_bonded', 'supply.total_stake', 'supply.pgf', 'supply.masp_shielded', 'supply.ibc_escrow', 'supply.osmosis', 'supply.liquid', 'epoch', 'dex.liquidity_usd', 'dex.ref_pool_liquidity_usd', PRICED_KEY];
+  const keys = ['price.usd', 'price.swap_1h', 'dex.pool_count', 'supply.total', 'supply.pos_bonded', 'supply.total_stake', 'supply.pgf', 'supply.masp_shielded', 'supply.ibc_escrow', 'supply.osmosis', 'supply.liquid', 'epoch', 'dex.liquidity_usd', 'dex.ref_pool_liquidity_usd', PRICED_KEY, NOT_KNOWN_KEY];
   const metricRows = await Promise.all(keys.map((k) => metricAt(db, k, asOf)));
   const m = new Map(keys.map((k, i) => [k, metricRows[i]]));
   const mv = (k: string) => m.get(k)?.value ?? null;
@@ -232,7 +232,11 @@ app.get('/api/overview', async (c) => {
   const stored = replay ? null : storedPools.row;
   const pools = stored?.pools ?? [];
   const total = stored ? poolsTotal(pools) : null;
-  const liquidityUsd = total ? total.usd : mv('dex.liquidity_usd');
+  // a minute stored after the last total with no total of its own (pool-sizes.ts NOT_KNOWN_KEY): the money in the pools
+  // was not known then, and the older total is not served as the time's
+  const notKnownAt = mt(NOT_KNOWN_KEY);
+  const unknownThen = !stored && notKnownAt != null && notKnownAt > (mt('dex.liquidity_usd') ?? -Infinity);
+  const liquidityUsd = total ? total.usd : unknownThen ? null : mv('dex.liquidity_usd');
   const refPoolLiquidityUsd = stored ? pools.find((p) => p.id === OSMOSIS.refPoolId)?.liquidityUsd ?? null : mv('dex.ref_pool_liquidity_usd');
   const routerCap = mv(PRICED_KEY) == null || mt(PRICED_KEY) !== mt('dex.liquidity_usd');
   const storedPriced = routerCap ? null : Math.round(mv(PRICED_KEY)!);
@@ -248,6 +252,8 @@ app.get('/api/overview', async (c) => {
   const capNote = routerCap ? 'Stored then as the Osmosis router\'s own figure, which counted NAM at nothing while it gave NAM no price.' : leftOut;
   const dexProv: Provenance = stored
     ? storedTotalProv(stored, now)
+    : unknownThen
+    ? { source: `${POOLS_SOURCE} (stored)`, at: notKnownAt, status: 'missing', note: notKnownThenWords(mv(NOT_KNOWN_KEY)) }
     : mv('dex.liquidity_usd') != null
     ? (replay ? { ...replayProv(storedSource, mt('dex.liquidity_usd')), ...(capNote ? { note: capNote } : {}) }
       : provAt(storedSource, mt('dex.liquidity_usd'), asOf, POOLS_STALE_MS, { note: [`${(storedPools.failed ? NOT_READ : NOT_STORED).replace(/\.$/, '')}, so this is the last stored total.`, routerCap ? routerCapNote(null) : leftOut].filter(Boolean).join(' ') }))
