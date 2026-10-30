@@ -4,10 +4,13 @@
 //
 // Logic carried over from the old App.tsx: polling, the WebSocket with reconnect, the stream's
 // price message replacing overview.price.usd with its own provenance, the flow seed, and
-// nt.lastSeen. Nothing here invents a value: a figure the API did not send stays null.
+// nt.lastSeen. Nothing here invents a value: a figure the API did not send stays null. The
+// socket itself (live-socket.ts) is closed while its tab has been hidden for 5 minutes, and the
+// seed is fetched again each time it opens after the first.
 import React, { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react';
 import type { AlertHit, Flow, LiveMessage, Overview } from '../../../shared/types';
 import { fetchAlertsRecent, fetchLiveSeed, fetchOverview } from '../api';
+import { openLiveSocket, seedInto } from './live-socket';
 import { useReplay } from './replay';
 import { useWallNow } from '../ui/now';
 import { useRoute } from './router';
@@ -247,31 +250,31 @@ export function OverviewProvider({ children }: { children: React.ReactNode }) {
       return;
     }
     let alive = true;
-    fetchLiveSeed(30)
-      .then((r) => {
-        if (!alive) return;
-        setLiveFlows((prev) => {
-          const ids = new Set(prev.map((f) => f.id));
-          return [...prev, ...r.flows.filter((f) => !ids.has(f.id))].sort((a, b) => b.ts - a.ts).slice(0, FLOW_KEEP);
-        });
-      })
-      .catch(() => {});
+    // the newest moves, at load and again each time the socket opens after the first (a reconnect, or a tab shown
+    // again after its socket was closed): what came while it was closed is listed (live-socket.ts seedInto)
+    const seed = () =>
+      fetchLiveSeed(30)
+        .then((r) => {
+          if (alive) setLiveFlows((prev) => seedInto(prev, r.flows, FLOW_KEEP));
+        })
+        .catch(() => {});
+    seed();
 
-    let ws: WebSocket | null = null;
-    let timer: ReturnType<typeof setTimeout> | undefined;
-    let backoff = 3000;
-    const connect = () => {
-      if (!alive) return;
-      ws = new WebSocket(`${location.protocol === 'https:' ? 'wss:' : 'ws:'}//${location.host}/ws`);
-      ws.onopen = () => {
-        backoff = 3000;
+    // the socket (live-socket.ts): reconnected after 3 s doubling to 30 s, each with 0 to 3 s more; closed after its
+    // tab has been hidden for 5 minutes, and opened again when the tab shows
+    const sock = openLiveSocket({
+      url: `${location.protocol === 'https:' ? 'wss:' : 'ws:'}//${location.host}/ws`,
+      visible: visSnap,
+      subscribeVisible: subscribeVis,
+      onOpen: (again) => {
         connectedRef.current = true;
         setStream((s) => ({ ...s, connected: true }));
-      };
-      ws.onmessage = (ev) => {
+        if (again) seed();
+      },
+      onMessage: (data) => {
         let msg: LiveMessage;
         try {
-          msg = JSON.parse(ev.data) as LiveMessage;
+          msg = JSON.parse(String(data)) as LiveMessage;
         } catch {
           return;
         }
@@ -298,23 +301,16 @@ export function OverviewProvider({ children }: { children: React.ReactNode }) {
           streamPriceAt.current = msg.at;
           checkAge();
         }
-      };
-      ws.onclose = () => {
+      },
+      onClose: () => {
         connectedRef.current = false;
         setStream((s) => ({ ...s, connected: false, osmosis: null, osmosisSince: null }));
         checkAge();
-        ws = null;
-        if (!alive) return;
-        timer = setTimeout(connect, backoff);
-        backoff = Math.min(backoff * 2, 30_000);
-      };
-      ws.onerror = () => ws?.close();
-    };
-    connect();
+      },
+    });
     return () => {
       alive = false;
-      clearTimeout(timer);
-      ws?.close();
+      sock.close();
     };
   }, [at, checkAge]);
 
