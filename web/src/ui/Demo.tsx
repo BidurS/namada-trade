@@ -530,7 +530,7 @@ function HoldersDemo({ rows, total, full }: { rows: Holder[]; total: number | nu
 }
 
 function PoolsDemo({ pools, prov }: { pools: PoolInfo[]; prov: Provenance }) {
-  const sorted = [...pools].sort((a, b) => b.liquidityUsd - a.liquidityUsd);
+  const sorted = [...pools].sort((a, b) => (b.liquidityUsd ?? -1) - (a.liquidityUsd ?? -1));
   const total = sorted.reduce((a, p) => a + (p.liquidityUsd || 0), 0);
   const shown = sorted.slice(0, 5);
   const rest = sorted.slice(5);
@@ -544,10 +544,10 @@ function PoolsDemo({ pools, prov }: { pools: PoolInfo[]; prov: Provenance }) {
           pair={p.pair.replace('/', ' / ')}
           sub={<><span>{p.id ? `#${p.id}` : 'no id'} · {p.type}</span>{i === 0 ? <Tag cat="Sets the price" look="ref" /> : null}</>}
           depth={<Num v={p.liquidityUsd} fmt={fmtUsdWhole} />}
-          share={<Num v={total > 0 ? (p.liquidityUsd / total) * 100 : null} fmt={(n) => fmtPctRule(n, 1)} unit="of all depth" />}
+          share={<Num v={total > 0 && p.liquidityUsd != null ? (p.liquidityUsd / total) * 100 : null} fmt={(n) => fmtPctRule(n, 1)} unit="of all depth" />}
           nam={<Num v={p.namReserve} fmt={fmtNamRule} unit="NAM" />}
           fee={<Num v={p.spreadFactor * 100} fmt={(n) => fmtPctRule(n)} unit="fee" />}
-          bar={top > 0 ? p.liquidityUsd / top : null}
+          bar={top > 0 && p.liquidityUsd != null ? p.liquidityUsd / top : null}
         />
       ))}
       {rest.length ? (

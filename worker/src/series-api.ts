@@ -15,7 +15,7 @@
 // Rows read per call are noted beside each statement (production, 2026-10-20 22:15 UTC, `meta.rows_read`).
 import type { Env } from './util';
 import type {
-  Provenance, Sourced, PoolInfo, SeriesStep, SeriesUnit, SeriesAgg, SeriesSample, SeriesSource, SeriesGap, SeriesResponse,
+  Provenance, Sourced, SeriesStep, SeriesUnit, SeriesAgg, SeriesSample, SeriesSource, SeriesGap, SeriesResponse,
   PriceChange, PriceChangeWindow, PoolChangeWindow, PriceChangesResponse, PriceReading, VolumeWindow, ExecutedVolume, VolumeResponse,
   PairRow, PairsResponse, TradeRow, TradeGroup, TradesResponse, TradePattern, ValueInput, ValueFigure, ValuesResponse,
 } from '../../shared/types';
@@ -36,6 +36,8 @@ import { OSMOSIS, INTERNAL_LABELS } from './config';
 import { OSMOSIS_DATA_SOURCE } from './sources/osmosis-data';
 import { JOB_WINDOW_MS, OSMOSIS_SUMMARY_STALE_MS } from './series';
 import { poolHoldsSomething } from '../../shared/pool-sides';
+import { NOT_READ, NOT_STORED, POOLS_SOURCE, PRICED_FROM_SQL, notPricedWords, routerCapNote, storedPoolsProv, type StoredPools } from './pool-sizes';
+import { osmosisGapCounts, osmosisGapWindows, reachesOsmosisGap, withOsmosisGap } from '../../shared/osmosis-gap';
 import { ApiInputError } from './api-route';
 
 const H = 3_600_000, D = 86_400_000, MIN = 60_000;
@@ -87,6 +89,10 @@ export interface SeriesKeyDef {
   graceMs: number;
   /** why a clock series has no reading for a stretch, in plain words */
   gapWhy: string;
+  /** counted from the stored Osmosis record: a window reaching back before it is complete says so (shared/osmosis-gap.ts) */
+  osmosisRecord?: boolean;
+  /** a pool size stored since before the pools were sized from their reserves: a window reaching back before then says so (pool-sizes.ts PRICED_KEY) */
+  sizeBasis?: boolean;
 }
 
 const MINUTE_GAP = 'No reading was recorded: the minute reader was not running or its source did not answer.';
@@ -96,7 +102,7 @@ const minuteKey = (unit: SeriesUnit, source: string, what: string): SeriesKeyDef
 });
 const SWAP_SOURCE = 'executed Osmosis swaps (flow index)';
 const swapKey = (unit: SeriesUnit, what: string): SeriesKeyDef => ({
-  unit, agg: 'sum', sparse: true, native: '1h', source: SWAP_SOURCE, backfilled: true, maxAgeMs: 2 * H + JOB_WINDOW_MS, graceMs: JOB_WINDOW_MS, gapWhy: '',
+  unit, agg: 'sum', sparse: true, native: '1h', source: SWAP_SOURCE, backfilled: true, maxAgeMs: 2 * H + JOB_WINDOW_MS, graceMs: JOB_WINDOW_MS, gapWhy: '', osmosisRecord: true,
   startNote: (s) => `${what} in each hour with a trade since ${s}, bot round trips left out. An hour without a point had no trade. The hours before the writer shipped were computed once from the same stored trades.`,
 });
 const hourlyClock = (unit: SeriesUnit, source: string, startNote: (s: string) => string, gapWhy: string, backfilled = false): SeriesKeyDef => ({
@@ -105,7 +111,7 @@ const hourlyClock = (unit: SeriesUnit, source: string, startNote: (s: string) =>
 });
 const DAILY_FLOWS = 'D1 flow index (daily)';
 const dailyFlowKey = (unit: SeriesUnit, what: string): SeriesKeyDef => ({
-  unit, agg: 'sum', sparse: false, native: '1d', source: DAILY_FLOWS, backfilled: true, maxAgeMs: 2 * D, graceMs: 2 * H, gapWhy: 'The daily writer did not record this day.',
+  unit, agg: 'sum', sparse: false, native: '1d', source: DAILY_FLOWS, backfilled: true, maxAgeMs: 2 * D, graceMs: 2 * H, gapWhy: 'The daily writer did not record this day.', osmosisRecord: true,
   startNote: (s) => `${what} for each UTC day since ${s}, from the flow index, bot round trips left out (the days before the writer shipped were computed once from the same stored moves).`,
 });
 
@@ -116,12 +122,12 @@ const dailyFlowKey = (unit: SeriesUnit, what: string): SeriesKeyDef => ({
  */
 export const SERIES_KEYS: Record<string, SeriesKeyDef> = {
   'price.usd': minuteKey('usd_per_nam', 'Osmosis SQS (stored)', 'The quoted price (the Osmosis router, NAM against USDC)'),
-  'dex.liquidity_usd': minuteKey('usd', 'Osmosis SQS pools (stored)', 'Money in the Osmosis NAM pools'),
+  'dex.liquidity_usd': { ...minuteKey('usd', `${POOLS_SOURCE} (stored)`, 'Money in the Osmosis NAM pools (each pool\'s coins at their own prices, the pools that can be priced)'), sizeBasis: true },
   'supply.total_stake': minuteKey('nam', 'Namada RPC abci_query', 'NAM staked with validators (the chain\'s total stake)'),
   'supply.masp_shielded': minuteKey('nam', 'Namada RPC (MASP balance)', 'NAM in the shielded pool'),
   'price.swap_1h': {
     unit: 'usd_per_nam', agg: 'last', sparse: true, native: '1h', lo: 'price.swap_1h.low', hi: 'price.swap_1h.high', n: 'price.swap_1h.n',
-    source: 'executed NAM/USDC swaps (hourly median)', backfilled: true, maxAgeMs: 2 * H + JOB_WINDOW_MS, graceMs: JOB_WINDOW_MS, gapWhy: '',
+    source: 'executed NAM/USDC swaps (hourly median)', backfilled: true, maxAgeMs: 2 * H + JOB_WINDOW_MS, graceMs: JOB_WINDOW_MS, gapWhy: '', osmosisRecord: true,
     startNote: (s) => `The median price of the hour's executed single-pool NAM/USDC trades of 50 NAM or more, for each hour with such a trade, since ${s}. An hour without a point had no such trade. The hours before the writer shipped were computed once from the same stored trades.`,
   },
   'price.pool_1h': {
@@ -302,10 +308,11 @@ export async function readSeries(db: DB, q: SeriesQuery, asOf: number, replay: b
   const pointMs = useRollup ? H : nativeMs;
   // The minute readings of the hours the rollup has not written yet (the current one, and the one before until the hourly job runs).
   const tailFrom = useRollup && to > asOf - 3 * H ? Math.max(from, Math.floor((to - 1) / H) * H - H) : null;
-  const [rows, tail, meta] = await Promise.all([
+  const [rows, tail, meta, sizeFrom] = await Promise.all([
     later(() => db.prepare(rangeSql(keys.length)).bind(...keys, from, to).all<{ key: string; ts: number; value: number }>()),
     later(() => (tailFrom != null ? db.prepare(rangeSql(1)).bind(q.key, tailFrom, to).all<{ key: string; ts: number; value: number }>() : Promise.resolve({ results: [] as { key: string; ts: number; value: number }[] }))),
     later(() => db.prepare(START_SQL).bind(q.key, valueKeyOf(q.key, useRollup)).first<{ start: number | null; start_read: number | null; job: string | null }>()),
+    def.sizeBasis ? sizedFrom(db) : Promise.resolve(undefined),
   ]);
 
   // Native points, one per native step: the step's readings of the value key (the last, or their sum, with their
@@ -347,12 +354,20 @@ export async function readSeries(db: DB, q: SeriesQuery, asOf: number, replay: b
   // only when it lies before the hour of the first minute reading (minute rows deleted since).
   const s0 = finite(meta?.start), s1 = finite(meta?.start_read);
   const start = s0 == null ? s1 : s1 != null && s1 < Math.floor(s0 / pointMs) * pointMs ? s1 : s0;
-  return seriesAnswer(def, q.key, native, start, meta?.job ?? null, { from, to, step, pointMs }, asOf, replay);
+  return seriesAnswer(def, q.key, native, start, meta?.job ?? null, { from, to, step, pointMs }, asOf, replay, sizeFrom);
 }
 
-/** The answer from the native points: thinned to the step, with its start, coverage, gaps and stamp. */
+/** The first minute the stored pool sizes were the pools' coins at their own prices (pool-sizes.ts PRICED_KEY), null before; a failed read says nothing (undefined). */
+const sizedFrom = (db: DB): Promise<number | null | undefined> =>
+  later(() => db.prepare(PRICED_FROM_SQL).first<{ t: number | null }>()).then((r) => finite(r?.t ?? null), () => undefined);
+
+/**
+ * The answer from the native points: thinned to the step, with its start, coverage, gaps and stamp. A series counted
+ * from the stored Osmosis record whose window reaches back before it is complete says so, and so does a pool size
+ * whose window reaches back before the pools were sized from their reserves (`sizeFrom`: that minute, null before it).
+ */
 function seriesAnswer(def: SeriesKeyDef, key: string, native: NativePoint[], start: number | null, jobRaw: string | null,
-  r: { from: number; to: number; step: SeriesStep; pointMs: number }, asOf: number, replay: boolean): SeriesResponse {
+  r: { from: number; to: number; step: SeriesStep; pointMs: number }, asOf: number, replay: boolean, sizeFrom?: number | null): SeriesResponse {
   const { from, to, step, pointMs } = r;
   const stepMs = SERIES_STEP_MS[step];
   const thinned = thin(native, stepMs, def.agg, pointMs);
@@ -392,6 +407,8 @@ function seriesAnswer(def: SeriesKeyDef, key: string, native: NativePoint[], sta
   } else {
     prov = provAt(def.source, newest.at, asOf, def.maxAgeMs);
   }
+  if (newest && def.osmosisRecord) prov = withOsmosisGap(prov, covFrom);
+  if (newest && sizeFrom !== undefined && (sizeFrom == null || covFrom < sizeFrom)) prov = { ...prov, note: [prov.note, routerCapNote(sizeFrom)].filter(Boolean).join(' ') };
   return {
     key, from, to, step, stepMs, agg: def.agg, unit: def.unit, points, sources: [source], start,
     sparse: def.sparse, coverage: { steps: Math.max(0, steps), withPoint }, gaps, prov, asOf,
@@ -402,7 +419,7 @@ function seriesAnswer(def: SeriesKeyDef, key: string, native: NativePoint[], sta
 
 /** The pool_hourly columns served as series: `pool_hourly.<pool id>.<column>`. */
 export const POOL_SERIES_COLUMNS = {
-  liquidity_usd: { unit: 'usd', router: true, what: 'Money in the pool, as the Osmosis router lists it' },
+  liquidity_usd: { unit: 'usd', router: true, what: 'Money in the pool: its coins at their own prices, from the reserves the Osmosis router lists' },
   nam_reserve: { unit: 'nam', router: true, what: 'NAM in the pool, as the Osmosis router lists it' },
   volume_24h_usd_osmosis: { unit: 'usd', router: false, what: 'Dollars traded in the pool in the last 24 hours, as the Osmosis app\'s pair summary counts them (the side it can price)' },
   volume_7d_usd_osmosis: { unit: 'usd', router: false, what: 'Dollars traded in the pool in the last 7 days, as the Osmosis app\'s pair summary counts them (the side it can price)' },
@@ -436,9 +453,10 @@ async function readPoolSeries(db: DB, key: string, pool: string, col: PoolColumn
   const from = fromAsked ?? to - 30 * D;
   if (!(from < to)) throw new SeriesInputError(400, '`from` must be before `to` (and before the rewound time, if any).');
   const step = chooseStep(def, from, to, q.step);
-  const [rows, st] = await Promise.all([
+  const [rows, st, sizeFrom] = await Promise.all([
     later(() => db.prepare(POOL_RANGE_SQL).bind(pool, from, to).all<Record<string, number | null>>()),
     later(() => db.prepare(POOL_START_SQL).bind(pool).first<{ start: number | null }>()),
+    col === 'liquidity_usd' ? sizedFrom(db) : Promise.resolve(undefined),
   ]);
   const native: NativePoint[] = [];
   for (const r of rows.results || []) {
@@ -447,7 +465,7 @@ async function readPoolSeries(db: DB, key: string, pool: string, col: PoolColumn
     const hour = Number(r.hour);
     native.push({ t: hour, at: finite(POOL_SERIES_COLUMNS[col].router ? r.at : r.osmosis_at) ?? hour, v, n: 1 });
   }
-  return seriesAnswer(def, key, native, finite(st?.start), null, { from, to, step, pointMs: H }, asOf, replay);
+  return seriesAnswer(def, key, native, finite(st?.start), null, { from, to, step, pointMs: H }, asOf, replay, sizeFrom);
 }
 
 // ================================================================ GET /api/series/changes
@@ -620,6 +638,9 @@ export async function readVolume(db: DB, asOf: number, replay: boolean): Promise
   if (start == null) notes.push('No trade is recorded yet.');
   else if (Object.values(windows).some((x) => x == null)) notes.push(`Trades are recorded since ${fmtDay(start)}, so a window reaching further back is not shown.`);
   if (capFrom > -Infinity) notes.push(`More than ${VOLUME_ROWS_MAX.toLocaleString('en-US')} trades on one side in the longest window: the windows reaching past ${fmtDayTime(capFrom)} are not computed per request.`);
+  // a window shown that reaches back before the stored Osmosis record is complete says so (shared/osmosis-gap.ts); its figures are as stored
+  const gapped = (Object.keys(VOLUME_WINDOW_MS) as VolumeWindow[]).filter((w) => windows[w] && reachesOsmosisGap(asOf - VOLUME_WINDOW_MS[w]));
+  if (gapped.length) notes.push(osmosisGapWindows(gapped.map((w) => WINDOW_WORD[w])));
   if (notes.length) prov = { ...prov, note: [prov.note, ...notes].filter(Boolean).join(' ') };
 
   const o24 = finite(meta?.o24), o7 = finite(meta?.o7);
@@ -653,28 +674,56 @@ export interface StoredPoolHour {
   volume_24h_usd_osmosis: number | null; volume_7d_usd_osmosis: number | null; liquidity_usd_osmosis: number | null; osmosis_at: number | null;
 }
 
+/**
+ * A stored hour's size when the stored list is not there (readPairs): never the router's liquidity_cap, which the hours
+ * before `sizedAt` (pool-sizes.ts PRICED_KEY's first minute; null when none is stored yet, undefined when it could not
+ * be read) hold; an hour stored without a size could not be priced then. Each says why in its stamp.
+ */
+function storedHourSize(s: StoredPoolHour, sizedAt: number | null | undefined): { liquidityUsd: number | null; sizeProv?: Provenance } {
+  const at = finite(s.at) ?? Number(s.hour);
+  const source = `${POOLS_SOURCE} (stored hour)`;
+  if (sizedAt === undefined) {
+    return { liquidityUsd: null, sizeProv: { source, at, status: 'missing', note: `Whether the size stored for the hour at ${fmtDayTime(at)} is the Osmosis router's own figure could not be read, so it is not shown as the pool's size.` } };
+  }
+  if (sizedAt == null || at < sizedAt) {
+    return { liquidityUsd: null, sizeProv: { source, at, status: 'missing', note: `The size stored for the hour at ${fmtDayTime(at)} is the Osmosis router's own figure, which counted NAM at nothing while it gave NAM no price, so it is not shown as the pool's size.` } };
+  }
+  const v = finite(s.liquidity_usd);
+  return v != null ? { liquidityUsd: v, sizeProv: { source, at, status: 'stale' } }
+    : { liquidityUsd: null, sizeProv: { source, at, status: 'missing', note: notPricedWords(`a side of the pool could not be priced in the hour stored at ${fmtDayTime(at)}`) } };
+}
+
 const NO_LEGS: Provenance = { source: 'D1 flow index', at: null, status: 'missing', note: 'Trades per pool are not recorded yet: a routed trade names several pools and cannot be split between them.' };
 const sumKnown = (xs: (number | null)[]) => (xs.some((x) => x != null) ? xs.reduce<number>((a, x) => a + (x ?? 0), 0) : null);
 /** A raw denom ('ibc/…', 'UNKNOWN') is not a symbol a reader knows. */
 const symbolOf = (s: string | null | undefined) => (!s || s === 'UNKNOWN' || s.startsWith('ibc/') || s.startsWith('factory/') ? null : s);
 
 /**
- * The NAM pools (screener-plan 2.4): depth, reserves and fee from the router's live answer (else the newest stored
- * hour, marked old), with the Osmosis app's 24 h and 7 d volume and its own update time from pool_hourly. Deepest
- * first. 1 query (the stored hour) beside the router's answer.
+ * The NAM pools (screener-plan 2.4): size, reserves and fee from the cron's stored pool list (pool-sizes.ts: each
+ * pool's coins at their own price; old past its age; else the newest stored hour, marked old), with the Osmosis app's
+ * 24 h and 7 d volume and its own update time from pool_hourly. Deepest first. 1 query (the stored hour) beside the
+ * stored list, which the route reads (kv osmosis.pools), and without the list one seek of the first sized minute
+ * (storedHourSize): nothing here asks the router. `failed`: the stored row could not be read (pool-sizes.ts readPoolsRow).
  */
-export async function readPairs(db: DB, now: number, live: { pools: PoolInfo[]; at: number; error?: string }): Promise<PairsResponse> {
-  const stored = (await db.prepare(PAIRS_STORED_SQL).bind(OSMOSIS.refPoolId, now).all<StoredPoolHour>()).results || [];
+export async function readPairs(db: DB, now: number, list: StoredPools | null, failed = false): Promise<PairsResponse> {
+  const inList = list?.pools ?? [];
+  const routed = inList.length > 0;
+  // Without the stored list, the stored hour stands in, and the first minute the sizes were the pools' coins at their
+  // own prices says which of its sizes are the router's liquidity_cap (undefined: not read, so none is taken as a size).
+  const [storedRes, sizedAt] = await Promise.all([
+    db.prepare(PAIRS_STORED_SQL).bind(OSMOSIS.refPoolId, now).all<StoredPoolHour>(),
+    routed ? Promise.resolve(undefined) : later(() => db.prepare(PRICED_FROM_SQL).first<{ t: number | null }>()).then((r) => finite(r?.t ?? null), () => undefined),
+  ]);
+  const stored = storedRes.results || [];
   const byId = new Map(stored.map((r) => [String(r.pool_id), r]));
-  const routed = live.pools.length > 0;
   const summaryRead = stored.some((r) => r.osmosis_at != null);
-  const ids = new Set<string>([...live.pools.map((p) => p.id), ...stored.map((r) => String(r.pool_id))]);
-  const livePool = new Map(live.pools.map((p) => [p.id, p]));
+  const ids = new Set<string>([...inList.map((p) => p.id), ...stored.map((r) => String(r.pool_id))]);
+  const livePool = new Map(inList.map((p) => [p.id, p]));
   const osmoMaxAge = OSMOSIS_SUMMARY_STALE_MS + H;
   const pairs: PairRow[] = [...ids].filter(Boolean).map((id) => {
     const p = livePool.get(id), s = byId.get(id);
-    const router = routed ? (p ? { liquidityUsd: p.liquidityUsd, namReserve: p.namReserve, counterReserve: p.counterReserve, spreadFactor: p.spreadFactor } : null)
-      : s && s.at != null ? { liquidityUsd: finite(s.liquidity_usd), namReserve: finite(s.nam_reserve), counterReserve: finite(s.counter_reserve), spreadFactor: finite(s.spread) } : null;
+    const router = routed ? (p ? { liquidityUsd: p.liquidityUsd, namReserve: p.namReserve, counterReserve: p.counterReserve, spreadFactor: p.spreadFactor, sizeProv: p.sizeProv } : null)
+      : s && s.at != null ? { ...storedHourSize(s, sizedAt), namReserve: finite(s.nam_reserve), counterReserve: finite(s.counter_reserve), spreadFactor: finite(s.spread) } : null;
     const sym = symbolOf(p?.counterSymbol);
     const osmosis: PairRow['osmosis'] = s?.osmosis_at != null
       ? { value: { volume24hUsd: finite(s.volume_24h_usd_osmosis), volume7dUsd: finite(s.volume_7d_usd_osmosis), liquidityUsd: finite(s.liquidity_usd_osmosis) }, prov: provAt(OSMOSIS_DATA_SOURCE, Number(s.osmosis_at), now, osmoMaxAge) }
@@ -682,16 +731,18 @@ export async function readPairs(db: DB, now: number, live: { pools: PoolInfo[]; 
     return {
       poolId: id, pair: sym ? `NAM/${sym}` : 'NAM/another coin', counterSymbol: sym, type: p?.type ?? null,
       liquidityUsd: router?.liquidityUsd ?? null, namReserve: router?.namReserve ?? null, counterReserve: router?.counterReserve ?? null, spreadFactor: router?.spreadFactor ?? null,
+      ...(router?.sizeProv ? { sizeProv: router.sizeProv } : {}),
       osmosis, here24h: { value: null, prov: NO_LEGS }, createdAt: null,
     };
   });
   // a pool empty on both sides (in the live answer or the stored hour) holds nothing to trade and is not listed
   const listed = pairs.filter(poolHoldsSomething);
-  listed.sort((a, b) => (b.liquidityUsd ?? -1) - (a.liquidityUsd ?? -1) || Number(a.poolId) - Number(b.poolId));
+  // priced by size, then the pools that cannot be priced by the NAM inside, then by pool number
+  listed.sort((a, b) => (b.liquidityUsd ?? -1) - (a.liquidityUsd ?? -1) || (b.namReserve ?? -1) - (a.namReserve ?? -1) || Number(a.poolId) - Number(b.poolId));
   const storedAt = stored.map((r) => finite(r.at)).filter((x): x is number => x != null);
-  const prov: Provenance = routed ? { source: ROUTER_SOURCE, at: live.at, status: 'live' }
-    : storedAt.length ? { source: `${ROUTER_SOURCE} (stored)`, at: Math.max(...storedAt), status: 'stale', note: `The Osmosis router did not answer; depth and reserves as read at ${fmtDayTime(Math.max(...storedAt))}.` }
-    : { source: ROUTER_SOURCE, at: null, status: 'missing', note: 'The Osmosis router did not answer and no pool reading is stored.' };
+  const prov: Provenance = routed ? storedPoolsProv(list, now)
+    : storedAt.length ? { source: `${POOLS_SOURCE} (stored hour)`, at: Math.max(...storedAt), status: 'stale', note: `${(failed ? NOT_READ : NOT_STORED).replace(/\.$/, '')}; sizes and reserves as stored for the hour at ${fmtDayTime(Math.max(...storedAt))}.` }
+    : { source: POOLS_SOURCE, at: null, status: 'missing', note: `${(failed ? NOT_READ : NOT_STORED).replace(/\.$/, '')}, and no pool reading is stored.` };
   const osAt = stored.map((r) => finite(r.osmosis_at)).filter((x): x is number => x != null);
   const osmosisProv: Provenance = osAt.length ? provAt(OSMOSIS_DATA_SOURCE, Math.max(...osAt), now, osmoMaxAge)
     : { source: OSMOSIS_DATA_SOURCE, at: null, status: 'missing', note: stored.length ? 'The Osmosis app\'s pair summary was not read in the newest hour stored.' : 'The Osmosis app\'s pool figures have not been stored yet.' };
@@ -885,8 +936,14 @@ export async function readTrades(db: DB, q: TradesQuery, asOf: number, replay: b
     r.pattern = pats[i];
   });
   const firsts = [startR?.b, startR?.s].map(finite).filter((x): x is number => x != null && x <= asOf);
+  // A page reaching back before the stored Osmosis record is complete says so, and so do the makers' counts, which
+  // cover every trade recorded (shared/osmosis-gap.ts); the rows and counts are as stored.
+  const oldest = page.length ? page[page.length - 1].ts : bound;
+  const prov = reachesOsmosisGap(oldest) ? withOsmosisGap(cov.osmosis, oldest)
+    : makers.length && firsts.length && reachesOsmosisGap(Math.min(...firsts)) ? { ...cov.osmosis, note: [cov.osmosis.note, osmosisGapCounts('The makers\' trade counts')].filter(Boolean).join(' ') }
+    : cov.osmosis;
   const res: TradesResponse & { foldUnderNam: number } = {
-    rows, groups: foldTrades(rows), next, asOf, foldMs: TRADE_FOLD_MS, patternRule: { ...PATTERN_RULE }, prov: cov.osmosis,
+    rows, groups: foldTrades(rows), next, asOf, foldMs: TRADE_FOLD_MS, patternRule: { ...PATTERN_RULE }, prov,
     firstTs: firsts.length ? Math.min(...firsts) : null,
     // Not in the TradesResponse contract yet (requested): consecutive trades fold only under this size.
     foldUnderNam: TRADE_FOLD_UNDER_NAM,

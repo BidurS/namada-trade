@@ -8,6 +8,7 @@ import type { BondListing } from './sources/namada';
 import { evaluateFlows, INTERNAL_ADDRESSES, isInternal, type AlertThresholds } from '../../shared/alerts';
 import { QUOTE_KEYS, quotesNeeded, settleMetaOf, settleOf, type Settle } from '../../shared/settle';
 import { SELLS_MOST_CUT } from '../../shared/supply-thresholds';
+import { withOsmosisGap } from '../../shared/osmosis-gap';
 import { kvGetJson, kvSet } from './db';
 import { AFTER_CURSOR, FLOWS_ORDER, NAM_AMOUNT, NOT_BELOW, NOT_LEGACY_TWIN } from './flows-query';
 import { safeHttpUrl, explorerHashOf, isOtherCoin, priceAtOf } from '../../shared/flow-rules';
@@ -1023,8 +1024,12 @@ export async function pressure(db: D1Database, asOf: number, replay: boolean, wi
     ...(unbondTermStructure ? { unbondTermStructure } : {}), unbondTermStructureProv, unbondWithdrawProv,
     pipelineSummary,
     bondedTrend: bondedTrend.map((p) => ({ ts: p.ts, value: p.value })), movers, proposals, proposalsProv,
-    coverage: cov.both,
-    coverageByChain: { osmosis: cov.osmosis, namada: cov.namada },
+    // A window reaching back before the stored Osmosis record is complete says so (shared/osmosis-gap.ts); no figure
+    // changes. The window's own figures (the movers, the crossings) reach back to `from`; what each receiver has left
+    // is counted from its sells since 30 days before it, so its own stamp reaches back that far.
+    coverage: withOsmosisGap(cov.both, from),
+    coverageByChain: { osmosis: withOsmosisGap(cov.osmosis, from), namada: cov.namada },
+    onDeckProv: withOsmosisGap(cov.osmosis, from - 30 * D),
   };
 }
 
@@ -1319,7 +1324,8 @@ export async function orderflowSeries(db: D1Database, asOf: number, replay: bool
     buySharePct,
     priceChangePct,
     absorptionRegime,
-    prov: cov.osmosis,
+    // a window reaching back before the stored Osmosis record is complete says so (shared/osmosis-gap.ts); the buckets are as stored
+    prov: withOsmosisGap(cov.osmosis, from),
   };
 }
 

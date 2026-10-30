@@ -6,7 +6,8 @@
 // (the one place a series carries the buy and sell hues, because each part is a buy or a sell).
 //
 // Descriptive only: "above what buyers paid" is arithmetic, never a reason to act. A window the record does not
-// cover is "—" with the reason; a route this server does not serve reads NOT_SERVED.
+// cover is "—" with the reason; a route this server does not serve reads NOT_SERVED. A window that reaches back before
+// the stored Osmosis record is complete (shared/osmosis-gap.ts) says so under the table, its figures as stored.
 import type { ExecutedVolume, Overview, VolumeResponse } from '../../../../shared/types';
 import { NOT_SERVED } from '../../../../shared/types';
 import { Num, ProvScope, SkeletonBlock, SourceLine, derive, type Stamp } from '../../ui/index';
@@ -17,6 +18,7 @@ import type { DailyTrades, HistoryLoad } from './data';
 import { DAILY_DAYS } from './data';
 import type { Depth } from './model';
 import { PAID_WINDOWS, WINDOW_WORD, turnoverPct, vsPaidPct } from './series';
+import { osmosisGapWindows, reachesOsmosisGap } from '../../../../shared/osmosis-gap';
 
 export interface BuyersProps {
   volume: HistoryLoad<VolumeResponse>;
@@ -29,6 +31,8 @@ export interface BuyersProps {
 
 const fin = (x: number | null | undefined): x is number => x != null && Number.isFinite(x);
 const WINDOW_LONG: Record<string, string> = { h24: 'Last 24 hours', d7: 'Last 7 days', d30: 'Last 30 days' };
+/** A window as the gap sentence names it ("The 30-day window reaches back before then."). */
+const WINDOW_SPAN: Record<string, string> = { h24: '24-hour', d7: '7-day', d30: '30-day' };
 
 /** "—" with the reason for a figure whose route does not answer. */
 const missing = (why: string): Stamp => ({ source: 'executed NAM swaps (hourly rows)', plain: 'Executed swaps', at: null, status: 'missing', note: why });
@@ -45,6 +49,8 @@ export function Buyers({ volume, daily, overview, depth, rewound = false }: Buye
   const vsStamp = volStamp && priceStamp ? derive([priceStamp, volStamp], 'the quoted price against the average price the last 7 days’ buyers paid') : null;
   const notCovered = (w: ExecutedVolume | null): Stamp | null =>
     w ? null : volStamp ? { ...volStamp, status: 'missing', note: v?.start != null ? 'The record does not cover this window yet.' : 'No trade hour is recorded yet.' } : null;
+  // the windows shown that reach back before the stored Osmosis record is complete
+  const gapped = v ? PAID_WINDOWS.filter((w) => { const x = v.windows[w]; return !!x && reachesOsmosisGap(x.from); }) : [];
 
   // ---- what traded against the pools' depth
   const h24 = v?.windows.h24 ?? null;
@@ -133,6 +139,7 @@ export function Buyers({ volume, daily, overview, depth, rewound = false }: Buye
                 <span data-num="">{fmtCount(v.windows.d30.hoursWithTrade)}</span> of the last <span data-num="">{fmtCount(v.windows.d30.hours)}</span> hours had a trade. An average over few trades moves with each one.
               </p>
             ) : null}
+            {gapped.length ? <p className="cap tk-gap">{osmosisGapWindows(gapped.map((w) => WINDOW_SPAN[w] ?? WINDOW_WORD[w]))}</p> : null}
           </>
         )}
         <SourceLine items={scope} label="Where the average prices come from" />

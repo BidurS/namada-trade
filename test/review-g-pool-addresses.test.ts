@@ -17,6 +17,7 @@ import { COHORT_LABELLED_SQL } from '../worker/src/series-sql';
 import { stmt } from '../worker/src/db';
 import { app } from '../worker/src/api';
 import { isPoolAccount } from '../worker/src/util';
+import { POOLS_KEY } from '../worker/src/pool-sizes';
 import { NAM, OSMOSIS } from '../worker/src/config';
 import { testD1, insert, runStmts, type TestD1 } from './d1-sqlite';
 import type { HoldersResponse } from '../shared/types';
@@ -114,9 +115,10 @@ describe('an address the quote service lists as a pool', () => {
     const ok = await fetchNamPools();
     expect(Object.keys(ok).sort()).toEqual(['at', 'pools', 'raw']); // raw: the list as given, for the depth module's own pool list (worker/src/depth/pools.ts)
     expect(ok.raw).toHaveLength(realPools.length);
-    expect(ok.pools.map((p) => [p.id, p.type, p.address, p.pair, p.liquidityUsd])).toEqual([
-      ['3008', 'cosmwasm', COSMWASM_3008, 'NAM / USDC', 748],
-      ['3005', 'concentrated', CL_3005, 'NAM / USDC', 724],
+    // the size is the cron's from the reserves (worker/src/pool-sizes.ts); the router's own figure stands beside it
+    expect(ok.pools.map((p) => [p.id, p.type, p.address, p.pair, p.liquidityUsd, p.routerLiquidityUsd, p.counterReserve])).toEqual([
+      ['3008', 'cosmwasm', COSMWASM_3008, 'NAM / USDC', null, 748, 0.00108],
+      ['3005', 'concentrated', CL_3005, 'NAM / USDC', null, 724, 155.773361],
     ]);
   });
 
@@ -170,5 +172,28 @@ describe('an address the quote service lists as a pool', () => {
     expect(parseOsmosisTx(send(osmoUser), hub.osmoCtx).flows.map((f) => [f.kind, f.from, f.to, f.amount])).toEqual([['transfer', osmoSigner, osmoUser, 50_000]]);
     // a deposit to a real pool is still liquidity
     expect(parseOsmosisTx(send(CL_3005), hub.osmoCtx).flows.map((f) => [f.kind, f.from, f.to, f.amount])).toEqual([['lp_add', osmoSigner, null, 50_000]]);
+  });
+
+  it('a hub that starts takes its pool accounts from the cron\'s stored pool list and asks the router nothing; the router only while none is stored', async () => {
+    // the list the cron stored (kv osmosis.pools, worker/src/pool-sizes.ts): its addresses were checked when it was read
+    network(realPools);
+    const listed = await fetchNamPools();
+    const db = testD1();
+    insert(db, 'kv', [{ key: POOLS_KEY, value: JSON.stringify({ at: Date.now(), pools: listed.pools, depth: null, price: null }), updated_at: Date.now() }]);
+    const asked: string[] = [];
+    vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL) => { asked.push(String(input)); return new Response('no outside request', { status: 500 }); }));
+    const hub = (env: unknown): any => Object.assign(Object.create(LiveHub.prototype), {
+      env, osmoCtx: { poolAddrs: new Map(), priceUsd: null, assets: new Map() },
+      quote: { refresh: async () => null }, lastPriceUsd: null, broadcast: () => {},
+    });
+    const stored = hub({ DB: db });
+    await stored.refreshContext();
+    expect([...stored.osmoCtx.poolAddrs.entries()].sort()).toEqual([[COSMWASM_3008, '3008'], [CL_3005, '3005']]);
+    expect(asked).toEqual([]);
+    // nothing stored yet: the router's own list, as before
+    network(realPools);
+    const fresh = hub({ DB: testD1() });
+    await fresh.refreshContext();
+    expect([...fresh.osmoCtx.poolAddrs.entries()].sort()).toEqual([[COSMWASM_3008, '3008'], [CL_3005, '3005']]);
   });
 });

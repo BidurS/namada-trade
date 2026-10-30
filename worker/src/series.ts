@@ -157,8 +157,11 @@ export function swapHourStmts(rows: SwapRow[], hour: number): Stmt[] {
 // ---------------------------------------------------------------- hourly
 
 export interface HourlyCtx {
-  /** the router's pools answer this tick (cron.ts poolRes) and when it was read */
-  pools: PoolInfo[];
+  /**
+   * the router's pools this tick, sized from their reserves (cron.ts sized: pool-sizes.ts sizePools), and when the list
+   * was read; a promise in the tick, since the sizes wait for the depth minute
+   */
+  pools: PoolInfo[] | Promise<PoolInfo[]>;
   poolsAt: number | null;
   health: SourceHealth[];
   /** a chain listing is being read this tick: the job waits for a quieter tick in the window */
@@ -349,7 +352,10 @@ export async function hourly(env: Env, now: number, ctx: HourlyCtx): Promise<Hou
       }
     }
     // pool_hourly once the summary is read, or at the close without it (the router's columns only).
-    if (sum || (!oj.summary && closing)) stmts.push(...poolHourlyStmts(hour, ctx.pools, ctx.pools.length ? ctx.poolsAt : null, sum));
+    if (sum || (!oj.summary && closing)) {
+      const pools = await Promise.resolve(ctx.pools).catch(() => [] as PoolInfo[]);
+      stmts.push(...poolHourlyStmts(hour, pools, pools.length ? ctx.poolsAt : null, sum));
+    }
     if (chart) {
       if ('v' in chart) {
         let stored = true;

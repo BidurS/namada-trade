@@ -2,7 +2,7 @@
 // vocabulary (web/src/lib/prov.ts). Pure functions only.
 import { describe, it, expect } from 'vitest';
 import {
-  MINUS, fmtUsdRule, fmtUsdWhole, splitPrice, fmtNamRule, fmtNamSigned, fmtPctRule, fmtPctSigned, fmtCoin,
+  MINUS, fmtUsdRule, fmtUsdWhole, splitPrice, fmtNamRule, fmtNamSigned, fmtPctRule, fmtPctSigned, fmtCoin, fmtCoinAmount,
   fmtAge, ageOf, fmtAgo, fmtUtcLong, fmtUtcClock, fmtDateline, fmtDayMonth, fmtMonthYear, fmtAddr, roundToTotal,
   explorerTx, explorerAddr,
 } from '../web/src/lib/format';
@@ -66,6 +66,15 @@ describe('NAM, coins and percentages', () => {
   it('USDC: two decimals', () => {
     expect(fmtCoin(5.045588)).toBe('5.05');
     expect(fmtCoin(102.541464)).toBe('102.54');
+  });
+  it('a pool\'s other coin: two decimals from 1 up, never zero for an amount that is not', () => {
+    expect(fmtCoinAmount(174.700606)).toBe('174.70');
+    expect(fmtCoinAmount(1668.114886)).toBe('1,668.11');
+    expect(fmtCoinAmount(0.0000215)).toBe('0.0000215');
+    expect(fmtCoinAmount(0.00108)).toBe('0.00108');
+    expect(fmtCoinAmount(0.162340)).toBe('0.162');
+    expect(fmtCoinAmount(0)).toBe('0');
+    expect(fmtCoinAmount(null)).toBe('—');
   });
   it('price move and share of supply: two decimals; hero share one', () => {
     expect(fmtPctRule(4.8)).toBe('4.80%');

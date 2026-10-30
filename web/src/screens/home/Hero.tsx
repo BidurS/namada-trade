@@ -9,6 +9,7 @@ import { Derived, Fact, HeroNumber, Icon, Num, ProvChip, ProvDot, SNum, Skeleton
 import type { Stamp } from '../../lib/prov';
 import { fmtCount, fmtDateline, fmtDayMonth, fmtPctRule, fmtPctSigned, fmtUsdRule } from '../../lib/format';
 import type { Res } from './data';
+import { withOsmosisGap } from '../../../../shared/osmosis-gap';
 
 export interface HeroProps {
   o: Overview | null;
@@ -43,11 +44,13 @@ export function Hero({ o, h1, at, spark, onSources, supplyP, osmoP, holdersP, fa
   // The executed price's stamp comes with the overview. When the overview never answered, the line still carries a
   // stamp: the time of its last hourly price, marked old (whether the history is current is not checked).
   const lastPt = pts.length ? pts[pts.length - 1] : null;
-  const execP: Stamp | null =
+  const lastP: Stamp | null =
     o?.price.swap1h.prov ??
     (lastPt
       ? { source: 'executed NAM/USDC swaps (hourly median)', plain: 'Executed swaps', at: lastPt.t, status: 'stale', note: 'The overview did not load, so whether this price history is current is not checked; the time is its last hourly price.' }
       : null);
+  // the 30 days are counted from the stored Osmosis record: a first price before it is complete says so (shared/osmosis-gap.ts)
+  const execP: Stamp | null = lastP && pts.length ? withOsmosisGap(lastP, pts[0].t) : lastP;
 
   return (
     <section className="band ground-accent hero" aria-labelledby="home-h1">

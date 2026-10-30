@@ -5,7 +5,8 @@
 import type { Overview, PoolInfo, PriceQuote, Provenance, QuoteCurveResponse, SlippageCurvePoint } from '../../../../shared/types';
 import type { Stamp } from '../../lib/prov';
 import { fmtNamRule, parseAmount } from '../../lib/format';
-import { poolSides } from '../../../../shared/pool-sides';
+import { counterName, namLeftOutWords, poolSides, pricedTotal, totalNotKnownWords } from '../../../../shared/pool-sides';
+export { counterName, restOf } from '../../../../shared/pool-sides';
 
 export type Side = 'sell' | 'buy';
 
@@ -149,35 +150,68 @@ export function refPrice(o: Overview | null): { value: number | null; prov: Stam
   return { value: null, prov: o.price.usd.prov };
 }
 
-/** Money in the NAM pools and how many: the live pool list when it answered, else the overview's stored reading. */
+/** What the pools hold in coin units: all their NAM, and the other coins by name, the most dollars first. */
+export interface Reserves {
+  nam: number;
+  coins: { name: string; amount: number; usd: number | null }[];
+}
+
+/**
+ * Money in the NAM pools and how many: the stored pool list when it answered (each pool's coins at their own prices,
+ * worker/src/pool-sizes.ts; a pool that cannot be priced is left out of the sum and counted; no sum unless the priced
+ * pools hold the NAM a total needs, shared/pool-sides.ts pricedTotal), else the overview's stored reading.
+ */
 export interface Depth {
+  /** the priced pools' sum; null when it is not known (`stamp` then says why) */
   usd: number | null;
   count: number | null;
+  /** pools left out of the sum because a side cannot be priced (null: not known, an overview without the count) */
+  notPriced: number | null;
+  /** the coins inside (both reserves), from the list; null for the overview's reading */
+  reserves: Reserves | null;
   stamp: Stamp;
-  /** true: summed from the live pool list on this page. */
+  /** true: summed from the pool list on this page. */
   fromList: boolean;
+}
+
+/** Both reserves of a list of pools in coin units: NAM summed, and each other coin summed by its name (a coin whose amount is not known is left out). */
+export function reservesOf(list: Pick<PoolInfo, 'pair' | 'counterSymbol' | 'namReserve' | 'counterReserve' | 'counterUsd'>[]): Reserves {
+  const by = new Map<string, { amount: number; usd: number | null }>();
+  let nam = 0;
+  for (const p of list) {
+    if (fin(p.namReserve)) nam += p.namReserve;
+    if (!fin(p.counterReserve) || !(p.counterReserve > 0)) continue;
+    const name = counterName(p);
+    const c = by.get(name) ?? { amount: 0, usd: 0 };
+    c.amount += p.counterReserve;
+    c.usd = c.usd != null && fin(p.counterUsd) ? c.usd + p.counterUsd : null;
+    by.set(name, c);
+  }
+  return { nam, coins: [...by.entries()].map(([name, c]) => ({ name, ...c })).sort((a, b) => (b.usd ?? -1) - (a.usd ?? -1) || b.amount - a.amount) };
 }
 
 export function depthOf(pools: { pools: PoolInfo[]; prov: Provenance } | null, o: Overview | null): Depth | null {
   if (pools && pools.pools.length) {
-    const usd = pools.pools.reduce((a, p) => a + (fin(p.liquidityUsd) ? p.liquidityUsd : 0), 0);
-    return { usd, count: pools.pools.length, stamp: { ...pools.prov, plain: 'Osmosis pools' }, fromList: true };
+    const t = pricedTotal(pools.pools);
+    // not known: the rule's own words, then the largest pool left out's reason (most NAM first: the list's order)
+    const why = pools.pools.find((p) => !fin(p.liquidityUsd))?.sizeProv?.note;
+    const stamp: Stamp = t.usd == null
+      ? { ...pools.prov, plain: 'Osmosis pools', status: 'missing', note: [totalNotKnownWords(t), why].filter(Boolean).join(' ') }
+      : { ...pools.prov, plain: 'Osmosis pools', ...(namLeftOutWords(t) && !pools.prov.note?.includes(namLeftOutWords(t)) ? { note: [pools.prov.note, namLeftOutWords(t)].filter(Boolean).join(' ') } : {}) };
+    return { usd: t.usd, count: pools.pools.length, notPriced: t.notPriced, reserves: reservesOf(pools.pools), stamp, fromList: true };
   }
-  if (o) return { usd: o.dex.liquidityUsd, count: fin(o.dex.pools) && o.dex.pools > 0 ? o.dex.pools : null, stamp: { ...o.dex.prov, plain: 'Osmosis pools' }, fromList: false };
+  if (o) {
+    const count = fin(o.dex.pools) && o.dex.pools > 0 ? o.dex.pools : null;
+    const priced = o.dex.pricedPools;
+    return { usd: o.dex.liquidityUsd, count, notPriced: count != null && fin(priced) && priced <= count ? count - priced : null, reserves: null, stamp: { ...o.dex.prov, plain: 'Osmosis pools' }, fromList: false };
+  }
   return null;
 }
 
-/** "NAM / coin 0FA923…", "NAM / allBTC": the counter coin in plain words (a pool from /api/pools or a pair from /api/series/pairs). */
+/** "NAM / coin 0FA923…", "NAM / allBTC": the pair in plain words. */
 export function pairName(p: { pair: string; counterSymbol?: string | null }): string {
-  const parts = p.pair.split('/').map((s) => s.trim());
-  const base = parts[0] || 'NAM';
-  const sym = p.counterSymbol || parts.slice(1).join('/');
-  let counter = sym;
-  // a bridged coin's denomination hash: its first six characters, enough to tell two apart in a row
-  if (/^ibc\//i.test(sym)) counter = `coin ${sym.length > 14 ? `${sym.slice(4, 10)}…` : sym.slice(4)}`;
-  else if (/^factory\//i.test(sym)) counter = sym.split('/').pop() || sym;
-  else if (!sym || /^unknown$/i.test(sym)) counter = 'unknown coin';
-  return `${base} / ${counter}`;
+  const base = p.pair.split('/')[0]?.trim() || 'NAM';
+  return `${base} / ${counterName(p)}`;
 }
 
 /** Pools with at least this share of all depth get a row; the rest are summed in one line. */
@@ -185,22 +219,27 @@ export const POOL_ROW_SHARE = 0.005;
 export const POOL_ROW_MAX = 12;
 
 /**
- * The pools by depth: those above the share line get a row (`shown`), the rest are summed in one line (`rest`), and a
- * pool holding only one side (`oneSided`, shared/pool-sides.ts) gets a row of its own that says what it holds, since
- * its listed depth ($0: the router counts no NAM) would hide it in the summed line.
+ * The pools by size: those above the share line get a row (`shown`), the rest are summed in one line (`rest`), and a
+ * pool holding only one side (`oneSided`, shared/pool-sides.ts) gets a row of its own that says what it holds. The
+ * total is every priced pool's size, the one-sided ones' included (their coins have a price like any other's). A pool
+ * that cannot be priced has no size and counts in no total: it gets a row after the priced ones when it holds at least
+ * the share line of all the NAM inside (so its reason is in view), else it is counted in the summed line.
  */
 export function splitPools<T extends { liquidityUsd: number | null; namReserve: number | null; counterReserve: number | null }>(list: T[]): { shown: T[]; rest: T[]; oneSided: T[]; total: number } {
   const oneSided = list.filter((p) => { const s = poolSides(p); return s === 'nam' || s === 'coin'; }).sort((a, b) => (b.namReserve || 0) - (a.namReserve || 0));
-  const sorted = list.filter((p) => !oneSided.includes(p)).sort((a, b) => (b.liquidityUsd || 0) - (a.liquidityUsd || 0));
-  const total = sorted.reduce((a, p) => a + (fin(p.liquidityUsd) ? p.liquidityUsd : 0), 0);
+  const sorted = list.filter((p) => !oneSided.includes(p)).sort((a, b) => (b.liquidityUsd ?? -1) - (a.liquidityUsd ?? -1) || (b.namReserve || 0) - (a.namReserve || 0));
+  const total = list.reduce((a, p) => a + (fin(p.liquidityUsd) ? p.liquidityUsd : 0), 0);
+  const namTotal = list.reduce((a, p) => a + (fin(p.namReserve) ? p.namReserve : 0), 0);
   const shown: T[] = [];
   const rest: T[] = [];
   for (const p of sorted) {
-    if (shown.length < POOL_ROW_MAX && (shown.length === 0 || (total > 0 && (p.liquidityUsd || 0) / total >= POOL_ROW_SHARE))) shown.push(p);
+    const big = fin(p.liquidityUsd) ? total > 0 && p.liquidityUsd / total >= POOL_ROW_SHARE : namTotal > 0 && (p.namReserve || 0) / namTotal >= POOL_ROW_SHARE;
+    if (shown.length < POOL_ROW_MAX && (shown.length === 0 || big)) shown.push(p);
     else rest.push(p);
   }
   return { shown, rest, oneSided, total };
 }
+
 
 /** How a safe-size figure was made (shared/types.ts SafeClipInfo['how']). */
 export type SafeHow = 'interpolated' | 'at_least' | 'below_smallest';
