@@ -53,7 +53,14 @@ describe('alert rules vs. historical events', () => {
     const misses = priceMoves.filter((r) => r.hits === 0);
     md += misses.length ? misses.map((r) => `- ${r.id} (${r.move}): no flow ≥ threshold in the prior 48h. Either the move came from flows below threshold, from pools other than 3005, or from outside the indexed window.`).join('\n') : '_none_';
     md += `\n\n## Caveats\n\n- Prices are hourly medians of executed swaps; hours without trades have no point, so some "moves" span many hours and the lead time is an upper bound.\n- Osmosis flows older than ~2026-08-30 carry extrapolated timestamps (see the "exact times" column).\n- The arb-exclusion rule depends on \`meta.arb\`, which the Osmosis parser sets only for round-trips within one tx.\n`;
-    writeFileSync(join(__dirname, '..', 'docs', 'replay-report.md'), md);
+    // Written only when it says something new: a run whose report differs from the file in its "Generated" time alone
+    // leaves the tracked file (and the proof block's date, scripts/export-proof.ts) as it is, so the suite keeps a
+    // clean tree clean (scripts/deploy-check.sh stops when the tests change it).
+    const out = join(__dirname, '..', 'docs', 'replay-report.md');
+    const GENERATED = /^Generated \d{4}-\d{2}-\d{2} \d{2}:\d{2} UTC/m;
+    let before = '';
+    try { before = readFileSync(out, 'utf8'); } catch { /* no report yet */ }
+    if (before.replace(GENERATED, '') !== md.replace(GENERATED, '')) writeFileSync(out, md);
     console.log(md);
     expect(rows.length).toBe(data.events.length);
   });
