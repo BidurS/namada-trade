@@ -14,7 +14,7 @@
     "db:migrate:local": "wrangler d1 migrations apply namada-trade-db --local",
     "db:migrate:remote": "wrangler d1 migrations apply namada-trade-db --remote",
     "backfill:namada": "node --experimental-strip-types scripts/backfill-namada.ts",
-    "backfill:osmosis": "node --experimental-strip-types scripts/backfill-osmosis.ts",
+    "backfill:osmosis": "tsx scripts/backfill-osmosis.ts",
     "test:replay": "vitest run test/replay.test.ts",
     "events": "node --experimental-strip-types scripts/events.ts",
     "task-tests": "node --experimental-strip-types scripts/task-tests.ts",
