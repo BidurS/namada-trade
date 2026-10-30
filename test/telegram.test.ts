@@ -11,8 +11,9 @@ import { app } from '../worker/src/api';
 import { createSession, sweepAuth, tokenHash, type Session } from '../worker/src/auth';
 import { applyUpdate, chatDigest, defaultPrefs, loadSettings, readTelegram, rowsOfChat, saveSettings, stopChannelStmt, TELEGRAM_CHATS_MAX, TELEGRAM_FULL, type StoredSettings } from '../worker/src/settings';
 import { configureAlerts, moveCard } from '../worker/src/sources/discord';
-import { cardMessage, embedHtml, forgetTelegramUsers, mdToHtml, sendTelegramMove, telegramRun, TG_UNSERVED_WHAT } from '../worker/src/sources/telegram';
-import { LINK_CODE_MS, linkKey, secretMatches } from '../worker/src/telegram-bot';
+import { cardMessage, embedHtml, forgetTelegramUsers, mdToHtml, mdToPlain, sendTelegramMove, telegramRun, TG_UNSERVED_WHAT } from '../worker/src/sources/telegram';
+import { LINK_CODE_MS, linkKey, OFFICIAL, secretMatches } from '../worker/src/telegram-bot';
+import { SITE } from '../shared/site';
 import { rowToFlow } from '../worker/src/analytics';
 import type { Flow } from '../shared/types';
 
@@ -331,18 +332,18 @@ describe('review fixes', () => {
     await linked(db, 33, CHAT);
     const tg = telegram();
     const f = moveFromWatched(41);
-    await sendTelegramMove(env(db), f, 10000, telegramRun(0, 10_000));
+    await sendTelegramMove(env(db), f, telegramRun(0, 10_000));
     expect(others(tg, CHAT)).toHaveLength(0);
-    await sendTelegramMove(env(db), f, 10000, telegramRun(10, 10_000));
+    await sendTelegramMove(env(db), f, telegramRun(10, 10_000));
     expect(others(tg, CHAT)).toHaveLength(1);
   });
 
-  it('the public channel and the subscribers are claimed apart: a failed read of the subscribers costs them nothing', async () => {
+  it('the public channel hears no move as it arrives (it takes the hour\'s: test/public-posts.test.ts), and a failed read of the subscribers costs them nothing', async () => {
     const db = testD1();
     telegram();
     await linked(db, 34, CHAT);
     const tg = telegram();
-    const big: Flow = { ...moveFromWatched(42), from: 'osmo1someoneelsexxxxxxxxxxxxxxxxxxxxxxxxxxxxx', amount: 50_000 } as Flow;
+    const big: Flow = { ...moveFromWatched(42), amount: 50_000 } as Flow;
     const prepare = db.prepare.bind(db);
     const spy = vi.spyOn(db, 'prepare').mockImplementation((sql: string) => {
       if (sql.includes("'$.tg') = 1")) throw new Error('D1 down');
@@ -350,14 +351,14 @@ describe('review fixes', () => {
     });
     const e = env(db, { TELEGRAM_CHANNEL: '@NamadaTradeAlerts' });
     forgetTelegramUsers(db as any);
-    await sendTelegramMove(e, { ...big, from: WATCHED } as Flow);
-    expect(tg.sent('@NamadaTradeAlerts')).toHaveLength(1);
+    await sendTelegramMove(e, big);
     expect(others(tg, CHAT)).toHaveLength(0);
     spy.mockRestore();
     forgetTelegramUsers(db as any);
-    await sendTelegramMove(e, { ...big, from: WATCHED } as Flow);
-    expect(tg.sent('@NamadaTradeAlerts')).toHaveLength(1);
+    await sendTelegramMove(e, big);
     expect(others(tg, CHAT)).toHaveLength(1);
+    expect(tg.sent('@NamadaTradeAlerts')).toHaveLength(0);
+    expect(db.raw.prepare("SELECT key FROM kv WHERE key LIKE 'alert:tg:ch:%'").all()).toEqual([]);
   });
 
   it('a Settings save does not put back a chat the bot unlinked while it ran, and a stale Discord stop cannot relink it', async () => {
@@ -638,5 +639,35 @@ describe('the card as Telegram HTML', () => {
       for (const href of m.html.matchAll(/href="([^"]+)"/g)) expect(href[1], k).toMatch(/^https:\/\//);
     }
     expect(embedHtml({ title: 'A <b>', color: 0, fields: [{ name: 'X&Y', value: '1', inline: true }] })).toBe('<b>A &lt;b&gt;</b>\n\n<b>X&amp;Y</b>\n1');
+  });
+
+  it('a private character an outsider wrote never becomes the character an escape stands for (own audit Low 8)', () => {
+    // U+E03A and U+E02E are what hide() makes of an escaped ":" and "."; written raw in a tag, they came back as ":"
+    // and "." after the checks, a link the tag rules had refused
+    const md = 'Tag https\uE03A//evil\uE02Eexample and `code\uE03A`';
+    for (const out of [mdToHtml(md), mdToPlain(md)]) {
+      expect(out).not.toContain('https://');
+      expect(out).not.toContain('evil.example');
+      expect(out).not.toMatch(/[\uE000-\uE07F]/);
+    }
+    // the escapes the cards write still show as themselves
+    expect(mdToPlain('a \\*b\\* \\[c\\]')).toBe('a *b* [c]');
+  });
+});
+
+describe('the bot\'s own words', () => {
+  it('its first words, in a chat and in a group, and its help name the official links and say it never writes first', async () => {
+    const db = testD1();
+    const tg = telegram();
+    await update(db, { message: { chat: { id: CHAT, type: 'private' }, from: { id: 1 }, text: '/start' } });
+    await update(db, { message: { chat: { id: CHAT, type: 'private' }, from: { id: 1 }, text: 'hello' } });
+    await update(db, { message: { chat: { id: GROUP, type: 'supergroup' }, from: { id: 1 }, text: '/start@NamadaTrade_bot' } });
+    const said = tg.calls.filter((c) => c.method === 'sendMessage').map((c) => String(c.body.text));
+    expect(said).toHaveLength(3);
+    for (const s of said) {
+      expect(s).toContain('<b>Official links</b>: namada.trade and @NamadaTrade_bot.');
+      expect(s).toContain('NamadaTrade never messages you first, and never asks for a seed phrase or a private key.');
+    }
+    expect(OFFICIAL).toContain(`@${SITE.telegram.bot}`);
   });
 });

@@ -1238,12 +1238,12 @@ const oneLine = (s: string) => plainMd(s.replace(/[\r\n]+/g, ' ').trim());
 /** Inside a masked link's text a bracket would end the link: none is kept. */
 const linkText = (s: string) => textSafe(s).replace(/[[\]]/g, '');
 /** The page of an address on the site, where what it did before and after this move is listed. */
-const sitePage = (addr: string) => `${ORIGIN}/activity?addr=${encodeURIComponent(addr)}`;
+export const sitePage = (addr: string) => `${ORIGIN}/activity?addr=${encodeURIComponent(addr)}`;
 const unix = (ms: number) => Math.floor(ms / 1000);
 const EXPLORER_NAME: Record<string, string> = { osmosis: 'Mintscan', namada: 'namada.valopers.com' };
 const I = INTERNAL_ADDRESSES;
 /** A protocol account by its name inside a sentence; such an account is never the person of a card. */
-const PROTOCOL_WORDS: Record<string, string> = {
+export const PROTOCOL_WORDS: Record<string, string> = {
   [I.masp]: 'the shielded pool', [I.pos]: 'the staking account', [I.ibc]: 'the bridge account', [I.pgf]: 'the public funding account',
   [I.governance]: 'the governance account', [I.osmoTransfer]: 'the Osmosis bridge account',
 };
