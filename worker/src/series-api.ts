@@ -36,7 +36,7 @@ import { OSMOSIS, INTERNAL_LABELS } from './config';
 import { OSMOSIS_DATA_SOURCE } from './sources/osmosis-data';
 import { JOB_WINDOW_MS, OSMOSIS_SUMMARY_STALE_MS } from './series';
 import { poolHoldsSomething } from '../../shared/pool-sides';
-import { NOT_READ, NOT_STORED, POOLS_SOURCE, PRICED_FROM_SQL, notPricedWords, routerCapNote, storedPoolsProv, type StoredPools } from './pool-sizes';
+import { NOT_READ, NOT_STORED, POOLS_SOURCE, PRICED_FROM_SQL, inRouterRun, notPricedWords, routerCapNote, routerRunsNote, routerRunsOf, storedPoolsProv, type RouterRun, type StoredPools } from './pool-sizes';
 import { osmosisGapCounts, osmosisGapWindows, reachesOsmosisGap, withOsmosisGap } from '../../shared/osmosis-gap';
 import { ApiInputError } from './api-route';
 
@@ -357,17 +357,23 @@ export async function readSeries(db: DB, q: SeriesQuery, asOf: number, replay: b
   return seriesAnswer(def, q.key, native, start, meta?.job ?? null, { from, to, step, pointMs }, asOf, replay, sizeFrom);
 }
 
-/** The first minute the stored pool sizes were the pools' coins at their own prices (pool-sizes.ts PRICED_KEY), null before; a failed read says nothing (undefined). */
-const sizedFrom = (db: DB): Promise<number | null | undefined> =>
-  later(() => db.prepare(PRICED_FROM_SQL).first<{ t: number | null }>()).then((r) => finite(r?.t ?? null), () => undefined);
+/**
+ * How the stored pool sizes were measured: the first minute they were the pools' coins at their own prices
+ * (pool-sizes.ts PRICED_KEY, `from`: null before it), and the stretches since stored by an earlier version as the
+ * router's figure (`runs`, pool-sizes.ts ROUTER_RUNS_KEY); a failed read says nothing (undefined).
+ */
+interface SizeBasis { from: number | null; runs: RouterRun[] }
+const sizedFrom = (db: DB): Promise<SizeBasis | undefined> =>
+  later(() => db.prepare(PRICED_FROM_SQL).first<{ t: number | null; runs: string | null }>()).then((r) => ({ from: finite(r?.t ?? null), runs: routerRunsOf(r?.runs) }), () => undefined);
 
 /**
  * The answer from the native points: thinned to the step, with its start, coverage, gaps and stamp. A series counted
  * from the stored Osmosis record whose window reaches back before it is complete says so, and so does a pool size
- * whose window reaches back before the pools were sized from their reserves (`sizeFrom`: that minute, null before it).
+ * whose window reaches back before the pools were sized from their reserves (`size.from`: that minute, null before it)
+ * or holds readings an earlier version stored as the router's figure (`size.runs`).
  */
 function seriesAnswer(def: SeriesKeyDef, key: string, native: NativePoint[], start: number | null, jobRaw: string | null,
-  r: { from: number; to: number; step: SeriesStep; pointMs: number }, asOf: number, replay: boolean, sizeFrom?: number | null): SeriesResponse {
+  r: { from: number; to: number; step: SeriesStep; pointMs: number }, asOf: number, replay: boolean, size?: SizeBasis): SeriesResponse {
   const { from, to, step, pointMs } = r;
   const stepMs = SERIES_STEP_MS[step];
   const thinned = thin(native, stepMs, def.agg, pointMs);
@@ -408,7 +414,9 @@ function seriesAnswer(def: SeriesKeyDef, key: string, native: NativePoint[], sta
     prov = provAt(def.source, newest.at, asOf, def.maxAgeMs);
   }
   if (newest && def.osmosisRecord) prov = withOsmosisGap(prov, covFrom);
-  if (newest && sizeFrom !== undefined && (sizeFrom == null || covFrom < sizeFrom)) prov = { ...prov, note: [prov.note, routerCapNote(sizeFrom)].filter(Boolean).join(' ') };
+  if (newest && size && (size.from == null || covFrom < size.from)) prov = { ...prov, note: [prov.note, routerCapNote(size.from)].filter(Boolean).join(' ') };
+  const runsNote = newest && size ? routerRunsNote(size.runs, covFrom, to) : '';
+  if (runsNote) prov = { ...prov, note: [prov.note, runsNote].filter(Boolean).join(' ') };
   return {
     key, from, to, step, stepMs, agg: def.agg, unit: def.unit, points, sources: [source], start,
     sparse: def.sparse, coverage: { steps: Math.max(0, steps), withPoint }, gaps, prov, asOf,
@@ -679,18 +687,23 @@ export interface StoredPoolHour {
  * before `sizedAt` (pool-sizes.ts PRICED_KEY's first minute; null when none is stored yet, undefined when it could not
  * be read) hold; an hour stored without a size could not be priced then. Each says why in its stamp.
  */
-function storedHourSize(s: StoredPoolHour, sizedAt: number | null | undefined): { liquidityUsd: number | null; sizeProv?: Provenance } {
+/**
+ * A stored hour's size as the pairs list may show it, and its other coin's amount: both only from an hour this code
+ * stored (at or after the switch, `basis.from`, and in no router run, `basis.runs`); the router's figures and an older
+ * writer's amounts (base units over a million, whatever the coin's decimals) are not shown as the pool's.
+ */
+function storedHourSize(s: StoredPoolHour, basis: SizeBasis | undefined): { liquidityUsd: number | null; counterReserve: number | null; sizeProv?: Provenance } {
   const at = finite(s.at) ?? Number(s.hour);
   const source = `${POOLS_SOURCE} (stored hour)`;
-  if (sizedAt === undefined) {
-    return { liquidityUsd: null, sizeProv: { source, at, status: 'missing', note: `Whether the size stored for the hour at ${fmtDayTime(at)} is the Osmosis router's own figure could not be read, so it is not shown as the pool's size.` } };
+  if (basis === undefined) {
+    return { liquidityUsd: null, counterReserve: null, sizeProv: { source, at, status: 'missing', note: `Whether the size stored for the hour at ${fmtDayTime(at)} is the Osmosis router's own figure could not be read, so it is not shown as the pool's size.` } };
   }
-  if (sizedAt == null || at < sizedAt) {
-    return { liquidityUsd: null, sizeProv: { source, at, status: 'missing', note: `The size stored for the hour at ${fmtDayTime(at)} is the Osmosis router's own figure, which counted NAM at nothing while it gave NAM no price, so it is not shown as the pool's size.` } };
+  if (basis.from == null || at < basis.from || inRouterRun(basis.runs, at)) {
+    return { liquidityUsd: null, counterReserve: null, sizeProv: { source, at, status: 'missing', note: `The size stored for the hour at ${fmtDayTime(at)} is the Osmosis router's own figure, which counted NAM at nothing while it gave NAM no price, so it is not shown as the pool's size.` } };
   }
-  const v = finite(s.liquidity_usd);
-  return v != null ? { liquidityUsd: v, sizeProv: { source, at, status: 'stale' } }
-    : { liquidityUsd: null, sizeProv: { source, at, status: 'missing', note: notPricedWords(`a side of the pool could not be priced in the hour stored at ${fmtDayTime(at)}`) } };
+  const v = finite(s.liquidity_usd), counterReserve = finite(s.counter_reserve);
+  return v != null ? { liquidityUsd: v, counterReserve, sizeProv: { source, at, status: 'stale' } }
+    : { liquidityUsd: null, counterReserve, sizeProv: { source, at, status: 'missing', note: notPricedWords(`a side of the pool could not be priced in the hour stored at ${fmtDayTime(at)}`) } };
 }
 
 const NO_LEGS: Provenance = { source: 'D1 flow index', at: null, status: 'missing', note: 'Trades per pool are not recorded yet: a routed trade names several pools and cannot be split between them.' };
@@ -709,10 +722,11 @@ export async function readPairs(db: DB, now: number, list: StoredPools | null, f
   const inList = list?.pools ?? [];
   const routed = inList.length > 0;
   // Without the stored list, the stored hour stands in, and the first minute the sizes were the pools' coins at their
-  // own prices says which of its sizes are the router's liquidity_cap (undefined: not read, so none is taken as a size).
+  // own prices, with the stretches an earlier version stored since, says which of its sizes are the router's
+  // liquidity_cap (undefined: not read, so none is taken as a size).
   const [storedRes, sizedAt] = await Promise.all([
     db.prepare(PAIRS_STORED_SQL).bind(OSMOSIS.refPoolId, now).all<StoredPoolHour>(),
-    routed ? Promise.resolve(undefined) : later(() => db.prepare(PRICED_FROM_SQL).first<{ t: number | null }>()).then((r) => finite(r?.t ?? null), () => undefined),
+    routed ? Promise.resolve(undefined) : sizedFrom(db),
   ]);
   const stored = storedRes.results || [];
   const byId = new Map(stored.map((r) => [String(r.pool_id), r]));
@@ -723,7 +737,7 @@ export async function readPairs(db: DB, now: number, list: StoredPools | null, f
   const pairs: PairRow[] = [...ids].filter(Boolean).map((id) => {
     const p = livePool.get(id), s = byId.get(id);
     const router = routed ? (p ? { liquidityUsd: p.liquidityUsd, namReserve: p.namReserve, counterReserve: p.counterReserve, spreadFactor: p.spreadFactor, sizeProv: p.sizeProv } : null)
-      : s && s.at != null ? { ...storedHourSize(s, sizedAt), namReserve: finite(s.nam_reserve), counterReserve: finite(s.counter_reserve), spreadFactor: finite(s.spread) } : null;
+      : s && s.at != null ? { ...storedHourSize(s, sizedAt), namReserve: finite(s.nam_reserve), spreadFactor: finite(s.spread) } : null;
     const sym = symbolOf(p?.counterSymbol);
     const osmosis: PairRow['osmosis'] = s?.osmosis_at != null
       ? { value: { volume24hUsd: finite(s.volume_24h_usd_osmosis), volume7dUsd: finite(s.volume_7d_usd_osmosis), liquidityUsd: finite(s.liquidity_usd_osmosis) }, prov: provAt(OSMOSIS_DATA_SOURCE, Number(s.osmosis_at), now, osmoMaxAge) }

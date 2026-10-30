@@ -242,8 +242,51 @@ export const readStoredPools = (db: D1Database): Promise<StoredPools | null> => 
  * prices: the rows before it are the router's liquidity_cap, so a reading of a past figure says which it is.
  */
 export const PRICED_KEY = 'dex.pools_priced';
-/** The first stored minute of PRICED_KEY: one seek on the metrics key. */
-export const PRICED_FROM_SQL = `SELECT MIN(ts) AS t FROM metrics WHERE key = '${PRICED_KEY}'`;
+/**
+ * kv `dex.router_runs`: the stretches after the switch to the pools' own coins (PRICED_KEY's first row) in which
+ * minutes of dex.liquidity_usd were stored with no PRICED_KEY row after the last one that has it: an earlier version
+ * of the site, back after a rollback (`npx wrangler rollback`, scripts/deploy-check.sh), storing the router's
+ * liquidity_cap every minute and in pool_hourly every hour. Each run is every minute stored after `after` and up to
+ * `to`. Found by the first tick this code stores after one (routerRunStmt), the newest ROUTER_RUNS_MAX kept, oldest
+ * first: a reading inside one is the router's figure, whatever the switch says.
+ */
+export const ROUTER_RUNS_KEY = 'dex.router_runs';
+export interface RouterRun { after: number; to: number }
+export const ROUTER_RUNS_MAX = 20;
+/** The first stored minute of PRICED_KEY (one seek on the metrics key), and the stored router runs (one kv seek). */
+export const PRICED_FROM_SQL = `SELECT MIN(ts) AS t, (SELECT value FROM kv WHERE key = '${ROUTER_RUNS_KEY}') AS runs FROM metrics WHERE key = '${PRICED_KEY}'`;
+/** The router runs as stored, each a pair of finite times in order; anything else is none. */
+export function routerRunsOf(v: unknown): RouterRun[] {
+  let a: unknown;
+  try { a = typeof v === 'string' ? JSON.parse(v) : v; } catch { return []; }
+  return Array.isArray(a) ? a.filter((r): r is RouterRun => !!r && fin(r.after) && fin(r.to) && r.after < r.to) : [];
+}
+/** The newest stored minute of dex.liquidity_usd and of PRICED_KEY (one seek each), and the runs stored. */
+const NEWEST_SIZES_SQL = `SELECT (SELECT MAX(ts) FROM metrics WHERE key = 'dex.liquidity_usd') l, (SELECT MAX(ts) FROM metrics WHERE key = '${PRICED_KEY}') p,
+  (SELECT value FROM kv WHERE key = '${ROUTER_RUNS_KEY}') runs`;
+/**
+ * The write that records a router run (ROUTER_RUNS_KEY), or null: the newest dex.liquidity_usd minute is later than
+ * the newest PRICED_KEY minute, which this code never stores apart (storedPoolsStmts), so an earlier version stored the
+ * minutes between. A run already on record up to that minute is not written again.
+ */
+export async function routerRunStmt(db: D1Database, now: number): Promise<Stmt | null> {
+  const r = await db.prepare(NEWEST_SIZES_SQL).first<{ l: number | null; p: number | null; runs: string | null }>();
+  const l = Number(r?.l), p = Number(r?.p);
+  if (!(r?.l != null && r?.p != null && fin(l) && fin(p) && l > p)) return null;
+  const runs = routerRunsOf(r.runs);
+  if (runs.some((x) => x.after === p && x.to >= l)) return null;
+  const next = [...runs.filter((x) => x.after !== p), { after: p, to: l }].sort((a, b) => a.after - b.after).slice(-ROUTER_RUNS_MAX);
+  return stmt.kvSet(ROUTER_RUNS_KEY, JSON.stringify(next), now);
+}
+/** The runs that hold a reading from `from` to `to` (a window), in words; '' when none. */
+export function routerRunsNote(runs: RouterRun[], from: number, to: number): string {
+  const hit = runs.filter((x) => x.to >= from && x.after < to);
+  if (!hit.length) return '';
+  const span = (x: RouterRun) => `after ${fmtDay(x.after)} ${fmtClock(x.after)} and up to ${fmtDay(x.to)} ${fmtClock(x.to)}`;
+  return `The readings stored ${hit.map(span).join(', and ')} are the Osmosis router's own figure, stored by an earlier version of the site, which counted NAM at nothing while it gave NAM no price.`;
+}
+/** Whether a reading stored at `at` falls in a router run. */
+export const inRouterRun = (runs: RouterRun[], at: number) => runs.some((x) => at > x.after && at <= x.to);
 /** What a stored pool size was at `at`, said for a reading that reaches before the switch (`from`: PRICED_FROM_SQL's answer; null when none is stored yet). */
 export const routerCapNote = (from: number | null) => from == null
   ? 'Every stored reading so far is the Osmosis router\'s own figure, which counts NAM at nothing while it gives NAM no price.'
@@ -315,7 +358,9 @@ export async function storePools(db: D1Database, x: StorePoolsInput): Promise<vo
     depth: x.depth ? { minute: x.depth.at, at: x.depth.ref.at, height: x.depth.ref.height, refPool: x.depth.ref.pool, refUsd: x.depth.ref.usd } : null,
     ...(x.refused ? { refused: x.refused } : {}),
   };
-  await runBatch(db, storedPoolsStmts(row, x.now));
+  // A stretch an earlier version stored since the last minute (a rollback) is recorded before this minute's totals.
+  const run = await routerRunStmt(db, x.now).catch((e) => { console.error('router runs not read', e); return null; });
+  await runBatch(db, [...(run ? [run] : []), ...storedPoolsStmts(row, x.now)]);
 }
 
 export interface StoreCurveInput {

@@ -652,9 +652,11 @@ describe('GET /api/series/pairs', () => {
     expect(asked).toEqual([]);
     expect(body.prov).toMatchObject({ source: 'Osmosis pool reserves (stored hour)', at: HOUR + 3000, status: 'stale' });
     expect(body.prov.note).toMatch(/has not been stored/);
-    // the hour was stored before the pools were sized from their reserves: its size is the router's liquidity_cap, never shown as the pool's
+    // the hour was stored before the pools were sized from their reserves: its size is the router's liquidity_cap, never
+    // shown as the pool's, and its other coin's amount was stored as base units over a million whatever the coin's
+    // decimals (an allBTC pool's 1,000 times its own), so it is not shown either (merged stage 1 review)
     const p3005 = body.pairs.find((p) => p.poolId === '3005')!;
-    expect(p3005).toMatchObject({ liquidityUsd: null, namReserve: 606000, counterReserve: 209, counterSymbol: null });
+    expect(p3005).toMatchObject({ liquidityUsd: null, namReserve: 606000, counterReserve: null, counterSymbol: null });
     expect(p3005.sizeProv).toMatchObject({ source: 'Osmosis pool reserves (stored hour)', at: HOUR + 3000, status: 'missing' });
     expect(p3005.sizeProv!.note).toMatch(/is the Osmosis router's own figure, which counted NAM at nothing while it gave NAM no price, so it is not shown as the pool's size\.$/);
     expect(body.pairs.find((p) => p.poolId === '3017')!.liquidityUsd).toBeNull();
@@ -662,7 +664,7 @@ describe('GET /api/series/pairs', () => {
     insert(db, 'metrics', [{ ts: HOUR - H, key: PRICED_KEY, value: 3 }]);
     db.raw.prepare(`UPDATE pool_hourly SET liquidity_usd = NULL WHERE pool_id = '3008' AND hour = ?`).run(HOUR);
     const sized = (await call<PairsResponse>(db, '/api/series/pairs')).body;
-    expect(sized.pairs[0]).toMatchObject({ poolId: '3005', liquidityUsd: 900, sizeProv: { status: 'stale', at: HOUR + 3000 } });
+    expect(sized.pairs[0]).toMatchObject({ poolId: '3005', liquidityUsd: 900, counterReserve: 209, sizeProv: { status: 'stale', at: HOUR + 3000 } });
     const p3008 = sized.pairs.find((p) => p.poolId === '3008')!;
     expect(p3008.liquidityUsd).toBeNull();
     expect(p3008.sizeProv!.note).toMatch(/^Not priced: a side of the pool could not be priced in the hour stored at /);
