@@ -525,7 +525,11 @@ export function annotateSlippageCurve(
 
 /** The sizes the size table quotes, each sold and bought. */
 export const CURVE_TIERS = [1000, 5000, 10000, 25000, 50000, 100000] as const;
-/** Router calls one size table makes at most: a sale and up to BUY_MAX_CALLS buys per size. */
+/**
+ * Router calls one size table makes at most: a sale and up to BUY_MAX_CALLS buys per size. A call the service refuses
+ * (403, 429, 5xx) is tried again by sqsGet, up to three attempts, so a table is at most three times this many requests
+ * (90), inside its phase of the tick (cron.ts CURVE_PHASE_MS).
+ */
 export const CURVE_CALLS_MAX = CURVE_TIERS.length * (1 + BUY_MAX_CALLS);
 
 /** The price the size table is quoted against: the cron's read this tick, as fetchNamPrice gave it. */

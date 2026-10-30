@@ -380,8 +380,9 @@ export function ibcConservation(escrowNam: number, osmosisNam: number, stuckNam:
 export const TICK_DEADLINE_MS = 45_000;
 /**
  * The size table's own phase in the tick (sources/sqs.ts buildCurve): started after the price read, beside the rest, one
- * size at a time. Six sizes take 12 to 30 router calls (CURVE_CALLS_MAX), about 1 to 2 s a size; a size not reached
- * by the phase's end is left out of that minute's table.
+ * size at a time. Six sizes take 12 to 30 router calls (CURVE_CALLS_MAX; up to three attempts each when refused), about
+ * 1 to 2 s a size; a size not reached by the phase's end is left out of that minute's table. Before, every edge-cache
+ * miss of /api/quote/curve built the table itself: once a minute in each Cloudflare location a visitor polled from.
  */
 export const CURVE_PHASE_MS = 20_000;
 /** Keplr REST reads in a tick: a short timeout and one retry, inside the tick's deadline. */
