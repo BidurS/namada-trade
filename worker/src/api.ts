@@ -708,8 +708,9 @@ interface FlowsRead { flows: Flow[]; total: number | null; next: string | null; 
 /**
  * When the stored counts do not answer a count, how it is taken: 'all', every count exactly (the address report, whose
  * one count is of one whole address, under HEAVY_LIMITER); 'stored', exactly for the lists the stored counts answer
- * while they are being written again (a live read: as before, for the minute until the next tick), at most COUNT_MAX + 1
- * moves for any other; 'none', at most COUNT_MAX + 1 moves for every count (a rewound read: each time its own key).
+ * while they are being written again (a live read: as before, until the cron writes them, at most FLOW_RECOUNT_GAP_MS
+ * later), at most COUNT_MAX + 1 moves for any other; 'none', at most COUNT_MAX + 1 moves for every count (a rewound
+ * read: each time its own key).
  */
 type CountExact = 'all' | 'stored' | 'none';
 

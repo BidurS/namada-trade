@@ -2111,8 +2111,8 @@ export async function runCron(env: Env) {
     }
 
     // 6c. The moves list's stored counts (flow-counts.ts, migration 0017): written whole when the triggers marked them
-    //     dirty, moved on by the hour behind them otherwise. Not written: the list counts the moves itself until a
-    //     later tick writes them.
+    //     dirty (at most once a quarter hour), moved on by the hour behind them otherwise. Not written: the list counts
+    //     the moves itself until a later tick writes them.
     if (!late()) await refreshFlowCounts(env.DB, now).catch((e) => console.error('flow counts', e));
 
     // Balance readings older than any window still asked for (hourly).

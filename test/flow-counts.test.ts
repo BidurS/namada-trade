@@ -9,7 +9,7 @@ import {
   COUNT_MAX, FLOW_SIZE_STEPS, KIND_GROUPS, TWIN_WINDOW_MS, flowsCountSql, flowsMode, storedCountSql, storedTotal,
   type FlowsFilter, type StoredCountRow,
 } from '../worker/src/flows-query';
-import { FLOW_COUNT_LAG_MS, FLOW_COUNT_STEP_MS, refreshFlowCounts } from '../worker/src/flow-counts';
+import { FLOW_COUNT_LAG_MS, FLOW_COUNT_STEP_MS, FLOW_RECOUNT_GAP_MS, refreshFlowCounts } from '../worker/src/flow-counts';
 import { stmt } from '../worker/src/db';
 import { app } from '../worker/src/api';
 import type { Flow, FlowsResponse } from '../shared/types';
@@ -198,7 +198,7 @@ describe('the triggers mark the counts dirty for every write that could change t
     // marks the counts dirty (it is before the mark), and the tick writes them whole with it
     insert(db, 'flows', [{ id: 'osmosis:TWINRECV:ibc_in:0', chain: 'osmosis', height: 9_000_001, ts: m - 5 * MIN, tx_hash: 'TWINRECV', kind: 'ibc_in', from_addr: tn(5), to_addr: os(5), amount_num: 4_321, meta: null }]);
     expect(dirty(db)).toBe(true);
-    expect(await refreshFlowCounts(db as any, now)).toBe('whole');
+    expect(await refreshFlowCounts(db as any, now + FLOW_RECOUNT_GAP_MS)).toBe('whole');
     expect(dirty(db)).toBe(false);
     const f = { asOf: now, onePerCrossing: true };
     const n = await stored(db, f);
@@ -209,8 +209,8 @@ describe('the triggers mark the counts dirty for every write that could change t
     const r = (await (await app.request('/api/flows?pairs=one&limit=10', {}, { DB: db } as any)).json()) as FlowsResponse;
     expect(r.total).toBe(await direct(db, f));
     expect(r.total).toBe(n);
-    // the next tick writes them whole and they answer again
-    expect(await refreshFlowCounts(db as any, now)).toBe('whole');
+    // the next tick a gap on writes them whole and they answer again
+    expect(await refreshFlowCounts(db as any, now + 2 * FLOW_RECOUNT_GAP_MS)).toBe('whole');
     expect(await stored(db, f)).toBe(await direct(db, f));
   });
 
@@ -245,7 +245,7 @@ describe('the triggers mark the counts dirty for every write that could change t
     const late2 = db.raw.prepare('SELECT id FROM flows WHERE ts > ? ORDER BY ts DESC LIMIT 1').get(m + TWIN_WINDOW_MS) as { id: string };
     db.raw.prepare('UPDATE flows SET ts = ? WHERE id = ?').run(m - H, late2.id);
     expect(dirty(db)).toBe(true);
-    expect(await refreshFlowCounts(db as any, now)).toBe('whole');
+    expect(await refreshFlowCounts(db as any, now + FLOW_RECOUNT_GAP_MS)).toBe('whole');
     for (const f of filters(now).filter((_, i) => i % 5 === 0)) expect(await stored(db, f), JSON.stringify(f)).toBe(await direct(db, f));
   });
 });
@@ -290,6 +290,33 @@ describe('the cron keeps them: written whole when dirty, moved on by the hour, n
     // the next tick writes them whole
     expect(await refreshFlowCounts(db as any, t0 + 2 * H)).toBe('whole');
     expect(mark(db).dirty).toBe(0);
+  });
+
+  it('dirty again within FLOW_RECOUNT_GAP_MS of a write: not written whole until the gap has passed, so a catch-up costs one whole write a gap', async () => {
+    const t0 = Date.now() - 6 * H;
+    const db = testD1();
+    insert(db, 'flows', mix(t0 - 8 * H, t0 + 5 * H, 200));
+    // never written: at once
+    expect(await refreshFlowCounts(db as any, t0)).toBe('whole');
+    // a catch-up writing a move older than the mark on every tick for an hour
+    const { wrapped, seen } = spied(db);
+    const done: (string | null)[] = [];
+    for (let k = 1; k <= 60; k++) {
+      await runStmts(db, [stmt.flow({ id: `osmosis:${hex(8_000_000 + k)}:0`, chain: 'osmosis', height: 8_000_000 + k, ts: mark(db).mark! - H, txHash: hex(8_000_000 + k), kind: 'sell', from: os(k), to: null, amount: 3_000 } as Flow)]);
+      done.push(await refreshFlowCounts(wrapped as any, t0 + k * MIN));
+    }
+    // one whole write a quarter hour (at 15, 30, 45 and 60 minutes), each from every move
+    expect(done.map((d, i) => (d ? i + 1 : 0)).filter(Boolean)).toEqual([15, 30, 45, 60]);
+    expect(done.filter((d) => d === 'whole')).toHaveLength(60 / (FLOW_RECOUNT_GAP_MS / MIN));
+    expect(seen.filter((s) => /^INSERT INTO flow_counts/.test(s.trim()))).toHaveLength(4);
+    // the last write came after the last move written, and counts as a whole count does
+    expect(mark(db).dirty).toBe(0);
+    for (const f of filters(Date.now()).filter((_, i) => i % 7 === 0)) expect(await stored(db, f), JSON.stringify(f)).toBe(await direct(db, f));
+    // a single repair long after the last write: written at the next tick
+    const at = mark(db).at!;
+    db.raw.exec('UPDATE flow_count_mark SET dirty = 1 WHERE id = 1');
+    expect(await refreshFlowCounts(db as any, at + FLOW_RECOUNT_GAP_MS - 1)).toBeNull();
+    expect(await refreshFlowCounts(db as any, at + FLOW_RECOUNT_GAP_MS)).toBe('whole');
   });
 
   it('without the migration (no mark row) it does nothing and the list counts the moves itself', async () => {
