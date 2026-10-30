@@ -414,11 +414,13 @@ export const RUN_ALERT_DEADLINE_MS = 50_000;
  * statement or batch) count, the object's own storage calls do not. The alarm's own reads are not counted against a
  * figure of their own: a scan keeping up makes a few dozen (status, block metas, block results, tx bytes, D1 writes,
  * the settings read, a claim and a few records per alert), a scan behind about three a block as far as its deadline
- * lets it, and a catch-up search up to 16 pages, a block read per transaction found and a D1 lookup per 90 hashes.
- * About half the limit is kept for those reads, so an alarm whose alerts use the whole count still has about 160
- * blocks of a scan behind, or a search of 100 transactions, before the platform refuses a read. The count covers one
- * whole alert (DELIVERABLE_MAX subscribers and the operator) with a few to spare; what does not fit waits for the
- * next alarm, never dropped (AlertBudget.defers).
+ * lets it, and a catch-up search up to 16 pages of the stream's queries, the pools' address queries' probes (ten a
+ * read, six reads for the 26 pools of 2026-10-29; one a query when a batch is refused) and up to 12 of their pages
+ * (live-hub.ts POOL_PROBE_BATCH, OSMOSIS_POOL_SWEEP_PAGES), a block read per transaction found and a D1 lookup per
+ * 90 new hashes. About half the limit is kept for those reads, so an alarm whose alerts use the whole count still has
+ * about 150 blocks of a scan behind, or a search of 90 transactions, before the platform refuses a read. The count
+ * covers one whole alert (DELIVERABLE_MAX subscribers and the operator) with a few to spare; what does not fit waits
+ * for the next alarm, never dropped (AlertBudget.defers).
  */
 export const LIVE_ALERT_POSTS = 520;
 /**

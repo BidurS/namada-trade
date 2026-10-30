@@ -1,5 +1,5 @@
 import { OSMOSIS, NAM, keplrHeaders } from '../config';
-import { fetchJson, toNam, isRealAddress, FETCH_TEXT_MAX_BYTES } from '../util';
+import { fetchJson, toNam, isRealAddress, isPoolAccount, FETCH_TEXT_MAX_BYTES } from '../util';
 
 export interface HolderItem {
   address: string;
@@ -189,6 +189,28 @@ export async function fetchOsmosisStatus(keplrKey: string) {
     catchingUp: Boolean(s?.catching_up),
   };
 }
+
+/**
+ * The Osmosis subscriptions (worker/src/live-hub.ts): the stream listens to these and the catch-up search repeats them.
+ * A transaction matches one only when it moves NAM, swaps in pool 3005 or sends a packet over the NAM channel. The
+ * stream keeps to these four: CometBFT gives a websocket client at most five subscriptions by default
+ * (max_subscriptions_per_client), and one per pool address and direction (osmosisPoolQueries) would never fit.
+ */
+export const OSMOSIS_QUERIES = [
+  "token_swapped.pool_id='3005'",
+  `transfer.amount CONTAINS '${NAM.osmoHash}'`,
+  `recv_packet.packet_dst_channel='${NAM.osmoChannel}'`,
+  `send_packet.packet_src_channel='${NAM.osmoChannel}'`,
+];
+
+/**
+ * The searches for one NAM pool's address, either way (a CosmWasm pool's address is its contract, so pool 3008's are
+ * its order book's): they find the transactions that move only the pool's other coin, which match none of
+ * OSMOSIS_QUERIES. The catch-up search and scripts/backfill-osmosis.ts read them, never the stream. Only an address
+ * shaped like a pool account goes into a query (the router's list is checked so too, sqs.ts fetchNamPools).
+ */
+export const osmosisPoolQueries = (address: string): string[] =>
+  isPoolAccount(address) ? [`transfer.sender='${address}'`, `transfer.recipient='${address}'`] : [];
 
 export async function searchOsmosisTxs(
   keplrKey: string,

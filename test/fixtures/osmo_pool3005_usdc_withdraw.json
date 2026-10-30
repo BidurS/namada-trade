@@ -1,0 +1,429 @@
+[
+ {
+  "hash": "EBDEAC7AF539A0497B2D7AB2CADCC1024733C02EE68802CAEEC3A7FFEBE53413",
+  "height": "73379662",
+  "index": 0,
+  "tx_result": {
+   "code": 0,
+   "data": "ElMKQi9vc21vc2lzLmNvbmNlbnRyYXRlZGxpcXVpZGl0eS52MWJldGExLk1zZ1dpdGhkcmF3UG9zaXRpb25SZXNwb25zZRINCgEwEgg2OTkxMjA3NQ==",
+   "log": "",
+   "info": "",
+   "gas_wanted": "954215",
+   "gas_used": "673021",
+   "events": [
+    {
+     "type": "coin_spent",
+     "attributes": [
+      {
+       "key": "spender",
+       "value": "osmo1nn62s9hm7ns4lwqsl70y49xx5tpe0ft45evpvh",
+       "index": true
+      },
+      {
+       "key": "amount",
+       "value": "1531factory/osmo147h5x9pcj7lm0cttlaefx6sqq5vdfnmwfcqxkmjd7exqm9gc7grqhr75m0/alloyed/allUSDC",
+       "index": true
+      }
+     ]
+    },
+    {
+     "type": "coin_received",
+     "attributes": [
+      {
+       "key": "receiver",
+       "value": "osmo1g7ajkk295vactngp74shkfrprvjrdwn662dg26",
+       "index": true
+      },
+      {
+       "key": "amount",
+       "value": "1531factory/osmo147h5x9pcj7lm0cttlaefx6sqq5vdfnmwfcqxkmjd7exqm9gc7grqhr75m0/alloyed/allUSDC",
+       "index": true
+      }
+     ]
+    },
+    {
+     "type": "transfer",
+     "attributes": [
+      {
+       "key": "recipient",
+       "value": "osmo1g7ajkk295vactngp74shkfrprvjrdwn662dg26",
+       "index": true
+      },
+      {
+       "key": "sender",
+       "value": "osmo1nn62s9hm7ns4lwqsl70y49xx5tpe0ft45evpvh",
+       "index": true
+      },
+      {
+       "key": "amount",
+       "value": "1531factory/osmo147h5x9pcj7lm0cttlaefx6sqq5vdfnmwfcqxkmjd7exqm9gc7grqhr75m0/alloyed/allUSDC",
+       "index": true
+      }
+     ]
+    },
+    {
+     "type": "message",
+     "attributes": [
+      {
+       "key": "sender",
+       "value": "osmo1nn62s9hm7ns4lwqsl70y49xx5tpe0ft45evpvh",
+       "index": true
+      }
+     ]
+    },
+    {
+     "type": "tx",
+     "attributes": [
+      {
+       "key": "fee",
+       "value": "1531factory/osmo147h5x9pcj7lm0cttlaefx6sqq5vdfnmwfcqxkmjd7exqm9gc7grqhr75m0/alloyed/allUSDC",
+       "index": true
+      }
+     ]
+    },
+    {
+     "type": "tx",
+     "attributes": [
+      {
+       "key": "acc_seq",
+       "value": "osmo1nn62s9hm7ns4lwqsl70y49xx5tpe0ft45evpvh/61",
+       "index": true
+      }
+     ]
+    },
+    {
+     "type": "tx",
+     "attributes": [
+      {
+       "key": "signature",
+       "value": "ueTv1D6+KZYSZCOnndQk+XNKPMKdoWfHxVJgfojDjuIYWSuXesy5nTO8/4lIihSEGbzSNsQalHz9rU0ADhIyAw==",
+       "index": true
+      }
+     ]
+    },
+    {
+     "type": "message",
+     "attributes": [
+      {
+       "key": "action",
+       "value": "/osmosis.concentratedliquidity.v1beta1.MsgWithdrawPosition",
+       "index": true
+      },
+      {
+       "key": "sender",
+       "value": "osmo1nn62s9hm7ns4lwqsl70y49xx5tpe0ft45evpvh",
+       "index": true
+      },
+      {
+       "key": "msg_index",
+       "value": "0",
+       "index": true
+      }
+     ]
+    },
+    {
+     "type": "coin_spent",
+     "attributes": [
+      {
+       "key": "spender",
+       "value": "osmo1m459jtgn77tz8cffvthq5jh0erswxu9872mjd9qde546mslc6udq85we5r",
+       "index": true
+      },
+      {
+       "key": "amount",
+       "value": "69912075ibc/498A0751C798A0D9A389AA3691123DADA57DAA4FE165D5C75894505B876BA6E4",
+       "index": true
+      },
+      {
+       "key": "msg_index",
+       "value": "0",
+       "index": true
+      }
+     ]
+    },
+    {
+     "type": "coin_received",
+     "attributes": [
+      {
+       "key": "receiver",
+       "value": "osmo1nn62s9hm7ns4lwqsl70y49xx5tpe0ft45evpvh",
+       "index": true
+      },
+      {
+       "key": "amount",
+       "value": "69912075ibc/498A0751C798A0D9A389AA3691123DADA57DAA4FE165D5C75894505B876BA6E4",
+       "index": true
+      },
+      {
+       "key": "msg_index",
+       "value": "0",
+       "index": true
+      }
+     ]
+    },
+    {
+     "type": "transfer",
+     "attributes": [
+      {
+       "key": "recipient",
+       "value": "osmo1nn62s9hm7ns4lwqsl70y49xx5tpe0ft45evpvh",
+       "index": true
+      },
+      {
+       "key": "sender",
+       "value": "osmo1m459jtgn77tz8cffvthq5jh0erswxu9872mjd9qde546mslc6udq85we5r",
+       "index": true
+      },
+      {
+       "key": "amount",
+       "value": "69912075ibc/498A0751C798A0D9A389AA3691123DADA57DAA4FE165D5C75894505B876BA6E4",
+       "index": true
+      },
+      {
+       "key": "msg_index",
+       "value": "0",
+       "index": true
+      }
+     ]
+    },
+    {
+     "type": "message",
+     "attributes": [
+      {
+       "key": "sender",
+       "value": "osmo1m459jtgn77tz8cffvthq5jh0erswxu9872mjd9qde546mslc6udq85we5r",
+       "index": true
+      },
+      {
+       "key": "msg_index",
+       "value": "0",
+       "index": true
+      }
+     ]
+    },
+    {
+     "type": "coin_spent",
+     "attributes": [
+      {
+       "key": "spender",
+       "value": "osmo1n6mm8p4dzd9fe3aly9uzfxx963zxf3ah8vurl4lqm5ggnk0q2vuskr0rtv",
+       "index": true
+      },
+      {
+       "key": "amount",
+       "value": "137173ibc/498A0751C798A0D9A389AA3691123DADA57DAA4FE165D5C75894505B876BA6E4",
+       "index": true
+      },
+      {
+       "key": "msg_index",
+       "value": "0",
+       "index": true
+      }
+     ]
+    },
+    {
+     "type": "coin_received",
+     "attributes": [
+      {
+       "key": "receiver",
+       "value": "osmo1nn62s9hm7ns4lwqsl70y49xx5tpe0ft45evpvh",
+       "index": true
+      },
+      {
+       "key": "amount",
+       "value": "137173ibc/498A0751C798A0D9A389AA3691123DADA57DAA4FE165D5C75894505B876BA6E4",
+       "index": true
+      },
+      {
+       "key": "msg_index",
+       "value": "0",
+       "index": true
+      }
+     ]
+    },
+    {
+     "type": "transfer",
+     "attributes": [
+      {
+       "key": "recipient",
+       "value": "osmo1nn62s9hm7ns4lwqsl70y49xx5tpe0ft45evpvh",
+       "index": true
+      },
+      {
+       "key": "sender",
+       "value": "osmo1n6mm8p4dzd9fe3aly9uzfxx963zxf3ah8vurl4lqm5ggnk0q2vuskr0rtv",
+       "index": true
+      },
+      {
+       "key": "amount",
+       "value": "137173ibc/498A0751C798A0D9A389AA3691123DADA57DAA4FE165D5C75894505B876BA6E4",
+       "index": true
+      },
+      {
+       "key": "msg_index",
+       "value": "0",
+       "index": true
+      }
+     ]
+    },
+    {
+     "type": "message",
+     "attributes": [
+      {
+       "key": "sender",
+       "value": "osmo1n6mm8p4dzd9fe3aly9uzfxx963zxf3ah8vurl4lqm5ggnk0q2vuskr0rtv",
+       "index": true
+      },
+      {
+       "key": "msg_index",
+       "value": "0",
+       "index": true
+      }
+     ]
+    },
+    {
+     "type": "collect_spread_rewards",
+     "attributes": [
+      {
+       "key": "module",
+       "value": "concentratedliquidity",
+       "index": true
+      },
+      {
+       "key": "pool_id",
+       "value": "3005",
+       "index": true
+      },
+      {
+       "key": "position_id",
+       "value": "15533107",
+       "index": true
+      },
+      {
+       "key": "tokens_out",
+       "value": "137173ibc/498A0751C798A0D9A389AA3691123DADA57DAA4FE165D5C75894505B876BA6E4",
+       "index": true
+      },
+      {
+       "key": "msg_index",
+       "value": "0",
+       "index": true
+      }
+     ]
+    },
+    {
+     "type": "remove_tick",
+     "attributes": [
+      {
+       "key": "module",
+       "value": "concentratedliquidity",
+       "index": true
+      },
+      {
+       "key": "pool_id",
+       "value": "3005",
+       "index": true
+      },
+      {
+       "key": "tick_idx",
+       "value": "-27980000",
+       "index": true
+      },
+      {
+       "key": "msg_index",
+       "value": "0",
+       "index": true
+      }
+     ]
+    },
+    {
+     "type": "remove_tick",
+     "attributes": [
+      {
+       "key": "module",
+       "value": "concentratedliquidity",
+       "index": true
+      },
+      {
+       "key": "pool_id",
+       "value": "3005",
+       "index": true
+      },
+      {
+       "key": "tick_idx",
+       "value": "-27770000",
+       "index": true
+      },
+      {
+       "key": "msg_index",
+       "value": "0",
+       "index": true
+      }
+     ]
+    },
+    {
+     "type": "withdraw_position",
+     "attributes": [
+      {
+       "key": "module",
+       "value": "concentratedliquidity",
+       "index": true
+      },
+      {
+       "key": "position_id",
+       "value": "15533107",
+       "index": true
+      },
+      {
+       "key": "sender",
+       "value": "osmo1nn62s9hm7ns4lwqsl70y49xx5tpe0ft45evpvh",
+       "index": true
+      },
+      {
+       "key": "pool_id",
+       "value": "3005",
+       "index": true
+      },
+      {
+       "key": "lower_tick",
+       "value": "-27980000",
+       "index": true
+      },
+      {
+       "key": "upper_tick",
+       "value": "-27770000",
+       "index": true
+      },
+      {
+       "key": "join_time",
+       "value": "2026-10-28 14:35:57.118273287 +0000 UTC",
+       "index": true
+      },
+      {
+       "key": "liquidity",
+       "value": "-201127817700.520466858152597717",
+       "index": true
+      },
+      {
+       "key": "amount0",
+       "value": "0",
+       "index": true
+      },
+      {
+       "key": "amount1",
+       "value": "-69912075",
+       "index": true
+      },
+      {
+       "key": "msg_index",
+       "value": "0",
+       "index": true
+      }
+     ]
+    }
+   ],
+   "codespace": ""
+  },
+  "tx": "CqMBCpABCjovb3Ntb3Npcy5jb25jZW50cmF0ZWRsaXF1aWRpdHkudjFiZXRhMS5Nc2dXaXRoZHJhd1Bvc2l0aW9uElIIs4i0BxIrb3NtbzFubjYyczlobTduczRsd3FzbDcweTQ5eHg1dHBlMGZ0NDVldnB2aBoeMjAxMTI3ODE3NzAwNTIwNDY2ODU4MTUyNTk3NzE3EglPc21vc2lzRkUYld/+IhK5AQpQCkYKHy9jb3Ntb3MuY3J5cHRvLnNlY3AyNTZrMS5QdWJLZXkSIwohA91+2wRfY8nCqWru8zxhsazWE88R7flgOdwNsx+29YyREgQKAgh/GD0SZQpfCldmYWN0b3J5L29zbW8xNDdoNXg5cGNqN2xtMGN0dGxhZWZ4NnNxcTV2ZGZubXdmY3F4a21qZDdleHFtOWdjN2dycWhyNzVtMC9hbGxveWVkL2FsbFVTREMSBDE1MzEQ5546GkC55O/UPr4plhJkI6ed1CT5c0o8wp2hZ8fFUmB+iMOO4hhZK5d6zLmdM7z/iUiKFIQZvNI2xBqUfP2tTQAOEjID"
+ }
+]
