@@ -110,9 +110,16 @@ export function flowsFilterError(q: (k: string) => string | undefined): string |
   return null;
 }
 
+/**
+ * How far apart in time the two records of one bridge crossing are matched (RECEIVED_TWIN), and so how far one move's
+ * place in a count can reach to other moves: migration 0017's triggers mark the stored counts dirty for a write this
+ * close to their mark (test/flow-counts.test.ts holds the two to one figure). The older-twin check reaches a minute.
+ */
+export const TWIN_WINDOW_MS = 900_000;
+
 /** The receiving side of a crossing whose sending side is also recorded (see ?pairs=one). */
 export const RECEIVED_TWIN = `(f.kind = 'ibc_in' AND EXISTS (SELECT 1 FROM flows p WHERE p.kind = 'ibc_out' AND p.chain != f.chain
-  AND p.to_addr = f.to_addr AND p.amount_num = f.amount_num AND p.ts BETWEEN f.ts - 900000 AND f.ts + 900000
+  AND p.to_addr = f.to_addr AND p.amount_num = f.amount_num AND p.ts BETWEEN f.ts - ${TWIN_WINDOW_MS} AND f.ts + ${TWIN_WINDOW_MS}
   AND (p.from_addr = f.from_addr OR CAST(json_extract(p.meta, '$.packetSequence') AS TEXT) = CAST(json_extract(f.meta, '$.packetSequence') AS TEXT))))`;
 
 /** Not a bot trade, the same rule as shared/flow-rules.ts isBotFlow (bridge refunds are kind 'other' and stay). */
@@ -303,21 +310,126 @@ export function timeCountIndex(f: FlowsFilter): string {
 }
 
 /**
+ * The most moves a count reads when the stored counts do not answer it (flowsCountSql with `cap`): past it the head page
+ * says "more than COUNT_MAX" (FlowsResponse.totalOver), the pager's words for a count not known
+ * (docs/design/nav-search-plan.md 2.3). Unbounded, a filtered count read every move it selects, a hub address every
+ * move it made.
+ */
+export const COUNT_MAX = 10_000;
+
+/**
  * The count of the head page (no `before`): 'address' and 'kind' count on the index their rows are read on, 'time'
  * on the index of its narrowest filter (timeCountIndex). For 'rows' the route counts the rows it read; this is for
- * the others.
+ * the others. With `cap`, at most cap + 1 moves are read: a `total` above `cap` says "more than", not a count.
  */
-export function flowsCountSql(f: FlowsFilter, mode: Exclude<FlowsMode, 'rows'>): { sql: string; params: unknown[] } {
+export function flowsCountSql(f: FlowsFilter, mode: Exclude<FlowsMode, 'rows'>, cap = 0): { sql: string; params: unknown[] } {
   const { conds, params } = flowsConditions(f);
   if (mode === 'address') {
     const a = f.addr!;
+    if (cap > 0) {
+      return {
+        sql: `SELECT COUNT(*) total FROM (SELECT 1 FROM flows f INDEXED BY flows_from WHERE f.from_addr = ? AND ${conds.join(' AND ')}
+              UNION ALL SELECT 1 FROM flows f INDEXED BY flows_to WHERE f.to_addr = ? AND f.from_addr IS NOT ? AND ${conds.join(' AND ')} LIMIT ?)`,
+        params: [a, ...params, a, a, ...params, cap + 1],
+      };
+    }
     return {
       sql: `SELECT (SELECT COUNT(*) FROM flows f INDEXED BY flows_from WHERE f.from_addr = ? AND ${conds.join(' AND ')})
              + (SELECT COUNT(*) FROM flows f INDEXED BY flows_to WHERE f.to_addr = ? AND f.from_addr IS NOT ? AND ${conds.join(' AND ')}) total`,
       params: [a, ...params, a, a, ...params],
     };
   }
-  return { sql: `SELECT COUNT(*) total FROM flows f ${mode === 'time' ? timeCountIndex(f) : modeIndex(mode)} WHERE ${conds.join(' AND ')}`, params };
+  const index = mode === 'time' ? timeCountIndex(f) : modeIndex(mode);
+  if (cap > 0) return { sql: `SELECT COUNT(*) total FROM (SELECT 1 FROM flows f ${index} WHERE ${conds.join(' AND ')} LIMIT ?)`, params: [...params, cap + 1] };
+  return { sql: `SELECT COUNT(*) total FROM flows f ${index} WHERE ${conds.join(' AND ')}`, params };
+}
+
+// ---------------------------------------------------------------- the stored counts (migration 0017)
+//
+// flow_counts holds the moves up to flow_count_mark.mark by chain, kind, crossing twin, bot trade and size step; the
+// cron writes it (worker/src/flow-counts.ts) and the triggers mark it dirty when a write could change it. A head page
+// whose filters are only those columns is counted as the stored count plus the moves after the mark, counted live
+// (storedCountSql): exact, and a read of the moves of the last hours instead of all of them.
+
+/**
+ * The NAM sizes the stored counts keep (flow_counts.size: 1 from the first, 2 from the second, 3 from the third, 0
+ * below them or in another coin): the sizes the moves list offers (web/src/screens/activity/Transactions.tsx SIZES)
+ * and the whale size (10,000, ?whale=true). Any other `minNam` is counted on the moves.
+ */
+export const FLOW_SIZE_STEPS = [1_000, 10_000, 100_000] as const;
+const WHALE_STEP = FLOW_SIZE_STEPS.indexOf(10_000) + 1;
+/** A move's size step (flow_counts.size), over `f`: as `amount_num >= step AND NAM_AMOUNT` reads it. */
+const SIZE_STEP = `CASE WHEN NOT ${NAM_AMOUNT} THEN 0 ${FLOW_SIZE_STEPS.map((v, i) => [v, i + 1] as const).reverse().map(([v, k]) => `WHEN f.amount_num >= ${v} THEN ${k}`).join(' ')} ELSE 0 END`;
+
+/**
+ * The stored counts' rows of the moves in (from, to] (from null: every move up to `to`): one row per chain, kind, twin,
+ * bot and size step, the older twins left out (NOT_LEGACY_TWIN), as every list leaves them out. `extra` is added to the
+ * WHERE (the cron's guard that the counts were not marked dirty since it read them).
+ */
+export function flowCountGroupsSql(from: number | null, to: number, extra: { sql: string; params: unknown[] } | null = null): { sql: string; params: unknown[] } {
+  const conds = [...(from != null ? ['f.ts > ?'] : []), 'f.ts <= ?', NOT_LEGACY_TWIN, ...(extra ? [extra.sql] : [])];
+  return {
+    // a step reads the moves of its range on flows_ts; the whole count reads every move, as the planner chooses
+    sql: `SELECT f.chain chain, f.kind kind, CASE WHEN ${RECEIVED_TWIN} THEN 1 ELSE 0 END twin, CASE WHEN ${NOT_BOT} THEN 0 ELSE 1 END bot, ${SIZE_STEP} size, COUNT(*) n
+          FROM flows f${from != null ? ' INDEXED BY flows_ts' : ''} WHERE ${conds.join(' AND ')} GROUP BY 1, 2, 3, 4, 5`,
+    params: [...(from != null ? [from] : []), to, ...(extra?.params ?? [])],
+  };
+}
+
+/** The mark's row in SQL (one row, migration 0017). */
+const MARK = '(SELECT mark FROM flow_count_mark WHERE id = 1)';
+
+/**
+ * The count of a head page from the stored counts, or null when its filters are not the stored counts' columns (a
+ * text search, a time window, an address, a record, a block, or a size the list does not offer). One statement, so the
+ * mark, the counts and the moves since the mark are read as of one moment: the stored count of the filter's groups and
+ * the moves between the mark and `asOf` with every condition of the list, at most COUNT_MAX + 1 of them (storedTotal
+ * adds them when `asOf` is after the mark, takes them away when a rewound `asOf` is before it).
+ */
+export function storedCountSql(f: FlowsFilter): { sql: string; params: unknown[] } | null {
+  if (f.search || f.since != null || f.addr || f.hash || f.height != null) return null;
+  let size = f.whale ? WHALE_STEP : 0;
+  if (f.minNam != null) {
+    const k = (FLOW_SIZE_STEPS as readonly number[]).indexOf(f.minNam);
+    if (k < 0) return null;
+    size = Math.max(size, k + 1);
+  }
+  const g: string[] = [];
+  const gp: unknown[] = [];
+  if (f.chain && f.chain !== 'all') { g.push('c.chain = ?'); gp.push(f.chain); }
+  if (f.kind && f.kind !== 'all') {
+    const grp = KIND_GROUPS[f.kind];
+    if (grp) g.push(`c.kind IN (${kindList(grp)})`);
+    else { g.push('c.kind = ?'); gp.push(f.kind); }
+  }
+  if (f.onePerCrossing) g.push('c.twin = 0');
+  if (f.excludeBots) g.push('c.bot = 0');
+  if (size) { g.push('c.size >= ?'); gp.push(size); }
+  // the list's conditions without its first, the time bound (f.ts <= asOf): the range from the mark replaces it
+  const { conds, params } = flowsConditions(f);
+  return {
+    sql: `SELECT m.mark mark, m.dirty dirty,
+            (SELECT COALESCE(SUM(c.n), 0) FROM flow_counts c${g.length ? ` WHERE ${g.join(' AND ')}` : ''}) stored,
+            (SELECT COUNT(*) FROM (SELECT 1 FROM flows f INDEXED BY flows_ts WHERE f.ts > MIN(?, ${MARK}) AND f.ts <= MAX(?, ${MARK}) AND ${conds.slice(1).join(' AND ')} LIMIT ?)) delta
+          FROM flow_count_mark m WHERE m.id = 1`,
+    params: [...gp, f.asOf, f.asOf, ...params.slice(1), COUNT_MAX + 1],
+  };
+}
+
+/** A row of storedCountSql. */
+export interface StoredCountRow { mark: number | null; dirty: number; stored: number; delta: number }
+
+/**
+ * The head page's count from storedCountSql's row, as of `asOf`: the stored count plus the moves after the mark (or
+ * minus those after `asOf`, for a rewound read before the mark). null when it cannot be said exactly: no row (the
+ * migration not applied), the counts marked dirty or never written, or more than COUNT_MAX moves between the mark and
+ * `asOf`. The caller then counts the moves (flowsCountSql).
+ */
+export function storedTotal(r: StoredCountRow | null | undefined, asOf: number): number | null {
+  if (!r || Number(r.dirty) !== 0 || r.mark == null) return null;
+  const delta = Number(r.delta);
+  if (delta > COUNT_MAX) return null;
+  return asOf >= Number(r.mark) ? Number(r.stored) + delta : Number(r.stored) - delta;
 }
 
 /**

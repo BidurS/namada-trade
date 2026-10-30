@@ -232,6 +232,13 @@ for i in 1 2 3 4 5; do out=$(npx wrangler d1 execute namada-trade-db --remote --
 echo "$out" | python3 -c "
 import sys,json; r=json.load(sys.stdin)[0]['results'][0]; print('0014/0015 tables and indexes:', r)
 sys.exit(0 if r['tables'] == 3 and r['n'] == 2 else 1)" || stop "migration 0014 or 0015 is not in place: not deploying"
+# 0017 (the moves list's stored counts, worker/src/flow-counts.ts): without the two tables the list counts the moves
+# itself on every miss, as before; without the three triggers the stored counts would go wrong after an old move is
+# written, so the Worker that reads them goes out only with all five in place
+for i in 1 2 3 4 5; do out=$(npx wrangler d1 execute namada-trade-db --remote --json --command "SELECT (SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name IN ('flow_counts','flow_count_mark')) tables, (SELECT COUNT(*) FROM sqlite_master WHERE type='trigger' AND name IN ('flow_counts_bi','flow_counts_ad','flow_counts_au')) n" 2>&1) && ! echo "$out" | grep -q 7403 && break; echo "retrying (Cloudflare 7403)"; sleep 6; done
+echo "$out" | python3 -c "
+import sys,json; r=json.load(sys.stdin)[0]['results'][0]; print('0017 tables and triggers:', r)
+sys.exit(0 if r['tables'] == 2 and r['n'] == 3 else 1)" || stop "migration 0017 is not in place: not deploying"
 # the depth archive bucket (wrangler.jsonc r2_buckets DEPTH_R2): wrangler refuses to upload a Worker bound to a bucket
 # that does not exist, so the bucket is created once by hand before the first deploy of the binding (the code tolerates
 # the binding missing; the deploy does not)

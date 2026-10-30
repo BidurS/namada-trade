@@ -88,7 +88,8 @@ export interface FlowsResponse {
   last?: { id: string; ts: number; chain: Chain } | null;
   /**
    * On a head page whose address start (`addr`, not a whole address) matches more than this many moves
-   * (worker/src/flows-query.ts FEW_ROWS): `total` is null and the moves are not counted further. Absent otherwise.
+   * (worker/src/flows-query.ts FEW_ROWS), or whose filters the stored counts do not answer and that match more than
+   * COUNT_MAX (10,000): `total` is null and the moves are not counted further. Absent otherwise.
    */
   totalOver?: number;
 }
@@ -208,16 +209,28 @@ export interface Holder {
  */
 export interface HoldersResponse {
   /**
-   * Holders the chain, category, size and search select. Without a search it comes from the counts the cron keeps
-   * (kv holders.counts, HolderCountsKv; stamped by `countsAt`); with a search it is counted in the request.
+   * Holders the chain, category, size and search select. Without a search or a size it comes from the counts the
+   * cron keeps (kv holders.counts, HolderCountsKv; stamped by `countsAt`); with one it is counted in the request, up
+   * to `totalOver`: null when more match than that (never 0, never the bound read as the count).
    */
-  total: number;
+  total: number | null;
+  /**
+   * When more holders match a size range than the request counts (worker/src/holders.ts WALK_COUNT_MAX, 10,000):
+   * `total` is null and this is the bound ("more than 10,000"). Absent otherwise.
+   */
+  totalOver?: number;
+  /**
+   * When more holders match than this site's server pages (worker/src/api.ts HOLDER_PAGE_REACH, 10,000): the list is
+   * served to that rank and no further ("showing the first 10,000"). A page past it has no rows and the page that ends
+   * there no `next`; the holders after it are reached by a size range or a search. Absent otherwise.
+   */
+  pagedTo?: number;
   /** the page these rows are (with `after`, the page the cursor's rank falls on) */
   page: number;
   limit: number;
   /** rank = (page − 1) × limit + i + 1, or, after a cursor, the cursor's rank + i + 1 */
   holders: Holder[];
-  /** the cursor for the rows after the last one here (send it back as `?after=`); null on the last page */
+  /** the cursor for the rows after the last one here (send it back as `?after=`); null on the last page served */
   next?: string | null;
   /** when the list was read: the order (and so every rank) is as of this time */
   asOf?: number;

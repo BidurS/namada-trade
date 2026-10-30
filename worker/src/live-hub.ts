@@ -11,7 +11,8 @@ import { feePayersOf } from './parse/namada-tx';
 import { blockMetas, blockResults, blockTxs, chainHead, headBound, headSince, namadaStatusAll, HEAD_AGREE_BLOCKS, HEAD_BOUND_BLOCK_MS, HEAD_VOTE_MAX_AGE_MS, RpcBreaker, LIVE_READ, type HeadVote, type ReadOpts, type Rpc } from './sources/namada';
 import type { NamadaBlock } from './parse/namada';
 import { runBatch, stmt, kvGet, kvGetJson, kvSet } from './db';
-import { admitSocket } from './ws-admit';
+import { admitAmong } from './ws-admit';
+import { clientOfRequest, type Client } from './client-key';
 import { fetchNamPools } from './sources/sqs';
 import { HubQuote, askQuoteService, storedQuoteReader } from './live-quote';
 import { priceRouteAt, stampPriceRoute } from './price-how';
@@ -191,8 +192,8 @@ export const ALARM_LEASE_MS = 10 * 60_000;
 
 export class LiveHub extends DurableObject<Env> {
   private sessions = new Set<WebSocket>();
-  /** The client address each socket came from (ws-admit.ts caps per address). */
-  private ips = new WeakMap<WebSocket, string>();
+  /** The client each socket came from (client-key.ts: an IPv4 address, an IPv6 /64 and /48; ws-admit.ts caps each). */
+  private clients = new WeakMap<WebSocket, Client>();
   private osmoWs: WebSocket | null = null;
   private isConnectingOsmo = false;
   /** The alarm run in progress, and when it started: only that run's `finally` clears it (ALARM_LEASE_MS). */
@@ -1497,18 +1498,18 @@ export class LiveHub extends DurableObject<Env> {
         return new Response('Expected websocket upgrade', { status: 426 });
       }
       // Admission (ws-admit.ts): the hub holds every socket in memory and walks them all on each broadcast.
-      // A request without the header (a local run, a direct origin call) shares one bucket rather than none.
-      const ip = request.headers.get('cf-connecting-ip') || 'unknown';
-      const sameIp = [...this.sessions].filter((s) => this.ips.get(s) === ip).length;
-      const verdict = admitSocket(this.sessions.size, sameIp);
+      // Counted per client (client-key.ts: an IPv4 address, an IPv6 /64 and its /48); a request without the header
+      // (a local run, a direct origin call) shares one bucket rather than none.
+      const who = clientOfRequest(request);
+      const verdict = admitAmong([...this.sessions].map((s) => this.clients.get(s)), who);
       if (verdict === 'full') return new Response('The live feed is full right now; try again in a minute.', { status: 503, headers: { 'retry-after': '60' } });
-      if (verdict === 'ip') return new Response('Too many live connections from your address.', { status: 429, headers: { 'retry-after': '60' } });
+      if (verdict === 'ip') return new Response('Too many live connections from your address or its network.', { status: 429, headers: { 'retry-after': '60' } });
       const pair = new WebSocketPair();
       const [client, server] = [pair[0], pair[1]];
 
       server.accept();
       this.sessions.add(server);
-      this.ips.set(server, ip);
+      this.clients.set(server, who);
 
       // Send initial hello
       server.send(

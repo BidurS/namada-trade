@@ -250,15 +250,32 @@ export function walkKeysSql(w: HolderWalk, page: { after?: HolderPosition | null
   return { sql: `${arms.map((a) => a.sql).join(' UNION ALL ')} ORDER BY v DESC, address LIMIT ? OFFSET ?`, params: [...arms.flatMap((a) => a.params), page.limit, page.offset] };
 }
 
-/** How many rows the walk selects (the count of a size range or of a large category), or how many are at or ahead of `ahead`. */
-export function walkCountSql(w: HolderWalk, ahead: HolderPosition | null = null): { sql: string; params: unknown[] } {
+/**
+ * The most entries a count of a walk reads (walkCountSql, walkCategorySql): a count past it is "more than WALK_COUNT_MAX"
+ * (own audit 2026-10-29, M2). Unbounded, a size range from 0 walked every entry of the order twice, its category tally
+ * with a label lookup per entry (about 400,000 rows read a request on production's figure of 194,513 per walk), and a
+ * cursor's place once more.
+ */
+export const WALK_COUNT_MAX = 10_000;
+
+/** The walk's entries (index columns only), one arm per chain, as at most `cap` rows: the inside of a bounded count. */
+function walkEntriesSql(w: HolderWalk, ahead: HolderPosition | null, cap: number): { sql: string; params: unknown[] } {
   const col = `h.${SORT_COL[w.by]}`;
   const arms = HOLDER_CHAINS_OF[w.chain].map((chain) => {
     const { conds, params } = walkConds(chain, w);
     if (ahead) { conds.push(aheadCond(col)); params.push(ahead.value, ahead.value, ahead.address); }
-    return { sql: `(SELECT COUNT(*) FROM holders h INDEXED BY ${SORT_INDEX[w.by]} WHERE ${conds.join(' AND ')})`, params };
+    return { sql: `SELECT h.address address FROM holders h INDEXED BY ${SORT_INDEX[w.by]} WHERE ${conds.join(' AND ')}`, params };
   });
-  return { sql: `SELECT ${arms.map((a) => a.sql).join(' + ')} n`, params: arms.flatMap((a) => a.params) };
+  return { sql: `${arms.map((a) => a.sql).join(' UNION ALL ')} LIMIT ?`, params: [...arms.flatMap((a) => a.params), cap] };
+}
+
+/**
+ * How many rows the walk selects (the count of a size range or of a large category), or how many are at or ahead of
+ * `ahead`, reading at most WALK_COUNT_MAX + 1 entries: `n` above WALK_COUNT_MAX says "more than that", not a count.
+ */
+export function walkCountSql(w: HolderWalk, ahead: HolderPosition | null = null): { sql: string; params: unknown[] } {
+  const e = walkEntriesSql(w, ahead, WALK_COUNT_MAX + 1);
+  return { sql: `SELECT COUNT(*) n FROM (${e.sql})`, params: e.params };
 }
 
 // ---------------------------------------------------------------- places: marks on the list's orders (the address sheet's ranks)
@@ -355,19 +372,18 @@ export async function placeOn(db: D1Database, chain: 'namada' | 'osmosis', by: M
 }
 
 /**
- * Holders by category over a walk (the "What" chips' counts): one pass over the walk's entries with one sum per
- * category asked (no GROUP BY, so no sort), and the unlabelled ones. `cats` are lower-case categories.
+ * Holders by category over a walk (the "What" chips' counts): one pass over at most WALK_COUNT_MAX + 1 of the walk's
+ * entries with one sum per category asked (no GROUP BY, so no sort), and the unlabelled ones; `n` above
+ * WALK_COUNT_MAX says the walk holds more, and the sums are then of a part of it, not counts. `cats` are lower-case
+ * categories.
  */
 export function walkCategorySql(w: HolderWalk, cats: string[]): { sql: string; params: unknown[] } {
-  const arms = HOLDER_CHAINS_OF[w.chain].map((chain) => {
-    const { conds, params } = walkConds(chain, { ...w, category: null });
-    return {
-      sql: `SELECT COUNT(*) n, SUM(CASE WHEN l.address IS NULL THEN 1 ELSE 0 END) c_none${cats.map((_, i) => `, SUM(CASE WHEN l.category = ? THEN 1 ELSE 0 END) c${i}`).join('')}
-            FROM holders h INDEXED BY ${SORT_INDEX[w.by]} LEFT JOIN labels l ON l.address = h.address WHERE ${conds.join(' AND ')}`,
-      params: [...cats, ...params],
-    };
-  });
-  return { sql: arms.map((a) => a.sql).join(' UNION ALL '), params: arms.flatMap((a) => a.params) };
+  const e = walkEntriesSql({ ...w, category: null }, null, WALK_COUNT_MAX + 1);
+  return {
+    sql: `SELECT COUNT(*) n, SUM(CASE WHEN l.address IS NULL THEN 1 ELSE 0 END) c_none${cats.map((_, i) => `, SUM(CASE WHEN l.category = ? THEN 1 ELSE 0 END) c${i}`).join('')}
+          FROM (${e.sql}) k LEFT JOIN labels l ON l.address = k.address`,
+    params: [...cats, ...e.params],
+  };
 }
 
 /** The columns of a list row (HolderBaseRow's shape, plus the stored stake), over `holders h`, `stakes s` and `labels l`. */

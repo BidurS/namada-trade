@@ -401,6 +401,8 @@ export interface Positions {
   exact: boolean;
   /** when that count was read */
   countedAt: number | null;
+  /** more than this many match (FlowsResponse.totalOver), from the last first page that said so instead of a count */
+  over: number | null;
   /** the server's position for page n (page 1 is the head and has none) */
   cursors: Map<number, string>;
   /** the oldest move in the index for this chain (FlowsResponse.firstTs) */
@@ -417,7 +419,7 @@ export function positionsOf(key: string): Positions {
     positions.set(key, p);
     return p;
   }
-  p = { total: null, exact: true, countedAt: null, cursors: new Map(), firstTs: null };
+  p = { total: null, exact: true, countedAt: null, over: null, cursors: new Map(), firstTs: null };
   positions.set(key, p);
   while (positions.size > MAX_KEYS) positions.delete(positions.keys().next().value as string);
   return p;

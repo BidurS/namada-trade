@@ -28,7 +28,7 @@ import { category_plain } from '../../../../shared/labels';
 import { fmtAddr, fmtAge, fmtCount, fmtNamRule, fmtNamSigned, fmtPctRule, fmtUtcClock } from '../../lib/format';
 import { ActivityBar, FilterPanel, FilterSet, KeysHint, ListSearch, useRovingRows } from './parts';
 import { HOLDER_SEARCH_EMPTY, SEARCH_HINT, SEARCH_PLACEHOLDER, TECH } from './words';
-import { HOLDER_CSV_MAX, PAGE_SIZES, firstVisibleRow, flashRow, focusFirstRow, focusRow, pageCount, pageOfRank, revealRow } from './paging';
+import { HOLDER_CSV_MAX, PAGE_SIZES, firstVisibleRow, flashRow, focusFirstRow, focusRow, pageOfRank, revealRow, servedPages } from './paging';
 import { HOLDER_DEFAULT, SORT_API, holderPatch, holdersApplied, hrefWith, liftHolders, type HolderUrl } from './urlState';
 import { noteOrigin } from './sheetOrigin';
 
@@ -51,7 +51,12 @@ type CatCounts = NonNullable<HoldersPage['categories']>;
 interface Loaded {
   key: string;
   rows: Holder[];
-  total: number;
+  /** null: more than `over` match a size range, and the server did not count further */
+  total: number | null;
+  /** HoldersResponse.totalOver: the count's bound when `total` is null */
+  over: number | null;
+  /** HoldersResponse.pagedTo: the server serves the list to this rank and no further (more holders match) */
+  reach: number | null;
   page: number;
   size: number;
   /** the server's "What" counts over the whole list (null on servers before the stored totals) */
@@ -102,7 +107,7 @@ export default function Holders({
     fetchHoldersPage({ chain: eff.chain, by, category, search, min: eff.min, max: eff.max, page, limit: size }, { signal: ctl.signal })
       .then((r) => {
         if (ctl.signal.aborted) return;
-        setData({ key, rows: r.holders, total: r.total, page, size, cats: r.categories ?? null, asOf: r.asOf ?? null, countsAt: r.countsAt ?? null, exact: r.exact });
+        setData({ key, rows: r.holders, total: r.total, over: r.totalOver ?? null, reach: r.pagedTo ?? null, page, size, cats: r.categories ?? null, asOf: r.asOf ?? null, countsAt: r.countsAt ?? null, exact: r.exact });
       })
       .catch(() => {
         if (!ctl.signal.aborted) setError(page > 1 ? 'This page of holders could not be fetched from this site’s server.' : 'The holder list could not be fetched from this site’s server.');
@@ -113,7 +118,10 @@ export default function Holders({
   // the same query (any page, any size): the count and the chips stay while another page loads
   const fresh = data?.key === key ? data : null;
   const loaded = fresh?.rows ?? [];
-  const pages = fresh ? pageCount(fresh.total, size) : null;
+  // the pages served: the count's, up to the server's reach (more holders than it pages: "showing the first 10,000")
+  const pages = fresh ? servedPages(fresh.total, fresh.over, fresh.reach, size) : null;
+  /** The holders the list is served to: its count, or the server's reach when that is shorter (or the count not taken). */
+  const served = fresh ? (fresh.total != null ? Math.min(fresh.total, fresh.reach ?? fresh.total) : fresh.reach) : null;
   /** The rows on screen are the ones the URL asks for. */
   const current = !!fresh && fresh.page === page && fresh.size === size;
   // a page past the end (an old link, a list that shrank): the last page, without a history entry
@@ -182,7 +190,14 @@ export default function Holders({
     const t = value.replace(/[,\s]/g, '');
     if (!/^\d+$/.test(t) || Number(t) < 1) return 'Type a rank as a whole number, as printed at the start of each row.';
     const rank = Number(t);
-    if (fresh && rank > fresh.total) {
+    if (fresh && fresh.reach != null && rank > fresh.reach && (fresh.total == null || rank <= fresh.total)) {
+      return (
+        <>
+          This site’s server pages the first <Num v={fresh.reach} fmt={fmtCount} /> holders of a list; a size or a search narrows it to the holders further down.
+        </>
+      );
+    }
+    if (fresh && fresh.total != null && rank > fresh.total) {
       return fresh.total === 1 ? (
         <>There is only one holder here; pick that rank.</>
       ) : (
@@ -381,7 +396,7 @@ export default function Holders({
   const anyOn = count > 0 || (url.by !== HOLDER_DEFAULT.by && eff.chain !== 'osmosis');
   const shown = rows.length;
   const showN = serverFiltered && fresh ? fresh.total : shown;
-  const showLabel = !fresh ? 'Show holders' : `Show ${fmtCount(showN)} holder${showN === 1 ? '' : 's'}`;
+  const showLabel = !fresh ? 'Show holders' : showN != null ? `Show ${fmtCount(showN)} holder${showN === 1 ? '' : 's'}` : fresh.over != null ? `Show more than ${fmtCount(fresh.over)} holders` : 'Show holders';
   const search$ = (compact: boolean) => (
     <ListSearch
       label="Search holders by address or name"
@@ -435,6 +450,16 @@ export default function Holders({
   const empty = !!fresh && !busy && rows.length === 0;
   /** The count covers the rows the filters select (a server that ignored a size filter: only this page was checked). */
   const exact = !!fresh && fresh.exact && serverFiltered;
+  /** Some holders match: a count above 0, or more than the server counts. */
+  const someMatch = !!fresh && ((fresh.total ?? 0) > 0 || fresh.over != null);
+  /** The server pages the list to this rank only (more holders match): "(showing the first 10,000)" in the count line. */
+  const showing =
+    fresh && fresh.reach != null ? (
+      <>
+        {' '}
+        (showing the first <Num v={fresh.reach} fmt={fmtCount} />)
+      </>
+    ) : null;
 
   // ---- column heads on the desktop table: Total, Spendable and Staked sort the list (the "Biggest by" choice)
   const sortHead = (v: HolderUrl['by'], word: string) => (
@@ -457,11 +482,11 @@ export default function Holders({
     : undefined;
 
   const csv =
-    fresh && fresh.total > 0 ? (
+    fresh && someMatch ? (
       <a className="link act-csv" href={holdersCsvHref({ chain: eff.chain, by, category, search })} download>
         <span>Download page data</span>
         {/* the export holds the biggest HOLDER_CSV_MAX of these holders (worker/src/api.ts /api/export/holders) */}
-        <span className="act-csv__n">{fresh.total > HOLDER_CSV_MAX ? `CSV, biggest ${fmtCount(HOLDER_CSV_MAX)}` : 'CSV, all of them'}</span>
+        <span className="act-csv__n">{fresh.total == null || fresh.total > HOLDER_CSV_MAX ? `CSV, biggest ${fmtCount(HOLDER_CSV_MAX)}` : 'CSV, all of them'}</span>
       </a>
     ) : null;
 
@@ -507,11 +532,26 @@ export default function Holders({
           <p className="act-count" aria-live="polite">
             {!fresh ? (
               <span className="skel__b act-count__sk" aria-hidden="true" />
+            ) : exact && fresh.total == null && fresh.over != null ? (
+              <>
+                More than <Num v={fresh.over} fmt={fmtCount} /> holders found {CHAIN_WORD[eff.chain]}
+                {whatWord ? <> in “{whatWord}”</> : null}
+                {search ? <> matching “{search}”</> : null}, biggest first by {BY_WORD[sort]}
+                {showing}
+                {fresh.asOf != null ? (
+                  <>
+                    {' '}
+                    · <span className="act-at">ordered at {fmtUtcClock(fresh.asOf)}</span>
+                  </>
+                ) : null}
+                .
+              </>
             ) : exact ? (
               <>
                 A total of <Num v={fresh.total} fmt={fmtCount} /> {fresh.total === 1 ? 'holder' : 'holders'} found {CHAIN_WORD[eff.chain]}
                 {whatWord ? <> in “{whatWord}”</> : null}
                 {search ? <> matching “{search}”</> : null}, biggest first by {BY_WORD[sort]}
+                {showing}
                 {fresh.asOf != null ? (
                   <>
                     {' '}
@@ -542,7 +582,7 @@ export default function Holders({
             onEmpty={focusSearch}
           />
         </div>
-        {fresh && fresh.total > 0 ? (
+        {someMatch ? (
           <PageTools
             className="act-tools"
             size={size}
@@ -589,7 +629,7 @@ export default function Holders({
               columns={columns}
               label={`Biggest NAM holders ${CHAIN_WORD[eff.chain]}`}
               old={listOld}
-              rowCount={exact && fresh ? fresh.total + 1 : undefined}
+              rowCount={exact && served != null ? served + 1 : undefined}
               className="act-holders"
             >
               {(busy ? data.rows : rows).map((h) => (

@@ -9,7 +9,7 @@ import { evaluateFlows, INTERNAL_ADDRESSES, isInternal, type AlertThresholds } f
 import { QUOTE_KEYS, quotesNeeded, settleMetaOf, settleOf, type Settle } from '../../shared/settle';
 import { SELLS_MOST_CUT } from '../../shared/supply-thresholds';
 import { kvGetJson, kvSet } from './db';
-import { NAM_AMOUNT, NOT_LEGACY_TWIN } from './flows-query';
+import { AFTER_CURSOR, FLOWS_ORDER, NAM_AMOUNT, NOT_BELOW, NOT_LEGACY_TWIN } from './flows-query';
 import { safeHttpUrl, explorerHashOf, isOtherCoin, priceAtOf } from '../../shared/flow-rules';
 import { fetchJson } from './util';
 import { INTERNAL_LABELS } from './config';
@@ -1325,20 +1325,34 @@ export async function orderflowSeries(db: D1Database, asOf: number, replay: bool
 
 // ---------------------------------------------------------------- alerts (D7)
 
+/** The most moves one window's read takes (alertsWindow): the rows the rules could fire on, newest first. */
+export const ALERTS_READ_MAX = 500;
+
 /**
- * Alert hits between `from` and `to`. Every rule's size is NAM, so rows in another coin (meta.tokenSymbol,
- * NAM_AMOUNT) are left out, as the site's other NAM reads of the same kinds leave them out, and never fill the 500
- * rows read.
+ * Alert hits between `from` and `to`, and the start of what they cover. Every rule's size is NAM, so rows in another
+ * coin (meta.tokenSymbol, NAM_AMOUNT) are left out, as the site's other NAM reads of the same kinds leave them out, and
+ * never fill the ALERTS_READ_MAX rows read. When the read is full, the window holds more, older: `since` is then just
+ * after the oldest row read (its millisecond's rows are let go, as the read may have cut them), so the hits are every
+ * hit in [since, to), never a part of [from, to) read as the whole.
  */
-export async function alertsBetween(db: D1Database, from: number, to: number, th: AlertThresholds): Promise<AlertHit[]> {
+export async function alertsWindow(db: D1Database, from: number, to: number, th: AlertThresholds): Promise<{ hits: AlertHit[]; since: number }> {
   const minAmt = Math.min(th.ibcInventory, th.unlock, th.bigSwap, th.unshield, th.bond);
   const rows = await db
-    .prepare(`${FLOW_SELECT} WHERE f.ts >= ? AND f.ts < ? AND f.amount_num >= ? AND f.kind IN ('ibc_in','withdraw','unbond','buy','sell','unshield','bond') AND ${NAM_AMOUNT} AND ${NOT_LEGACY_TWIN} ORDER BY f.ts DESC LIMIT 500`)
-    .bind(from, to, minAmt)
+    .prepare(`${FLOW_SELECT} WHERE f.ts >= ? AND f.ts < ? AND f.amount_num >= ? AND f.kind IN ('ibc_in','withdraw','unbond','buy','sell','unshield','bond') AND ${NAM_AMOUNT} AND ${NOT_LEGACY_TWIN} ORDER BY f.ts DESC LIMIT ?`)
+    .bind(from, to, minAmt, ALERTS_READ_MAX)
     .all<any>();
-  const flows = (rows.results || []).map(rowToFlow);
-  return withQuotes(db, evaluateFlows(flows, th), flows);
+  let flows = (rows.results || []).map(rowToFlow);
+  let since = from;
+  if (flows.length >= ALERTS_READ_MAX) {
+    const oldest = flows[flows.length - 1].ts;
+    flows = flows.filter((f) => f.ts > oldest);
+    since = oldest + 1;
+  }
+  return { hits: await withQuotes(db, evaluateFlows(flows, th), flows), since };
 }
+
+/** Alert hits between `from` and `to` (alertsWindow, its hits alone). */
+export const alertsBetween = (db: D1Database, from: number, to: number, th: AlertThresholds): Promise<AlertHit[]> => alertsWindow(db, from, to, th).then((w) => w.hits);
 
 /** A quote this much older than a trade is no longer the price of its minute. */
 export const QUOTE_MATCH_MS = 5 * 60_000;
@@ -1420,31 +1434,51 @@ export async function withQuotes(db: D1Database, hits: AlertHit[], flows: Flow[]
 }
 
 /**
+ * The most moves the search for the last alert walks (lastAlertBefore): the newest this many before its time, about
+ * five months on 2026-10-29. Before, a search whose rules matched nothing walked every flow (about 56,000 rows, and
+ * growing), and the signed-in test messages reach it with a wallet's own sizes (own audit 2026-10-29, Low 24).
+ */
+export const LAST_ALERT_SCAN = 5_000;
+
+/**
  * The most recent alert hit before `to`, of any age (W5), for the "nothing crossed an alert size" state.
  * The SQL narrows to flows each rule could fire on (its chain, kinds and NAM size; rows in another coin are left
  * out, NAM_AMOUNT, so they never fill a page); the shared rules then decide, exactly as for live alerts. Pages back
- * newest first: null only when the search reached the oldest record and found none; undefined when it gave up after
- * `pages` full pages (not known, so never "none on record").
+ * newest first over the newest `scan` moves before `to`: null only when the search reached the oldest record and found
+ * none; undefined when it gave up, after `pages` full pages or at the end of the moves it walks (not known, so never
+ * "none on record").
  */
-export async function lastAlertBefore(db: D1Database, to: number, th: AlertThresholds, pages = 5, pageSize = 100): Promise<AlertHit | null | undefined> {
+export async function lastAlertBefore(db: D1Database, to: number, th: AlertThresholds, pages = 5, pageSize = 100, scan = LAST_ALERT_SCAN): Promise<AlertHit | null | undefined> {
   const cond = `((f.chain='osmosis' AND f.kind='ibc_in' AND f.amount_num >= ?)
     OR (f.chain='namada' AND f.kind IN ('withdraw','unbond') AND f.amount_num >= ?)
     OR (f.chain='osmosis' AND f.kind IN ('buy','sell') AND f.amount_num >= ?)
     OR (f.chain='namada' AND f.kind='unshield' AND f.amount_num >= ?)
     OR (f.chain='namada' AND f.kind='bond' AND f.amount_num >= ?))`;
+  // The end of the walk: the scan-th entry of flows_ts before `to` (index columns only). None: fewer moves than that,
+  // and the walk reaches the oldest.
+  const end = (await db.prepare(`SELECT f.ts, f.height, f.id FROM flows f INDEXED BY flows_ts WHERE f.ts < ? ${FLOWS_ORDER} LIMIT 1 OFFSET ?`)
+    .bind(to, scan - 1).all<{ ts: number; height: number; id: string }>()).results?.[0] ?? null;
+  const floor = end ? ` AND ${NOT_BELOW}` : '';
+  const floorParams = end ? [end.ts, end.ts, end.height, end.height, end.id] : [];
   // Newest first on flows_ts, stopping at the page's last row (4,501 rows read for the first page on 2026-10-20); the
-  // planner's own choice, one range per kind on flows_kind merged and sorted whole, read 40,134 for every page.
+  // planner's own choice, one range per kind on flows_kind merged and sorted whole, read 40,134 for every page. Each
+  // page goes on after the last row of the one before (a seek, not an offset), so the pages walk the moves once.
+  let after: { ts: number; height: number; id: string } | null = null;
   for (let p = 0; p < pages; p++) {
-    const rows = await db
-      .prepare(`${flowSelect('INDEXED BY flows_ts')} WHERE f.ts < ? AND ${cond} AND ${NAM_AMOUNT} AND ${NOT_LEGACY_TWIN} ORDER BY f.ts DESC, f.height DESC LIMIT ? OFFSET ?`)
-
-      .bind(to, th.ibcInventory, th.unlock, th.bigSwap, th.unshield, th.bond, pageSize, p * pageSize)
+    const key = after ? ` AND ${AFTER_CURSOR}` : '';
+    const keyParams = after ? [after.ts, after.ts, after.height, after.height, after.id] : [];
+    const rows: D1Result<any> = await db
+      .prepare(`${flowSelect('INDEXED BY flows_ts')} WHERE f.ts < ? AND ${cond} AND ${NAM_AMOUNT} AND ${NOT_LEGACY_TWIN}${floor}${key} ${FLOWS_ORDER} LIMIT ?`)
+      .bind(to, th.ibcInventory, th.unlock, th.bigSwap, th.unshield, th.bond, ...floorParams, ...keyParams, pageSize)
       .all<any>();
     const list = rows.results || [];
     const flows = list.map(rowToFlow);
     const hits = evaluateFlows(flows, th);
     if (hits.length) return (await withQuotes(db, [hits[0]], flows))[0];
-    if (list.length < pageSize) return null;
+    // a short page: the walk reached its end, the oldest move only when no end was set
+    if (list.length < pageSize) return end ? undefined : null;
+    const last = list[list.length - 1];
+    after = { ts: Number(last.ts), height: Number(last.height), id: String(last.id) };
   }
   return undefined;
 }

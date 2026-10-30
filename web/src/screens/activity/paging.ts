@@ -17,6 +17,14 @@ export const HIT_MS = 1_600;
 /** The number of pages for `total` rows (at least 1, so an empty list is page 1 of 1). */
 export const pageCount = (total: number, size: number = PAGE_SIZE): number => Math.max(1, Math.ceil(total / size));
 
+/**
+ * The pages a holder list is served on: its count's, up to the first `reach` holders when the server pages no further
+ * (HoldersResponse.pagedTo); with no count (`over`: more than that many match, which is never fewer than `reach`),
+ * the pages of the reach, every one of them full. null when neither is known.
+ */
+export const servedPages = (total: number | null, over: number | null, reach: number | null, size: number): number | null =>
+  total != null ? pageCount(reach != null ? Math.min(total, reach) : total, size) : over != null && reach != null && over >= reach ? pageCount(reach, size) : null;
+
 /** The page that holds the row at 1-based position `rank`. */
 export const pageOfRank = (rank: number, size: number): number => Math.max(1, Math.ceil(rank / size));
 

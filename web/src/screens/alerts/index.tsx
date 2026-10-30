@@ -66,7 +66,9 @@ export default function AlertsScreen({ route }: ScreenProps) {
   const range = useMemo(() => {
     const end = at ?? Date.now();
     const since = eff === 'away' && lastSeen ? Math.min(lastSeen, end - HOUR) : end - WINDOW_HOURS[eff === 'away' ? '24h' : eff] * HOUR;
-    return { since, end };
+    // a window of its own is measured from its end (the shared window of its length: api.ts fetchAlertsRecent `end`);
+    // a last visit from the request's moment, so the window asked reaches back to it
+    return { since, end, measuredFrom: eff === 'away' && lastSeen ? undefined : end };
     // tick: a live refresh moves the window's end to now
   }, [at, eff, lastSeen, tick]); // eslint-disable-line react-hooks/exhaustive-deps
 
@@ -76,7 +78,7 @@ export default function AlertsScreen({ route }: ScreenProps) {
 
   useEffect(() => {
     let alive = true;
-    fetchAlertsRecentWithLast(at, range.since)
+    fetchAlertsRecentWithLast(at, range.since, range.measuredFrom)
       .then((r) => {
         if (alive) setHits({ data: { ...r, hits: [...r.hits].sort((a, b) => b.ts - a.ts) }, last: r.last, error: null });
       })
