@@ -328,6 +328,11 @@ export interface PoolInfo {
   /** whole coins of the other side; null when the coin's decimals are not known (an empty side is 0 in any unit) */
   counterReserve: number | null;
   /**
+   * The other side in base units, only while its decimals are not known (sources/sqs.ts fetchNamPools): the cron sizes
+   * it with the decimals the depth module read (pool-sizes.ts sizePools) and never stores or serves it.
+   */
+  counterBase?: string;
+  /**
    * The pool's size in US dollars: its NAM at the site's NAM price plus its other coin at that coin's price
    * (worker/src/pool-sizes.ts), never the router's liquidity_cap. null when a side that holds coins cannot be priced:
    * `sizeProv` then says why ("not priced"), never 0.
@@ -387,8 +392,17 @@ export interface Overview {
   };
   dex: {
     pools: number;
+    /**
+     * the pools' money: each pool's coins at their own prices (worker/src/pool-sizes.ts), the priced pools summed; null
+     * when the priced pools hold too little of the NAM for a total (shared/pool-sides.ts pricedTotal), `prov` says why
+     */
     liquidityUsd: number | null;
     refPoolLiquidityUsd: number | null;
+    /**
+     * how many of `pools` the total counts (the rest cannot be priced and are left out); null when not known: a total
+     * stored before the pools were sized from their reserves, or a server before 2026-10-29
+     */
+    pricedPools?: number | null;
     /** holders on Osmosis (protocol accounts excluded); null when the count could not be read, never 0 as a stand-in. Current, not as of ?at= */
     holders: number | null;
     volume24hNam: number;
@@ -642,6 +656,12 @@ export interface Pressure {
   coverage: Provenance;
   /** each chain's flow index on its own: stamp an Osmosis-only figure with `osmosis`, a Namada-only one with `namada` */
   coverageByChain?: { osmosis: Provenance; namada: Provenance };
+  /**
+   * The Osmosis index's stamp for what each receiver has left (onDeck and its totals), whose sells are read from 30 days
+   * before the window: it carries the history-gap sentence while that reaches back before the stored record is complete
+   * (shared/osmosis-gap.ts). Absent on servers before 2026-10-29.
+   */
+  onDeckProv?: Provenance;
 }
 
 // ---------------------------------------------------------------- blind spot (D5)

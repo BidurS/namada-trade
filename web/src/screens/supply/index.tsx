@@ -67,18 +67,21 @@ export default function SupplyScreen({ route }: ScreenProps) {
 
   // ---------------- the hero: Ready to sell ----------------
   // Everything in the hero and the first two facts is counted from Osmosis records: the Osmosis flow index
-  // stamps it when the server stamps each chain (Pressure.coverageByChain), else both indexes together.
+  // stamps it when the server stamps each chain (Pressure.coverageByChain), else both indexes together. What each
+  // receiver has left is counted from its sells since 30 days before the window, which its own stamp covers
+  // (Pressure.onDeckProv, on servers since 2026-10-29).
   const cov = data ? (data.coverageByChain?.osmosis ?? data.coverage) : null;
+  const deckCov = data ? (data.onDeckProv ?? cov) : null;
   const totals = data?.onDeckTotals ?? null;
   const price = o?.price.usd ?? null;
-  const usdStamp = data && cov && price ? derive([cov, price.prov], 'ready to sell × NAM price') : null;
+  const usdStamp = data && deckCov && price ? derive([deckCov, price.prov], 'ready to sell × NAM price') : null;
   const hero = data ? (
     <HeroNumber
       size="48"
       className="sp-hero__n"
       label={<Term id="ready-to-sell">Ready to sell</Term>}
-      chip={<ProvChip p={cov} label="Ready to sell" />}
-      value={<Num v={data.onDeckTotal} prov={cov} fmt={fmtNamRule} unit="NAM" showAge={false} />}
+      chip={<ProvChip p={deckCov} label="Ready to sell" />}
+      value={<Num v={data.onDeckTotal} prov={deckCov} fmt={fmtNamRule} unit="NAM" showAge={false} />}
       sub={
         <>
           <span className="sp-hero__usd">
@@ -95,8 +98,8 @@ export default function SupplyScreen({ route }: ScreenProps) {
             NAM that crossed to Osmosis in {wWords}, minus what has been sold or sent back
             {totals ? (
               <>
-                : <Num v={totals.bridgedIn} prov={cov} fmt={fmtNamRule} showAge={false} /> NAM crossed in to the {data.onDeck.length === 1 ? 'one receiver' : `${data.onDeck.length} receivers`} listed below,{' '}
-                <Num v={totals.sold} prov={cov} fmt={fmtNamRule} showAge={false} /> sold and <Num v={totals.sentBack} prov={cov} fmt={fmtNamRule} showAge={false} /> sent back.
+                : <Num v={totals.bridgedIn} prov={deckCov} fmt={fmtNamRule} showAge={false} /> NAM crossed in to the {data.onDeck.length === 1 ? 'one receiver' : `${data.onDeck.length} receivers`} listed below,{' '}
+                <Num v={totals.sold} prov={deckCov} fmt={fmtNamRule} showAge={false} /> sold and <Num v={totals.sentBack} prov={deckCov} fmt={fmtNamRule} showAge={false} /> sent back.
               </>
             ) : (
               '.'

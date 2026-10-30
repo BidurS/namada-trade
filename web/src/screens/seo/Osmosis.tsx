@@ -12,6 +12,7 @@ import { Inside } from '../../ui/PairsList';
 import { fetchPools, fetchQuoteCurve } from '../../api';
 import { fmtAgo, fmtCoin, fmtCount, fmtNamRule, fmtPctRule, fmtPctSigned, fmtUsdRule, fmtUsdWhole } from '../../lib/format';
 import { counterName, pairName, restOf, safeSize } from '../trade/model';
+import { pricedTotal } from '../../../../shared/pool-sides';
 import { SafeFig, safeDerivedFrom } from '../trade/Safe';
 import { Band, Dateline, Facts, Fig, FigList, GoLink, Hero, QSection, Related, Say, fromOne, missing, noAnswer, ratio, useLoad, useOv } from './parts';
 
@@ -51,7 +52,8 @@ export function Osmosis({ route }: ScreenProps) {
   // size, comes after the priced ones and counts in no total.
   const sizeOf = (p: PoolInfo) => (p.liquidityUsd != null && Number.isFinite(p.liquidityUsd) ? p.liquidityUsd : null);
   const list = [...(pools.data?.pools ?? [])].sort((a, b) => (sizeOf(b) ?? -1) - (sizeOf(a) ?? -1) || b.namReserve - a.namReserve);
-  const total = list.reduce((a, p) => a + (sizeOf(p) ?? 0), 0);
+  // each pool's share is of the pools' money, when the priced pools hold the NAM a total needs (shared/pool-sides.ts)
+  const total = pricedTotal(list).usd;
   const deepest = sizeOf(list[0] ?? ({} as PoolInfo)) ?? 0;
   const rest = list.slice(TOP);
   const restSum = restOf(rest);

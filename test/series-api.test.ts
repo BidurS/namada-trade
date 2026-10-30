@@ -16,7 +16,8 @@ import { fmtDay } from '../shared/search-grammar';
 import type { SeriesResponse, PriceChangesResponse, VolumeResponse, PairsResponse, TradesResponse, NotServedBody, TradeRow, ValuesResponse } from '../shared/types';
 import { TRADE_FOLD_MS } from '../shared/types';
 import { fetchNamPools } from '../worker/src/sources/sqs';
-import { POOLS_KEY, sizePools, type StoredPools } from '../worker/src/pool-sizes';
+import { POOLS_KEY, PRICED_KEY, sizePools, type StoredPools } from '../worker/src/pool-sizes';
+import { OSMOSIS_GAP_NOTE } from '../shared/osmosis-gap';
 
 const H = 3_600_000, D = 86_400_000, MIN = 60_000;
 /** 22:10 UTC on 20 Oct 2026 (the day this was built), whole minute. */
@@ -194,7 +195,8 @@ describe('GET /api/series: hourly series', () => {
     db.raw.prepare(`UPDATE kv SET value = ? WHERE key = 'jobs.hourly'`).run(String(HOUR - 5 * H));
     const old = (await call<SeriesResponse>(db, `/api/series?key=price.swap_1h&from=${from}`)).body;
     expect(old.prov.status).toBe('stale');
-    expect(old.prov.note).toBe(`Trades are counted up to ${fmtDay(HOUR - 5 * H)} ${new Date(HOUR - 5 * H).toISOString().slice(11, 16)} UTC; the hourly writer has not run since, so newer trades are not counted yet.`);
+    // the day before reaches back before the stored Osmosis record is complete (20 Oct 2026 22:00 UTC): said, its prices as stored
+    expect(old.prov.note).toBe(`Trades are counted up to ${fmtDay(HOUR - 5 * H)} ${new Date(HOUR - 5 * H).toISOString().slice(11, 16)} UTC; the hourly writer has not run since, so newer trades are not counted yet. ${OSMOSIS_GAP_NOTE}`);
   });
 
   it('the pool price: flat hours flagged, a coarser step flat only when every hour in it was, missing hours a gap', async () => {
@@ -623,7 +625,8 @@ describe('GET /api/series/pairs', () => {
     expect(p3017.osmosis.value).toEqual({ volume24hUsd: 0, volume7dUsd: 0.26, liquidityUsd: 1.68 });
     expect(body.pairs.some((p) => p.poolId === '2000')).toBe(false);
     expect(body.prov).toMatchObject({ source: 'Osmosis pool reserves', at: NOW - 30_000, status: 'live' });
-    expect(body.prov.note).toBe('4 pools from the router\'s pool list, NAM at the site\'s price of $0.001 at 22:09 UTC. Not priced, so left out of the total: pool 3008, pool 9999.');
+    // 3008 and 9999 hold 46% of the NAM: the list stands, its total is not known
+    expect(body.prov.note).toBe('The money in the pools is not known: the pools that can be priced hold 54% of the NAM in the pools, under the 90% a total needs. 4 pools from the router\'s pool list, NAM at the site\'s price of $0.001 at 22:09 UTC. Not priced, so left out of the total: pool 3008, pool 9999. The pools not priced hold 46% of the NAM in the pools.');
     expect(body.osmosisProv).toMatchObject({ at: NOW - 25 * MIN, status: 'live' });
     expect(body.osmosisTotals.volume24hUsd).toBeCloseTo(4.73 + 6.03 + 0, 9);
     expect(body.osmosisTotals.volume7dUsd).toBeCloseTo(420.64 + 137.17 + 0.26, 9);
@@ -647,10 +650,22 @@ describe('GET /api/series/pairs', () => {
     const asked = noRouter();
     const { body } = await call<PairsResponse>(db, '/api/series/pairs');
     expect(asked).toEqual([]);
-    expect(body.prov).toMatchObject({ source: 'Osmosis SQS pools (stored)', at: HOUR + 3000, status: 'stale' });
+    expect(body.prov).toMatchObject({ source: 'Osmosis pool reserves (stored hour)', at: HOUR + 3000, status: 'stale' });
     expect(body.prov.note).toMatch(/has not been stored/);
-    expect(body.pairs[0]).toMatchObject({ poolId: '3005', liquidityUsd: 900, namReserve: 606000, counterSymbol: null });
+    // the hour was stored before the pools were sized from their reserves: its size is the router's liquidity_cap, never shown as the pool's
+    const p3005 = body.pairs.find((p) => p.poolId === '3005')!;
+    expect(p3005).toMatchObject({ liquidityUsd: null, namReserve: 606000, counterReserve: 209, counterSymbol: null });
+    expect(p3005.sizeProv).toMatchObject({ source: 'Osmosis pool reserves (stored hour)', at: HOUR + 3000, status: 'missing' });
+    expect(p3005.sizeProv!.note).toMatch(/is the Osmosis router's own figure, which counted NAM at nothing while it gave NAM no price, so it is not shown as the pool's size\.$/);
     expect(body.pairs.find((p) => p.poolId === '3017')!.liquidityUsd).toBeNull();
+    // from the first minute the sizes were the pools' coins at their own prices: the hour's size, and an hour with none says it could not be priced
+    insert(db, 'metrics', [{ ts: HOUR - H, key: PRICED_KEY, value: 3 }]);
+    db.raw.prepare(`UPDATE pool_hourly SET liquidity_usd = NULL WHERE pool_id = '3008' AND hour = ?`).run(HOUR);
+    const sized = (await call<PairsResponse>(db, '/api/series/pairs')).body;
+    expect(sized.pairs[0]).toMatchObject({ poolId: '3005', liquidityUsd: 900, sizeProv: { status: 'stale', at: HOUR + 3000 } });
+    const p3008 = sized.pairs.find((p) => p.poolId === '3008')!;
+    expect(p3008.liquidityUsd).toBeNull();
+    expect(p3008.sizeProv!.note).toMatch(/^Not priced: a side of the pool could not be priced in the hour stored at /);
   });
 
   it('nothing stored: no pool, both stamps missing', async () => {

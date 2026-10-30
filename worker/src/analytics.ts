@@ -1024,10 +1024,12 @@ export async function pressure(db: D1Database, asOf: number, replay: boolean, wi
     ...(unbondTermStructure ? { unbondTermStructure } : {}), unbondTermStructureProv, unbondWithdrawProv,
     pipelineSummary,
     bondedTrend: bondedTrend.map((p) => ({ ts: p.ts, value: p.value })), movers, proposals, proposalsProv,
-    // The Osmosis reads reach back to `from`, and the sells behind each receiver's inventory 30 days further: a window
-    // reaching back before the stored Osmosis record is complete says so (shared/osmosis-gap.ts); no figure changes.
-    coverage: withOsmosisGap(cov.both, from - 30 * D),
-    coverageByChain: { osmosis: withOsmosisGap(cov.osmosis, from - 30 * D), namada: cov.namada },
+    // A window reaching back before the stored Osmosis record is complete says so (shared/osmosis-gap.ts); no figure
+    // changes. The window's own figures (the movers, the crossings) reach back to `from`; what each receiver has left
+    // is counted from its sells since 30 days before it, so its own stamp reaches back that far.
+    coverage: withOsmosisGap(cov.both, from),
+    coverageByChain: { osmosis: withOsmosisGap(cov.osmosis, from), namada: cov.namada },
+    onDeckProv: withOsmosisGap(cov.osmosis, from - 30 * D),
   };
 }
 

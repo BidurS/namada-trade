@@ -16,7 +16,7 @@ import { Inside, PairsList } from '../../ui/PairsList';
 import { NBSP, fmtAgo, fmtCount, fmtNamRule, fmtPctRule, fmtUsdWhole } from '../../lib/format';
 import type { Depth } from './model';
 import { counterName, pairName, restOf, splitPools } from './model';
-import { oneSidedWords, poolSides } from '../../../../shared/pool-sides';
+import { oneSidedWords, poolSides, pricedTotal, totalNotKnownWords } from '../../../../shared/pool-sides';
 import type { HistoryLoad } from './data';
 import { DepthLine } from '../depth/Line';
 import { SITE_SYMBOL } from '../../../../shared/depth';
@@ -33,14 +33,19 @@ export interface PoolsProps {
 /** The pairs answer as rows: the pools above the share line (at most POOL_ROW_MAX), the rest folded into one row. */
 function PairsBody({ r, osmosisLine }: { r: PairsResponse; osmosisLine: ReactNode }) {
   const now = useUiNow();
-  const { shown, rest, oneSided, total } = splitPools<PairRow>(r.pairs);
+  const { shown, rest, oneSided } = splitPools<PairRow>(r.pairs);
   const stamp: Stamp = { ...r.prov, plain: 'Osmosis pools' };
+  // the pools' money only when the priced pools hold the NAM a total needs (shared/pool-sides.ts pricedTotal); each
+  // pool's share is of that total, and none without it
+  const sum = pricedTotal(r.pairs);
+  const total = sum.usd;
+  const totalStamp: Stamp | undefined = total == null ? { ...stamp, status: 'missing', note: totalNotKnownWords(sum) } : undefined;
   const osmoStamp: Stamp = { ...r.osmosisProv, plain: 'Osmosis app data' };
   const hereProv = r.pairs.find((p) => p.here24h.value)?.here24h.prov ?? r.pairs[0]?.here24h.prov ?? null;
   const hereStamp: Stamp | null = hereProv ? { ...hereProv, plain: 'Flow index' } : null;
   const hereTotal = r.pairs.reduce((a, p) => a + (p.here24h.value?.trades ?? 0), 0);
   const anyHere = r.pairs.some((p) => p.here24h.value);
-  const share = shown[0] && total > 0 && shown[0].liquidityUsd != null ? (shown[0].liquidityUsd / total) * 100 : null;
+  const share = shown[0] && total != null && total > 0 && shown[0].liquidityUsd != null ? (shown[0].liquidityUsd / total) * 100 : null;
   const items: ScopeItem[] = [
     { label: 'Pool depth, the coins inside and fee', p: stamp },
     { label: 'Dollars traded per pool (Osmosis pair summary)', p: osmoStamp },
@@ -53,7 +58,7 @@ function PairsBody({ r, osmosisLine }: { r: PairsResponse; osmosisLine: ReactNod
       oldSentence={<>The pool list did not answer just now. These figures are its last answer, from {fmtAgo(stamp.at, now)}, so they are shown dimmed.</>}
     >
       <p className="lead">
-        <Num as="b" v={r.pairs.length} fmt={fmtCount} /> pools hold <Num as="b" v={total} fmt={fmtUsdWhole} />. The biggest holds{' '}
+        <Num as="b" v={r.pairs.length} fmt={fmtCount} /> pools hold <Num as="b" v={total} prov={totalStamp} fmt={fmtUsdWhole} />. The biggest holds{' '}
         <Num as="b" v={share} fmt={(n) => fmtPctRule(n, 1)} showReason={false} /> of it.
       </p>
       {/* the two volume sources, each with its own stamp in view: the Osmosis pair summary's update time and the flow index's */}
@@ -65,7 +70,7 @@ function PairsBody({ r, osmosisLine }: { r: PairsResponse; osmosisLine: ReactNod
         ) : null}.
       </p>
       {osmosisLine}
-      <PairsList pairs={shown} rest={rest} oneSided={oneSided} totalUsd={total} pairName={pairName} label="Pools that trade NAM" />
+      <PairsList pairs={shown} rest={rest} oneSided={oneSided} totalUsd={total ?? 0} pairName={pairName} label="Pools that trade NAM" />
       <SourceLine items={items} label="Where the pool figures come from" />
     </ProvScope>
   );
@@ -94,11 +99,12 @@ export function Pools({ rewound, pools, pairs, depth, overview }: PoolsProps) {
   if (!rewound && pairs?.data && pairs.data.pairs.length) {
     body = <PairsBody r={pairs.data} osmosisLine={osmosisLine} />;
   } else if (list.length) {
-    const { shown, rest, oneSided, total } = splitPools(list);
+    const { shown, rest, oneSided } = splitPools(list);
+    const total = pricedTotal(list).usd;
     const top = Math.max(0, ...[...shown, ...oneSided].map((p) => (p.liquidityUsd != null && Number.isFinite(p.liquidityUsd) ? p.liquidityUsd : 0)));
     const restSum = restOf(rest);
     const stamp: Stamp = { ...pools.data!.prov, plain: 'Osmosis pools' };
-    const share = (p: PoolInfo) => (total > 0 && p.liquidityUsd != null ? (p.liquidityUsd / total) * 100 : null);
+    const share = (p: PoolInfo) => (total != null && total > 0 && p.liquidityUsd != null ? (p.liquidityUsd / total) * 100 : null);
     const size = (p: PoolInfo) => (p.liquidityUsd != null ? <Num v={p.liquidityUsd} fmt={fmtUsdWhole} showReason={false} /> : <Num v={null} prov={p.sizeProv ? { ...p.sizeProv, status: 'missing' } : null} />);
     body = (
       <ProvScope

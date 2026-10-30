@@ -15,7 +15,7 @@ import { Button, Num, SkeletonBlock, SourceLine, derive, fmtPriceNode, type Stam
 import type { ScopeItem } from '../../ui/index';
 import { GlossPop, useGlossPop } from '../../ui/Term';
 import { VALUE_WORDS } from '../../../../shared/copy';
-import { NBSP, fmtAge, fmtCoin, fmtCount, fmtDayClock, fmtDayMonthYear, fmtNamRule, fmtPctSigned, fmtUsdRule, fmtUsdWhole } from '../../lib/format';
+import { NBSP, fmtAge, fmtCoinAmount, fmtCount, fmtDayClock, fmtDayMonthYear, fmtNamRule, fmtPctSigned, fmtUsdRule, fmtUsdWhole } from '../../lib/format';
 import type { HistoryLoad } from './data';
 import type { Depth } from './model';
 import { POOL_WINDOWS, QUOTED_WINDOWS, WINDOW_WORD, allNamValue, changeCells, lateBase, listWords, spendableValue, type ChangeCell } from './series';
@@ -191,7 +191,7 @@ function Coins({ r }: { r: NonNullable<Depth['reserves']> }) {
       holding <span data-num="">{fmtNamRule(r.nam)}</span>{NBSP}NAM
       {named.map((c, i) => (
         <span key={c.name}>
-          {i === named.length - 1 && !more ? ' and ' : ', '}<span data-num="">{fmtCoin(c.amount)}</span>{NBSP}{c.name}
+          {i === named.length - 1 && !more ? ' and ' : ', '}<span data-num="">{fmtCoinAmount(c.amount)}</span>{NBSP}{c.name}
         </span>
       ))}
       {more ? <> and <span data-num="">{fmtCount(more)}</span> other {more === 1 ? 'coin' : 'coins'}</> : null}

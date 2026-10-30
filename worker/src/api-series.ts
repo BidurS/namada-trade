@@ -21,7 +21,7 @@ import { NOT_SERVED, TRADES_LIMIT_MAX } from '../../shared/types';
 import { asOfOf, refuse, route } from './api-route';
 import { parseBeforeParam, clampLimit, LIMIT_MIN } from '../../shared/paging';
 import { isWholeAddress } from '../../shared/search-grammar';
-import { readStoredPools } from './pool-sizes';
+import { readPoolsRow } from './pool-sizes';
 import { readSeries, readChanges, readVolume, readPairs, readTrades, readValues, SeriesInputError } from './series-api';
 
 export const seriesApp = new Hono<{ Bindings: Env }>();
@@ -64,7 +64,8 @@ seriesApp.get('/volume', route('/api/series/volume', async (c) => {
 seriesApp.get('/pairs', route('/api/series/pairs', async (c) => {
   params(c, '/api/series/pairs');
   // Current only: the cron's stored pool list (as /api/pools; never the router), the stored hour of the Osmosis app's figures beside it.
-  return readPairs(c.env.DB, Date.now(), await readStoredPools(c.env.DB));
+  const r = await readPoolsRow(c.env.DB);
+  return readPairs(c.env.DB, Date.now(), r.row, r.failed);
 }));
 
 seriesApp.get('/trades', route('/api/series/trades', async (c) => {

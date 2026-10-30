@@ -85,18 +85,27 @@ describe('the other Osmosis windows', () => {
     expect(day.grossVolumeNam).toBe(3_000);
   });
 
-  it('the pressure page (/api/pressure): its Osmosis reads reach 30 days before the window, the movers among them', async () => {
+  it('the pressure page (/api/pressure): the window\'s own figures say so from the window\'s start, what each receiver has left from 30 days before it', async () => {
     const db = testD1();
     trades(db, CUT - 40 * D, CUT + 60 * D);
+    // a 7-day window from 3 days after the cut-off: the movers count only its trades, the receivers' sells reach back
     at(CUT + 10 * D);
     const p = await get<Pressure>(db, '/api/pressure?days=7');
-    expect(p.coverageByChain!.osmosis.note).toContain(OSMOSIS_GAP_NOTE);
-    expect(p.coverage.note).toContain(OSMOSIS_GAP_NOTE);
-    expect(p.coverageByChain!.namada.note ?? '').not.toContain(OSMOSIS_GAP_NOTE);
     expect(p.movers.length).toBeGreaterThan(0);
+    expect(p.coverageByChain!.osmosis.note ?? '').not.toContain(OSMOSIS_GAP_NOTE);
+    expect(p.coverage.note ?? '').not.toContain(OSMOSIS_GAP_NOTE);
+    expect(p.onDeckProv!.note).toContain(OSMOSIS_GAP_NOTE);
+    expect(p.coverageByChain!.namada.note ?? '').not.toContain(OSMOSIS_GAP_NOTE);
+    // a window that starts before the cut-off: the movers' stamp says so too
+    at(CUT + 2 * D);
+    const early = await get<Pressure>(db, '/api/pressure?days=7');
+    expect(early.coverageByChain!.osmosis.note).toContain(OSMOSIS_GAP_NOTE);
+    expect(early.coverage.note).toContain(OSMOSIS_GAP_NOTE);
+    // 30 days and a window after the cut-off: nothing reaches back
     at(CUT + 40 * D);
     const later = await get<Pressure>(db, '/api/pressure?days=7');
     expect(later.coverageByChain!.osmosis.note ?? '').not.toContain(OSMOSIS_GAP_NOTE);
+    expect(later.onDeckProv!.note ?? '').not.toContain(OSMOSIS_GAP_NOTE);
   });
 
   it('the trades tape (/api/series/trades): a page reaching back says so; a recent page says its makers\' counts do, while the record starts before the cut-off', async () => {
@@ -132,6 +141,21 @@ describe('the other Osmosis windows', () => {
     expect(narrow.points.length).toBeGreaterThan(0);
   });
 
+  it('the executed price (/api/series?key=price.swap_1h), the hourly median of the stored swaps: a range from before the cut-off says so, its prices as stored', async () => {
+    const db = testD1();
+    db.raw.exec('BEGIN');
+    const st = db.raw.prepare('INSERT INTO metrics (ts, key, value) VALUES (?, ?, ?)');
+    for (let h = CUT - 5 * D; h < CUT + 5 * D; h += 6 * H) { st.run(h, 'price.swap_1h', 0.001); st.run(h, 'price.swap_1h.n', 3); }
+    db.raw.exec('COMMIT');
+    at(CUT + 5 * D);
+    const wide = await get<SeriesResponse>(db, `/api/series?key=price.swap_1h&from=${CUT - 3 * D}&step=1h`);
+    expect(wide.prov.note).toContain(OSMOSIS_GAP_NOTE);
+    expect(wide.points.every((x) => x.v === 0.001)).toBe(true);
+    const narrow = await get<SeriesResponse>(db, `/api/series?key=price.swap_1h&from=${CUT + D}&step=1h`);
+    expect(narrow.prov.note ?? '').not.toContain(OSMOSIS_GAP_NOTE);
+    expect(narrow.points.length).toBeGreaterThan(0);
+  });
+
   it('the overview\'s last 24 hours under Rewind, when they reach back before the cut-off', async () => {
     const db = testD1();
     trades(db, CUT - 5 * D, CUT + 5 * D);
@@ -157,7 +181,8 @@ describe('a stored pool size reaching back before the pools were sized from thei
     db.raw.prepare('INSERT INTO metrics (ts, key, value) VALUES (?, ?, ?)').run(T - H, PRICED_KEY, 5);
     const both = await get<SeriesResponse>(db, `/api/series?key=dex.liquidity_usd&from=${T - 2 * H}&step=1m`);
     expect(both.prov.note).toContain(routerCapNote(T - H));
-    expect(routerCapNote(T - H)).toMatch(/^Readings before 2026-11-09 21:00 UTC are the Osmosis router's own figure/);
+    // the day and time as every other stamp writes them
+    expect(routerCapNote(T - H)).toMatch(/^Readings before 9 Nov 2026 21:00 UTC are the Osmosis router's own figure/);
     const after = await get<SeriesResponse>(db, `/api/series?key=dex.liquidity_usd&from=${T - 30 * 60_000}&step=1m`);
     expect(after.prov.note ?? '').not.toContain('router');
   });

@@ -2,8 +2,9 @@ import type { Env } from './util';
 import { runBatch, stmt, kvGet, kvSet, kvGetJson } from './db';
 import { fetchOsmosisHolderList, fetchOsmosisSupplyBase, fetchOsmosisBalanceBase, OSMOSIS_HOLDER_PAGES, OSMOSIS_NEXT_KEY_MAX, KEPLR_REST_SRC, type HolderListRead, type KeplrOpts, type OsmosisBalanceRead } from './sources/osmosis';
 import { buildCurve, curveComplete, fetchNamPools, fetchNamPrice, priceSourceName, CURVE_TIERS } from './sources/sqs';
-import { CURVE_HEALTH_NAME, MINUTE_STALE_MS, sizePools, storeCurve, storePools, type SitePrice } from './pool-sizes';
+import { CURVE_HEALTH_NAME, MINUTE_STALE_MS, sizePools, storeCurve, storePools, type CoinMeta, type SitePrice } from './pool-sizes';
 import * as depth from './depth/index';
+import { KV_KEYS as DEPTH_KV } from './depth/sql';
 import { PRICE_HOW_KEY, priceHealth, priceHowAt, priceHowStmt, storedPriceSource, type PriceHowLog } from './price-how';
 import { QUOTE_KEYS } from '../../shared/settle';
 import { namBalance, namTotalSupply, namTotalStake, namadaEpoch, namadaStatusAll, delegationsAt, answeringRpcs, listingHeads, QUICK, RpcBreaker, allNamBalances, allBonds, ListingTooLargeError, LISTING_MAX_VALUE_BYTES, type BalanceListing, type BondListing, type ReadOpts, type Rpc } from './sources/namada';
@@ -380,9 +381,11 @@ export function ibcConservation(escrowNam: number, osmosisNam: number, stuckNam:
 export const TICK_DEADLINE_MS = 45_000;
 /**
  * The size table's own phase in the tick (sources/sqs.ts buildCurve): started after the price read, beside the rest, one
- * size at a time. Six sizes take 12 to 30 router calls (CURVE_CALLS_MAX; up to three attempts each when refused), about
- * 1 to 2 s a size; a size not reached by the phase's end is left out of that minute's table. Before, every edge-cache
- * miss of /api/quote/curve built the table itself: once a minute in each Cloudflare location a visitor polled from.
+ * size at a time. Six sizes take 12 to 30 router calls (CURVE_CALLS_MAX; up to three attempts each when refused); a size
+ * not reached by the phase's end is left out of that minute's table. Timed against the live router on 2026-10-29 (three
+ * builds, read-only, from outside Cloudflare): 16 calls, 180 to 720 ms each, 2.5 to 3.1 s for the whole table, so the
+ * phase holds it about six times over. Before, every edge-cache miss of /api/quote/curve built the table itself: once a
+ * minute in each Cloudflare location a visitor polled from.
  */
 export const CURVE_PHASE_MS = 20_000;
 /** Keplr REST reads in a tick: a short timeout and one retry, inside the tick's deadline. */
@@ -1726,14 +1729,18 @@ export async function runCron(env: Env) {
 
     // 1c. The pool sizes (pool-sizes.ts sizePools): each pool's coins at their own price, never the router's
     //     liquidity_cap. A pool the depth minute covers takes the minute it wrote this tick; any other the router's
-    //     reserves at this tick's NAM price (else the stored one, while under MINUTE_STALE_MS old). Visitors read the
-    //     list the tick stores below (kv osmosis.pools); the hourly pool rows take it too.
+    //     reserves at this tick's NAM price (else the stored one, while under MINUTE_STALE_MS old), a coin the list gave
+    //     in base units only at the decimals the depth module read (kv depth.params tokens, read once its minute is over).
+    //     Visitors read the list the tick stores below (kv osmosis.pools); the hourly pool rows take it too.
     const sitePrice: Promise<SitePrice | null> = price.usd
       ? Promise.resolve({ usd: price.usd, at: price.at, source: priceSourceName(price.how) })
       : env.DB.prepare(`SELECT ts, value FROM metrics WHERE key = 'price.usd' AND ts >= ? ORDER BY ts DESC LIMIT 1`).bind(now - MINUTE_STALE_MS).first<{ ts: number; value: number }>()
           .then((r) => (r && Number(r.value) > 0 ? { usd: Number(r.value), at: Number(r.ts), source: storedPriceSource(priceHowAt(howPrev ?? null, Number(r.ts))) } : null), () => null);
-    const sized = Promise.all([depthRun, sitePrice]).then(([d, p]) => ({
-      pools: sizePools({ pools: poolRes.pools, poolsAt: poolRes.at, depth: d?.written ? d.latest : null, price: p, coinUsd: price.coinUsd, coinAt: price.at }),
+    const coinMeta: Promise<CoinMeta | null> = poolRes.pools.some((p) => p.counterBase)
+      ? depthRun.then(() => kvGetJson<{ tokens?: CoinMeta }>(env.DB, DEPTH_KV.params)).then((r) => r?.tokens ?? null, () => null)
+      : Promise.resolve(null);
+    const sized = Promise.all([depthRun, sitePrice, coinMeta]).then(([d, p, tokens]) => ({
+      pools: sizePools({ pools: poolRes.pools, poolsAt: poolRes.at, depth: d?.written ? d.latest : null, price: p, coinUsd: price.coinUsd, coinAt: price.at, tokens }),
       depth: d?.written ? d.latest : null, price: p,
     }));
     // 1d. The size table (sources/sqs.ts buildCurve), once a minute against this tick's price, so a visitor's
@@ -2175,7 +2182,7 @@ export async function runCron(env: Env) {
     try {
       const curve = await curveRun;
       health.push(await storeCurve(env.DB, {
-        now, curve, complete: !!curve && curveComplete(curve), sizes: CURVE_TIERS.length, pools: s.pools,
+        now, curve, complete: !!curve && curveComplete(curve), sizes: CURVE_TIERS, pools: s.pools,
         why: !price.usd ? 'the NAM price was not read' : !curvePhase ? 'the tick was already late' : undefined,
       }));
     } catch (e) {

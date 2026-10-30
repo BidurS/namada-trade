@@ -8,7 +8,9 @@
 // other pool takes the router's reserves, its NAM at the site's own price (this tick's price.usd) and its other coin at
 // a price the code already has (Noble USDC and allUSDC as one dollar, the coins quoted each minute, a coin the depth
 // minute priced). A side that holds coins and has no price leaves the pool "not priced" with the reason: never 0, never
-// liquidity_cap (kept beside it as routerLiquidityUsd, for comparison only).
+// liquidity_cap (kept beside it as routerLiquidityUsd, for comparison only). The pools' total is the priced pools summed
+// only when they hold at least 90% of the NAM in the pools (shared/pool-sides.ts pricedTotal); else it is not known, so
+// a minute with no NAM price never makes an emptied pool's few USDC the money in the pools.
 //
 // The cron writes the sized list once a minute (kv osmosis.pools) and the size table it builds (kv quote.curve), so
 // /api/overview, /api/pools, /api/series/pairs and /api/quote/curve read stored rows only and never call the router;
@@ -16,11 +18,13 @@
 import type { PoolInfo, Provenance, QuoteCurveResponse, SourceHealth } from '../../shared/types';
 import type { DepthResponse } from '../../shared/depth';
 import { USDC_AS_ONE } from '../../shared/depth';
+import { namLeftOutWords, pricedTotal, totalNotKnownWords, type PricedTotal } from '../../shared/pool-sides';
+import { fmtDay } from '../../shared/search-grammar';
 import { OSMOSIS } from './config';
 import { NAM_DEPTH } from './depth/config';
 import { osmoAssets } from './parse/osmosis';
 import { fmtClock } from './digest/types';
-import { kvGetJson, runBatch, stmt, type Stmt } from './db';
+import { kvGet, kvGetJson, runBatch, stmt, type Stmt } from './db';
 
 /** The kv row of the sized pool list the cron writes each minute. */
 export const POOLS_KEY = 'osmosis.pools';
@@ -80,12 +84,17 @@ function coinPrice(denom: string, coinUsd: Record<string, number>, coinAt: numbe
   return seen ? { usd: seen.counterUsd, how: seen.counterUsdHow } : { usd: null, how: '' };
 }
 
+/** The coins' metadata the depth module reads from the quote service and keeps (kv depth.params tokens): decimals by denomination. */
+export type CoinMeta = Record<string, { symbol?: string; decimals: number }>;
+
 /**
  * The decimals of a counter coin as the code already knows them (the depth module's quote coins, the coins the parser
- * names: worker/src/parse/osmosis.ts osmoAssets), else null: the router's list gives base units only.
+ * names: worker/src/parse/osmosis.ts osmoAssets, then the metadata the depth module read: kv depth.params tokens),
+ * else null: the router's list gives base units only.
  */
-export function counterDecimals(denom: string): number | null {
-  return NAM_DEPTH.quoteCoins[denom]?.decimals ?? osmoAssets().get(denom)?.decimals ?? null;
+export function counterDecimals(denom: string, tokens?: CoinMeta | null): number | null {
+  const meta = tokens?.[denom]?.decimals;
+  return NAM_DEPTH.quoteCoins[denom]?.decimals ?? osmoAssets().get(denom)?.decimals ?? (typeof meta === 'number' && Number.isInteger(meta) && meta >= 0 && meta <= 30 ? meta : null);
 }
 
 /** The coin's name in words for a note ("USDC", "OSMO"), never a raw denomination. */
@@ -103,6 +112,8 @@ export interface SizeInput {
   /** this tick's quotes of the other coins (fetchNamPrice coinUsd) and when they were read */
   coinUsd?: Record<string, number>;
   coinAt?: number | null;
+  /** the coins' decimals the depth module read (kv depth.params tokens), for a coin the router's list gave in base units only */
+  tokens?: CoinMeta | null;
 }
 
 /**
@@ -111,7 +122,12 @@ export interface SizeInput {
  * the router's reserves at the site's price and the coin's own price.
  */
 export function sizePools(input: SizeInput): PoolInfo[] {
-  const sized = input.pools.map((p) => fromDepth(input.depth, p) ?? fromList(input, p));
+  // a counter the list gave in base units only takes the decimals the depth module read; the base units are never stored
+  const sized = input.pools.map(({ counterBase, ...p }) => {
+    const dec = p.counterReserve == null && counterBase ? counterDecimals(p.counterDenom, input.tokens) : null;
+    const q: PoolInfo = dec != null && Number.isFinite(Number(counterBase) / 10 ** dec) ? { ...p, counterReserve: Number(counterBase) / 10 ** dec } : p;
+    return fromDepth(input.depth, q) ?? fromList(input, q);
+  });
   return sized.sort((a, b) => (fin(b.liquidityUsd) ? b.liquidityUsd : -1) - (fin(a.liquidityUsd) ? a.liquidityUsd : -1) || b.namReserve - a.namReserve);
 }
 
@@ -153,27 +169,41 @@ function fromList(input: SizeInput, p: PoolInfo): PoolInfo {
   return { ...p, liquidityUsd: namUsd + counterUsd, namUsd, counterUsd, sizeProv };
 }
 
-/** The priced pools' total (null when none is priced), how many are in it, and the pools not priced, left out of it. */
-export function poolsTotal(pools: PoolInfo[]): { usd: number | null; priced: number; notPriced: PoolInfo[] } {
-  const priced = pools.filter((p) => fin(p.liquidityUsd));
-  const notPriced = pools.filter((p) => !fin(p.liquidityUsd));
-  return { usd: priced.length ? priced.reduce((a, p) => a + (p.liquidityUsd as number), 0) : null, priced: priced.length, notPriced };
+/**
+ * The pools' total (shared/pool-sides.ts pricedTotal: the priced pools summed, null unless they hold at least
+ * TOTAL_NAM_SHARE_MIN of the NAM in the pools), how many it counts, the pools not priced (left out of it), and why there
+ * is no total when there is none.
+ */
+export function poolsTotal(pools: PoolInfo[]): Omit<PricedTotal, 'notPriced'> & { notPriced: PoolInfo[]; why: string | null } {
+  const t = pricedTotal(pools);
+  return { ...t, notPriced: pools.filter((p) => !fin(p.liquidityUsd)), why: t.usd == null ? totalNotKnownWords(t) : null };
 }
 
-/** The stored list's note: where the NAM side was priced, and the pools left out of the total with each one's reason. */
+/** The stored list's note: whether there is a total, where the NAM side was priced, and the pools left out of the total with the NAM they hold. */
 export function poolsNote(row: StoredPools): string {
   const t = poolsTotal(row.pools);
   const fromDepth = row.pools.filter((p) => p.sizeProv?.source === SIZE_SOURCE.depth).length;
   const parts: string[] = [];
+  // no total: said first, with the missing NAM price when that is why (no pool holding NAM could then be priced)
+  if (t.why) parts.push(t.why, ...(!row.price && !(row.depth && fromDepth) ? [`${NO_NAM_PRICE[0].toUpperCase()}${NO_NAM_PRICE.slice(1)}.`] : []));
   if (row.depth && fromDepth) parts.push(`${fromDepth} of ${row.pools.length} pools from the depth minute of ${fmtClock(row.depth.minute)}${row.depth.height != null ? ` (height ${row.depth.height.toLocaleString('en-US')})` : ''}, NAM at pool ${row.depth.refPool}'s own price of ${usdWords(row.depth.refUsd)}.`);
   if (row.pools.length > fromDepth && row.price) parts.push(`${row.pools.length - fromDepth === 1 ? 'One pool' : `${row.pools.length - fromDepth} pools`} from the router's pool list, NAM at the site's price of ${usdWords(row.price.usd)} at ${fmtClock(row.price.at)}.`);
   if (t.notPriced.length) parts.push(`Not priced, so left out of the total: ${t.notPriced.slice(0, 6).map((p) => `pool ${p.id}`).join(', ')}${t.notPriced.length > 6 ? ` and ${t.notPriced.length - 6} more` : ''}.`);
+  const share = namLeftOutWords({ ...t, notPriced: t.notPriced.length });
+  if (share) parts.push(share);
   return parts.join(' ');
 }
 
-/** The provenance of the stored list as a reader serves it: its read time and height, old past POOLS_STALE_MS. */
-export function storedPoolsProv(row: StoredPools | null, now: number): Provenance {
-  if (!row) return { source: POOLS_SOURCE, at: null, status: 'missing', note: 'The pool list has not been stored yet.' };
+/** What a reader says when there is no stored list: none written yet, or the row that is there could not be read. */
+export const NOT_STORED = 'The pool list has not been stored yet.';
+export const NOT_READ = 'The stored pool list could not be read.';
+
+/**
+ * The provenance of the stored list as a reader serves it: its read time and height, old past POOLS_STALE_MS (`failed`:
+ * the row could not be read, as readPoolsRow says, which is not the same as none stored).
+ */
+export function storedPoolsProv(row: StoredPools | null, now: number, failed = false): Provenance {
+  if (!row) return { source: POOLS_SOURCE, at: null, status: 'missing', note: failed ? NOT_READ : NOT_STORED };
   const age = now - row.at;
   const note = poolsNote(row);
   const height = row.depth?.height ?? null;
@@ -182,9 +212,29 @@ export function storedPoolsProv(row: StoredPools | null, now: number): Provenanc
     : { source: POOLS_SOURCE, at: row.at, height, status: 'live', ...(note ? { note } : {}) };
 }
 
+/**
+ * The stamp of the pools' total as the overview serves it: the stored list's own (storedPoolsProv), missing with the
+ * reason when the list gives no total (the priced pools hold too little of the NAM: poolsTotal).
+ */
+export function storedTotalProv(row: StoredPools, now: number): Provenance {
+  const p = storedPoolsProv(row, now);
+  return poolsTotal(row.pools).usd == null ? { ...p, status: 'missing' } : p;
+}
+
+/** The stored pool list (kv osmosis.pools): null when none is stored, `failed` when the row there could not be read or is not a list. */
+export const readPoolsRow = (db: D1Database): Promise<{ row: StoredPools | null; failed: boolean }> =>
+  kvGet(db, POOLS_KEY).then(
+    (v) => {
+      if (v == null || v === '') return { row: null, failed: false };
+      let r: StoredPools | null = null;
+      try { r = JSON.parse(v) as StoredPools; } catch { /* not a list: said as not read */ }
+      return r && Array.isArray(r.pools) && Number.isFinite(r.at) ? { row: r, failed: false } : { row: null, failed: true };
+    },
+    () => ({ row: null, failed: true }),
+  );
+
 /** The stored pool list (kv osmosis.pools), or null when none is stored or it cannot be read. */
-export const readStoredPools = (db: D1Database): Promise<StoredPools | null> =>
-  kvGetJson<StoredPools>(db, POOLS_KEY).then((r) => (r && Array.isArray(r.pools) && Number.isFinite(r.at) ? r : null), () => null);
+export const readStoredPools = (db: D1Database): Promise<StoredPools | null> => readPoolsRow(db).then((r) => r.row);
 
 /**
  * The metric stored beside each total: how many pools it counts. Its first row is also the minute the stored totals
@@ -197,14 +247,15 @@ export const PRICED_FROM_SQL = `SELECT MIN(ts) AS t FROM metrics WHERE key = '${
 /** What a stored pool size was at `at`, said for a reading that reaches before the switch (`from`: PRICED_FROM_SQL's answer; null when none is stored yet). */
 export const routerCapNote = (from: number | null) => from == null
   ? 'Every stored reading so far is the Osmosis router\'s own figure, which counts NAM at nothing while it gives NAM no price.'
-  : `Readings before ${new Date(from).toISOString().slice(0, 16).replace('T', ' ')} UTC are the Osmosis router's own figure, which counted NAM at nothing while it gave NAM no price; from then on, the pools' coins at their own prices.`;
+  : `Readings before ${fmtDay(from)} ${fmtClock(from)} are the Osmosis router's own figure, which counted NAM at nothing while it gave NAM no price; from then on, the pools' coins at their own prices.`;
 
 /** The statements that store the sized list and its totals (dex.liquidity_usd, dex.ref_pool_liquidity_usd, dex.pools_priced). */
 export function storedPoolsStmts(row: StoredPools, now: number): Stmt[] {
   const t = poolsTotal(row.pools);
   const ref = row.pools.find((p) => p.id === OSMOSIS.refPoolId);
   const out: Stmt[] = [stmt.kvSet(POOLS_KEY, JSON.stringify(row), now)];
-  // A total stands only when a pool is priced; how many pools it counts is stored beside it, so a past minute says it too.
+  // A total stands only when the priced pools hold the NAM a total needs (poolsTotal); how many pools it counts is stored
+  // beside it, so a past minute says it too.
   if (t.usd != null) out.push(stmt.metric(now, 'dex.liquidity_usd', t.usd), stmt.metric(now, PRICED_KEY, t.priced));
   if (ref && fin(ref.liquidityUsd)) out.push(stmt.metric(now, 'dex.ref_pool_liquidity_usd', ref.liquidityUsd));
   return out;
@@ -271,30 +322,40 @@ export interface StoreCurveInput {
   now: number;
   /** the size table built this tick (sources/sqs.ts buildCurve), or null with `why` */
   curve: QuoteCurveResponse | null;
-  /** every size quoted on both sides (sources/sqs.ts curveComplete), and how many sizes the table asks */
+  /** every size quoted on both sides (sources/sqs.ts curveComplete), and the sizes the table asks (CURVE_TIERS) */
   complete: boolean;
-  sizes: number;
+  sizes: readonly number[];
   why?: string;
   /** the tick's sized pools, for the table's pool figures */
   pools: PoolInfo[];
 }
 
+/** "1,000", "50,000 and 100,000": sizes in NAM for a note. */
+const sizeList = (xs: number[]) => {
+  const w = xs.map((n) => n.toLocaleString('en-US'));
+  return w.length > 1 ? `${w.slice(0, -1).join(', ')} and ${w[w.length - 1]}` : w[0] ?? '';
+};
+
 /**
  * The tick's write of the size table (kv quote.curve): when every size was quoted, or when some were and the stored
- * table is older than MINUTE_STALE_MS (one refused size never replaces a fresh whole table; an empty table is never
- * written, the stored one ages instead). The health row says how the table went.
+ * table is older than MINUTE_STALE_MS (one refused size never replaces a fresh whole table). A table in which no size
+ * was quoted on both sides is never written, as an empty one is not: the stored table ages instead. A part that is
+ * written names the sizes it lacks in its stamp. The health row says how the table went.
  */
 export async function storeCurve(db: D1Database, x: StoreCurveInput): Promise<SourceHealth> {
-  if (!x.curve || !x.curve.curve.length) {
-    return { name: CURVE_HEALTH_NAME, ok: false, at: x.now, note: `Not built this tick: ${x.why ?? 'no size was quoted'}. The stored table stands, with its own time.` };
+  const quotedBoth = (x.curve?.curve ?? []).filter((p) => p.sellImpactPct != null && p.buyImpactPct != null);
+  if (!x.curve || !quotedBoth.length) {
+    return { name: CURVE_HEALTH_NAME, ok: false, at: x.now, note: `Not built this tick: ${x.why ?? (x.curve?.curve.length ? 'no size was quoted on both sides' : 'no size was quoted')}. The stored table stands, with its own time.` };
   }
   let write = x.complete;
   if (!write) {
     const prev = await db.prepare('SELECT updated_at FROM kv WHERE key = ?').bind(CURVE_KEY).first<{ updated_at: number }>().catch(() => null);
     write = !prev || !(x.now - Number(prev.updated_at) <= MINUTE_STALE_MS);
   }
-  if (write) await runBatch(db, [stmt.kvSet(CURVE_KEY, JSON.stringify(curveWithPools(x.curve, x.pools)), x.now)]);
+  const lacking = x.sizes.filter((n) => !quotedBoth.some((p) => p.amountNam === n));
+  const lackNote = lacking.length ? `The ${sizeList(lacking)} NAM ${lacking.length === 1 ? 'size was' : 'sizes were'} not quoted on both sides when the table was built.` : '';
+  const table = lackNote ? { ...x.curve, prov: { ...x.curve.prov, note: [x.curve.prov.note, lackNote].filter(Boolean).join(' ') } } : x.curve;
+  if (write) await runBatch(db, [stmt.kvSet(CURVE_KEY, JSON.stringify(curveWithPools(table, x.pools)), x.now)]);
   if (x.complete) return { name: CURVE_HEALTH_NAME, ok: true, at: x.now };
-  const quoted = x.curve.curve.filter((p) => p.sellImpactPct != null && p.buyImpactPct != null).length;
-  return { name: CURVE_HEALTH_NAME, ok: false, at: x.now, note: `${quoted} of ${x.sizes} sizes quoted on both sides${write ? '' : '; the stored table, built under three minutes ago, was kept'}.` };
+  return { name: CURVE_HEALTH_NAME, ok: false, at: x.now, note: `${quotedBoth.length} of ${x.sizes.length} sizes quoted on both sides${write ? '' : '; the stored table, built under three minutes ago, was kept'}.` };
 }

@@ -5,7 +5,7 @@
 import type { Overview, PoolInfo, PriceQuote, Provenance, QuoteCurveResponse, SlippageCurvePoint } from '../../../../shared/types';
 import type { Stamp } from '../../lib/prov';
 import { fmtNamRule, parseAmount } from '../../lib/format';
-import { counterName, poolSides } from '../../../../shared/pool-sides';
+import { counterName, namLeftOutWords, poolSides, pricedTotal, totalNotKnownWords } from '../../../../shared/pool-sides';
 export { counterName, restOf } from '../../../../shared/pool-sides';
 
 export type Side = 'sell' | 'buy';
@@ -158,14 +158,14 @@ export interface Reserves {
 
 /**
  * Money in the NAM pools and how many: the stored pool list when it answered (each pool's coins at their own prices,
- * worker/src/pool-sizes.ts; a pool that cannot be priced is left out of the sum and counted), else the overview's
- * stored reading.
+ * worker/src/pool-sizes.ts; a pool that cannot be priced is left out of the sum and counted; no sum unless the priced
+ * pools hold the NAM a total needs, shared/pool-sides.ts pricedTotal), else the overview's stored reading.
  */
 export interface Depth {
-  /** the priced pools' sum; null when none is priced (`stamp` then says why) */
+  /** the priced pools' sum; null when it is not known (`stamp` then says why) */
   usd: number | null;
   count: number | null;
-  /** pools left out of the sum because a side cannot be priced (null: not known, the overview's reading) */
+  /** pools left out of the sum because a side cannot be priced (null: not known, an overview without the count) */
   notPriced: number | null;
   /** the coins inside (both reserves), from the list; null for the overview's reading */
   reserves: Reserves | null;
@@ -192,15 +192,19 @@ export function reservesOf(list: Pick<PoolInfo, 'pair' | 'counterSymbol' | 'namR
 
 export function depthOf(pools: { pools: PoolInfo[]; prov: Provenance } | null, o: Overview | null): Depth | null {
   if (pools && pools.pools.length) {
-    const priced = pools.pools.filter((p) => fin(p.liquidityUsd));
-    const usd = priced.length ? priced.reduce((a, p) => a + (p.liquidityUsd as number), 0) : null;
-    const notPriced = pools.pools.length - priced.length;
-    // no pool priced: the figure is not known, and the first pool's reason says why
+    const t = pricedTotal(pools.pools);
+    // not known: the rule's own words, then the largest pool left out's reason (most NAM first: the list's order)
     const why = pools.pools.find((p) => !fin(p.liquidityUsd))?.sizeProv?.note;
-    const stamp: Stamp = usd == null ? { ...pools.prov, plain: 'Osmosis pools', status: 'missing', note: why ?? pools.prov.note } : { ...pools.prov, plain: 'Osmosis pools' };
-    return { usd, count: pools.pools.length, notPriced, reserves: reservesOf(pools.pools), stamp, fromList: true };
+    const stamp: Stamp = t.usd == null
+      ? { ...pools.prov, plain: 'Osmosis pools', status: 'missing', note: [totalNotKnownWords(t), why].filter(Boolean).join(' ') }
+      : { ...pools.prov, plain: 'Osmosis pools', ...(namLeftOutWords(t) && !pools.prov.note?.includes(namLeftOutWords(t)) ? { note: [pools.prov.note, namLeftOutWords(t)].filter(Boolean).join(' ') } : {}) };
+    return { usd: t.usd, count: pools.pools.length, notPriced: t.notPriced, reserves: reservesOf(pools.pools), stamp, fromList: true };
   }
-  if (o) return { usd: o.dex.liquidityUsd, count: fin(o.dex.pools) && o.dex.pools > 0 ? o.dex.pools : null, notPriced: null, reserves: null, stamp: { ...o.dex.prov, plain: 'Osmosis pools' }, fromList: false };
+  if (o) {
+    const count = fin(o.dex.pools) && o.dex.pools > 0 ? o.dex.pools : null;
+    const priced = o.dex.pricedPools;
+    return { usd: o.dex.liquidityUsd, count, notPriced: count != null && fin(priced) && priced <= count ? count - priced : null, reserves: null, stamp: { ...o.dex.prov, plain: 'Osmosis pools' }, fromList: false };
+  }
   return null;
 }
 

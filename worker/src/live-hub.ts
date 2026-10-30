@@ -13,6 +13,7 @@ import type { NamadaBlock } from './parse/namada';
 import { runBatch, stmt, kvGet, kvGetJson, kvSet } from './db';
 import { admitSocket } from './ws-admit';
 import { fetchNamPools } from './sources/sqs';
+import { readStoredPools } from './pool-sizes';
 import { HubQuote, askQuoteService, storedQuoteReader } from './live-quote';
 import { priceRouteAt, stampPriceRoute } from './price-how';
 import { sendTelegramMove, telegramRun, TG_LIVE_MS, TG_LIVE_SENDS } from './sources/telegram';
@@ -291,9 +292,16 @@ export class LiveHub extends DurableObject<Env> {
     });
   }
 
+  /**
+   * The pool accounts the live parser books liquidity against: the cron's stored pool list (pool-sizes.ts readStoredPools;
+   * each address was checked as a pool account's when the cron read it), so a hub that starts, on a visitor's socket or
+   * its own alarm, asks no outside service. The router's own list only while none is stored (the first minute after the
+   * cron began storing it, or a stored row that cannot be read).
+   */
   async refreshContext() {
     try {
-      const { pools } = await fetchNamPools();
+      const stored = this.env?.DB ? await readStoredPools(this.env.DB) : null;
+      const { pools } = stored?.pools.length ? stored : await fetchNamPools();
       for (const p of pools) {
         if (p.address) this.osmoCtx.poolAddrs.set(p.address, p.id);
       }

@@ -100,6 +100,12 @@ export const fmtNamSigned = (n: number | null | undefined): string => {
 export const fmtCoin = (n: number | null | undefined, digits = 2): string => (!ok(n) ? '—' : nf(round(n, digits), digits));
 
 /**
+ * A pool's other coin, whatever the coin: two decimals from 1 up ("174.70", "1,668.11"), three significant digits under
+ * 1, so an amount that is not zero never prints as zero ("0.00108" USDC, "0.0000215" BTC); "0" for nothing.
+ */
+export const fmtCoinAmount = (n: number | null | undefined): string => (!ok(n) ? '—' : n === 0 ? '0' : Math.abs(n) >= 1 ? fmtCoin(n) : fmtSig(n, 3));
+
+/**
  * Percent with a fixed number of decimals. Price moves and shares of supply use two
  * (1.49%, 4.80%); hero shares use one (4.4%). Unsigned.
  */

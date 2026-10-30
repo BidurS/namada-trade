@@ -9,7 +9,7 @@ import type {
 } from '../../shared/types';
 import { quoteNamTrade, priceSourceName } from './sources/sqs';
 import { PRICE_HOW_KEY, priceHowAt, storedPriceNote, storedPriceSource, type PriceHowLog } from './price-how';
-import { MINUTE_STALE_MS, POOLS_SOURCE, POOLS_STALE_MS, PRICED_KEY, poolsTotal, readStoredCurve, readStoredPools, routerCapNote, storedCurve, storedPoolsProv } from './pool-sizes';
+import { MINUTE_STALE_MS, NOT_READ, NOT_STORED, POOLS_SOURCE, POOLS_STALE_MS, PRICED_KEY, poolsTotal, readPoolsRow, readStoredCurve, routerCapNote, storedCurve, storedPoolsProv, storedTotalProv } from './pool-sizes';
 import { withOsmosisGap } from '../../shared/osmosis-gap';
 import { namBalance, namadaEpoch, delegationsAt, QUICK, type ReadOpts } from './sources/namada';
 import { fetchIntel } from './sources/intel';
@@ -145,11 +145,11 @@ app.get('/api/overview', async (c) => {
   // Nothing here asks an outside service: the price and the pools are the cron's stored minute (pool-sizes.ts), so a
   // cache miss costs D1 reads only, however many visitors arrive.
   const [checksRes, health, storedPools] = replay
-    ? [{ results: [] as any[] }, null, null]
+    ? [{ results: [] as any[] }, null, { row: null, failed: false }]
     : await Promise.all([
         db.prepare('SELECT * FROM checks').all<any>().catch(() => ({ results: [] as any[] })),
         kvGetJson<Record<string, SourceHealth>>(db, 'source.health'),
-        readStoredPools(db),
+        readPoolsRow(db),
       ]);
 
   const checks: Check[] = (checksRes.results || []).map((r: any) => checkOf(r, Date.now()));
@@ -220,22 +220,33 @@ app.get('/api/overview', async (c) => {
   const osmoSupplyProv: Provenance = replay ? replayProv('Keplr Osmosis bank/supply', mt('supply.osmosis')) : provAt('Keplr Osmosis bank/supply', mt('supply.osmosis'), now, 5 * 60000);
 
   // Pools: the cron's stored list (pool-sizes.ts: each pool's coins at their own price, never the router's
-  // liquidity_cap), old past POOLS_STALE_MS. Under Rewind, and before a list is stored, the stored totals of the time;
-  // a total stored before the pools were sized from their reserves (no dex.pools_priced row yet) is the router's own
-  // figure, and its stamp says so.
-  const stored = replay ? null : storedPools;
+  // liquidity_cap), old past POOLS_STALE_MS, with no total when the priced pools hold too little of the NAM (poolsTotal).
+  // Under Rewind, and before a list is stored, the stored totals of the time; a total stored with no dex.pools_priced
+  // row of the same minute (stored before the pools were sized from their reserves) is the router's own figure, and its
+  // stamp says so; one stored with it says how many pools it counts.
+  const stored = replay ? null : storedPools.row;
   const pools = stored?.pools ?? [];
-  const liquidityUsd = stored ? poolsTotal(pools).usd : mv('dex.liquidity_usd');
+  const total = stored ? poolsTotal(pools) : null;
+  const liquidityUsd = total ? total.usd : mv('dex.liquidity_usd');
   const refPoolLiquidityUsd = stored ? pools.find((p) => p.id === OSMOSIS.refPoolId)?.liquidityUsd ?? null : mv('dex.ref_pool_liquidity_usd');
-  const routerCap = mv(PRICED_KEY) == null;
+  const routerCap = mv(PRICED_KEY) == null || mt(PRICED_KEY) !== mt('dex.liquidity_usd');
+  const storedPriced = routerCap ? null : Math.round(mv(PRICED_KEY)!);
+  const storedCount = Math.round(mv('dex.pool_count') ?? 0);
+  // how many of dex.pools the total counts: the stored count beside a stored total only against the same minute's pools
+  const pricedPools = total ? total.priced : mt('dex.pool_count') === mt('dex.liquidity_usd') ? storedPriced : null;
   const storedSource = routerCap ? 'Osmosis SQS pools (stored)' : `${POOLS_SOURCE} (stored)`;
-  const capNote = routerCap ? { note: 'Stored then as the Osmosis router\'s own figure, which counted NAM at nothing while it gave NAM no price.' } : {};
+  // the pools a stored total left out, said under Rewind and in the fallback (the live list's own note names them); the
+  // pool count of another minute is not set against it
+  const leftOut = storedPriced == null ? ''
+    : mt('dex.pool_count') === mt('dex.liquidity_usd') ? (storedCount > storedPriced ? `${storedCount - storedPriced} of the ${storedCount} pools could not be priced and are left out of this total.` : '')
+    : `This total counts the ${storedPriced} ${storedPriced === 1 ? 'pool' : 'pools'} that could be priced then.`;
+  const capNote = routerCap ? 'Stored then as the Osmosis router\'s own figure, which counted NAM at nothing while it gave NAM no price.' : leftOut;
   const dexProv: Provenance = stored
-    ? storedPoolsProv(stored, now)
+    ? storedTotalProv(stored, now)
     : mv('dex.liquidity_usd') != null
-    ? (replay ? { ...replayProv(storedSource, mt('dex.liquidity_usd')), ...capNote }
-      : provAt(storedSource, mt('dex.liquidity_usd'), asOf, POOLS_STALE_MS, { note: ['The pool list has not been stored yet, so this is the last stored total.', routerCap ? routerCapNote(null) : ''].filter(Boolean).join(' ') }))
-    : { source: POOLS_SOURCE, at: null, status: 'missing', note: replay ? 'Pool depth was not recorded before 16 Oct 2026.' : 'The pool list has not been stored yet.' };
+    ? (replay ? { ...replayProv(storedSource, mt('dex.liquidity_usd')), ...(capNote ? { note: capNote } : {}) }
+      : provAt(storedSource, mt('dex.liquidity_usd'), asOf, POOLS_STALE_MS, { note: [`${(storedPools.failed ? NOT_READ : NOT_STORED).replace(/\.$/, '')}, so this is the last stored total.`, routerCap ? routerCapNote(null) : leftOut].filter(Boolean).join(' ') }))
+    : { source: POOLS_SOURCE, at: null, status: 'missing', note: replay ? 'Pool depth was not recorded before 16 Oct 2026.' : storedPools.failed ? NOT_READ : NOT_STORED };
 
   const rpcCheck = checks.find((k) => k.key === 'rpc_consensus');
   const rpcHeight = Math.max(0, ...(((rpcCheck?.detail as any)?.statuses ?? []) as any[]).map((s) => Number(s.height) || 0));
@@ -264,8 +275,8 @@ app.get('/api/overview', async (c) => {
       epoch: mv('epoch'),
     },
     dex: {
-      pools: pools.length || Math.round(mv('dex.pool_count') ?? 0),
-      liquidityUsd, refPoolLiquidityUsd,
+      pools: pools.length || storedCount,
+      liquidityUsd, refPoolLiquidityUsd, pricedPools,
       holders: holderCounts?.osmosis ?? null,
       volume24hNam: (osmoStats?.buy_nam || 0) + (osmoStats?.sell_nam || 0),
       volume24hUsd: priceUsd.value != null ? ((osmoStats?.buy_nam || 0) + (osmoStats?.sell_nam || 0)) * priceUsd.value : null,
@@ -773,8 +784,8 @@ app.get('/api/flows', async (c) => {
 // ---------------------------------------------------------------- trade (D1)
 // The cron's stored pool list (pool-sizes.ts), never the router: each pool's size from its reserves, old past its age.
 app.get('/api/pools', async (c) => {
-  const r = await readStoredPools(c.env.DB);
-  return c.json({ pools: r?.pools ?? [], prov: storedPoolsProv(r, Date.now()) });
+  const r = await readPoolsRow(c.env.DB);
+  return c.json({ pools: r.row?.pools ?? [], prov: storedPoolsProv(r.row, Date.now(), r.failed) });
 });
 
 /** Far above all NAM in existence (about 1.15 billion): a larger size is refused before any quote service is asked. */

@@ -38,8 +38,9 @@ const pct1 = (x: number) => fmtPctRule(x, 1);
 
 export function ReadyToSell({ data, overview: o, isMine }: { data: Pressure; overview: Overview | null; isMine: (a: string | null | undefined) => boolean }) {
   const now = useUiNow();
-  // Osmosis records only (crossings in, sales, sends back): the Osmosis flow index's stamp when the server stamps each chain
-  const cov = data.coverageByChain?.osmosis ?? data.coverage;
+  // Osmosis records only (crossings in, sales, sends back): the Osmosis flow index's stamp for what each receiver has
+  // left (its sells read from 30 days before the window), else the chain's own, else both indexes together
+  const cov = data.onDeckProv ?? data.coverageByChain?.osmosis ?? data.coverage;
   const price = o?.price.usd ?? null;
   const left = data.onDeck.filter((e) => !noneLeft(e));
   const gone = data.onDeck.filter(noneLeft);

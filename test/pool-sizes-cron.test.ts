@@ -11,7 +11,7 @@ vi.mock('cloudflare:workers', () => ({ DurableObject: class {} }));
 import { runCron } from '../worker/src/cron';
 import { NAM, OSMOSIS } from '../worker/src/config';
 import { CURVE_TIERS, CURVE_CALLS_MAX } from '../worker/src/sources/sqs';
-import { CURVE_HEALTH_NAME, CURVE_KEY, POOLS_KEY, PRICED_KEY, SIZE_SOURCE, poolsTotal, type StoredPools } from '../worker/src/pool-sizes';
+import { CURVE_HEALTH_NAME, CURVE_KEY, POOLS_KEY, PRICED_KEY, SIZE_SOURCE, noCoinPrice, notPricedWords, poolsTotal, type StoredPools } from '../worker/src/pool-sizes';
 import { testD1, insert, type TestD1 } from './d1-sqlite';
 import { depthNetwork, bookKvFromFixture, paramsKvFromFixture, SQS_POOLS, REF_HEIGHT } from './depth-minute-net';
 import type { QuoteCurveResponse } from '../shared/types';
@@ -114,6 +114,13 @@ describe('the cron tick stores the Osmosis answers visitors read', () => {
     expect(quotes.most).toBeLessThanOrEqual(2);
     expect(quotes.calls).toBeGreaterThanOrEqual(2 * CURVE_TIERS.length);
     expect(quotes.calls).toBeLessThanOrEqual(CURVE_CALLS_MAX);
+    // a coin the router's list gives in base units only takes the decimals the depth module read (kv depth.params
+    // tokens): pool 3020's UM is 3,491.227565 coins, and the pool is not priced for want of a price, as the minute says
+    const um = row.pools.find((p) => p.id === '3020')!;
+    expect(um.counterReserve).toBeCloseTo(3_491.227565, 6);
+    expect(um.sizeProv!.note).toBe(notPricedWords(noCoinPrice('the other coin')));
+    expect(latest.unpriced.find((u: any) => u.id === '3020').why).toMatch(/gives this coin no price/);
+    expect(row.pools.every((p) => !('counterBase' in p) && !p.sizeProv?.note?.includes('decimals'))).toBe(true);
     const health = kv<Record<string, any>>(db, 'source.health');
     expect(health[CURVE_HEALTH_NAME]).toMatchObject({ ok: true });
     expect(health['Osmosis SQS (pools)']).toMatchObject({ ok: true });

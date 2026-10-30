@@ -239,10 +239,12 @@ export async function fetchNamPools(): Promise<{ pools: PoolInfo[]; at: number; 
       }
 
       const typeMap: Record<number, string> = { 0: 'balancer', 1: 'stableswap', 2: 'concentrated', 3: 'cosmwasm' };
-      // the other side in whole coins when its decimals are known; a side of no base units is 0 in any unit
+      // the other side in whole coins when its decimals are known; a side of no base units is 0 in any unit; else its
+      // base units are kept for the cron, which sizes it with the decimals the depth module read (pool-sizes.ts)
       const counterAmount = counterBal ? String(counterBal.amount ?? '0') : '0';
       const decimals = counterBal ? counterDecimals(counterBal.denom) : null;
       const counterReserve = /^0*$/.test(counterAmount) ? 0 : decimals != null ? Number(counterAmount) / 10 ** decimals : null;
+      const counterBase = counterReserve == null && /^\d{1,40}$/.test(counterAmount) ? counterAmount : undefined;
       const cap = parseFloat(p.liquidity_cap);
 
       pools.push({
@@ -254,6 +256,7 @@ export async function fetchNamPools(): Promise<{ pools: PoolInfo[]; at: number; 
         counterSymbol,
         namReserve: namBal ? toNam(namBal.amount) : 0,
         counterReserve: Number.isFinite(counterReserve) ? counterReserve : null,
+        ...(counterBase ? { counterBase } : {}),
         liquidityUsd: null,
         routerLiquidityUsd: Number.isFinite(cap) ? cap : null,
         spreadFactor: parseFloat(p.spread_factor || '0'),
@@ -559,6 +562,8 @@ export async function buildCurve(spot: CurveSpot, signal?: AbortSignal): Promise
       if (signal?.aborted) break;
       const [sellQ, buyQ] = await Promise.all([quoteSell(amountNam, spotUsd, spot.at, call, prov.source), quoteBuyFor(amountNam, spotUsd, spot.at, call, prov.source)]);
       const s = sellQ.quote, b = buyQ.quote;
+      // a size whose quotes the phase's end cut is not reached: left out, never listed with a side it did not quote
+      if (signal?.aborted && !(s && b)) break;
       curve.push({
         amountNam,
         usdSize: amountNam * spotUsd,

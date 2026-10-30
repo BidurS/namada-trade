@@ -13,7 +13,7 @@
 // does not list reads "—" with the reason; a column with the same reason in every row says it once, above the
 // rows, instead of in each one. Nothing is filled in.
 import type { PairRow, Provenance } from '../../../shared/types';
-import { fmtCoin, fmtCount, fmtDayMonthYear, fmtNamRule, fmtPctRule, fmtUsdWhole } from '../lib/format';
+import { fmtCoinAmount, fmtCount, fmtDayMonthYear, fmtNamRule, fmtPctRule, fmtUsdWhole } from '../lib/format';
 import { Num } from './Num';
 import { counterName, oneSidedWords, poolSides, restOf } from '../../../shared/pool-sides';
 
@@ -60,7 +60,7 @@ export function Inside({ nam, counter, coin }: { nam: number | null; counter: nu
       <span className="inside__l"><Num v={nam} fmt={fmtNamRule} unit="NAM" showReason={false} /></span>
       <span className="inside__l">
         {counter != null && Number.isFinite(counter)
-          ? <Num v={counter} fmt={(n) => fmtCoin(n)} unit={coin} showReason={false} />
+          ? <Num v={counter} fmt={fmtCoinAmount} unit={coin} showReason={false} />
           : <><Num v={null} prov={{ source: 'Osmosis pool reserves', at: null, status: 'missing', note: `the amount of ${coin} is not known` }} showReason={false} /> {coin}</>}
       </span>
     </>
