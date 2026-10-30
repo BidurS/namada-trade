@@ -33,11 +33,11 @@ import { label_plain, category_plain, labelAuthorShort, tagByline } from './labe
 import { counterpartiesOf, priceAtOf, priceBasisWords, priceHowOf } from '../../shared/flow-rules';
 import { settleUsd } from '../../shared/settle';
 import {
-  FLOW_SELECT, flowSelect, rowToFlow, safeParseJson, provAt, metricAt, coverageOf, pressure, blindSpot, alertsBetween, lastAlertBefore, metricSeries, withSettles, metricSeriesRolled, type HistoryPoint, osmosisNetIbc, orderflowSeries,
+  FLOW_SELECT, flowSelect, rowToFlow, safeParseJson, provAt, metricAt, coverageOf, pressure, blindSpot, alertsWindow, lastAlertBefore, metricSeries, withSettles, metricSeriesRolled, type HistoryPoint, osmosisNetIbc, orderflowSeries,
 } from './analytics';
 import { NAM_AMOUNT, NOT_LEGACY_TWIN as NOT_TWIN } from './flows-query';
 import { INTERNAL_ADDRESSES } from '../../shared/alerts';
-import { alertRules, DEFAULT_THRESHOLDS, type AlertThresholds } from '../../shared/alerts';
+import { alertRules, ALERT_WINDOW_DAYS, DEFAULT_THRESHOLDS, type AlertThresholds } from '../../shared/alerts';
 import { issueNonce, login, logout, sessionFromRequest, createPairCode, claimPairCode, listSessions, revokeSession, revokeAllSessions, createSession, tokenHash } from './auth';
 import { loadSettings, saveSettings, deleteSettings, defaultPrefs, publicView, applyUpdate, requireKey, refusalOf, noteSettingsRefused, hookOkStmt, linkProven, channelsFull, stopChannelStmt, telegramOf, telegramUpdate, telegramChatsOther, unlinkChat, SETTINGS_FULL, CHANNELS_FULL, TELEGRAM_CHATS_MAX, TELEGRAM_FULL, type StoredSettings } from './settings';
 import { clampLimit, prefixRange, decodeHolderCursor, encodeHolderCursor, encodeFlowCursor, parseBeforeParam, type HolderCursor, type BeforeParam, type FlowCursor } from '../../shared/paging';
@@ -329,24 +329,37 @@ app.get('/api/alerts/rules', (c) => c.json({ rules: alertRules(thresholdsParam(c
 
 /**
  * How far back /api/alerts/recent reads: the widest window the app asks for (web/src/api.ts LAST_WINDOW_MS, 30
- * days) and a day for a client clock off. An older `since` reads from here, and the answer's `since` says so (the
- * Alerts page prints it): since=1 read every alert-kind flow (47,743 rows on 2026-10-22), 30 days 2,092.
+ * days) and a day for a client clock off, the widest shared window (`days=31`). An older `since` reads from here, and
+ * the answer's `since` says so (the Alerts page prints it): since=1 read every alert-kind flow (47,743 rows on
+ * 2026-10-22), 30 days 2,092.
  */
 export const ALERTS_SINCE_MAX_MS = 31 * D;
 const THRESHOLD_KEYS = Object.keys(DEFAULT_THRESHOLDS) as (keyof AlertThresholds)[];
 
-// Hits in [since, until) plus `last`, the most recent hit before `until` of any age (W5).
+/** `?days=` as the route takes it: the shared windows past the default 24 hours (shared/alerts.ts ALERT_WINDOW_DAYS). */
+const ALERT_DAYS = ALERT_WINDOW_DAYS.filter((d) => d > 1).map(String);
+
+// Hits in [since, until) plus `last`, the most recent hit before `until` of any age (W5). The window is one every reader
+// shares (one edge copy): the last 24 hours, or `days=7` or `days=31`; a page keeps the hits after its own start (a last
+// visit), which it never sends (web/src/api.ts fetchAlertsRecent). `since=<ms>` (an API reader's own start) is still
+// read, at most ALERTS_SINCE_MAX_MS back, under the rewound reads' limit (http.ts isReplay).
 app.get('/api/alerts/recent', async (c) => {
   // The site's own alert sizes only (no page sends one): a size above every move made the search for `last` walk
   // every flow (56,402 rows on 2026-10-22), each value a cache entry of its own. Refused, so never cached.
   if (THRESHOLD_KEYS.some((k) => c.req.query(k) !== undefined)) {
     return c.json({ error: `Alerts are read at the site's own sizes; leave out ${THRESHOLD_KEYS.join(', ')}.` }, 400);
   }
+  // Any other spelling of a window would be one more stored copy of an answer already kept (a 400 is never cached).
+  const days = c.req.query('days');
+  if (days != null && days !== '' && !ALERT_DAYS.includes(days)) return c.json({ error: `days must be ${ALERT_DAYS.join(' or ')}, or left out (the last 24 hours).` }, 400);
+  const sinceRaw = c.req.query('since');
+  if (days && sinceRaw) return c.json({ error: 'Send since or days, not both.' }, 400);
   const { asOf } = asOfParam(c);
-  const sinceQ = Number(c.req.query('since'));
-  const since = Number.isFinite(sinceQ) && sinceQ > 0 ? Math.max(sinceQ, asOf - ALERTS_SINCE_MAX_MS) : asOf - D;
+  const sinceQ = Number(sinceRaw);
+  const asked = days ? asOf - Number(days) * D : Number.isFinite(sinceQ) && sinceQ > 0 ? Math.max(sinceQ, asOf - ALERTS_SINCE_MAX_MS) : asOf - D;
   const th = DEFAULT_THRESHOLDS;
-  const hits = await alertsBetween(c.env.DB, since, asOf, th);
+  // `since`: where the hits start, later than asked when the window held more moves than one read takes (alertsWindow)
+  const { hits, since } = await alertsWindow(c.env.DB, asked, asOf, th);
   // A failed or abandoned search omits `last` (not known), so the client runs its own 30-day read instead of
   // reading it as "none on record".
   const last = hits.length ? hits[0] : await lastAlertBefore(c.env.DB, asOf, th).catch(() => undefined);

@@ -338,6 +338,7 @@ export function OverviewProvider({ children }: { children: React.ReactNode }) {
   useEffect(() => {
     if (at || !visible) return;
     let alive = true;
+    // one window every reader shares (api.ts fetchAlertsRecent): the last visit is applied here and never sent
     const get = () =>
       fetchAlertsRecent(null, since ?? undefined)
         .then((r) => alive && setAlertHits([...r.hits].sort((a, b) => b.ts - a.ts)))

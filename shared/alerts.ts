@@ -35,6 +35,17 @@ export const isInternal = (a: string | null | undefined) => !!a && INTERNAL.has(
 /** The hour (UTC) the daily digest is due from, every day; the weekly one is due from the same hour on Mondays. */
 export const DIGEST_HOUR_UTC = 8;
 
+/**
+ * The windows GET /api/alerts/recent serves every reader alike, one edge copy each: the last 24 hours (`days` left
+ * out), 7 days (`days=7`) and 31 days (`days=31`). A page asks for the narrowest that reaches back as far as it shows
+ * and keeps the hits after its own start, so that start (a last visit) never leaves the browser (web/src/api.ts
+ * fetchAlertsRecent). Before, each tab sent its own last visit to the millisecond: a key of its own on every poll.
+ */
+export const ALERT_WINDOW_DAYS = [1, 7, 31] as const;
+export type AlertWindowDays = (typeof ALERT_WINDOW_DAYS)[number];
+/** The days of the narrowest shared window that reaches back `spanMs` (the widest when none does). */
+export const alertWindowDays = (spanMs: number): AlertWindowDays => ALERT_WINDOW_DAYS.find((d) => spanMs <= d * 86_400_000) ?? 31;
+
 export interface AlertThresholds {
   ibcInventory: number;
   unlock: number;

@@ -26,7 +26,7 @@ export const CACHE_PARAMS: Record<string, string[]> = {
   '/api/metrics/history': ['key', 'hours', 'at'],
   '/api/quote/curve': [],
   '/api/alerts/rules': THRESHOLDS,
-  '/api/alerts/recent': ['at', 'since', ...THRESHOLDS],
+  '/api/alerts/recent': ['at', 'since', 'days', ...THRESHOLDS],
   '/api/intel': [],
   // The series routes (worker/src/api-series.ts SERIES_PARAMS lists exactly these; test/series-api.test.ts checks it)
   '/api/series': ['key', 'from', 'to', 'step', 'at'],

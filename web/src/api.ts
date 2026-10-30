@@ -13,6 +13,7 @@ export type {
 import type { DepthChangesResponse, DepthHeatResponse, DepthHistoryResponse, DepthOwnersApiResponse, DepthQuoteResponse, DepthResponse } from '../../shared/depth';
 import { authFetch } from './lib/auth';
 import { encodeFlowCursor } from '../../shared/paging';
+import { alertWindowDays } from '../../shared/alerts';
 import { filterFlows, plainNotes, serverIgnoredFlowFilter, withAddressReport, withFlow, withHolder, withOverview, withPressure } from './lib/compat';
 
 const at = (asOf: number | null, q: URLSearchParams = new URLSearchParams()) => {
@@ -66,9 +67,19 @@ export const fetchAlertRules = () => get<{ rules: AlertRuleInfo[] }>('/api/alert
 /**
  * Alert hits in [since, until) and `last`: the most recent hit of any age before `until` (the empty state's
  * "The last one: …"). `since` defaults to 24 h before `until`; `until` is now, or the rewind time.
+ *
+ * `since` is never sent: the request asks for the narrowest window every reader shares (shared/alerts.ts
+ * ALERT_WINDOW_DAYS: 24 hours, 7 or 31 days; one edge copy each) and the hits before `since` are left out here, so a
+ * last visit stays in this browser. The answer's `since` is the later of the two starts: a window that ends before the
+ * one asked (a last visit more than 31 days ago, or more moves than the server reads at once) says where it starts.
  */
-export const fetchAlertsRecent = (asOf: number | null, since?: number) =>
-  get<AlertsRecentResponse>(`/api/alerts/recent${at(asOf, new URLSearchParams(since ? { since: String(since) } : {}))}`);
+export async function fetchAlertsRecent(asOf: number | null, since?: number): Promise<AlertsRecentResponse> {
+  const days = since != null ? alertWindowDays((asOf ?? Date.now()) - since) : 1;
+  const r = await get<AlertsRecentResponse>(`/api/alerts/recent${at(asOf, new URLSearchParams(days > 1 ? { days: String(days) } : {}))}`);
+  if (since == null) return r;
+  const from = Math.max(since, r.since);
+  return { ...r, since: from, hits: r.hits.filter((h) => h.ts >= from) };
+}
 
 /**
  * An alerts answer with how far `last` is known. `last: null` alone means none is on record (the server
