@@ -1,13 +1,107 @@
 #!/usr/bin/env bash
 # Deploy with the checks the security review asks for, in the right order:
+#   guard. the working tree is clean and HEAD is the tip of branch integration (the public line), so what ships is a
+#      commit anyone can read back,
+#   packages. npm ci only when node_modules is missing or does not match package-lock.json,
+#   checks. the typecheck, the build, then the test suite against that build (some tests load web/dist),
 #   0. the SEND_ALERTS secret is set (only a Worker that has it posts alerts),
+#   rollback. the Worker version live now and a D1 Time Travel bookmark, read before anything remote changes, with
+#      the one command that goes back to each,
 #   1. pending D1 migrations first (the worker's SELECTs may need new columns),
-#   2. build and deploy,
+#   2. deploy the build the tests ran against,
 #   3. smoke checks on the live site (docs/security-review.md "Before deploying").
-# usage: scripts/deploy-check.sh            (asks nothing; stops at the first failure)
+# usage: scripts/deploy-check.sh [--dry-run] [--skip-tests] [--off-tip]   (asks nothing; stops at the first failure)
+#   --dry-run     (or DRY_RUN=1) runs the local checks that write nothing (the guard, the packages check, the
+#                 typecheck) and the remote reads (secret names, the migration list and the schema checks, the bucket,
+#                 the live version, the bookmark), and prints every step that would write instead of running it: npm
+#                 ci, the build, the tests, the migrations, the deploy and the smoke checks. With a migration pending,
+#                 a dry run stops at the schema check of the object that migration adds (it applied nothing).
+#   --skip-tests  leaves the test suite out (the typecheck and the build still run), for an emergency fix or rollback
+#                 deploy only: it says so loudly.
+#   --off-tip     deploys a dirty tree or a commit other than integration's tip, saying so loudly. Never for routine use.
 set -euo pipefail
 cd "$(dirname "$0")/.."
 H=https://namada.trade
+
+DRY=0; SKIP_TESTS=0; OFF_TIP=0
+case "${DRY_RUN:-0}" in 0|'') ;; *) DRY=1 ;; esac
+for a in "$@"; do
+  case "$a" in
+    --dry-run) DRY=1 ;;
+    --skip-tests) SKIP_TESTS=1 ;;
+    --off-tip) OFF_TIP=1 ;;
+    *) echo "unknown option $a (usage: scripts/deploy-check.sh [--dry-run] [--skip-tests] [--off-tip])"; exit 2 ;;
+  esac
+done
+dry() { [ "$DRY" = 1 ]; }
+# A step that writes: a dry run prints it instead
+would() { echo "   dry run, not run: $*"; }
+# A failed check: a real run stops; a dry run says so and goes on
+stop() { echo "FAIL $*"; if dry; then echo "     (dry run: a real run stops here)"; else exit 1; fi; }
+loud() {
+  echo
+  echo "!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!"
+  for line in "$@"; do echo "!!! $line"; done
+  echo "!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!"
+  echo
+}
+dry && echo "DRY RUN: nothing is installed, built, migrated or deployed; remote calls are reads only"
+
+echo "== guard: the tree and the commit"
+# What ships is the commit at integration's tip with nothing beside it: the public line (integration fast-forwards to
+# GitHub main), so the live Worker is code anyone can read back. A file left in the tree, tracked or not, could be
+# built into the Worker without being in any commit. The refs are shared by every worktree of the repository, so a
+# clean checkout of the tip (a worktree on a detached HEAD) passes as the main checkout on integration does.
+head=$(git rev-parse HEAD)
+tip=$(git rev-parse --verify --quiet refs/heads/integration || true)
+dirty=$(git status --porcelain --untracked-files=normal)
+why=()
+if [ -n "$dirty" ]; then why+=("the working tree has $(echo "$dirty" | wc -l | tr -d ' ') changed or untracked path(s):"); while IFS= read -r l; do why+=("    $l"); done < <(echo "$dirty" | head -10); fi
+if [ -z "$tip" ]; then why+=("there is no branch integration in this repository")
+elif [ "$head" != "$tip" ]; then why+=("HEAD is ${head:0:9} ($(git log -1 --format=%cs "$head")), not the tip of integration, ${tip:0:9} ($(git log -1 --format=%cs "$tip"))"); fi
+if [ ${#why[@]} -eq 0 ]; then echo "ok   clean tree at integration's tip ${head:0:9}"
+elif [ "$OFF_TIP" = 1 ]; then loud "WARNING --off-tip: going on anyway, although" "${why[@]}" "The live Worker will not be a commit of the public line."
+else for l in "${why[@]}"; do echo "FAIL $l"; done; echo "FAIL not deploying (commit the change to integration and deploy its tip; --off-tip overrides, loudly)"; exit 1; fi
+
+echo "== packages"
+# npm ci only when needed (it takes minutes): the installed tree is read from node_modules/.package-lock.json, which
+# npm writes on every install, against package-lock.json. A package may be absent only when the lock marks it optional
+# and bound to another platform (os, cpu or libc: esbuild's and workerd's builds for other machines); every other
+# entry must be there with the lock's version and integrity, and nothing may be installed that the lock lacks. A
+# change made inside node_modules by hand is not seen (npm's own check has the same limit).
+lock_matches() {
+  python3 -c "
+import json,sys
+try:
+    lock=json.load(open('package-lock.json'))['packages']; got=json.load(open('node_modules/.package-lock.json'))['packages']
+except Exception as e: print('   the installed tree could not be read:', e); sys.exit(1)
+bad=[]
+for k,v in lock.items():
+    if not k: continue
+    g=got.get(k)
+    if g is None:
+        if not ((v.get('optional') or v.get('devOptional')) and any(f in v for f in ('os','cpu','libc'))): bad.append(k + ' missing')
+    elif g.get('version')!=v.get('version') or (v.get('integrity') and g.get('integrity') and g['integrity']!=v['integrity']): bad.append(k + ' ' + str(g.get('version')) + ' installed, the lock has ' + str(v.get('version')))
+bad+=[k + ' installed, not in the lock' for k in got if k not in lock]
+if bad: print('   node_modules does not match package-lock.json:', '; '.join(bad[:5]), '(and %d more)' % (len(bad)-5) if len(bad)>5 else ''); sys.exit(1)
+print('ok   node_modules matches package-lock.json (%d packages)' % len(got))"
+}
+if [ -L node_modules ]; then
+  # a worktree's link to another checkout's packages: npm ci empties the folder it points at, which would break that
+  # checkout, so it is never run through a link
+  if lock_matches; then echo "     node_modules is a link to $(readlink node_modules); no npm ci"
+  else stop "node_modules is a link to another checkout and does not match the lock: deploy from a checkout with its own (npm ci there)"; fi
+elif [ ! -d node_modules ]; then echo "   node_modules is missing"; if dry; then would npm ci; else npm ci; fi
+elif ! lock_matches; then if dry; then would npm ci; else npm ci; fi
+fi
+
+echo "== checks: typecheck, build, tests"
+npm run typecheck
+if dry; then would npm run build; else npm run build; fi
+# the suite has wall-clock tests (5 s timeouts, a 15 s alarm walk) that fail on a loaded machine with more workers
+if [ "$SKIP_TESTS" = 1 ]; then loud "WARNING --skip-tests: the test suite was NOT run." "Only for an emergency fix or rollback deploy; run it on this commit as soon as the site is safe."
+elif dry; then would npx vitest run --maxWorkers=4 --minWorkers=1
+else npx vitest run --maxWorkers=4 --minWorkers=1; fi
 
 echo "== 0. alerts secret"
 # Only a Worker whose SEND_ALERTS secret is yes posts alerts (worker/src/sources/discord.ts sendsAlerts), so a local
@@ -22,9 +116,46 @@ except Exception: names=None
 if names is None: print('the secret list could not be read'); sys.exit(1)
 print('SEND_ALERTS secret:', 'set' if 'SEND_ALERTS' in names else 'missing'); sys.exit(0 if 'SEND_ALERTS' in names else 1)" || { echo "FAIL SEND_ALERTS is not known to be set (npx wrangler secret put SEND_ALERTS, value yes): not deploying"; exit 1; }
 
+echo "== rollback: what is live now"
+# Read before the migrations and the deploy change anything, so each is one command away from how it was. Only the
+# version, its share and its time are printed (the answer also names who deployed it).
+for i in 1 2 3 4 5; do out=$(npx wrangler deployments status --json 2>&1) && ! echo "$out" | grep -q 7403 && break; echo "retrying (Cloudflare 7403)"; sleep 6; done
+live=$(echo "$out" | python3 -c "
+import sys,json,re
+t=sys.stdin.read(); m=re.search(r'^\{', t, re.M)
+try: d=json.loads(t[m.start():]) if m else None
+except Exception: d=None
+vs=[v for v in (d or {}).get('versions', []) if re.fullmatch(r'[0-9a-f-]{36}', str(v.get('version_id', '')))]
+if not vs: sys.exit(1)
+# a split deployment (two versions) goes back to the one with the larger share
+vs.sort(key=lambda v: -float(v.get('percentage') or 0))
+print('\t'.join([vs[0]['version_id'], ' + '.join('%s at %s%%' % (v['version_id'], v.get('percentage')) for v in vs), str(d.get('created_on') or '?')]))") || { echo "FAIL the live Worker version could not be read (npx wrangler deployments status): not deploying, as a rollback would have no version to go back to"; exit 1; }
+IFS=$'\t' read -r live_id live_split live_at <<<"$live"
+echo "live Worker version: $live_split, deployed $live_at"
+for i in 1 2 3 4 5; do out=$(npx wrangler d1 time-travel info namada-trade-db --json 2>&1) && ! echo "$out" | grep -q 7403 && break; echo "retrying (Cloudflare 7403)"; sleep 6; done
+bookmark=$(echo "$out" | python3 -c "
+import sys,json,re
+t=sys.stdin.read(); m=re.search(r'^\{', t, re.M)
+try: b=json.loads(t[m.start():]).get('bookmark') if m else None
+except Exception: b=None
+if not (isinstance(b, str) and re.fullmatch(r'[0-9a-f-]{8,}', b)): sys.exit(1)
+print(b)") || { echo "FAIL the D1 Time Travel bookmark could not be read (npx wrangler d1 time-travel info namada-trade-db): not deploying"; exit 1; }
+bookmark_at=$(date -u +%Y-%m-%dT%H:%M:%SZ)
+echo "D1 bookmark at $bookmark_at: $bookmark"
+rollback_words() {
+  echo "   the Worker:   npx wrangler rollback $live_id --message \"back from the deploy of ${head:0:9}\""
+  echo "   the database, only when a migration or a write of this deploy must be undone (it overwrites every row"
+  echo "   written since, and the restore prints a bookmark of its own that undoes it):"
+  echo "     1. npx wrangler secret delete SEND_ALERTS   (first: restored claims and cursors would post old alerts again)"
+  echo "     2. npx wrangler d1 time-travel restore namada-trade-db --bookmark=$bookmark"
+  echo "     3. put SEND_ALERTS back (npx wrangler secret put SEND_ALERTS, value yes) only once the ticks have caught up"
+}
+echo "to go back:"
+rollback_words
+
 echo "== 1. migrations"
 for i in 1 2 3 4 5; do out=$(npx wrangler d1 migrations list namada-trade-db --remote 2>&1) && ! echo "$out" | grep -q 7403 && { echo "$out" | tail -4; break; }; echo "retrying (Cloudflare 7403)"; sleep 6; done
-{ yes || true; } | npx wrangler d1 migrations apply namada-trade-db --remote
+if dry; then would npx wrangler d1 migrations apply namada-trade-db --remote; else { yes || true; } | npx wrangler d1 migrations apply namada-trade-db --remote; fi
 # 0008 (stored totals, wider indexes, the word table): its 8 triggers and 7 new objects must be there before the
 # worker that reads them goes out (read-only check)
 for i in 1 2 3 4 5; do out=$(npx wrangler d1 execute namada-trade-db --remote --json --command "SELECT (SELECT COUNT(*) FROM sqlite_master WHERE type='trigger') triggers, (SELECT COUNT(*) FROM sqlite_master WHERE name IN ('holders_total','holders_stake','holders_tail','flows_hash','flows_hash_wrapper','flows_hash_inner','label_tokens')) objects" 2>&1) && ! echo "$out" | grep -q 7403 && break; echo "retrying (Cloudflare 7403)"; sleep 6; done
@@ -76,7 +207,16 @@ for i in 1 2 3 4 5; do out=$(npx wrangler r2 bucket list 2>&1) && ! echo "$out" 
 echo "$out" | grep -q 'namada-trade-depth' && echo "depth bucket: namada-trade-depth" || { echo "FAIL the depth archive bucket is missing: create it first (npx wrangler r2 bucket create namada-trade-depth), then deploy"; exit 1; }
 
 echo "== 2. deploy"
-npm run deploy 2>&1 | grep -E "Current Version ID|Deployed|rror"
+# the build the tests ran against (package.json's deploy script would build again)
+if dry; then
+  would npx wrangler deploy
+  echo "   dry run, not run: the smoke checks and the cross-checks, which read the site after a deploy"
+  echo "== dry run done: the steps above marked 'not run' are what a real run would do next"
+  exit 0
+fi
+npx wrangler deploy 2>&1 | grep -E "Current Version ID|Deployed|rror"
+echo "if this deploy must be undone (the Worker was $live_id before it):"
+rollback_words
 
 echo "== 3. smoke"
 fail=0

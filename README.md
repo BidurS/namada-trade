@@ -71,6 +71,8 @@ Deploying the depth module (`worker/src/depth/`, from step S2 on) needs, in this
 
 Secrets: `.dev.vars` locally (`KEPLR_KEY`, `DISCORD_WEBHOOK_URL`, a development `SETTINGS_KEY`), `wrangler secret put` in production. Only a Worker whose `SEND_ALERTS` secret is `yes` posts alerts, and only production has it (`wrangler secret put SEND_ALERTS`; `scripts/deploy-check.sh` does not deploy without it). A local run posts none and never reads the users' settings, even on a copy of the production database, which lacks the claims production took after the copy and holds every user's settings as they were then; it logs each post it would have made. Never put `SEND_ALERTS` in `.dev.vars`.
 
+Deploys go through `scripts/deploy-check.sh`: it deploys only the tip of `integration` from a clean tree, runs `npm ci` only when `node_modules` does not match `package-lock.json` (never through a link to another checkout's packages), runs the typecheck, the build and the test suite (`--maxWorkers=4 --minWorkers=1`), then checks the secret, prints the live Worker version and a D1 Time Travel bookmark with the command that goes back to each, applies the migrations, deploys the build the tests ran against and runs the smoke checks. `--dry-run` (or `DRY_RUN=1`) makes only the reads and prints each write; `--skip-tests` (an emergency fix or rollback only) and `--off-tip` say so loudly. A database restore removes `SEND_ALERTS` first, so restored claims and cursors post no old alert again. The weekly copy off Cloudflare is `scripts/export-offsite.sh <folder>`: the whole database, gzipped and dated, into an existing folder outside any git working tree (a running export holds the database's other requests, so it runs at a quiet hour).
+
 ## Data
 
 | table | what |
