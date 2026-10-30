@@ -191,9 +191,12 @@ export const OSMOSIS_SWEEP_STALE_MS = 15 * 60000;
  */
 const LAST_MOVE_SQL = (chain: 'osmosis' | 'namada') => `(SELECT ts FROM flows INDEXED BY flows_ts WHERE ts <= ? AND chain = '${chain}' ORDER BY ts DESC LIMIT 1)`;
 
-/** IndexState osmosisSweep `note`: the cursor's error and its `shallow` note, each as the hub wrote it, at most 1,200 characters. */
-const sweepNote = (c: { error?: unknown; shallow?: { note?: unknown } }): { note?: string } => {
-  const note = [c.error, c.shallow?.note].filter((x): x is string => typeof x === 'string' && x.length > 0).join(' ').slice(0, 1200);
+/**
+ * IndexState osmosisSweep `note`: the cursor's error, its `shallow` note and why its pool-address queries are behind
+ * it (`poolsFrom`), each as the hub wrote it, at most 1,200 characters.
+ */
+const sweepNote = (c: { error?: unknown; shallow?: { note?: unknown }; poolsFrom?: { note?: unknown } }): { note?: string } => {
+  const note = [c.error, c.shallow?.note, c.poolsFrom?.note].filter((x): x is string => typeof x === 'string' && x.length > 0).join(' ').slice(0, 1200);
   return note ? { note } : {};
 };
 

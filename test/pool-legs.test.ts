@@ -143,7 +143,8 @@ describe('the catch-up search: each pool\'s address both ways', () => {
   /**
    * The node: the stream's four queries find nothing new unless `lists` says so; 3005's sends hold the withdrawal,
    * 3008's receipts the bid. Each list is newest first. A tx_search is asked by GET or in a JSON-RPC batch of up to
-   * ten (POST to the node's root, as the public node answers one); `refuseBatch` answers a batch with one error.
+   * ten (POST to the node's root, as the public node answers one), a /status before and after the queries;
+   * `refuseBatch` answers a batch with one error.
    */
   function osmosis(db: TestD1, opts: { lists?: Record<string, any[]>; refuseBatch?: boolean } = {}) {
     const reads: Read[] = [];
@@ -163,6 +164,7 @@ describe('the catch-up search: each pool\'s address both ways', () => {
         const calls = JSON.parse(String(init.body));
         if (opts.refuseBatch || calls.length > 10) return Response.json({ jsonrpc: '2.0', id: -1, error: { code: -32600, message: 'Invalid Request', data: `batch request exceeds maximum (${opts.refuseBatch ? 1 : 10}) allowed number of requests` } });
         return Response.json(calls.map((c: any) => {
+          if (c.method === 'status') return { jsonrpc: '2.0', id: c.id, result: { sync_info: { latest_block_height: String(HEAD), earliest_block_height: '1' } } };
           expect(c.method).toBe('tx_search');
           expect(c.params.order_by).toBe('desc');
           reads.push({ q: c.params.query, per: Number(c.params.per_page), page: Number(c.params.page), batch: true });
@@ -265,13 +267,19 @@ describe('the catch-up search: each pool\'s address both ways', () => {
     const hub = hubOn(db);
     const pages: number[] = [];
     let last: Read[] = [];
-    for (let s = 0; s < 6 && (s === 0 || cursorOf(db).height !== HEAD); s++) {
+    for (let s = 0; s < 6 && (s === 0 || cursorOf(db).poolsFrom); s++) {
       const before = reads.length;
       await hub.sweepOsmosis();
       last = reads.slice(before);
       pages.push(reads.slice(before).filter((r) => r.per === 50 && r.q.startsWith('transfer.') && !OSMOSIS_QUERIES.includes(r.q)).length);
+      // the stream's four queries are read down to the cursor: it moves at every search, the pool queries keeping a
+      // floor of their own while they are behind
+      expect(cursorOf(db)).toMatchObject({ height: HEAD });
+      expect(cursorOf(db).error).toBeUndefined();
+      if (s === 0) expect(cursorOf(db).poolsFrom).toMatchObject({ height: CURSOR, at: 1 });
     }
     expect(pages.length).toBeGreaterThan(1);
+    expect(cursorOf(db).poolsFrom).toBeUndefined();
     expect(Math.max(...pages)).toBeLessThanOrEqual(OSMOSIS_POOL_SWEEP_PAGES);
     expect(cursorOf(db)).toMatchObject({ height: HEAD });
     expect(cursorOf(db).resume).toBeUndefined();

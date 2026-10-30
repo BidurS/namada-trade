@@ -20,7 +20,7 @@ import { HubQuote, askQuoteService, storedQuoteReader } from './live-quote';
 import { priceRouteAt, stampPriceRoute } from './price-how';
 import { sendTelegramMove, telegramRun, TG_LIVE_MS, TG_LIVE_SENDS } from './sources/telegram';
 import { alarmBudget, configureAlerts, fanoutBudget, flushAlerts, isNamWhale, noteNotSent, offeredForAlerts, sendDiscordWhaleAlert, sendsAlerts, spentOut, FANOUT_DEADLINE_MS, UsersUnreadError, WEBHOOK_TIMEOUT_MS, type AlertBudget, type PendingAlert } from './sources/discord';
-import { fetchJson, redact, registerSecrets, FETCH_TEXT_MAX_BYTES, ReadBudgetError, ResponseTooLargeError, type ReadBudget } from './util';
+import { fetchJson, HttpError, redact, registerSecrets, FETCH_TEXT_MAX_BYTES, ReadBudgetError, ResponseTooLargeError, type ReadBudget } from './util';
 import { watchCronStall, OPS_STALL_LOOK_MS } from './ops';
 
 /** Moves found late (by the catch-up search, or by a Namada scan that was behind) alert only when they happened within this window. */
@@ -86,16 +86,17 @@ export { OSMOSIS_QUERIES };
 export const OSMOSIS_POOL_QUERY_MAX = 40;
 /**
  * Pool-address queries probed in one read by a catch-up search (one transaction each, newest first), as a JSON-RPC
- * batch: the public node answers ten calls in one (eleven are refused, "batch request exceeds maximum (10)", measured
- * 2026-10-29), so the 52 queries of 26 pools cost six subrequests of the alarm, not 52. A batch not answered whole is
- * asked query by query, as before.
+ * batch with a /status before and after them (live-hub.ts probePools): the public node answers ten calls in one
+ * (eleven are refused, "batch request exceeds maximum (10)", measured 2026-10-29), so the 52 queries of 26 pools cost
+ * seven subrequests of the alarm, not 52. A batch not answered whole is asked query by query, as before.
  */
-export const POOL_PROBE_BATCH = 10;
+export const POOL_PROBE_BATCH = 8;
 /**
  * Pages of 50 the pool-address queries read in all, per catch-up search, beside OSMOSIS_SWEEP_PAGES each for the
  * stream's queries: with every pool busy (after an outage) they could otherwise take 4 pages each, 208 for 26 pools,
- * each a subrequest of the alarm's (discord.ts LIVE_ALERT_POSTS). A query left unread for it keeps its place, the
- * search is not complete, and the next one goes on.
+ * each a subrequest of the alarm's (discord.ts LIVE_ALERT_POSTS). A query left unread for it keeps its place and the
+ * pool queries keep their floor (OsmosisCursor `poolsFrom`), while the cursor moves with the stream's queries; the
+ * next search starts its pool queries with that one (`poolsNext`).
  */
 export const OSMOSIS_POOL_SWEEP_PAGES = 12;
 /** How often the hub reads the router's NAM pools again (fetchNamPools), and how often while it knows none. */
@@ -131,10 +132,16 @@ export const OSMOSIS_SWEEP_MAX_BYTES = 24 * 1024 * 1024;
  * dropped by the next search that finishes.
  * `pools`: the NAM pools whose addresses the search read (osmosisPoolQueries); 0 while the hub knows none (the router
  * not read yet), when a transaction that moves only a pool's other coin is not searched for.
+ * `poolsFrom`: while a search leaves a pool-address query not read down to the cursor (their pages spent, a read that
+ * failed, an empty answer from an index that may not hold the range), the block those queries are read down to, below
+ * `height`, the `at` of the cursor that had it, and why; their places are in `resume`. The cursor never waits on them.
+ * `poolsNext`: the pool-address query the next search's pool queries start with, the first the last one left unread
+ * for want of pages.
  */
 export interface OsmosisCursor {
   height: number; at: number; added?: number; error?: string; skipped?: { at: number; note: string }[]; resume?: Record<string, OsmosisResume>;
   depth?: OsmosisDepth; shallow?: { at: number; note: string }; pools?: number;
+  poolsFrom?: { height: number; at: number; note: string }; poolsNext?: string;
 }
 /**
  * The shallowest node the searches have seen (OsmosisCursor `depth`): how many blocks it held behind its head, and
@@ -660,27 +667,38 @@ export class LiveHub extends DurableObject<Env> {
   }
 
   /**
-   * Each pool-address query's newest transaction's height (-Infinity for a query with none), POOL_PROBE_BATCH queries
-   * a read (`post`); the queries of a batch not answered whole are asked one by one (`get`). A query no read answered
-   * is left out: it is read like the others.
+   * Each pool-address query's newest transaction's height (`h`, -Infinity for a query with none), POOL_PROBE_BATCH
+   * queries a read (`post`), and the first block of the index that answered it (`first`): each read is a batch of a
+   * /status, the queries and a /status, as scripts/osmosis-pager.ts reads (the public node answered every batch measured
+   * from one index, 2026-10-29), and the first block is known only when both /status answers name the same one. The
+   * queries of a batch not answered whole are asked one by one (`get`), with no first block known. A query no read
+   * answered is left out: it is read like the others.
    */
-  private async probePools(qs: string[], get: (path: string) => Promise<any>, post: (body: string) => Promise<unknown[] | null>, signal?: AbortSignal): Promise<Map<string, number>> {
-    const out = new Map<string, number>();
-    const take = (q: string, r: any) => {
+  private async probePools(qs: string[], get: (path: string) => Promise<any>, post: (body: string) => Promise<unknown[] | null>, signal?: AbortSignal): Promise<Map<string, { h: number; first: number | null }>> {
+    const out = new Map<string, { h: number; first: number | null }>();
+    const take = (q: string, r: any, first: number | null) => {
       const txs = r?.txs;
       if (!Array.isArray(txs)) return;
       const h = txs.length ? Number(txs[0]?.height) : -Infinity;
-      if (!Number.isNaN(h)) out.set(q, h);
+      if (!Number.isNaN(h)) out.set(q, { h, first });
     };
+    const status = (id: number) => ({ jsonrpc: '2.0', id, method: 'status', params: {} });
+    const firstOf = (a: any) => { const e = Number(a?.result?.sync_info?.earliest_block_height); return Number.isSafeInteger(e) && e > 0 ? e : null; };
     for (let i = 0; i < qs.length; i += POOL_PROBE_BATCH) {
       if (signal?.aborted) break;
       const part = qs.slice(i, i + POOL_PROBE_BATCH);
-      const answer = await post(JSON.stringify(part.map((query, id) => ({ jsonrpc: '2.0', id, method: 'tx_search', params: { query, page: '1', per_page: '1', order_by: 'desc' } })))).catch(() => null);
+      const last = part.length + 1;
+      const calls = [status(0), ...part.map((query, k) => ({ jsonrpc: '2.0', id: k + 1, method: 'tx_search', params: { query, page: '1', per_page: '1', order_by: 'desc' } })), status(last)];
+      const answer = await post(JSON.stringify(calls)).catch(() => null);
+      const by = new Map<number, { result?: unknown }>();
       for (const x of answer ?? []) {
         const a = x as { id?: unknown; error?: unknown; result?: unknown };
-        if (typeof a?.id === 'number' && part[a.id] != null && !a.error) take(part[a.id], a.result);
+        if (typeof a?.id === 'number' && !a.error) by.set(a.id, a);
       }
-      await Promise.all(part.filter((q) => !out.has(q)).map(async (q) => take(q, (await get(`/tx_search?query=${encodeURIComponent(`"${q}"`)}&page=1&per_page=1&order_by=%22desc%22`).catch(() => null))?.result)));
+      const e0 = firstOf(by.get(0)), e1 = firstOf(by.get(last));
+      const first = e0 != null && e0 === e1 ? e0 : null;
+      part.forEach((q, k) => { if (by.has(k + 1)) take(q, by.get(k + 1)!.result, first); });
+      await Promise.all(part.filter((q) => !out.has(q)).map(async (q) => take(q, (await get(`/tx_search?query=${encodeURIComponent(`"${q}"`)}&page=1&per_page=1&order_by=%22desc%22`).catch(() => null))?.result, null)));
     }
     return out;
   }
@@ -1370,12 +1388,12 @@ export class LiveHub extends DurableObject<Env> {
    * height already covered, the stream's OSMOSIS_QUERIES and two for each NAM pool's address (osmosisPoolQueries: a
    * pool's transactions in its other coin alone, which the stream never sees; a pool the hub learns of, at start or
    * from the router's list read again each hour (refreshPools), is searched from the cursor on, and what came before
-   * is scripts/backfill-osmosis.ts's; together these read at most OSMOSIS_POOL_SWEEP_PAGES pages, their probes ten
-   * queries a read); transactions not yet in `flows` are parsed
+   * is scripts/backfill-osmosis.ts's; together these read at most OSMOSIS_POOL_SWEEP_PAGES pages, after the stream's
+   * queries, their probes POOL_PROBE_BATCH queries a read); transactions not yet in `flows` are parsed
    * and written with their block time, a pool's legs in its other coins with them (poolLegsOf), and those
    * whose write threw (osmoRetryTx) are alerted even when that write stored them. The cursor moves to the head read
-   * at the start only when every query answered, and to just below a stream transaction still being written or
-   * retried. A query with more than OSMOSIS_SWEEP_PAGES pages above the cursor is read on by the next search from
+   * at the start only when every one of the stream's queries answered (a pool query left behind keeps a floor of its
+   * own, the cursor's `poolsFrom`), and to just below a stream transaction still being written or retried. A query with more than OSMOSIS_SWEEP_PAGES pages above the cursor is read on by the next search from
    * where this one stopped (the cursor's `resume`), so a backlog of any size is read through over several searches.
    * `signal`: the alarm's deadline (ALARM_DEADLINE_MS); a search it
    * ends is not complete, and the transactions it did not reach are read by the next one.
@@ -1428,16 +1446,24 @@ export class LiveHub extends DurableObject<Env> {
       if (large === rpcs.length) throw overBudget ?? tooLarge;
       throw last ?? (tooLarge ? new Error(`only some nodes answered, past the cap: ${String(tooLarge)}`) : new Error('the catch-up search passed the alarm deadline'));
     };
-    // A JSON-RPC batch (the pool probes), its answer handed back when it is one (an array). A node that gives none is
-    // asked last for the rest of the search, as for `get`; one that answers otherwise (a node refusing batches) is not.
+    // A JSON-RPC batch (the pool probes), its answer handed back when it is one (an array). Only a node that has failed
+    // no read of this search, and has not refused a batch in it, is asked; with none, the probes' queries are asked one
+    // by one (`get`, the nodes in the breaker's order). A node that gives no answer is asked last for the rest of the
+    // search, as for `get`; one that answers with something else (a node refusing batches: an error object, a 405) is
+    // asked for no batch again. Else a node that accepts requests and never answers would cost every batch its 25 s,
+    // the breaker putting it back first whenever the other node refused a batch: six batches, the alarm's deadline.
+    const noBatch = new Set<string>();
     const post = async (body: string): Promise<unknown[] | null> => {
       for (const r of breaker.order(rpcs)) {
         if (signal?.aborted) break;
+        if (noBatch.has(r.provider) || breaker.failures(r.provider) > 0) continue;
         try {
           const a = await fetchJson<unknown>(r.url, { timeoutMs: 25000, retries: 0, maxBytes: FETCH_TEXT_MAX_BYTES, signal, init: { method: 'POST', body, headers: { 'Content-Type': 'application/json', ...(r.provider === 'keplr' ? keplrHeaders(this.env.KEPLR_KEY) : {}) } } });
           if (Array.isArray(a)) return a;
+          noBatch.add(r.provider);
         } catch (e) {
-          if (!(e instanceof ResponseTooLargeError) && !signal?.aborted) breaker.failed(r.provider);
+          if (e instanceof HttpError) noBatch.add(r.provider);
+          else if (!(e instanceof ResponseTooLargeError) && !signal?.aborted) breaker.failed(r.provider);
         }
       }
       return null;
@@ -1452,10 +1478,21 @@ export class LiveHub extends DurableObject<Env> {
     // says is absent starts at or above `knownFrom` (walk); with no depth known, as before.
     const depth = nodeDepth(prev?.depth, head, status?.result?.sync_info?.earliest_block_height, Date.now());
     const knownFrom = depth ? head - depth.blocks : -Infinity;
-    const shallowNotes: string[] = [];
+    const shallowNotes: { q: string; note: string }[] = [];
     // A stream transaction whose write failed is read again even below the cursor (handleOsmosisMessage).
     const retryGen = this.osmoRetryGen;
     const floor = Math.min(prev?.height ?? 0, this.osmoRetryFrom != null ? this.osmoRetryFrom - 1 : Infinity);
+    // The pool-address queries (osmosisPoolQueries) are read down to a floor of their own (`poolFloor`, the cursor's
+    // `poolsFrom`), never above the stream's queries' floor: a search that leaves one of them unread still moves the
+    // cursor once the stream's four are read down to theirs, and the next searches read the pool queries on from where
+    // they stopped. Without a cursor yet none is read (what came before is scripts/backfill-osmosis.ts's).
+    const ofPools = [...this.osmoCtx.poolAddrs.keys()].slice(0, OSMOSIS_POOL_QUERY_MAX).flatMap(osmosisPoolQueries);
+    const poolQueries = floor > 0 ? ofPools : [];
+    const ofPool = new Set(poolQueries);
+    const pf = prev?.poolsFrom;
+    const poolFloor = pf && Number.isSafeInteger(pf.height) && pf.height > 0 ? Math.min(floor, pf.height) : floor;
+    /** The floor query `q` is read down to (each closure below reads its query's as `floor`). */
+    const floorOf = (q: string) => (ofPool.has(q) ? poolFloor : floor);
     const found = new Map<string, any>();
     const have = new Set<string>();
     const looked = new Set<string>();
@@ -1465,9 +1502,10 @@ export class LiveHub extends DurableObject<Env> {
      * One read's transactions: those above the floor, up to the head, are looked at once each. One already stored
      * (and not a stream write that threw), seen by the stream, or that makes no row is let go at once (whether a
      * transaction makes a flow or a move does not depend on its time or price), and the read gives back to the budget
-     * all its bytes but those of the transactions kept: only what the search will write or alert is held.
+     * all its bytes but those of the transactions kept: only what the search will write or alert is held. `floor`: the
+     * floor of the query read (floorOf).
      */
-    const keep = async (txs: any[], bytes: number) => {
+    const keep = async (txs: any[], bytes: number, floor: number) => {
       const fresh = txs.filter((t) => Number(t.height) > floor && Number(t.height) <= head);
       const ask = [...new Set(fresh.map((t) => String(t.hash).toUpperCase()))].filter((h) => !looked.has(h));
       for (let i = 0; i < ask.length; i += 90) {
@@ -1496,6 +1534,7 @@ export class LiveHub extends DurableObject<Env> {
      * height and position). `after`: the height of the last transaction this query read.
      */
     const search = async (q: string, page: number, per: number, after: { height: number | null }, rows: Map<string, Row>): Promise<{ n: number; low: number; high: number }> => {
+      const floor = floorOf(q);
       const before = budget.left;
       let r: any;
       try {
@@ -1521,7 +1560,7 @@ export class LiveHub extends DurableObject<Env> {
         return { n, low, high };
       }
       const txs: any[] = r?.result?.txs ?? [];
-      await keep(txs, before - budget.left);
+      await keep(txs, before - budget.left, floor);
       txs.forEach((t, i) => rows.set(String(t.hash).toUpperCase(), { h: Number(t.height), pos: (page - 1) * per + i }));
       if (txs.length) after.height = Number(txs[txs.length - 1].height);
       const hs = txs.map((t) => Number(t.height));
@@ -1535,7 +1574,7 @@ export class LiveHub extends DurableObject<Env> {
      */
     const ends = (q: string, r: { low: number }, from: number) => {
       if (from >= knownFrom) return true;
-      shallowNotes.push(`query "${q}": the answer ended ${Number.isFinite(r.low) ? `at block ${r.low}` : 'with no transaction'}, and the nodes are known to hold blocks only from ${knownFrom}, above block ${from} where the range starts; it is asked again`);
+      shallowNotes.push({ q, note: `query "${q}": the answer ended ${Number.isFinite(r.low) ? `at block ${r.low}` : 'with no transaction'}, and the nodes are known to hold blocks only from ${knownFrom}, above block ${from} where the range starts; it is asked again` });
       return false;
     };
     /**
@@ -1551,6 +1590,7 @@ export class LiveHub extends DurableObject<Env> {
      */
     let pagesRead = 0;
     const walk = async (q: string, old: OsmosisResume | null, rows: Map<string, Row>, cap = OSMOSIS_SWEEP_PAGES): Promise<{ done: boolean; old: OsmosisResume | null; stand?: boolean; shallow?: boolean }> => {
+      const floor = floorOf(q);
       const after = { height: null as number | null };
       let pages = 0, page = 0;
       const read = (p: number, into = rows) => { pages++; pagesRead++; return search(q, p, 50, after, into); };
@@ -1601,53 +1641,71 @@ export class LiveHub extends DurableObject<Env> {
     // the stream reconnects), and dropping the place would start the catch-up again from the newest. The transactions
     // above the head are not looked at (keep), and a place left from this search's own reads has this head as top.
     const placeOf = (q: string): OsmosisResume | null => {
+      const floor = floorOf(q);
       const o = prev?.resume?.[q];
       if (!o || !(Number.isFinite(o.top) && Number.isFinite(o.low) && Number.isInteger(o.n) && o.n >= 0)) return null;
       if (o.top <= floor || o.low > o.top || (o.low > floor && typeof o.last !== 'string')) return null;
       const from = o.low > floor ? o.low : floor + 1;
       return [...this.osmoRetryTx.values()].some((h) => h >= from && h <= o.top) ? null : o;
     };
-    // The pool-address queries (osmosisPoolQueries) find what moves only a pool's other coin, which matches none of
-    // OSMOSIS_QUERIES. Most pools see nothing for hours, so each is first asked for its newest transaction alone, ten
-    // queries a read (POOL_PROBE_BATCH), and is read like the others only when that one is above the floor, or above
-    // the top of a place read down to the floor (a place gone on from part way is read on without asking). A probe
-    // that fails says nothing, and its query is read like the others. Together they read at most
-    // OSMOSIS_POOL_SWEEP_PAGES pages; without a cursor yet none is read (what came before is
-    // scripts/backfill-osmosis.ts's).
-    const ofPools = [...this.osmoCtx.poolAddrs.keys()].slice(0, OSMOSIS_POOL_QUERY_MAX).flatMap(osmosisPoolQueries);
-    const poolQueries = floor > 0 ? ofPools : [];
-    const goingOn = (o: OsmosisResume | null) => !!o && o.low > floor;
-    const newest = await this.probePools(poolQueries.filter((q) => !goingOn(placeOf(q))), get, post, signal);
-    // nothing above the floor: read down to it; nothing above a place's top: its place holds as it was
-    const quiet = new Set<string>(), holding = new Set<string>();
-    for (const [q, h] of newest) {
-      const o = placeOf(q);
-      if (h <= (o ? o.top : floor)) (o ? holding : quiet).add(q);
-    }
     let complete = true;
-    let poolPages = OSMOSIS_POOL_SWEEP_PAGES;
-    const ofPool = new Set(poolQueries);
+    // Whether every pool-address query was read down to its floor (or was quiet, or its place held): only then does
+    // their floor move with the cursor (`poolsFrom`). A pool query left unread never holds the cursor.
+    let poolsDone = true;
     const walks = new Map<string, { done: boolean; old: OsmosisResume | null; stand?: boolean; shallow?: boolean; rows: Map<string, Row> } | null>();
-    for (const q of [...OSMOSIS_QUERIES, ...poolQueries]) {
+    /** Query `q` read (walk), at most `cap` pages, into `walks`: whether it was read down to its floor. */
+    const readOne = async (q: string, old: OsmosisResume | null, cap: number): Promise<boolean> => {
       const rows = new Map<string, Row>();
-      if (quiet.has(q)) { walks.set(q, { done: true, old: null, rows }); continue; }
-      // carried as it was (below), and nothing to read
-      if (holding.has(q)) { walks.set(q, null); continue; }
-      const old = placeOf(q);
-      // a place gone on from takes two pages: the newest down to its top, then on from its last
-      if (ofPool.has(q) && poolPages < (goingOn(old) ? 2 : 1)) { walks.set(q, null); complete = false; continue; }
-      const before = pagesRead;
       try {
-        const w = await walk(q, old, rows, ofPool.has(q) ? Math.min(OSMOSIS_SWEEP_PAGES, poolPages) : OSMOSIS_SWEEP_PAGES);
+        const w = await walk(q, old, rows, cap);
         walks.set(q, { ...w, rows });
-        if (!w.done) complete = false;
+        return w.done;
       } catch (e) {
         walks.set(q, null);
-        complete = false;
         console.error(`Osmosis catch-up search "${q}":`, e);
-      } finally {
-        if (ofPool.has(q)) poolPages -= pagesRead - before;
+        return false;
       }
+    };
+    // The stream's queries first: what the stream missed of NAM never waits on the pools' probes or their pages.
+    for (const q of OSMOSIS_QUERIES) if (!(await readOne(q, placeOf(q), OSMOSIS_SWEEP_PAGES))) complete = false;
+    // The pool-address queries (osmosisPoolQueries) find what moves only a pool's other coin, which matches none of
+    // OSMOSIS_QUERIES. Most pools see nothing for hours, so each is first asked for its newest transaction alone,
+    // POOL_PROBE_BATCH queries a read (probePools), and is read like the others only when that one is above its floor,
+    // or above the top of a place read down to the floor (a place gone on from part way is read on without asking). A
+    // probe that fails says nothing, and its query is read like the others. An answer with a transaction comes from an
+    // index that holds that block, and so every block above it; an empty one says the range holds nothing only when
+    // the index is known to hold where the range starts: its batch's /status names the index's first block, or the
+    // nodes are known to hold it (knownFrom, as `ends` asks). Else (the public node's shallow backend, after the
+    // searches stopped for longer than its 16 hours) the query is left as it was for the next search's probe, which
+    // may come from the other index: a walk's pages could come from the same one. Together they read at most
+    // OSMOSIS_POOL_SWEEP_PAGES pages, from the query the last search left unread for want of them (`poolsNext`), so
+    // that when more of them have something new than the pages allow, the ones late in the list are read too.
+    const goingOn = (o: OsmosisResume | null) => !!o && o.low > poolFloor;
+    const probed = await this.probePools(poolQueries.filter((q) => !goingOn(placeOf(q))), get, post, signal);
+    // nothing above the floor: read down to it; nothing above a place's top: its place holds as it was
+    const quiet = new Set<string>(), holding = new Set<string>(), unsure = new Set<string>();
+    for (const [q, { h, first }] of probed) {
+      const o = placeOf(q);
+      const top = o ? o.top : poolFloor;
+      if (h > top) continue;
+      if (Number.isFinite(h) || top + 1 >= knownFrom || (first != null && first <= top + 1)) (o ? holding : quiet).add(q);
+      else unsure.add(q);
+    }
+    let poolPages = OSMOSIS_POOL_SWEEP_PAGES;
+    const start = Math.max(0, poolQueries.indexOf(prev?.poolsNext ?? ''));
+    let poolsNext: string | undefined;
+    let unread = 0;
+    for (const q of [...poolQueries.slice(start), ...poolQueries.slice(0, start)]) {
+      if (quiet.has(q)) { walks.set(q, { done: true, old: null, rows: new Map() }); continue; }
+      // carried as it was (below), and nothing to read
+      if (holding.has(q)) { walks.set(q, null); continue; }
+      if (unsure.has(q)) { walks.set(q, null); poolsDone = false; continue; }
+      const old = placeOf(q);
+      // a place gone on from takes two pages: the newest down to its top, then on from its last
+      if (poolPages < (goingOn(old) ? 2 : 1)) { walks.set(q, null); poolsDone = false; poolsNext ??= q; unread++; continue; }
+      const before = pagesRead;
+      if (!(await readOne(q, old, Math.min(OSMOSIS_SWEEP_PAGES, poolPages)))) poolsDone = false;
+      poolPages -= pagesRead - before;
     }
     let added = 0;
     const times = new Map<number, number>();
@@ -1730,8 +1788,8 @@ export class LiveHub extends DurableObject<Env> {
     for (const note of skipped) console.error(`Osmosis catch-up search: ${note}`);
     const skips = [...(prev?.skipped ?? []), ...[...new Set(skipped)].filter((note) => !prev?.skipped?.some((s) => s.note === note)).map((note) => ({ at: now, note }))].slice(-20);
     const kept = skips.length ? { skipped: skips } : {};
-    // Where each query is left when the cursor stays: down to the last transaction read before one not written yet (no
-    // block time, no quote, the deadline), and never past one. The rows are taken in the order read, which is the
+    // Where each query is left when the cursor stays, and each pool-address query when their floor stays: down to the
+    // last transaction read before one not written yet (no block time, no quote, the deadline), and never past one. The rows are taken in the order read, which is the
     // query's order (positions from two nodes' answers need not agree). A query that failed, or read nothing to go on
     // from, keeps its place.
     // Nor is a place left past a stream transaction not yet known written, the ones `pending` keeps the cursor below:
@@ -1742,8 +1800,11 @@ export class LiveHub extends DurableObject<Env> {
     for (const [hash, w] of this.osmoWriting) if (now - w.since < OSMOSIS_SWEEP_EVERY_MS) unwritten.add(hash);
     const held = pending.length ? Math.max(...pending) : -Infinity;
     const resume: Record<string, OsmosisResume> = {};
-    if (!complete) {
+    if (!complete || !poolsDone) {
       for (const [q, w] of walks) {
+        // the cursor moves: only the pool queries left behind keep places, below their own floor
+        if (complete && !ofPool.has(q)) continue;
+        const floor = floorOf(q);
         const carried = prev?.resume?.[q];
         if (!w) { if (carried) resume[q] = carried; continue; }
         const old = w.old;
@@ -1782,17 +1843,30 @@ export class LiveHub extends DurableObject<Env> {
       }
     }
     const behind = Object.keys(resume).length > 0;
-    // The depth the nodes are known to hold, and the short answers not taken for it: kept until a search finishes
-    // (the cron's osmosis_index check carries them with the cursor's error, analytics.ts indexState).
-    for (const note of shallowNotes) console.warn(`Osmosis catch-up search: ${note}`);
-    const shallow = shallowNotes.length ? { at: now, note: shallowNotes.join('; ').slice(0, 1000) } : complete ? undefined : prev?.shallow;
+    // The depth the nodes are known to hold, and the stream's queries' short answers not taken for it: kept until a
+    // search finishes (the cron's osmosis_index check carries them with the cursor's error, analytics.ts indexState).
+    // The pool queries' go with their floor (`poolsFrom`).
+    for (const x of shallowNotes) console.warn(`Osmosis catch-up search: ${x.note}`);
+    const namShallow = shallowNotes.filter((x) => !ofPool.has(x.q)).map((x) => x.note);
+    const shallow = namShallow.length ? { at: now, note: namShallow.join('; ').slice(0, 1000) } : complete ? undefined : prev?.shallow;
     const known = { ...(depth ? { depth } : {}), ...(shallow ? { shallow } : {}) };
     const pools = ofPools.length / 2;
+    const height = complete ? upTo : prev?.height ?? 0;
+    // The pool queries' own floor, while one of them is left behind, with why.
+    const poolNotes = [
+      unread ? `${unread} not read: the search's ${OSMOSIS_POOL_SWEEP_PAGES} pages for them were spent, and the next search starts with them` : '',
+      unsure.size ? `${unsure.size} answered with no transaction by an index whose first block is above where their range starts, asked again` : '',
+      ...shallowNotes.filter((x) => ofPool.has(x.q)).map((x) => x.note),
+    ].filter(Boolean);
+    const poolsFrom = !poolsDone && poolFloor > 0 && poolFloor < height
+      ? { height: poolFloor, at: pf && pf.height === poolFloor && Number.isFinite(pf.at) ? pf.at : prev?.at ?? 0, note: `Of the pool-address queries, ${poolNotes.length ? poolNotes.join('; ') : 'some were not read down to the block'}.`.slice(0, 1000) }
+      : undefined;
+    const ofPoolsLeft = { ...(poolsFrom ? { poolsFrom } : {}), ...(poolsNext ? { poolsNext } : {}) };
     const next: OsmosisCursor = complete
-      ? { height: upTo, at: Date.now(), added, ...kept, ...known, pools }
+      ? { height, at: Date.now(), added, ...kept, ...known, pools, ...ofPoolsLeft, ...(behind ? { resume } : {}) }
       : {
-          height: prev?.height ?? 0, at: prev?.at ?? 0, added, ...kept, ...known, pools,
-          error: shallowNotes.length ? 'The last catch-up search did not finish: a node answered from blocks that may not reach back to the cursor, and the next search asks again.'
+          height, at: prev?.at ?? 0, added, ...kept, ...known, pools, ...ofPoolsLeft,
+          error: namShallow.length ? 'The last catch-up search did not finish: a node answered from blocks that may not reach back to the cursor, and the next search asks again.'
             : behind ? 'The last catch-up search did not finish; the next one goes on from where it stopped.' : 'The last catch-up search did not finish; it is retried.',
           ...(behind ? { resume } : {}),
         };
