@@ -2,14 +2,14 @@
 // history through. The history before 2026-10-21 lacked at least 350 pool transactions; the old backfill paged newest
 // first and left a query at its first failed page, and osmosis-rpc.publicnode.com answers from a deep index (blocks from
 // 2026-08-10) and a shallow one (about 16 hours) behind one name, in runs of up to 27 answers of one index in a row
-// (measured 2026-10-29), so no count of agreeing answers shows the deep one. Every read is a JSON-RPC batch of a /status
-// and the call, which one index answers whole, and the /status names that index's first block. Here a node with both
-// indexes (and, where a test says, a deeper one), answering from either as the test says: the pager reads oldest first,
-// takes an answer only when its /status names the deep index's first block (another index's answer, refusal, or a deep
-// node a block behind is asked again on a new connection, after a pause doubling from 250 ms to 4 s, 40 times at
-// most), asks a failed read again after 1, 2, 4 and 8 s and stops the run naming the query and page at the fifth
-// failure, finds a height's place by halving over pages of one transaction, and goes on from a page it is given. No
-// network: fetch is stubbed.
+// (measured 2026-10-29), so no count of agreeing answers shows the deep one. Every read is a JSON-RPC batch of a
+// /status, the call and a /status, which one index answers whole, and the /status answers name that index's first
+// block. Here a node with both indexes (and, where a test says, a deeper one), answering from either as the test says:
+// the pager reads oldest first, takes an answer only when its /status answers name the deep index's first block
+// (another index's answer, refusal, or a deep node a block behind is asked again on a new connection, after a pause
+// doubling from 250 ms to 4 s, 40 times at most; two /status answers that disagree are a failure), asks a failed read
+// again after 1, 2, 4 and 8 s and stops the run naming the query and page at the fifth failure, finds a height's place
+// by halving over pages of one transaction, and goes on from a page it is given. No network: fetch is stubbed.
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { OsmosisPager, PAGE_TRIES, PagerError, SHALLOW_PAUSE_MAX_MS, SHALLOW_TRIES, STATUS_READS, STATUS_READS_MAX } from '../scripts/osmosis-pager';
 
@@ -22,7 +22,7 @@ const history = (n = 230) => Array.from({ length: n }, (_, i) => ({ hash: hashOf
 /** The deep index holds the blocks from 900, the shallow one those from 3,000, a deeper one (where a test says) from 500. */
 const DEEP = 900, HORIZON = 3000;
 
-type Who = 'deep' | 'shallow' | 'fail' | 'behind' | 'deeper' | 'single';
+type Who = 'deep' | 'shallow' | 'fail' | 'behind' | 'deeper' | 'single' | 'split';
 interface Call { method: string; params: Record<string, string> }
 interface Node {
   deep: any[];
@@ -37,8 +37,8 @@ function osmosis(node: Node) {
     expect(String(u)).toBe('https://rpc.test');
     expect(init.method).toBe('POST');
     const batch = JSON.parse(String(init.body));
-    expect(batch.map((x: any) => x.id)).toEqual([0, 1]);
-    expect(batch[0].method).toBe('status');
+    expect(batch.map((x: any) => x.id)).toEqual([0, 1, 2]);
+    expect([batch[0].method, batch[2].method]).toEqual(['status', 'status']);
     const call: Call = batch[1];
     const who = node.pick(sent.length, call);
     sent.push({ call, fresh: (init.headers as Record<string, string>)?.Connection === 'close', who });
@@ -48,8 +48,10 @@ function osmosis(node: Node) {
     const first = who === 'shallow' ? HORIZON : who === 'deeper' ? 500 : DEEP;
     const list = who === 'shallow' ? node.deep.filter((t) => Number(t.height) >= HORIZON) : who === 'behind' ? node.deep.slice(0, -1) : node.deep;
     const status = { sync_info: { latest_block_height: '4000', earliest_block_height: String(first) } };
-    const ok = (result: unknown) => Response.json([{ jsonrpc: '2.0', id: 0, result: status }, { jsonrpc: '2.0', id: 1, result }]);
-    const refuse = (data: string) => Response.json([{ jsonrpc: '2.0', id: 0, result: status }, { jsonrpc: '2.0', id: 1, error: { code: -32603, message: 'Internal error', data } }]);
+    // a proxy splitting the batch: the second /status from the other index
+    const status2 = who === 'split' ? { sync_info: { ...status.sync_info, earliest_block_height: String(HORIZON) } } : status;
+    const ok = (result: unknown) => Response.json([{ jsonrpc: '2.0', id: 0, result: status }, { jsonrpc: '2.0', id: 1, result }, { jsonrpc: '2.0', id: 2, result: status2 }]);
+    const refuse = (data: string) => Response.json([{ jsonrpc: '2.0', id: 0, result: status }, { jsonrpc: '2.0', id: 1, error: { code: -32603, message: 'Internal error', data } }, { jsonrpc: '2.0', id: 2, result: status2 }]);
     if (call.method === 'status') return ok(status);
     if (call.method === 'block') {
       const h = Number(call.params.height);
@@ -225,6 +227,15 @@ describe('a failed read is asked again; one that keeps failing stops the run', (
     // pages 1 and 2 were handed on; page 4 was never asked for
     expect(seen.length).toBe(100);
     expect(searches(sent).some((s) => s.call.params.page === '4' && s.call.params.per_page === '50')).toBe(false);
+  });
+
+  it('an answer whose two /status answers name two first blocks (a batch split between indexes) is a failure, asked again', async () => {
+    let k = 0;
+    osmosis({ deep: history(), pick: (n, c) => (c.method === 'status' ? alternate(n) : k++ < 2 ? 'split' : 'deep') });
+    const p = await started();
+    expect(await p.query(Q)).toMatchObject({ total: 230, first: 1000 });
+    expect(p.stats.failed).toBe(2);
+    expect(pauses).toEqual([1000, 2000]);
   });
 
   it('a node that refuses the batch fails the read like any other failure, and the run stops naming it', async () => {

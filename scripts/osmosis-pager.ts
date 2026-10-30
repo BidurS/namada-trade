@@ -16,8 +16,8 @@
  * maximum (10) allowed number of requests"), one batch from one index: in 20 batches of a /status, a tx_search and a
  * /status, the two /status answers always named one first block, and that block always told the index the tx_search
  * came from. So:
- * - Every read is a batch of a /status and the call, and the /status answer names the first block of the index that
- *   gave the answer. The deep index is the one naming the lowest first block the opening /status reads saw
+ * - Every read is a batch of a /status, the call and a /status, and the /status answers name the first block of the
+ *   index that gave the answer (an answer whose two do not agree is a failure). The deep index is the one naming the lowest first block the opening /status reads saw
  *   (`deepFirst`); an answer of any other is asked again after a pause doubling from SHALLOW_PAUSE_MS to
  *   SHALLOW_PAUSE_MAX_MS, on a new connection, up to SHALLOW_TRIES times. An index naming a lower block still stops
  *   the run (places counted on the deep index would not be its places).
@@ -78,10 +78,15 @@ export class OsmosisPager {
     this.timeoutMs = opts.timeoutMs ?? 30_000;
   }
 
-  /** One read: a batch of a /status and `call`, on a new connection when `fresh` (a kept one goes to one index in runs). */
+  /**
+   * One read: a batch of a /status, `call` and a /status, on a new connection when `fresh` (a kept one goes to one
+   * index in runs). The two /status answers must name one first block: an answer they do not agree on came from more
+   * than one index, and is a failure.
+   */
   private async once(call: Call, fresh: boolean): Promise<Answer> {
     this.stats.reads++;
-    const body = JSON.stringify([{ jsonrpc: '2.0', id: 0, method: 'status', params: {} }, { jsonrpc: '2.0', id: 1, ...call }]);
+    const status = (id: number) => ({ jsonrpc: '2.0', id, method: 'status', params: {} });
+    const body = JSON.stringify([status(0), { jsonrpc: '2.0', id: 1, ...call }, status(2)]);
     const res = await fetch(this.rpc, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json', Accept: 'application/json', ...(fresh ? { Connection: 'close' } : {}) },
@@ -97,6 +102,8 @@ export class OsmosisPager {
     const s = by.get(0)?.result?.sync_info, a = by.get(1);
     const first = Number(s?.earliest_block_height), head = Number(s?.latest_block_height);
     if (!(first > 0) || !(head > 0)) throw new Error(`HTTP ${res.status}, a batch answer without the node's first block and head`);
+    const after = Number(by.get(2)?.result?.sync_info?.earliest_block_height);
+    if (after !== first) throw new Error(`HTTP ${res.status}, a batch answer from two indexes (first blocks ${first} and ${after})`);
     if (!a) throw new Error(`HTTP ${res.status}, a batch answer without the call's`);
     if (a.error) return { first, head, error: errText(a.error) };
     if (a.result == null) throw new Error(`HTTP ${res.status}, no result`);
