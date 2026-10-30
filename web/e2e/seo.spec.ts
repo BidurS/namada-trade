@@ -206,6 +206,16 @@ test.describe('once', () => {
       ['github.com/BidurS/namada-trade', SITE.repo, '_blank'],
     ]);
     await expect(answer).toHaveText(BODY.faq.sections!.at(-1)!.paras[0]);
+    // once a fragment: a Rewind time set on the page keeps the fragment and loads the figures again, and the reader
+    // who scrolled back up stays where they are
+    await page.evaluate(() => window.scrollTo(0, 0));
+    const reload = page.waitForResponse((r) => r.url().includes('/api/overview') && r.url().includes(`at=${REWIND_AT}`), { timeout: 30_000 });
+    await page.evaluate((at) => { history.pushState(null, '', `/faq?at=${at}#q-official`); dispatchEvent(new PopStateEvent('popstate')); }, REWIND_AT);
+    await reload;
+    await settled(page);
+    await page.evaluate(() => new Promise((done) => requestAnimationFrame(() => requestAnimationFrame(done))));
+    expect(await page.evaluate(() => window.scrollY)).toBe(0);
+    await expect(page.locator('main h1')).toBeInViewport();
   });
 
   test('rewound: every /api request carries at= (exempt list aside), no live-only or current-only call, and the pages say so', async ({ page, baseURL }) => {

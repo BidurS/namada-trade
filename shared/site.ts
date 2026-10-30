@@ -31,9 +31,10 @@ export const SITE = {
    * What the site never does, said where people who borrow its name are met (plan Stage 1, identity basics): the
    * footer's line beside its link to the official links, and the second paragraph of the questions page's
    * "Which links are NamadaTrade's own?". Must stay true: the bot writes only to chats that linked themselves
-   * (worker/src/telegram-bot.ts), and the only signature asked for is the sign-in, which moves nothing.
+   * (worker/src/telegram-bot.ts), and the only signature asked for is the sign-in (web/src/lib/auth.ts), which moves
+   * nothing, so a request to sign something to "verify" a wallet is never this site's.
    */
-  neverAsks: 'NamadaTrade never sends a direct message first, never asks for a seed phrase and has no support staff.',
+  neverAsks: 'NamadaTrade never sends a direct message first, never asks for a seed phrase, asks for a signature only to sign in on namada.trade and has no support staff.',
   /** Footer, first sentence; the view appends how current the flow records are. */
   provenance: 'Every number shows its source and age.',
   /** The data sources, in the words the footer uses. */

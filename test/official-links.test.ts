@@ -37,10 +37,14 @@ describe('the official links', () => {
   });
 
   it('what the site never does: the footer\'s sentence opens the answer\'s second paragraph, and the sign-in is the one signature', () => {
-    expect(SITE.neverAsks).toBe('NamadaTrade never sends a direct message first, never asks for a seed phrase and has no support staff.');
+    // the footer seen on every route names the signature too, the commonest ask of a page that borrows the name
+    expect(SITE.neverAsks).toBe('NamadaTrade never sends a direct message first, never asks for a seed phrase, asks for a signature only to sign in on namada.trade and has no support staff.');
+    expect(SITE.neverAsks).toContain(`sign in on ${new URL(SITE.origin).host} `);
     expect(official.paras[1].startsWith(SITE.neverAsks)).toBe(true);
-    expect(official.paras[1]).toContain('The only signature it asks for is Sign in, on namada.trade itself');
-    expect(official.paras[1]).toContain('costs nothing and moves nothing');
+    expect(official.paras[1]).toContain('Sign in, on namada.trade itself, signs a short message that costs nothing and moves nothing.');
+    expect(official.paras[1]).toContain('Someone who asks you to sign something to verify a wallet, or for a seed phrase, is not this site.');
+    // said once: the footer's sentence names the signature, so the answer does not say it again
+    expect(official.paras[1].match(/signature/g)).toHaveLength(1);
   });
 
   it('the footer carries the sentence and links to the answer by its id', () => {

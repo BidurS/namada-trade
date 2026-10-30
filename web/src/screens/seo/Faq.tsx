@@ -4,7 +4,7 @@
 // away; the H2 is the question and the answer's first sentence answers it. Where a figure makes
 // the answer concrete it sits under the text with its own source line. The last question names the
 // site's own links (the footer links to it, #q-official), each name in the answer a link.
-import { useEffect, type ReactNode } from 'react';
+import { useEffect, useRef, type ReactNode } from 'react';
 import type { ScreenProps } from '../../app/index';
 import { REWIND_WORDS, useLocation, useOverlays, useReplay } from '../../app/index';
 import { BODY, SITE } from '../../../../shared/copy';
@@ -70,14 +70,18 @@ export function Faq({ route }: ScreenProps) {
   const [qPrice, qShielded, qAge, qData, qBuy, qBook, qNot, qWho, qOfficial] = copy.sections!;
 
   // #q-official (the footer's link) or another question: scroll there once the figures above it are drawn (the
-  // shell scrolls to the top on a new path)
+  // shell scrolls to the top on a new path), and once a fragment: the figures load again on a new Rewind time, which
+  // keeps the fragment, and that leaves the reader where they are
+  const scrolledTo = useRef<string | null>(null);
   useEffect(() => {
     let id = '';
     try { id = decodeURIComponent(loc.hash.slice(1)); } catch { return; }
-    if (!id || loading) return;
+    if (!id) { scrolledTo.current = null; return; }
+    if (loading || scrolledTo.current === loc.hash) return;
     const el = document.getElementById(id);
     if (!el) return;
-    const raf = requestAnimationFrame(() => el.scrollIntoView({ block: 'start' }));
+    const hash = loc.hash;
+    const raf = requestAnimationFrame(() => { scrolledTo.current = hash; el.scrollIntoView({ block: 'start' }); });
     return () => cancelAnimationFrame(raf);
   }, [loc.hash, loading]);
 

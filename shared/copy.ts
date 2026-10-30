@@ -306,7 +306,7 @@ export const BODY: Record<string, PageCopy> = {
         h2: 'Which links are NamadaTrade\'s own?',
         paras: [
           `NamadaTrade's own links are this site, ${SITE_HOST}, its X account @${X_HANDLE}, its Telegram bot @${SITE.telegram.bot} and its source code on GitHub, ${REPO_PATH}. A site, account or bot that uses the name anywhere else is not this site.`,
-          `${SITE.neverAsks} The only signature it asks for is Sign in, on ${SITE_HOST} itself: a short message that costs nothing and moves nothing. Someone who asks you to sign something to verify a wallet, or for a seed phrase, is not this site.`,
+          `${SITE.neverAsks} Sign in, on ${SITE_HOST} itself, signs a short message that costs nothing and moves nothing. Someone who asks you to sign something to verify a wallet, or for a seed phrase, is not this site.`,
         ],
       },
     ],
