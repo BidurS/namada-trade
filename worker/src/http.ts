@@ -1,6 +1,7 @@
 // HTTP helpers of the Worker's fetch handler (index.ts), in their own module so they can be tested without the
 // Durable Object runtime: the API cache rule and the page security policy.
 import type { Env } from './util';
+import { clientKey } from './client-key';
 import { DAY_MS, DAILY_DAYS, HISTORY_FETCH_DAYS } from '../../shared/history';
 import { TRADES_TAPE_LIMIT } from '../../shared/types';
 import { QUOTE_NAM_MIN, QUOTE_NAM_MAX, roundQuoteNam, HEAT_DAYS, CHANGES_LIMIT_MAX } from '../../shared/depth';
@@ -187,8 +188,9 @@ export function isReplay(url: URL): boolean {
 type Limiter = { limit(o: { key: string }): Promise<{ success: boolean }> } | undefined;
 async function limitBy(limiter: Limiter, request: Request, url: URL, message: string): Promise<Response | null> {
   if (!limiter) return null;
-  const ip = request.headers.get('cf-connecting-ip') || 'unknown';
-  const r = await limiter.limit({ key: `${ip}:${url.pathname.split('/').slice(0, 3).join('/')}` }).catch(() => ({ success: true }));
+  // per client (client-key.ts): an IPv4 address whole, an IPv6 address by its /64
+  const who = clientKey(request.headers.get('cf-connecting-ip'));
+  const r = await limiter.limit({ key: `${who}:${url.pathname.split('/').slice(0, 3).join('/')}` }).catch(() => ({ success: true }));
   if (r.success) return null;
   return new Response(JSON.stringify({ error: message }), {
     status: 429, headers: { 'content-type': 'application/json', 'retry-after': '60', 'x-robots-tag': 'noindex', 'cache-control': 'no-store', 'x-content-type-options': 'nosniff' },

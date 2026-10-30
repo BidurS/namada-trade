@@ -19,7 +19,8 @@ import { saveSettings, defaultPrefs, type StoredSettings } from '../worker/src/s
 import { appliedUnbonds } from '../worker/src/parse/namada-unbond';
 import { parseNamadaBlock } from '../worker/src/parse/namada';
 import { namadaStatusAny, blockResults, LIVE_READ } from '../worker/src/sources/namada';
-import { admitSocket, MAX_SOCKETS, MAX_SOCKETS_PER_IP } from '../worker/src/ws-admit';
+import { admitSocket, MAX_SOCKETS, MAX_SOCKETS_PER_IPV4 } from '../worker/src/ws-admit';
+import { clientOf } from '../worker/src/client-key';
 import { NAMADA } from '../worker/src/config';
 import type { Flow, ForumPost } from '../shared/types';
 
@@ -540,13 +541,15 @@ describe('C8/C9: the live scan asks the next node when one is down or answers wi
 // ------------------------------------------------------------------ C10: live feed admission
 describe('C10: the live feed admits a bounded number of sockets', () => {
   it('refuses at the global cap and at the per-address cap', () => {
-    expect(admitSocket(0, 0)).toBe('ok');
-    expect(admitSocket(MAX_SOCKETS - 1, 0)).toBe('ok');
-    expect(admitSocket(MAX_SOCKETS, 0)).toBe('full');
-    expect(admitSocket(10, MAX_SOCKETS_PER_IP - 1)).toBe('ok');
-    expect(admitSocket(10, MAX_SOCKETS_PER_IP)).toBe('ip');
+    // per client: an IPv4 address here (IPv6 by its /64 and /48: test/client-key.test.ts)
+    const c = clientOf('203.0.113.7');
+    expect(admitSocket(0, c, 0)).toBe('ok');
+    expect(admitSocket(MAX_SOCKETS - 1, c, 0)).toBe('ok');
+    expect(admitSocket(MAX_SOCKETS, c, 0)).toBe('full');
+    expect(admitSocket(10, c, MAX_SOCKETS_PER_IPV4 - 1)).toBe('ok');
+    expect(admitSocket(10, c, MAX_SOCKETS_PER_IPV4)).toBe('ip');
     expect(MAX_SOCKETS).toBeLessThanOrEqual(1000);
-    expect(MAX_SOCKETS_PER_IP).toBeGreaterThanOrEqual(8);
+    expect(MAX_SOCKETS_PER_IPV4).toBeGreaterThanOrEqual(8);
   });
 });
 
