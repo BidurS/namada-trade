@@ -6,7 +6,8 @@
 # usage: scripts/export-offsite.sh [--dry-run] <folder>     e.g. scripts/export-offsite.sh /Volumes/Backup/namada-trade
 #   The folder must already exist: it is never created, so a typing slip or a disk that is not mounted does not leave
 #   the copy somewhere else. A folder inside this repository, or inside any git working tree, is refused, so the copy
-#   is never where it could be committed (*.sql is ignored here, *.gz is not).
+#   is never where it could be committed (*.sql is ignored here, *.gz is not). A relative folder is read from the
+#   directory the script is run from, before it moves to the repository (where wrangler finds wrangler.jsonc).
 #   --dry-run (or DRY_RUN=1) checks the folder and prints the file it would write, without reading the database.
 #
 # What the file holds: every table, kv included, so every user's settings sealed under SETTINGS_KEY (which is kept in
@@ -18,16 +19,17 @@
 # measured. Export refuses a database with a virtual table; this one has none by design
 # (migrations/0008_nav_search.sql, label_tokens).
 set -euo pipefail
-cd "$(dirname "$0")/.."
-repo=$(pwd -P)
 DRY=0
 case "${DRY_RUN:-0}" in 0|'') ;; *) DRY=1 ;; esac
 if [ "${1:-}" = "--dry-run" ]; then DRY=1; shift; fi
 usage() { echo "usage: scripts/export-offsite.sh [--dry-run] <an existing folder outside this repository>"; exit 2; }
 [ $# -eq 1 ] && [ -n "$1" ] || usage
 case "$1" in -*) usage ;; esac
+# the folder as the caller names it, from the caller's directory (CDPATH never redirects it)
 [ -d "$1" ] || { echo "FAIL $1 is not an existing folder (it is never created: mount the disk or make the folder first)"; exit 1; }
-dir=$(cd "$1" && pwd -P)
+dir=$(CDPATH='' cd -- "$1" && pwd -P)
+cd "$(dirname "$0")/.."
+repo=$(pwd -P)
 case "$dir/" in "$repo/"*) echo "FAIL $dir is inside this repository ($repo): a copy of the database never goes there"; exit 1 ;; esac
 if git -C "$dir" rev-parse --is-inside-work-tree >/dev/null 2>&1; then
   echo "FAIL $dir is inside the git working tree of $(git -C "$dir" rev-parse --show-toplevel): a copy of the database never goes where it could be committed"; exit 1
@@ -41,7 +43,7 @@ stamp=$(date -u +%Y-%m-%dT%H%MZ)
 out="$dir/namada-trade-db-$stamp.sql.gz"
 [ ! -e "$out" ] || { echo "FAIL $out already exists"; exit 1; }
 if [ "$DRY" = 1 ]; then
-  echo "dry run, not run: npx wrangler d1 export namada-trade-db --remote --skip-confirmation --output=<a part file in $dir>, then gzip -9 to $out (mode 600)"
+  echo "dry run, not run: WRANGLER_WRITE_LOGS=false npx wrangler d1 export namada-trade-db --remote --skip-confirmation --output=<a part file in $dir>, then gzip -9 to $out (mode 600)"
   exit 0
 fi
 
@@ -50,9 +52,11 @@ part="$dir/.namada-trade-db-$stamp.sql.part"
 trap 'rm -f "$part" "$out.part"' EXIT
 echo "== export (a read; the database serves no other request while it runs)"
 # --skip-confirmation answers wrangler's own warning (the database "will be unavailable to serve queries"), which is
-# the reason for the quiet hour; the line naming the export's download link is dropped: that link opens the whole
-# database to anyone who has it for an hour, and this output may end up in a log
-npx wrangler d1 export namada-trade-db --remote --skip-confirmation --output="$part" 2>&1 | sed '/following URL manually/d'
+# the reason for the quiet hour. The line naming the export's download link is dropped: that link opens the whole
+# database to anyone who has it for an hour, and this output may end up in a log. wrangler also writes every line it
+# prints to its own debug log (under its global config folder, logs/, kept 30 days; wrangler 4.151 cli.js
+# shouldLogToDisk), so WRANGLER_WRITE_LOGS=false keeps the link out of that file too.
+WRANGLER_WRITE_LOGS=false npx wrangler d1 export namada-trade-db --remote --skip-confirmation --output="$part" 2>&1 | sed '/following URL manually/d'
 # a whole export: the schema of the tables the site cannot do without (an export writes `CREATE TABLE flows (`, and
 # `CREATE TABLE IF NOT EXISTS "d1_migrations"(` for wrangler's own), and rows
 for t in flows kv holders metrics; do grep -Eq "CREATE TABLE (IF NOT EXISTS )?[\"'\`]?$t[\"'\` (]" "$part" || { echo "FAIL the export has no table $t: not kept"; exit 1; }; done

@@ -8,10 +8,11 @@
 // working tree. Nothing here reaches Cloudflare: the script runs in a scratch repository with stand-ins for npx, npm
 // and curl that record each call and answer the reads from saved answers, and the steps' parsers run on saved text.
 import { describe, it, expect, afterAll } from 'vitest';
-import { copyFileSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
+import { copyFileSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, statSync, symlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { execFileSync, spawnSync } from 'node:child_process';
+import { gunzipSync } from 'node:zlib';
 
 const ROOT = join(__dirname, '..');
 const DEPLOY = readFileSync(join(ROOT, 'scripts', 'deploy-check.sh'), 'utf8');
@@ -39,26 +40,43 @@ const bin = join(scratch, 'bin');
 const log = join(scratch, 'calls.log');
 mkdirSync(bin);
 // npx: the wrangler reads answered as Cloudflare answers them (a warning line before the JSON included); anything
-// else is recorded and answers nothing, so a check added later fails here by name rather than reaching the network
+// else is recorded and answers nothing, so a check added later fails here by name rather than reaching the network.
+// The deploy itself fails, so a real run ends there and never reaches the smoke checks, which read the live site.
+// STANDIN_PENDING answers as a database with migration 0017 pending (the depth tables missing); STANDIN_TESTS_WRITE
+// and STANDIN_BUILD_WRITE name a file the test run or the build changes, as test/replay.test.ts once rewrote its report.
+// d1 export writes a small dump to its --output and prints wrangler's line with the download link.
 writeFileSync(join(bin, 'npx'), `#!/bin/bash
 echo "npx $*" >> "${log}"
 case "$*" in
+  vitest*) [ -n "\${STANDIN_TESTS_WRITE:-}" ] && echo 'Generated now' >> "$STANDIN_TESTS_WRITE" ;;
+  "wrangler deploy") echo '✘ [ERROR] the stand-in deploys nothing'; exit 1 ;;
+  *"d1 export"*)
+    for a in "$@"; do case "$a" in --output=*) out="\${a#--output=}" ;; esac; done
+    printf 'CREATE TABLE flows (id);\\nCREATE TABLE kv (key);\\nCREATE TABLE holders (a);\\nCREATE TABLE metrics (k);\\nINSERT INTO kv VALUES (1);\\n' > "$out"
+    echo "WRANGLER_WRITE_LOGS=\${WRANGLER_WRITE_LOGS:-unset}" >> "${log}"
+    echo 'You can also download your export from the following URL manually. This link will be valid for one hour: https://example.invalid/signed'
+    echo 'Done.' ;;
   *"secret list"*) echo '[{"name":"SEND_ALERTS","type":"secret_text"},{"name":"SETTINGS_KEY","type":"secret_text"}]' ;;
   *"deployments status"*) echo '▲ [WARNING] a note'; echo '{"id":"d1","created_on":"2026-10-29T14:17:52.776814Z","author_email":"${AUTHOR}","versions":[{"version_id":"${LIVE}","percentage":100}]}' ;;
   *"time-travel info"*) echo '{"bookmark":"${BOOKMARK}"}' ;;
-  *"migrations list"*) echo 'No migrations to apply!' ;;
+  *"migrations list"*) if [ -n "\${STANDIN_PENDING:-}" ]; then echo 'Migrations to be applied:'; echo '0017_next.sql'; else echo 'No migrations to apply!'; fi ;;
   *holders_total*) echo '[{"results":[{"triggers":8,"objects":7}]}]' ;;
   *kv_session_addr*) echo '[{"results":[{"n":3}]}]' ;;
   *labels_user_author*) echo '[{"results":[{"col":1,"n":2}]}]' ;;
   *kv_alert_claim_time*) echo '[{"results":[{"n":1}]}]' ;;
   *kv_user_deliverable*) echo '[{"results":[{"n":1}]}]' ;;
   *kv_user_telegram*) echo '[{"results":[{"n":2}]}]' ;;
-  *depth_minute*) echo '[{"results":[{"tables":3,"n":2}]}]' ;;
+  *depth_minute*) if [ -n "\${STANDIN_PENDING:-}" ]; then echo '[{"results":[{"tables":0,"n":0}]}]'; else echo '[{"results":[{"tables":3,"n":2}]}]'; fi ;;
   *"r2 bucket list"*) echo 'name: namada-trade-depth' ;;
   *) echo '[{"results":[{}]}]' ;;
 esac
+exit 0
 `, { mode: 0o755 });
-writeFileSync(join(bin, 'npm'), `#!/bin/bash\necho "npm $*" >> "${log}"\n`, { mode: 0o755 });
+writeFileSync(join(bin, 'npm'), `#!/bin/bash
+echo "npm $*" >> "${log}"
+[ "$*" = "run build" ] && [ -n "\${STANDIN_BUILD_WRITE:-}" ] && echo 'export const stamp = 2;' >> "$STANDIN_BUILD_WRITE"
+exit 0
+`, { mode: 0o755 });
 writeFileSync(join(bin, 'curl'), `#!/bin/bash\necho "curl $*" >> "${log}"\nexit 1\n`, { mode: 0o755 });
 
 const repo = join(scratch, 'repo');
@@ -66,6 +84,9 @@ const git = (...args: string[]) => execFileSync('git', ['-c', 'user.name=test', 
 mkdirSync(join(repo, 'scripts'), { recursive: true });
 copyFileSync(join(ROOT, 'scripts', 'deploy-check.sh'), join(repo, 'scripts', 'deploy-check.sh'));
 writeFileSync(join(repo, '.gitignore'), 'node_modules\n');
+// two tracked files a step may change: a report the tests write and a stamp the build writes
+writeFileSync(join(repo, 'report.md'), 'Generated then\n');
+writeFileSync(join(repo, 'stamp.ts'), 'export const stamp = 1;\n');
 writeFileSync(join(repo, 'package-lock.json'), JSON.stringify({ lockfileVersion: 3, packages: { '': {}, 'node_modules/a': { version: '1.0.0', integrity: 'sha512-a' } } }));
 git('init', '-q', '-b', 'integration');
 git('add', '.');
@@ -87,9 +108,20 @@ describe('deploy-check.sh', () => {
     expect(r.out).toContain(`live Worker version: ${LIVE} at 100%, deployed 2026-10-29T14:17:52.776814Z`);
     expect(r.out).toContain(`npx wrangler rollback ${LIVE} --message`);
     expect(r.out).toContain(`npx wrangler d1 time-travel restore namada-trade-db --bookmark=${BOOKMARK}`);
-    // SEND_ALERTS goes first, then the restore, then it comes back
-    expect(r.out.indexOf('secret delete SEND_ALERTS')).toBeLessThan(r.out.indexOf('time-travel restore'));
-    expect(r.out.indexOf('time-travel restore')).toBeLessThan(r.out.indexOf('secret put SEND_ALERTS, value yes'));
+    // the Worker goes back first (a rollback brings back that version's secrets, SEND_ALERTS among them), then
+    // SEND_ALERTS goes, the period claims since the bookmark are counted, the restore runs, and SEND_ALERTS comes back
+    const order = [`npx wrangler rollback ${LIVE}`, 'secret delete SEND_ALERTS', 'SELECT COUNT(*) n FROM kv', 'time-travel restore', 'secret put SEND_ALERTS, value yes', 'not before 00:00 UTC'];
+    const at = order.map((s) => r.out.indexOf(s));
+    for (let i = 0; i < order.length; i++) expect(at[i], order[i]).toBeGreaterThan(-1);
+    expect([...at].sort((a, b) => a - b)).toEqual(at);
+    expect(r.out).toContain('it brings back that version\'s secrets, SEND_ALERTS among them');
+    // the count reads the day's and the week's digest and the X recap claimed today since the bookmark's time
+    const since = /AND updated_at >= MAX\((\d{13}), CAST\(strftime\('%s', 'now', 'start of day'\) AS INTEGER\) \* 1000\)"/.exec(r.out);
+    expect(since, r.out).not.toBeNull();
+    expect(Math.abs(Number(since![1]) - Date.now())).toBeLessThan(5 * 60_000);
+    expect(r.out).toContain("(key LIKE 'alert:digest:%' OR key LIKE 'alert:x:recap:%')");
+    // nothing here says whether the commit is public: no origin/main in this repository
+    expect(r.out).toMatch(/note [0-9a-f]{9} is not on origin\/main as last fetched/);
     // no node_modules here: the install is printed, and so is the typecheck, which would have nothing to run with
     for (const w of ['npm ci', 'npm run typecheck', 'npm run build', 'npx vitest run --maxWorkers=4 --minWorkers=1', 'npx wrangler d1 migrations apply namada-trade-db --remote', 'npx wrangler deploy']) expect(r.out).toContain(`dry run, not run: ${w}`);
     expect(r.out).toContain('== dry run done');
@@ -187,6 +219,66 @@ describe('deploy-check.sh', () => {
     // the deploy ships the build the tests ran against: npm run deploy would build again
     expect(DEPLOY).not.toContain('npm run deploy');
   });
+
+  it('a real run makes its steps in order, deploys the tested build with wrangler, and a failed deploy runs no smoke check', () => {
+    const r = deploy([]);
+    // the stand-in deploy fails, so the run ends there with wrangler's error line
+    expect(r.status, r.out).toBe(1);
+    expect(r.out).toContain('✘ [ERROR] the stand-in deploys nothing');
+    const step = (c: string) => c.replace(/ --command .*/, ' --command …');
+    expect(r.calls.map(step)).toEqual([
+      'npm ci', 'npm run typecheck', 'npm run build', 'npx vitest run --maxWorkers=4 --minWorkers=1',
+      'npx wrangler secret list --format json', 'npx wrangler deployments status --json', 'npx wrangler d1 time-travel info namada-trade-db --json',
+      'npx wrangler d1 migrations list namada-trade-db --remote', 'npx wrangler d1 migrations apply namada-trade-db --remote',
+      ...Array(7).fill('npx wrangler d1 execute namada-trade-db --remote --json --command …'),
+      'npx wrangler r2 bucket list', 'npx wrangler deploy',
+    ]);
+    expect(r.out).not.toContain('dry run');
+    expect(r.calls.some((c) => c.startsWith('curl '))).toBe(false);
+    // --skip-tests still builds, and leaves the suite out
+    const s = deploy(['--skip-tests']);
+    expect(s.calls).toContain('npm run build');
+    expect(s.calls.some((c) => c.startsWith('npx vitest'))).toBe(false);
+    expect(s.out).toContain('!!! WARNING --skip-tests: the test suite was NOT run.');
+  }, 30_000);
+
+  it('a build or a test run that changes the tree stops the deploy before anything remote', () => {
+    try {
+      const b = deploy([], { STANDIN_BUILD_WRITE: join(repo, 'stamp.ts') });
+      expect(b.status).toBe(1);
+      expect(b.out).toContain('FAIL the install, the typecheck or the build changed the working tree, so what would ship is in no commit:');
+      expect(b.out).toContain('FAIL      M stamp.ts');
+      expect(b.calls).toEqual(['npm ci', 'npm run typecheck', 'npm run build']);
+      git('checkout', '--', 'stamp.ts');
+      // a test that rewrites a tracked report on every run (test/replay.test.ts did, until it wrote only on a change)
+      const t = deploy([], { STANDIN_TESTS_WRITE: join(repo, 'report.md') });
+      expect(t.status).toBe(1);
+      expect(t.out).toContain('FAIL the test suite changed the working tree, so what would ship is in no commit:');
+      expect(t.out).toContain('FAIL      M report.md');
+      expect(t.out).toContain('FAIL not deploying (commit the change to integration and deploy its tip, or undo it)');
+      expect(t.calls.at(-1)).toBe('npx vitest run --maxWorkers=4 --minWorkers=1');
+      expect(t.calls.some((c) => c.includes('wrangler'))).toBe(false);
+      git('checkout', '--', 'report.md');
+      // a new untracked file counts too
+      const u = deploy([], { STANDIN_TESTS_WRITE: join(repo, 'left-behind.txt') });
+      expect(u.status).toBe(1);
+      expect(u.out).toContain('FAIL     ?? left-behind.txt');
+    } finally {
+      git('checkout', '--', 'stamp.ts', 'report.md');
+      rmSync(join(repo, 'left-behind.txt'), { force: true });
+    }
+  }, 30_000);
+
+  it('a dry run with a migration pending says the schema check fails, goes on to the remaining reads and ends with 1', () => {
+    const r = deploy(['--dry-run'], { STANDIN_PENDING: '1' });
+    expect(r.status, r.out).toBe(1);
+    expect(r.out).toContain('0017_next.sql');
+    expect(r.out).toContain('FAIL migration 0014 or 0015 is not in place: not deploying\n     (dry run: a real run stops here)');
+    expect(r.out.indexOf('FAIL migration 0014 or 0015')).toBeLessThan(r.out.indexOf('depth bucket: namada-trade-depth'));
+    expect(r.out).toContain('dry run, not run: npx wrangler deploy');
+    expect(r.out).toContain('== 1 check(s) above would have stopped a real run');
+    expect(r.calls.some((c) => /migrations apply|wrangler deploy( |$)/.test(c))).toBe(false);
+  }, 30_000);
 });
 
 describe('deploy-check.sh, its readers', () => {
@@ -275,16 +367,52 @@ describe('export-offsite.sh', () => {
     writeFileSync(log, '');
     for (const r of [run('--dry-run', outside), (() => { const x = spawnSync('bash', [EXPORT, outside], { encoding: 'utf8', env: { ...process.env, PATH: `${bin}:${process.env.PATH}`, DRY_RUN: '1' } }); return { status: x.status, out: x.stdout }; })()]) {
       expect(r.status, r.out).toBe(0);
-      expect(r.out).toMatch(/dry run, not run: npx wrangler d1 export namada-trade-db --remote --skip-confirmation --output=.* then gzip -9 to .*\/namada-trade-db-\d{4}-\d{2}-\d{2}T\d{4}Z\.sql\.gz \(mode 600\)/);
+      expect(r.out).toMatch(/dry run, not run: WRANGLER_WRITE_LOGS=false npx wrangler d1 export namada-trade-db --remote --skip-confirmation --output=.* then gzip -9 to .*\/namada-trade-db-\d{4}-\d{2}-\d{2}T\d{4}Z\.sql\.gz \(mode 600\)/);
     }
     expect(readdirSync(outside)).toEqual([]);
     expect(readFileSync(log, 'utf8')).toBe('');
   });
 
-  it('the export answers wrangler\'s prompt, drops the line carrying the download link and keeps the copy private', () => {
+  it('a relative folder is read from the directory the script is run from, not the repository', () => {
+    const parent = join(scratch, 'disk');
+    mkdirSync(join(parent, 'copies', 'week'), { recursive: true });
+    const from = (cwd: string, arg: string) => {
+      const r = spawnSync('bash', [EXPORT, '--dry-run', arg], { cwd, encoding: 'utf8', env: { ...process.env, PATH: `${bin}:${process.env.PATH}`, DRY_RUN: '', CDPATH: ROOT } });
+      return { status: r.status, out: r.stdout + r.stderr };
+    };
+    // the folder beside the caller, though the repository has none of that name (and CDPATH names the repository)
+    const sub = from(parent, 'copies');
+    expect(sub.status, sub.out).toBe(0);
+    expect(sub.out).toMatch(/gzip -9 to \S*\/disk\/copies\/namada-trade-db-/);
+    // '..' from inside it is the caller's parent, never the repository's (which is on the Desktop for the main checkout)
+    const up = from(join(parent, 'copies', 'week'), '..');
+    expect(up.status, up.out).toBe(0);
+    expect(up.out).toMatch(/gzip -9 to \S*\/disk\/copies\/namada-trade-db-/);
+    // '.' inside the repository is still refused
+    const here = from(join(ROOT, 'scripts'), '.');
+    expect(here.status).toBe(1);
+    expect(here.out).toContain('is inside this repository');
+    expect(readdirSync(join(parent, 'copies'))).toEqual(['week']);
+  });
+
+  it('the export keeps the download link out of its output and wrangler\'s debug log, and keeps the copy private', () => {
     const src = readFileSync(EXPORT, 'utf8');
-    expect(src).toContain(`npx wrangler d1 export namada-trade-db --remote --skip-confirmation --output="$part" 2>&1 | sed '/following URL manually/d'`);
+    expect(src).toContain(`WRANGLER_WRITE_LOGS=false npx wrangler d1 export namada-trade-db --remote --skip-confirmation --output="$part" 2>&1 | sed '/following URL manually/d'`);
     expect(src.indexOf('umask 077')).toBeLessThan(src.indexOf('npx wrangler d1 export'));
-    expect(src).toContain('chmod 600 "$out"');
+    // a run with the stand-in wrangler, which writes a small dump and prints the line with the link
+    const into = join(scratch, 'offsite-run');
+    mkdirSync(into);
+    writeFileSync(log, '');
+    const r = run(into);
+    expect(r.status, r.out).toBe(0);
+    expect(r.out).not.toContain('example.invalid');
+    expect(r.out).toMatch(/ok {3}\S*\/namada-trade-db-\d{4}-\d{2}-\d{2}T\d{4}Z\.sql\.gz/);
+    expect(r.out).toContain('4 tables, 1 insert statements');
+    expect(readFileSync(log, 'utf8')).toContain('WRANGLER_WRITE_LOGS=false');
+    const files = readdirSync(into);
+    expect(files).toHaveLength(1);
+    const file = join(into, files[0]);
+    expect(statSync(file).mode & 0o777).toBe(0o600);
+    expect(gunzipSync(readFileSync(file)).toString()).toContain('CREATE TABLE kv (key);');
   });
 });
