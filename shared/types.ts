@@ -219,12 +219,18 @@ export interface HoldersResponse {
    * `total` is null and this is the bound ("more than 10,000"). Absent otherwise.
    */
   totalOver?: number;
+  /**
+   * When more holders match than this site's server pages (worker/src/api.ts HOLDER_PAGE_REACH, 10,000): the list is
+   * served to that rank and no further ("showing the first 10,000"). A page past it has no rows and the page that ends
+   * there no `next`; the holders after it are reached by a size range or a search. Absent otherwise.
+   */
+  pagedTo?: number;
   /** the page these rows are (with `after`, the page the cursor's rank falls on) */
   page: number;
   limit: number;
   /** rank = (page − 1) × limit + i + 1, or, after a cursor, the cursor's rank + i + 1 */
   holders: Holder[];
-  /** the cursor for the rows after the last one here (send it back as `?after=`); null on the last page */
+  /** the cursor for the rows after the last one here (send it back as `?after=`); null on the last page served */
   next?: string | null;
   /** when the list was read: the order (and so every rank) is as of this time */
   asOf?: number;

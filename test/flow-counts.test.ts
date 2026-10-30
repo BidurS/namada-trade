@@ -406,5 +406,11 @@ describe('GET /api/flows: the head page counts from the stored counts; any other
     const csv = await app.request(`/api/export/flows?addr=${hub}`, {}, { DB: db } as any);
     expect(csv.headers.get('X-Total-Count')).toBeNull();
     expect(csv.headers.get('X-Truncated')).toBe('true');
+    // its JSON says "more than COUNT_MAX", as /api/flows does, so it never reads as a text search, which is not counted
+    const body = (await (await app.request(`/api/export/flows?addr=${hub}&format=json`, {}, { DB: db } as any)).json()) as { total: number | null; totalOver?: number; truncated: boolean };
+    expect(body).toMatchObject({ total: null, totalOver: COUNT_MAX, truncated: true });
+    const text = (await (await app.request('/api/export/flows?search=qqqqqqqq&format=json', {}, { DB: db } as any)).json()) as { total: number | null; totalOver?: number };
+    expect(text.total).toBeNull();
+    expect(text.totalOver).toBeUndefined();
   });
 });

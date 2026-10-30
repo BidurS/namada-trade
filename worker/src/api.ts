@@ -408,8 +408,17 @@ function holderSize(raw: string | undefined, name: string): number | null | { er
   if (!(Number.isFinite(n) && n >= 0)) return { error: `${name} must be an amount of NAM (a number of 0 or more).` };
   return name === 'min' && n === 0 ? null : n;
 }
+/**
+ * How far down a walk the list is served, by page= or by after= alike: its first HOLDER_PAGE_REACH places (the
+ * pattern of Etherscan's lists, "showing the first 10,000"; docs/design/nav-search-plan.md 2.3). A page's offset is
+ * read entry by entry on the index, so a page further down read every entry above it: 65,000 for the last Namada page,
+ * and a page past the end the whole index, 120 a minute per client (own audit 2026-10-29, M2, its page path). The holders
+ * after the reach are reached by a size range (min=, max=: a seek on the index) or a search. The same figure as a
+ * count's bound, so a list counted only to "more than WALK_COUNT_MAX" has every one of its served pages full.
+ */
+export const HOLDER_PAGE_REACH = WALK_COUNT_MAX;
 /** A cursor deeper than WALK_COUNT_MAX on a walk: its place would be a count past the bound, so it is not served. */
-const DEEP_CURSOR_WORDS = `This cursor is more than ${WALK_COUNT_MAX.toLocaleString('en-US')} holders down the list, further than this site's server counts to place it; ask for that part of the list by page number (page=) instead.`;
+const DEEP_CURSOR_WORDS = `This cursor is more than ${WALK_COUNT_MAX.toLocaleString('en-US')} holders down the list, past the ${HOLDER_PAGE_REACH.toLocaleString('en-US')} this site's server pages; a size (min=, max=) or a search narrows the list to the holders further down.`;
 /**
  * The stake a holder row shows: the chain's figure; the flow estimate only while no bond listing has gone through
  * (the same rule as the stored stake, holders.ts stakeNum). The estimate itself is always carried beside it.
@@ -447,6 +456,8 @@ interface HolderSelection {
   /** null: more than `over` match (a walk's count stops there, WALK_COUNT_MAX) */
   total: number | null;
   over?: number;
+  /** HOLDER_PAGE_REACH, when more holders match than that: the list is served to there and no further */
+  reach?: number;
   next: string | null;
   countsAt: number | null;
   categories: HoldersResponse['categories'];
@@ -528,14 +539,14 @@ async function selectHolders(db: D1Database, ask: HolderAsk, pg: { page: number;
       if (ok) seen.set(`${r.chain}:${r.address}`, r);
     }
     const sizedRows = [...seen.values()].filter(inSize);
-    const tally: Record<string, number> = Object.create(null);
-    for (const r of sizedRows) tally[catOf(r)] = (tally[catOf(r)] ?? 0) + 1;
+    const byCat: Record<string, number> = Object.create(null);
+    for (const r of sizedRows) byCat[catOf(r)] = (byCat[catOf(r)] ?? 0) + 1;
     const all = (category && !smallCategory ? sizedRows.filter((r) => catOf(r) === category) : sizedRows).sort(order);
     let start = (pg.page - 1) * pg.limit;
     if (pg.after) { const i = all.findIndex((r) => holderAfter(ask.by, r, pg.after!)); start = i < 0 ? all.length : i; }
     const rows = all.slice(start, start + pg.limit);
     const last = rows[rows.length - 1];
-    let categories: HoldersResponse['categories'] = categoriesOf(sizedRows.length, tally);
+    let categories: HoldersResponse['categories'] = categoriesOf(sizedRows.length, byCat);
     // A category on its own: the chips are the chain's (the stored counts, or a pass over the size range).
     if (smallCategory) categories = sized ? tally ? await walkCategories(db, { chain, by: ask.by, min, max }, counts) : null : storedCategories(counts, chain);
     return {
@@ -556,24 +567,30 @@ async function selectHolders(db: D1Database, ask: HolderAsk, pg: { page: number;
     if (n > WALK_COUNT_MAX) return { error: DEEP_CURSOR_WORDS };
     rankBase = n;
   }
-  const pageSql = holderPageSql(w, { after: pg.after, limit: pg.limit + 1, offset: pg.after ? 0 : rankBase });
+  // The rows of the first HOLDER_PAGE_REACH places only: a page from there on reads no row of the list (its count is
+  // still taken), and a page across it is cut there, so an offset reads at most HOLDER_PAGE_REACH index entries.
+  const want = Math.max(0, Math.min(pg.limit, HOLDER_PAGE_REACH - rankBase));
+  const pageSql = want > 0 ? holderPageSql(w, { after: pg.after, limit: want + 1, offset: pg.after ? 0 : rankBase }) : null;
   const stored = counts && !sized ? counts.byChain[chain] : null;
   const countQ = stored ? null : walkCountSql(w);
   const [rowsRes, countRes, categories] = await Promise.all([
-    db.prepare(pageSql.sql).bind(...pageSql.params).all<HolderBaseRow>(),
+    pageSql ? db.prepare(pageSql.sql).bind(...pageSql.params).all<HolderBaseRow>() : Promise.resolve({ results: [] as HolderBaseRow[] }),
     countQ ? db.prepare(countQ.sql).bind(...countQ.params).first<{ n: number }>() : Promise.resolve(null),
     stored ? Promise.resolve(storedCategories(counts, chain)) : tally ? walkCategories(db, { chain, by: ask.by, min, max }, counts) : Promise.resolve(null),
   ]);
   const got = (rowsRes.results || []).sort(order);
-  const rows = got.slice(0, pg.limit);
+  const rows = got.slice(0, want);
   // a walk's count past WALK_COUNT_MAX is "more than that" (`over`), never the bound read as the count
   const counted = Number(countRes?.n ?? 0);
   const over = !stored && counted > WALK_COUNT_MAX;
   const total = stored ? (category === 'none' ? stored.none : category ? countOf(stored.byCategory, category) ?? 0 : stored.all) : over ? null : counted;
   const last = rows[rows.length - 1];
+  // no cursor at the reach: the rows after it are not served, so a cursor to them would only be refused
+  const more = got.length > want && rankBase + rows.length < HOLDER_PAGE_REACH;
   return {
     rows, firstRank: rankBase + 1, page: Math.floor(rankBase / pg.limit) + 1, total, ...(over ? { over: WALK_COUNT_MAX } : {}),
-    next: last && got.length > pg.limit ? encodeHolderCursor({ value: Number(last[col as keyof HolderBaseRow]) || 0, address: last.address, rank: rankBase + rows.length }) : null,
+    ...(over || (total ?? 0) > HOLDER_PAGE_REACH ? { reach: HOLDER_PAGE_REACH } : {}),
+    next: last && more ? encodeHolderCursor({ value: Number(last[col as keyof HolderBaseRow]) || 0, address: last.address, rank: rankBase + rows.length }) : null,
     countsAt: stored ? counts!.at : null, categories,
   };
 }
@@ -640,6 +657,8 @@ function holderOut(r: HolderBaseRow, rank: number, listed: ListingTimes, supplyT
 // server status (owner decision 7), real 24 h / 7 d changes or null, and plain label words (owner decision 6).
 // The count and the chips' counts come from the stored counts (kv holders.counts, `countsAt`) unless the request
 // narrows by a search or a size, when they are counted here (`countsAt` null). `asOf`: when the order was read.
+// A list longer than HOLDER_PAGE_REACH is served to there (`pagedTo`): a page further down answers its count and no
+// rows, as a page past the end does, and the last page served gives no `next`.
 app.get('/api/holders', async (c) => {
   const db = c.env.DB;
   const chain = holderChain(c.req.query('chain'));
@@ -686,7 +705,10 @@ app.get('/api/holders', async (c) => {
   }
   const supplyTotal = supplyRow?.value ?? null;
   const holders = raw.map((r, i) => holderOut(r, sel.firstRank + i, listed, supplyTotal, now, changes, linksMap));
-  const res: HoldersResponse = { total: sel.total, ...(sel.over != null ? { totalOver: sel.over } : {}), page: sel.page, limit, holders, next: sel.next, asOf: now, countsAt: sel.countsAt, categories: sel.categories };
+  const res: HoldersResponse = {
+    total: sel.total, ...(sel.over != null ? { totalOver: sel.over } : {}), ...(sel.reach != null ? { pagedTo: sel.reach } : {}),
+    page: sel.page, limit, holders, next: sel.next, asOf: now, countsAt: sel.countsAt, categories: sel.categories,
+  };
   return c.json(res);
 });
 
@@ -1834,7 +1856,8 @@ app.get('/api/export/holders', async (c) => {
     listingTimes(db),
   ]);
   if ('error' in sel) return c.json({ error: sel.error }, 400);
-  // null: more than WALK_COUNT_MAX match (a size range), not counted further; `next` then says whether the file is cut
+  // null: more than WALK_COUNT_MAX match (a size range), not counted further, so more match than the file holds
+  // (HOLDER_EXPORT_MAX, the list's reach: no `next` from there)
   const matching = sel.total;
   const total = supplyRow?.value ?? null;
   const list = sel.rows.map((r, idx) => {
@@ -1852,7 +1875,7 @@ app.get('/api/export/holders', async (c) => {
       stakeCheckedAt: isoOrBlank(confirmedAt(r.bonded_verified_at, r.bonded_src, BOND_LISTING_SRC, listed.bond)),
     };
   });
-  const cut = matching != null ? list.length < matching : sel.next != null;
+  const cut = matching != null ? list.length < matching : sel.over != null || sel.next != null;
   const name = `namada-trade-holders-${chain}-${cut ? `first-${list.length}-${matching != null ? `of-${matching}-` : ''}` : ''}${now}`;
   if (format === 'json') return c.json({ count: list.length, total: matching, ...(sel.over != null ? { totalOver: sel.over } : {}), truncated: cut, supplyTotal: total, by, holders: list }, 200, { ...(matching != null ? { 'X-Total-Count': String(matching) } : {}), 'X-Truncated': String(cut) });
   const csv = csvOf(
@@ -1882,7 +1905,7 @@ app.get('/api/export/flows', async (c) => {
   const matching = r.total;
   const cut = matching != null ? flows.length < matching : r.next != null;
   await withSettles(db, flows);
-  if (format === 'json') return c.json({ count: flows.length, total: matching, truncated: cut, asOf, flows }, 200, { ...(matching != null ? { 'X-Total-Count': String(matching) } : {}), 'X-Truncated': String(cut) });
+  if (format === 'json') return c.json({ count: flows.length, total: matching, ...(r.over != null ? { totalOver: r.over } : {}), truncated: cut, asOf, flows }, 200, { ...(matching != null ? { 'X-Total-Count': String(matching) } : {}), 'X-Truncated': String(cut) });
   const meta = (f: { meta?: Record<string, unknown> | null }, k: string) => (f.meta && typeof f.meta[k] === 'string' ? (f.meta[k] as string) : '');
   const csv = csvOf(
     // each label with where it came from and, for a wallet's tag ('user'), who wrote it, as the JSON export sends them;

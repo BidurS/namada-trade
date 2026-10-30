@@ -28,7 +28,7 @@ import { category_plain } from '../../../../shared/labels';
 import { fmtAddr, fmtAge, fmtCount, fmtNamRule, fmtNamSigned, fmtPctRule, fmtUtcClock } from '../../lib/format';
 import { ActivityBar, FilterPanel, FilterSet, KeysHint, ListSearch, useRovingRows } from './parts';
 import { HOLDER_SEARCH_EMPTY, SEARCH_HINT, SEARCH_PLACEHOLDER, TECH } from './words';
-import { HOLDER_CSV_MAX, PAGE_SIZES, firstVisibleRow, flashRow, focusFirstRow, focusRow, pageCount, pageOfRank, revealRow } from './paging';
+import { HOLDER_CSV_MAX, PAGE_SIZES, firstVisibleRow, flashRow, focusFirstRow, focusRow, pageOfRank, revealRow, servedPages } from './paging';
 import { HOLDER_DEFAULT, SORT_API, holderPatch, holdersApplied, hrefWith, liftHolders, type HolderUrl } from './urlState';
 import { noteOrigin } from './sheetOrigin';
 
@@ -55,8 +55,8 @@ interface Loaded {
   total: number | null;
   /** HoldersResponse.totalOver: the count's bound when `total` is null */
   over: number | null;
-  /** the server holds rows after this page (HoldersResponse.next) */
-  more: boolean;
+  /** HoldersResponse.pagedTo: the server serves the list to this rank and no further (more holders match) */
+  reach: number | null;
   page: number;
   size: number;
   /** the server's "What" counts over the whole list (null on servers before the stored totals) */
@@ -107,7 +107,7 @@ export default function Holders({
     fetchHoldersPage({ chain: eff.chain, by, category, search, min: eff.min, max: eff.max, page, limit: size }, { signal: ctl.signal })
       .then((r) => {
         if (ctl.signal.aborted) return;
-        setData({ key, rows: r.holders, total: r.total, over: r.totalOver ?? null, more: r.next != null, page, size, cats: r.categories ?? null, asOf: r.asOf ?? null, countsAt: r.countsAt ?? null, exact: r.exact });
+        setData({ key, rows: r.holders, total: r.total, over: r.totalOver ?? null, reach: r.pagedTo ?? null, page, size, cats: r.categories ?? null, asOf: r.asOf ?? null, countsAt: r.countsAt ?? null, exact: r.exact });
       })
       .catch(() => {
         if (!ctl.signal.aborted) setError(page > 1 ? 'This page of holders could not be fetched from this site’s server.' : 'The holder list could not be fetched from this site’s server.');
@@ -118,8 +118,10 @@ export default function Holders({
   // the same query (any page, any size): the count and the chips stay while another page loads
   const fresh = data?.key === key ? data : null;
   const loaded = fresh?.rows ?? [];
-  // not known when more holders match than the server counts (`over`): "of —", and the next page while it has more
-  const pages = fresh && fresh.total != null ? pageCount(fresh.total, size) : null;
+  // the pages served: the count's, up to the server's reach (more holders than it pages: "showing the first 10,000")
+  const pages = fresh ? servedPages(fresh.total, fresh.over, fresh.reach, size) : null;
+  /** The holders the list is served to: its count, or the server's reach when that is shorter (or the count not taken). */
+  const served = fresh ? (fresh.total != null ? Math.min(fresh.total, fresh.reach ?? fresh.total) : fresh.reach) : null;
   /** The rows on screen are the ones the URL asks for. */
   const current = !!fresh && fresh.page === page && fresh.size === size;
   // a page past the end (an old link, a list that shrank): the last page, without a history entry
@@ -188,6 +190,13 @@ export default function Holders({
     const t = value.replace(/[,\s]/g, '');
     if (!/^\d+$/.test(t) || Number(t) < 1) return 'Type a rank as a whole number, as printed at the start of each row.';
     const rank = Number(t);
+    if (fresh && fresh.reach != null && rank > fresh.reach && (fresh.total == null || rank <= fresh.total)) {
+      return (
+        <>
+          This site’s server pages the first <Num v={fresh.reach} fmt={fmtCount} /> holders of a list; a size or a search narrows it to the holders further down.
+        </>
+      );
+    }
     if (fresh && fresh.total != null && rank > fresh.total) {
       return fresh.total === 1 ? (
         <>There is only one holder here; pick that rank.</>
@@ -443,8 +452,14 @@ export default function Holders({
   const exact = !!fresh && fresh.exact && serverFiltered;
   /** Some holders match: a count above 0, or more than the server counts. */
   const someMatch = !!fresh && ((fresh.total ?? 0) > 0 || fresh.over != null);
-  /** The rank this page starts from. */
-  const firstOnPage = (page - 1) * size + 1;
+  /** The server pages the list to this rank only (more holders match): "(showing the first 10,000)" in the count line. */
+  const showing =
+    fresh && fresh.reach != null ? (
+      <>
+        {' '}
+        (showing the first <Num v={fresh.reach} fmt={fmtCount} />)
+      </>
+    ) : null;
 
   // ---- column heads on the desktop table: Total, Spendable and Staked sort the list (the "Biggest by" choice)
   const sortHead = (v: HolderUrl['by'], word: string) => (
@@ -475,11 +490,9 @@ export default function Holders({
       </a>
     ) : null;
 
-  /** When the number of pages is not known (more holders match than the server counts): why, in one sentence. */
-  const unknownWhy = fresh && fresh.over != null ? `The number of pages is not known: more than ${fmtCount(fresh.over)} holders match these filters, and this site’s server does not count past that.` : undefined;
   const pager = (where: 'head' | 'foot') =>
-    fresh && (pages != null || fresh.over != null) ? (
-      <Pager label={where === 'head' ? 'Holder pages' : 'Holder pages, under the list'} page={page} pages={pages} hasNext={fresh.more} hrefFor={pageHref} onGo={onGo} run={where === 'foot'} unknown={where === 'foot' ? unknownWhy : undefined} className={`act-pager act-pager--${where}`} />
+    fresh && pages != null ? (
+      <Pager label={where === 'head' ? 'Holder pages' : 'Holder pages, under the list'} page={page} pages={pages} hrefFor={pageHref} onGo={onGo} run={where === 'foot'} className={`act-pager act-pager--${where}`} />
     ) : (
       <div className="pager act-pager act-pager--ph" aria-hidden="true" />
     );
@@ -524,6 +537,7 @@ export default function Holders({
                 More than <Num v={fresh.over} fmt={fmtCount} /> holders found {CHAIN_WORD[eff.chain]}
                 {whatWord ? <> in “{whatWord}”</> : null}
                 {search ? <> matching “{search}”</> : null}, biggest first by {BY_WORD[sort]}
+                {showing}
                 {fresh.asOf != null ? (
                   <>
                     {' '}
@@ -537,6 +551,7 @@ export default function Holders({
                 A total of <Num v={fresh.total} fmt={fmtCount} /> {fresh.total === 1 ? 'holder' : 'holders'} found {CHAIN_WORD[eff.chain]}
                 {whatWord ? <> in “{whatWord}”</> : null}
                 {search ? <> matching “{search}”</> : null}, biggest first by {BY_WORD[sort]}
+                {showing}
                 {fresh.asOf != null ? (
                   <>
                     {' '}
@@ -614,7 +629,7 @@ export default function Holders({
               columns={columns}
               label={`Biggest NAM holders ${CHAIN_WORD[eff.chain]}`}
               old={listOld}
-              rowCount={exact && fresh && fresh.total != null ? fresh.total + 1 : undefined}
+              rowCount={exact && served != null ? served + 1 : undefined}
               className="act-holders"
             >
               {(busy ? data.rows : rows).map((h) => (
@@ -637,9 +652,6 @@ export default function Holders({
                 'No Osmosis holder rows came back from this site’s server.'
               )}
             </EmptyState>
-          ) : fresh && fresh.total == null && fresh.over != null && page > 1 ? (
-            // not counted past `over`, so a page past the end is known only when it comes back empty
-            <EmptyState title="This page is past the end of the list.">More than {fmtCount(fresh.over)} holders match these filters, but fewer than the {fmtCount(firstOnPage)} this page starts from.</EmptyState>
           ) : eff.what && !serverFiltered ? (
             <EmptyState title="No holder on this page matches.">The filter looks only at the {fmtCount(loaded.length)} holders on this page.</EmptyState>
           ) : search && (eff.what || eff.min || eff.max || eff.chain !== HOLDER_DEFAULT.chain) ? (
