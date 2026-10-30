@@ -62,7 +62,7 @@ export const SETTINGS_ROWS_HEALTH = 'Saved alert settings';
 /**
  * Not ok from 80% of either cap, and for a day after a cap refused a save (a wallet's first save past USER_ROWS_MAX,
  * or a channel turned on past DELIVERABLE_MAX). The numbers are said only from 80%: below it the row says there is
- * room, and no more.
+ * room, and no more. A refusal's row carries its time as `failedAt` (its words change as saves come in).
  */
 export async function settingsRowsHealth(db: D1Database, now: number): Promise<SourceHealth> {
   const DAY = 24 * 3600000;
@@ -77,8 +77,8 @@ export async function settingsRowsHealth(db: D1Database, now: number): Promise<S
     const nearOn = on >= Math.ceil(DELIVERABLE_MAX * 0.8);
     const places = `${taken} of ${USER_ROWS_MAX} places taken`;
     const channels = `${on} of ${DELIVERABLE_MAX} Discord channels on`;
-    if (recent) return { name: SETTINGS_ROWS_HEALTH, ok: false, at: refused!.lastAt, note: `${places}; a new wallet's first save was refused (${refused!.total} in all).` };
-    if (recentOn) return { name: SETTINGS_ROWS_HEALTH, ok: false, at: refused!.channelsAt!, note: `${channels}; a save turning one more on was refused (${refused!.channels ?? 0} in all).` };
+    if (recent) return { name: SETTINGS_ROWS_HEALTH, ok: false, at: refused!.lastAt, failedAt: refused!.lastAt, note: `${places}; a new wallet's first save was refused (${refused!.total} in all).` };
+    if (recentOn) return { name: SETTINGS_ROWS_HEALTH, ok: false, at: refused!.channelsAt!, failedAt: refused!.channelsAt!, note: `${channels}; a save turning one more on was refused (${refused!.channels ?? 0} in all).` };
     if (near) return { name: SETTINGS_ROWS_HEALTH, ok: false, at: now, note: `${places}; new wallets are refused at ${USER_ROWS_MAX}.` };
     if (nearOn) return { name: SETTINGS_ROWS_HEALTH, ok: false, at: now, note: `${channels}; more are refused at ${DELIVERABLE_MAX}.` };
     return { name: SETTINGS_ROWS_HEALTH, ok: true, at: now, note: `Room for new wallets (under ${Math.ceil(USER_ROWS_MAX * 0.8)} of ${USER_ROWS_MAX} places taken).` };
@@ -318,18 +318,26 @@ export const STREAM_SHARE_SQL = `SELECT COUNT(*) n, COALESCE(SUM(CASE WHEN meta 
 /** Whether the stream-share check runs this tick: never run, or its last run is STREAM_SHARE_EVERY_MS old. */
 export const streamShareDue = (lastAt: number | null, now: number): boolean => lastAt == null || now - lastAt >= STREAM_SHARE_EVERY_MS;
 /**
+ * Fewer moves than this in the window are too few to judge: the fewest of which one move found late is a share under
+ * STREAM_SHARE_OK_PCT (21 at 5%), so on a quiet day one late move alone never reads as a share over the line.
+ */
+export const STREAM_SHARE_MIN_FLOWS = Math.floor(100 / STREAM_SHARE_OK_PCT) + 1;
+/**
  * The stream-share check from the window's counts: 'ok' under STREAM_SHARE_OK_PCT found late, 'warn' from it, 'idle'
- * with no Osmosis move in the window (nothing to compare, never 0%). The detail says its cadence (`everyMs`), so the
- * row reads "no recent result" only once an hourly run is missed (digest/freshness.ts checkStaleMs).
+ * with no Osmosis move in the window (nothing to compare, never 0%) or fewer than STREAM_SHARE_MIN_FLOWS (`tooFew`).
+ * The detail says its cadence (`everyMs`), so the row reads "no recent result" only once an hourly run is missed
+ * (digest/freshness.ts checkStaleMs).
  */
 export function streamShareCheck(n: number, late: number, now: number): Stmt {
-  // judged on the share itself; the detail keeps it to two decimals
+  // judged on the share itself; the detail keeps two decimals, cut rather than rounded under the line, so a share that
+  // passes is never written as the line (4.996% is 4.99, not 5)
   const share = n > 0 ? (late / n) * 100 : null;
-  const pct = share == null ? null : Math.round(share * 100) / 100;
-  const status = share == null ? 'idle' : share < STREAM_SHARE_OK_PCT ? 'ok' : 'warn';
+  const pct = share == null ? null : share < STREAM_SHARE_OK_PCT ? Math.floor(share * 100) / 100 : Math.round(share * 100) / 100;
+  const tooFew = n > 0 && n < STREAM_SHARE_MIN_FLOWS;
+  const status = share == null || tooFew ? 'idle' : share < STREAM_SHARE_OK_PCT ? 'ok' : 'warn';
   return stmt.check('osmosis_stream_share', status, 'Osmosis moves found by the catch-up search, not the live stream (24 h)', {
-    flows: n, catchUp: late, sharePct: pct, okBelowPct: STREAM_SHARE_OK_PCT, windowHours: STREAM_SHARE_WINDOW_MS / 3600_000,
-    everyMs: STREAM_SHARE_EVERY_MS, from: now - STREAM_SHARE_WINDOW_MS, to: now, ...(pct == null ? { noFlows: true } : {}),
+    flows: n, catchUp: late, sharePct: pct, okBelowPct: STREAM_SHARE_OK_PCT, minFlows: STREAM_SHARE_MIN_FLOWS, windowHours: STREAM_SHARE_WINDOW_MS / 3600_000,
+    everyMs: STREAM_SHARE_EVERY_MS, from: now - STREAM_SHARE_WINDOW_MS, to: now, ...(pct == null ? { noFlows: true } : {}), ...(tooFew ? { tooFew: true } : {}),
   }, now);
 }
 
@@ -428,6 +436,15 @@ export async function takeTickLock(db: D1Database, id: string, now: number): Pro
       ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at WHERE kv.updated_at < ?`)
     .bind(id, now, now - TICK_LOCK_MS).run().catch(() => null);
   // A D1 without the kv table (or a failure) must not stop the tick: run unlocked.
+  return r == null ? true : Number(r.meta?.changes ?? 0) > 0;
+}
+/**
+ * Renews the tick lock this tick holds (kv cron.lock, its time set to `now`): true when it still holds it, so for the
+ * next TICK_LOCK_MS no other tick can take it; false when a later tick took it after it expired (a tick whose end ran
+ * past TICK_LOCK_MS). A D1 that cannot answer gives true, as takeTickLock runs unlocked then.
+ */
+export async function holdTickLock(db: D1Database, id: string, now: number): Promise<boolean> {
+  const r = await db.prepare(`UPDATE kv SET updated_at = ? WHERE key = 'cron.lock' AND value = ?`).bind(now, id).run().catch(() => null);
   return r == null ? true : Number(r.meta?.changes ?? 0) > 0;
 }
 export async function releaseTickLock(db: D1Database, id: string) {
@@ -1848,13 +1865,15 @@ export async function runCron(env: Env) {
         { totalStakeNam: stakeNam, posBalanceNam: posNam, notStakedNam: posNam - stakeNam }, now));
     }
 
-    // Live unbond decoder (LiveHub alarm): last outcome recorded in kv by liveUnbonds()
+    // Live unbond decoder (LiveHub alarm): last outcome recorded in kv by liveUnbonds(). The row's time is the last
+    // decode, which a success moves while the row stays not ok for a day after a failure; the failure's own time is
+    // `failedAt` (the operator's incidents count a new failure, ops.ts readMark), and so for the rows after it.
     const unb = await kvGetJson<LiveUnbondStatus>(env.DB, 'namada.unbonds.live');
     if (unb) {
       const lastFail = unb.failures[unb.failures.length - 1];
       const failedRecently = !!lastFail && now - lastFail.at < 24 * 3600000;
       health.push({
-        name: 'Namada RPC (live unbond decode)', ok: !failedRecently, at: unb.lastAt ?? lastFail?.at ?? now,
+        name: 'Namada RPC (live unbond decode)', ok: !failedRecently, at: unb.lastAt ?? lastFail?.at ?? now, ...(failedRecently ? { failedAt: lastFail.at } : {}),
         note: failedRecently
           ? `block ${lastFail.height}: ${lastFail.note}`.slice(0, 160)
           : `${unb.decoded} unbond request(s) decoded${unb.lastHeight ? `, last at block ${unb.lastHeight}` : ''}`,
@@ -1867,7 +1886,7 @@ export async function runCron(env: Env) {
       const lastFail = bnd.failures[bnd.failures.length - 1];
       const failedRecently = !!lastFail && now - lastFail.at < 24 * 3600000;
       health.push({
-        name: 'Namada RPC (live bond decode)', ok: !failedRecently, at: bnd.lastAt ?? lastFail?.at ?? now,
+        name: 'Namada RPC (live bond decode)', ok: !failedRecently, at: bnd.lastAt ?? lastFail?.at ?? now, ...(failedRecently ? { failedAt: lastFail.at } : {}),
         note: failedRecently
           ? `block ${lastFail.height}: ${lastFail.note}`.slice(0, 160)
           : `${bnd.decoded} bond request(s) decoded${bnd.lastHeight ? `, last block with a bond key read: ${bnd.lastHeight}` : ''}`,
@@ -1879,7 +1898,7 @@ export async function runCron(env: Env) {
     if (scan?.failures.length) {
       const last = scan.failures[scan.failures.length - 1];
       const recent = now - last.at < 24 * 3600000;
-      health.push({ name: 'Namada RPC (live block scan)', ok: !recent, at: last.at, note: (recent ? last.note : `last unreadable block ${last.height}, more than a day ago`).slice(0, 160) });
+      health.push({ name: 'Namada RPC (live block scan)', ok: !recent, at: last.at, ...(recent ? { failedAt: last.at } : {}), note: (recent ? last.note : `last unreadable block ${last.height}, more than a day ago`).slice(0, 160) });
     }
     // Alert posts that could not be sent (sources/discord.ts postAll: deadline passed or a webhook backed off). A
     // Worker that does not send alerts keeps the row pushed first (alertDeliveryOff), which this one never replaces.
@@ -1893,7 +1912,7 @@ export async function runCron(env: Env) {
       const waiting = pending && pending.parts > 0 ? ` ${pending.parts} alert part(s), ${pending.posts} post(s), wait in the live hub's pending list.` : '';
       if (skipped?.last.at) {
         const recent = now - skipped.last.at < 24 * 3600000;
-        health.push({ name: ALERT_DELIVERY_HEALTH, ok: !recent, at: skipped.last.at, note: `${skipped.last.n} post(s) for ${skipped.last.what} not sent; ${skipped.total} in all${waiting ? `.${waiting}` : ''}`.slice(0, 160) });
+        health.push({ name: ALERT_DELIVERY_HEALTH, ok: !recent, at: skipped.last.at, ...(recent ? { failedAt: skipped.last.at } : {}), note: `${skipped.last.n} post(s) for ${skipped.last.what} not sent; ${skipped.total} in all${waiting ? `.${waiting}` : ''}`.slice(0, 160) });
       } else health.push({ name: ALERT_DELIVERY_HEALTH, ok: true, at: now, note: `On: this Worker posts alerts, and no post not sent is on record.${waiting}` });
     }
     health.push(await settingsRowsHealth(env.DB, now));
@@ -2204,8 +2223,12 @@ export async function runCron(env: Env) {
     await trials;
     if (health.length > merged) await mergeHealth(env, health.slice(merged));
     // The operator's incidents (ops.ts): the tick's rows and checks judged once all are written, and the tick's
-    // completion recorded (the live hub and /api/health read it), under the lock, so two passes never overlap.
-    await runOps(env, now).catch((e) => console.error('ops', e));
+    // completion recorded (the live hub and /api/health read it). The lock expires TICK_LOCK_MS after it was taken,
+    // and a tick whose end ran past that may have a later one running: the lock is renewed first, so no later tick can
+    // take it during the pass, and a tick that lost it leaves the pass to the one that holds it (two passes would read
+    // one state, tell the same lines twice, and the later write would undo the other's).
+    if (await holdTickLock(env.DB, lockId, Date.now())) await runOps(env, now).catch((e) => console.error('ops', e));
+    else console.error('ops: a later tick holds the lock; its pass judges this one\'s rows');
     await releaseTickLock(env.DB, lockId);
   }
 }

@@ -1,21 +1,29 @@
 // The operator's incidents (scale plan, Stage 1 item 4; worker/src/ops.ts): nothing told the owner of a failure while
 // it lasted, only the 08:00 UTC digest. A name not ok on 10 ticks in a row, its bad state read afresh on two of them,
 // opens an incident, told once to the operator's Discord channel (and the owner's Telegram chat when TELEGRAM_OWNER_CHAT
-// is set); one reminder an hour at most while it stays; ok on 3 ticks in a row resolves it, told once. A name that flips
-// between ticks opens nothing, nor does one failed read of a source read every 10 minutes. kv ops.alerts.on
-// '0' and a Worker without SEND_ALERTS post nothing; a message that reached no channel is tried on the next tick. A cron
-// that stops is seen by the live hub's look (watchCronStall), and the first tick after the gap takes it over; a gap the
-// hub did not see is opened by that tick. GET /api/health answers 200 or 503 from two kv rows, 15 s at the edge.
-// Fetch is stubbed: nothing reaches Discord or Telegram.
+// is set); reminders after 1, 2, 4 ... hours while it stays, at most a day apart; ok on 3 ticks in a row resolves it,
+// told once. A name that flips between ticks opens nothing, nor does one failed read of a source read every 10 minutes,
+// nor one failure of a row that stays not ok for a day after it (its time moved by the successes since). A check that
+// only needs a look ('warn'), a row turned off on purpose, the depth module's names while its kill switch is off and the
+// names on the quiet list (kv ops.quiet) open nothing (review of 2026-10-29: a stream share above 5% and depth.on = '0'
+// held /api/health at 503 and sent a reminder every hour). kv ops.alerts.on '0' and a Worker without SEND_ALERTS post
+// nothing; a message that reached no channel is tried on the next tick. A cron that stops is seen by the live hub's look
+// (watchCronStall), and the first tick after the gap takes it over; a gap the hub did not see is opened by that tick.
+// GET /api/health answers 200 or 503 from two kv rows, 15 s at the edge. Fetch is stubbed: nothing reaches Discord or
+// Telegram.
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { base64 } from '@scure/base';
 import { testD1, insert, type TestD1 } from './d1-sqlite';
 import { app } from '../worker/src/api';
 import { cachedApi, cacheKeyUrl } from '../worker/src/http';
 import { configureAlerts } from '../worker/src/sources/discord';
+import { alertDeliveryOff } from '../worker/src/cron';
+import { KILL_SWITCH_NOTE } from '../worker/src/depth/budget';
+import { DEPTH_HEALTH } from '../worker/src/depth/index';
 import {
-  judge, runOps, watchCronStall, healthAnswer, fitLines, CRON_TICKS, CRON_STALE_MS, INCIDENT_OPEN_TICKS, INCIDENT_RESOLVE_TICKS, OPS_KV, OPS_REMIND_MS,
-  OPS_STALL_KV, OPS_SWITCH_KV, HEALTH_TICK_MAX_AGE_MS, type OpsState,
+  judge, runOps, watchCronStall, healthAnswer, fitLines, letGo, offOnPurpose, quietOf, readMark, remindDue, DEPTH_NAMES, CRON_TICKS, CRON_STALE_MS,
+  INCIDENT_OPEN_TICKS, INCIDENT_RESOLVE_TICKS, OPS_KV, OPS_QUIET_KV, OPS_REMIND_MAX_MS, OPS_STALL_KV, OPS_SWITCH_KV, HEALTH_TICK_MAX_AGE_MS,
+  type OpsState,
 } from '../worker/src/ops';
 
 const KEY = base64.encode(new Uint8Array(32).fill(29));
@@ -24,7 +32,7 @@ const MIN = 60_000, H = 60 * MIN;
 const NB = ' ';
 const EPOCH = 'Namada RPC (epoch)';
 
-interface Post { url: string; body: any }
+interface Post { url: string; body: any; at: number }
 let posts: Post[] = [];
 let hook = 0;
 /** A fresh operator link per test: the dispatcher's backoff is kept per link in the isolate. */
@@ -35,8 +43,8 @@ function net(discord: () => Response = () => new Response(null, { status: 204 })
   vi.stubGlobal('fetch', vi.fn(async (u: RequestInfo | URL, init?: RequestInit) => {
     const url = String(u);
     const body = init?.body ? JSON.parse(String(init.body)) : null;
-    if (url.startsWith('https://discord.com/')) { posts.push({ url, body }); return discord(); }
-    if (url.startsWith('https://api.telegram.org/')) { posts.push({ url, body }); return telegram(); }
+    if (url.startsWith('https://discord.com/')) { posts.push({ url, body, at: Date.now() }); return discord(); }
+    if (url.startsWith('https://api.telegram.org/')) { posts.push({ url, body, at: Date.now() }); return telegram(); }
     return new Response('down', { status: 503 });
   }));
 }
@@ -44,8 +52,9 @@ const discordPosts = () => posts.filter((p) => p.url.startsWith('https://discord
 const textsOf = (ps = discordPosts()) => ps.map((p) => p.body.content as string);
 
 const env = (db: TestD1, extra: Record<string, unknown> = {}) => ({ DB: db, SEND_ALERTS: 'yes', DISCORD_WEBHOOK_URL: opUrl(), ...extra }) as any;
-const setHealth = (db: TestD1, rows: Record<string, { ok: boolean; note?: string; at?: number }>, at: number) => {
-  const map = Object.fromEntries(Object.entries(rows).map(([name, r]) => [name, { name, ok: r.ok, at: r.at ?? at, ...(r.note ? { note: r.note } : {}) }]));
+type Row = { ok: boolean; note?: string; at?: number; failedAt?: number };
+const setHealth = (db: TestD1, rows: Record<string, Row>, at: number) => {
+  const map = Object.fromEntries(Object.entries(rows).map(([name, r]) => [name, { name, ok: r.ok, at: r.at ?? at, ...(r.note ? { note: r.note } : {}), ...(r.failedAt != null ? { failedAt: r.failedAt } : {}) }]));
   db.raw.prepare("INSERT INTO kv (key, value, updated_at) VALUES ('source.health', ?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value").run(JSON.stringify(map), at);
 };
 const state = (db: TestD1): OpsState | null => {
@@ -53,13 +62,14 @@ const state = (db: TestD1): OpsState | null => {
   return v ? JSON.parse(v) : null;
 };
 /** One tick's ops pass at `at`, as the cron's finally runs it. */
-async function tickAt(e: any, at: number, health?: Record<string, { ok: boolean; note?: string; at?: number }>) {
+async function tickAt(e: any, at: number, health?: Record<string, Row>) {
   vi.setSystemTime(at);
   if (health) setHealth(e.DB, health, at);
   return runOps(e, at);
 }
 const DOWN = { [EPOCH]: { ok: false, note: 'Error: HTTP 503 for https://rpc.example.invalid/abci_query: <html>down</html>' }, 'Namada RPC Papadritta': { ok: true, note: 'height 8,460,000' } };
 const UP = { [EPOCH]: { ok: true, note: 'epoch 412' }, 'Namada RPC Papadritta': { ok: true, note: 'height 8,460,001' } };
+const getHealth = async (db: TestD1) => { const r = await app.request('/api/health', {}, { DB: db } as any); return { status: r.status, body: (await r.json()) as any }; };
 
 beforeEach(() => { configureAlerts(KEY, true); vi.useFakeTimers({ now: T0, toFake: ['Date'] }); });
 afterEach(() => { vi.useRealTimers(); vi.unstubAllGlobals(); });
@@ -85,20 +95,47 @@ describe('an incident opens after 10 bad ticks in a row, is told once, reminded 
     expect(state(db)!.watch[EPOCH]).toBeUndefined();
   });
 
-  it('is not told again while it stays; one reminder after an hour, listing it, then none for another hour', async () => {
+  it('is not told again while it stays; reminded 1 h after the open, then after 2, 4, 8, 16 h, then once a day', async () => {
     net();
     const db = testD1();
     const e = env(db);
     for (let i = 0; i <= 9; i++) await tickAt(e, T0 + i * MIN, DOWN);
     expect(discordPosts()).toHaveLength(1);
-    // a minute a tick for two hours after the open
-    for (let m = 10; m <= 9 + 2 * 60; m++) await tickAt(e, T0 + m * MIN, DOWN);
+    const OPEN = T0 + 9 * MIN;
+    // a tick every five minutes for 80 h after the open (no gap: the cron's gap is over ten minutes)
+    for (let t = OPEN + 5 * MIN; t <= OPEN + 80 * H; t += 5 * MIN) await tickAt(e, t, DOWN);
     const texts = textsOf();
-    expect(texts).toHaveLength(3);
     expect(texts[1]).toBe(`Still open: Namada RPC (epoch): not ok since 29 Oct 2026, 10:00${NB}UTC (1.2${NB}h): Error: upstream unavailable (HTTP 503).`);
-    expect(texts[2]).toMatch(/^Still open: Namada RPC \(epoch\): not ok since 29 Oct 2026, 10:00 UTC \(2\.2 h\)/);
-    // the reminders came exactly OPS_REMIND_MS apart, from the open
-    expect(state(db)!.remindedAt).toBe(T0 + 9 * MIN + 2 * OPS_REMIND_MS);
+    expect(texts.slice(1).every((t) => t.startsWith(`Still open: Namada RPC (epoch): not ok since 29 Oct 2026, 10:00${NB}UTC`))).toBe(true);
+    // 1, 3, 7, 15 and 31 h after the open (each wait twice the last), then a day apart: 7 reminders in 80 h, not 80
+    expect(discordPosts().slice(1).map((p) => (p.at - OPEN) / H)).toEqual([1, 3, 7, 15, 31, 55, 79]);
+    expect(state(db)).toMatchObject({ remindedAt: OPEN + 79 * H, reminds: 7 });
+    expect(OPS_REMIND_MAX_MS).toBe(24 * H);
+    expect(remindDue(OPEN, 3, OPEN + 8 * H - 1)).toBe(false);
+    expect(remindDue(OPEN, 3, OPEN + 8 * H)).toBe(true);
+    expect(remindDue(OPEN, 40, OPEN + 24 * H)).toBe(true);
+    expect(remindDue(null, 0, OPEN)).toBe(true);
+  });
+
+  it('a new incident starts the waits again: its open is told at once, and the next reminder, of both, an hour later', async () => {
+    net();
+    const db = testD1();
+    const e = env(db);
+    const PAPA = 'Namada RPC Papadritta';
+    for (let i = 0; i <= 9; i++) await tickAt(e, T0 + i * MIN, DOWN);
+    const OPEN = T0 + 9 * MIN;
+    for (let t = OPEN + 5 * MIN; t <= OPEN + 3 * H; t += 5 * MIN) await tickAt(e, t, DOWN);
+    expect(state(db)!.reminds).toBe(2);
+    // a second source goes down at 13:14 and opens on its tenth tick
+    const both = { ...DOWN, [PAPA]: { ok: false, note: 'no answer in 10 s' } };
+    let t = OPEN + 3 * H + 5 * MIN;
+    for (let i = 0; i < INCIDENT_OPEN_TICKS; i++, t += 5 * MIN) await tickAt(e, t, both);
+    expect(textsOf().at(-1)).toMatch(/^Opened: Namada RPC Papadritta: not ok since 29 Oct 2026, 13:14/);
+    expect(state(db)!.reminds).toBe(0);
+    const opened = discordPosts().at(-1)!.at;
+    for (; t <= opened + H; t += 5 * MIN) await tickAt(e, t, both);
+    expect(discordPosts().at(-1)!.at).toBe(opened + H);
+    expect(textsOf().at(-1)!.split('\n').map((l) => l.slice(0, 34))).toEqual(['Still open: Namada RPC (epoch): no', 'Still open: Namada RPC Papadritta:']);
   });
 
   it(`resolves on the ${INCIDENT_RESOLVE_TICKS}rd good tick in a row, told once; a bad tick between good ones starts the count again`, async () => {
@@ -153,26 +190,142 @@ describe('an incident opens after 10 bad ticks in a row, is told once, reminded 
     expect(state(db)!.open).toEqual({});
   });
 
-  it('a check not ok opens with its status and its own title; a check whose last run is past its window opens as "no recent result"', async () => {
+  it('one failure of a row that stays not ok for a day after it opens nothing, though successes since move its time; a second failure does', async () => {
+    // the review's case (2026-10-29): one undecoded unbond at 10:00 keeps the decoder's row not ok for 24 h, its time
+    // the last decode, which moved every 20 minutes; it opened at 10:20, reminded every hour and held the probe at 503
+    net();
+    const db = testD1();
+    const e = env(db);
+    const UNB = 'Namada RPC (live unbond decode)';
+    const latched = (failedAt: number, lastAt: number) => ({ ...UP, [UNB]: { ok: false, at: lastAt, failedAt, note: 'block 8458000: abcd1234: unknown tx shape' } });
+    let lastAt = T0;
+    for (let m = 0; m <= 23 * 60; m++) {
+      if (m > 0 && m % 20 === 0) lastAt = T0 + m * MIN;
+      await tickAt(e, T0 + m * MIN, latched(T0, lastAt));
+    }
+    expect(discordPosts()).toHaveLength(0);
+    expect(state(db)!.watch[UNB]).toMatchObject({ since: T0, bad: 23 * 60 + 1, reads: 1 });
+    expect(await getHealth(db)).toMatchObject({ status: 200, body: { failing: [UNB], incidents: [] } });
+    // a second undecoded unbond at 09:00 the next day: a new failure, and so the incident
+    const second = T0 + 23 * H;
+    await tickAt(e, second + MIN, latched(second, lastAt));
+    expect(textsOf()).toEqual([`Opened: ${UNB}: not ok since 29 Oct 2026, 10:00${NB}UTC (23${NB}h, at least 10 ticks in a row): block 8458000: abcd1234: unknown tx shape.`]);
+    // the mark of a row that says when it failed is that time alone; any other row's is its time and words
+    expect(readMark({ name: UNB, ok: false, at: lastAt, failedAt: second, note: 'x' })).toBe(readMark({ name: UNB, ok: false, at: lastAt + H, failedAt: second, note: 'y' }));
+    expect(readMark({ name: EPOCH, ok: false, at: T0, note: 'x' })).not.toBe(readMark({ name: EPOCH, ok: false, at: T0, note: 'y' }));
+  });
+
+  it("the alert delivery row's words change as alerts wait in the hub; one post not sent is still one failure", async () => {
+    net();
+    const db = testD1();
+    const e = env(db);
+    const DEL = 'Discord alert delivery';
+    for (let m = 0; m <= 90; m++) {
+      const waiting = m % 3 ? ` ${m} alert part(s), ${m} post(s), wait in the live hub's pending list.` : '';
+      await tickAt(e, T0 + m * MIN, { ...UP, [DEL]: { ok: false, at: T0, failedAt: T0, note: `2 post(s) for whale alert not sent; 3 in all.${waiting}` } });
+    }
+    expect(discordPosts()).toHaveLength(0);
+    expect(state(db)!.watch[DEL]).toMatchObject({ reads: 1 });
+  });
+
+  it('a check that fails opens with its own title, one past its window as "no recent result"; one that only needs a look opens nothing', async () => {
     net();
     const db = testD1();
     const e = env(db);
     insert(db, 'checks', [
-      { key: 'osmosis_index', status: 'warn', title: "This site's Osmosis flow index: live stream and catch-up search", detail: '{}', checked_at: T0 },
+      { key: 'osmosis_index', status: 'fail', title: "This site's Osmosis flow index: live stream and catch-up search", detail: '{}', checked_at: T0 },
       { key: 'rpc_consensus', status: 'ok', title: 'Namada RPC agreement', detail: '{}', checked_at: T0 - 20 * MIN },
-      { key: 'osmosis_stream_share', status: 'ok', title: 'Osmosis moves found by the catch-up search', detail: JSON.stringify({ everyMs: H }), checked_at: T0 - 50 * MIN },
+      { key: 'bridge_records_paired', status: 'warn', title: 'Every bridge crossing is on record on both chains', detail: '{}', checked_at: T0 },
+      // 17% found late (29 Oct), hourly: it needs a look, for days on end, and is no outage
+      { key: 'osmosis_stream_share', status: 'warn', title: 'Osmosis moves found by the catch-up search', detail: JSON.stringify({ everyMs: H }), checked_at: T0 - 50 * MIN },
     ]);
     for (let i = 0; i <= 9; i++) {
-      db.raw.prepare("UPDATE checks SET checked_at = ? WHERE key = 'osmosis_index'").run(T0 + i * MIN);
+      db.raw.prepare("UPDATE checks SET checked_at = ? WHERE key IN ('osmosis_index', 'bridge_records_paired')").run(T0 + i * MIN);
       await tickAt(e, T0 + i * MIN, UP);
     }
     const [text] = textsOf();
     expect(text.split('\n')).toEqual([
-      `Opened: check osmosis\\_index: warn since 29 Oct 2026, 10:00${NB}UTC (9${NB}min, at least 10 ticks in a row): This site's Osmosis flow index: live stream and catch-up search.`,
+      `Opened: check osmosis\\_index: failing since 29 Oct 2026, 10:00${NB}UTC (9${NB}min, at least 10 ticks in a row): This site's Osmosis flow index: live stream and catch-up search.`,
       `Opened: check rpc\\_consensus: with no recent result since 29 Oct 2026, 10:00${NB}UTC (9${NB}min, at least 10 ticks in a row): last run 29 Oct 2026, 09:40${NB}UTC; Namada RPC agreement.`,
     ]);
-    // the hourly check is current for twice its cadence
-    expect(state(db)!.open['check:osmosis_stream_share']).toBeUndefined();
+    expect(Object.keys(state(db)!.open).sort()).toEqual(['check:osmosis_index', 'check:rpc_consensus']);
+    expect(state(db)!.watch).toEqual({});
+    // both pass again; the two warn checks go on for four hours of ticks, the hourly one run each hour: never an
+    // incident, and the probe is green once the others are resolved
+    db.raw.prepare("UPDATE checks SET status = 'ok' WHERE key = 'osmosis_index'").run();
+    for (let m = 10; m <= 4 * 60; m++) {
+      db.raw.prepare("UPDATE checks SET checked_at = ? WHERE key IN ('osmosis_index', 'bridge_records_paired', 'rpc_consensus')").run(T0 + m * MIN);
+      if (m % 60 === 0) db.raw.prepare("UPDATE checks SET checked_at = ? WHERE key = 'osmosis_stream_share'").run(T0 + m * MIN);
+      await tickAt(e, T0 + m * MIN, UP);
+    }
+    expect(textsOf().slice(1).flatMap((t) => t.split('\n')).map((l) => l.slice(0, 33))).toEqual(['Resolved: check osmosis\\_index: o', 'Resolved: check rpc\\_consensus: o']);
+    expect(state(db)).toMatchObject({ open: {}, watch: {} });
+    expect(await getHealth(db)).toMatchObject({ status: 200, body: { failing: [], incidents: [] } });
+  });
+
+  it('a health row turned off on purpose (the depth kill switch, a Worker that does not send alerts) opens nothing', () => {
+    expect(offOnPurpose(KILL_SWITCH_NOTE)).toBe(true);
+    expect(offOnPurpose(alertDeliveryOff({}, T0)!.note)).toBe(true);
+    for (const n of ['Offline: no node answered', 'Error: HTTP 503', 'the depth kv rows could not be read: Off', undefined]) expect(offOnPurpose(n)).toBe(false);
+    const rows = {
+      [DEPTH_HEALTH.pools]: { name: DEPTH_HEALTH.pools, ok: false, at: T0, note: KILL_SWITCH_NOTE },
+      'Discord alert delivery': alertDeliveryOff({}, T0)!,
+      [EPOCH]: { name: EPOCH, ok: false, at: T0, note: 'Offline: no node answered' },
+    };
+    expect([...judge(rows, [], T0, T0).keys()]).toEqual([EPOCH]);
+  });
+
+  it("with the depth module's kill switch off (kv depth.on '0'), its rows and its four checks gone quiet open nothing, and an open one is let go unsaid", async () => {
+    net();
+    const db = testD1();
+    const e = env(db);
+    expect(DEPTH_NAMES).toEqual([...Object.values(DEPTH_HEALTH), 'check:depth_vs_chain_estimate', 'check:depth_vs_route_quote', 'check:depth_vs_executed', 'check:depth_budget']);
+    const depthChecks = ['depth_vs_chain_estimate', 'depth_vs_route_quote', 'depth_vs_executed', 'depth_budget'];
+    insert(db, 'checks', depthChecks.map((key) => ({ key, status: 'ok', title: key, detail: '{}', checked_at: T0 })));
+    // the store row was failing before the switch went off, and opened
+    const store = { [DEPTH_HEALTH.store]: { ok: false, note: 'rows written past the warn mark' } };
+    for (let i = 0; i <= 9; i++) {
+      db.raw.prepare('UPDATE checks SET checked_at = ?').run(T0 + i * MIN);
+      await tickAt(e, T0 + i * MIN, { ...UP, ...store });
+    }
+    expect(textsOf()).toHaveLength(1);
+    expect(state(db)!.open[DEPTH_HEALTH.store]).toBeDefined();
+    // the owner turns depth off at 10:10: the minute writes the kill switch's rows and no check from then on
+    insert(db, 'kv', [{ key: 'depth.on', value: '0', updated_at: T0 + 10 * MIN }]);
+    const off = { ...UP, ...store, [DEPTH_HEALTH.pools]: { ok: false, note: KILL_SWITCH_NOTE }, [DEPTH_HEALTH.owners]: { ok: false, note: KILL_SWITCH_NOTE } };
+    for (let m = 10; m <= 3 * 60; m++) await tickAt(e, T0 + m * MIN, off);
+    expect(textsOf()).toHaveLength(1);
+    expect(state(db)).toMatchObject({ open: {}, watch: {}, closing: [] });
+    expect(await getHealth(db)).toMatchObject({ status: 200, body: { failing: [], incidents: [] } });
+    // back on, and still not written: the quiet checks are incidents again, after their ten ticks
+    db.raw.prepare("DELETE FROM kv WHERE key = 'depth.on'").run();
+    for (let m = 3 * 60 + 1; m <= 3 * 60 + 10; m++) await tickAt(e, T0 + m * MIN, UP);
+    expect(textsOf()[1].split('\n').map((l) => l.slice(0, 40))).toEqual([...depthChecks].sort().map((k) => `Opened: check ${k.replace(/_/g, '\\_')}: with no recent result`.slice(0, 40)));
+    expect(letGo(null, '1')).toEqual(new Set());
+    expect(letGo(null, ' 0 ')).toEqual(new Set(DEPTH_NAMES));
+  });
+
+  it('a name on the quiet list (kv ops.quiet) opens nothing; one open when it is put there is let go unsaid; the cron is never quiet', async () => {
+    net();
+    const db = testD1();
+    const e = env(db);
+    for (let i = 0; i <= 9; i++) await tickAt(e, T0 + i * MIN, DOWN);
+    expect(textsOf()).toHaveLength(1);
+    expect((await getHealth(db)).status).toBe(503);
+    // the owner knows the node is down for days: puts it on the list
+    insert(db, 'kv', [{ key: OPS_QUIET_KV, value: JSON.stringify([EPOCH, 'check:indexer_lag']), updated_at: T0 + 10 * MIN }]);
+    for (let m = 10; m <= 6 * 60; m++) await tickAt(e, T0 + m * MIN, DOWN);
+    expect(textsOf()).toHaveLength(1);
+    expect(state(db)).toMatchObject({ open: {}, watch: {}, closing: [] });
+    expect(await getHealth(db)).toMatchObject({ status: 200, body: { failing: [], incidents: [] } });
+    // taken off the list while still down: it opens again after its ten ticks
+    db.raw.prepare('DELETE FROM kv WHERE key = ?').run(OPS_QUIET_KV);
+    for (let m = 6 * 60 + 1; m <= 6 * 60 + 10; m++) await tickAt(e, T0 + m * MIN, DOWN);
+    expect(textsOf()[1]).toMatch(/^Opened: Namada RPC \(epoch\): not ok since 29 Oct 2026, 16:01/);
+    // anything but a list of names is no list, and the cron's own ticks are never let go
+    for (const raw of [null, '', 'Namada RPC (epoch)', '{"a":1}', '[1, null]']) expect(quietOf(raw)).toEqual(new Set());
+    expect(quietOf('[" Namada RPC (epoch) ", ""]')).toEqual(new Set([EPOCH]));
+    expect(letGo(JSON.stringify([CRON_TICKS, EPOCH]), null)).toEqual(new Set([EPOCH]));
   });
 
   it("the cron's own row counts only on the tick that wrote it (a failed tick's row stays until a skipped one replaces it)", () => {
@@ -353,7 +506,17 @@ describe("the cron's own ticks", () => {
     await watchCronStall(e);
     expect(discordPosts()).toHaveLength(1);
     const row = JSON.parse((db.raw.prepare('SELECT value FROM kv WHERE key = ?').get(OPS_STALL_KV) as { value: string }).value);
-    expect(row).toEqual({ since: T0 + H, openedAt: T0 + H + 15 * MIN, toldAt: T0 + H + 15 * MIN, remindedAt: T0 + H + 15 * MIN });
+    expect(row).toEqual({ since: T0 + H, openedAt: T0 + H + 15 * MIN, toldAt: T0 + H + 15 * MIN, remindedAt: T0 + H + 15 * MIN, reminds: 0 });
+  });
+
+  it('the hub reminds of a cron that stays stopped as the ticks are reminded: 1 h after its open, then 2 h after that', async () => {
+    net();
+    const db = testD1();
+    const e = env(db);
+    await tickAt(e, T0, UP);
+    for (let m = 11; m <= 4 * 60; m++) { vi.setSystemTime(T0 + m * MIN); await watchCronStall(e); }
+    expect(discordPosts().map((p) => (p.at - T0) / MIN)).toEqual([11, 71, 191]);
+    expect(textsOf()[2]).toBe(`Still open: Cron ticks: no tick has completed since 29 Oct 2026, 10:00${NB}UTC (3.2${NB}h).`);
   });
 });
 

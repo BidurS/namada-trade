@@ -6,7 +6,7 @@
 // name appears only in the sheet, under "Technical name".
 import type { ReactNode } from 'react';
 import type { Check, Pressure, Provenance, SourceStatus, Sourced } from '../../../shared/types';
-import { ageOf, fmtCount, fmtDayMonthYear, fmtMonthYear, fmtNamRule, fmtPctRule, fmtUtcClock, fmtUtcLong } from './format';
+import { ageOf, fmtCount, fmtDayMonthYear, fmtMonthYear, fmtNamRule, fmtPctRule, fmtSharePct, fmtUtcClock, fmtUtcLong } from './format';
 import { DEPTH_CHECK_TITLES } from '../../../shared/depth-checks';
 
 export type Status = SourceStatus;
@@ -181,6 +181,18 @@ const detailNum = (v: unknown): number | null => {
   return Number.isFinite(n) ? n : null;
 };
 const plural = (n: number, one: string, many: string) => `${fmtCount(n)} ${Math.abs(n) === 1 ? one : many}`;
+/**
+ * The share of moves found late as the stream-share line shows it, from the counts: one decimal, but a share under the
+ * pass line never reads as the line or over it (4.97% is "4.97%", two decimals cut, not "5.0%"), and a share that is
+ * not nothing never reads 0.0% (1 of 3,000 is "0.033%").
+ */
+const lateShare = (late: number, n: number, line: number | null): string => {
+  const s = (late / n) * 100;
+  const one = Math.round(s * 10) / 10;
+  if (line != null && s < line && one >= line) return fmtPctRule(Math.floor(s * 100) / 100, 2);
+  if (late > 0 && one === 0) return fmtSharePct(s);
+  return fmtPctRule(s, 1);
+};
 
 /**
  * A check's result in one plain line under its title ("1,614 NAM apart", "68.2% of staked NAM matched to
@@ -275,11 +287,17 @@ export function checkDetail(c: Check): string | null {
       return typeof d.streaming === 'boolean' ? (d.streaming ? 'listening' : 'not listening') : null;
     case 'osmosis_stream_share': {
       // The share of the last 24 h of Osmosis moves that the five-minute catch-up found rather than the live stream
-      // (worker/src/cron.ts streamShareCheck); a day with no move has nothing to compare, never 0%.
+      // (worker/src/cron.ts streamShareCheck), from its counts; a day with no move has nothing to compare, never 0%,
+      // and a day with too few moves to judge says how many, not a share.
       if (d.noFlows === true) return 'No Osmosis move in the last 24 h to compare';
-      const n = detailNum(d.flows), late = detailNum(d.catchUp), pct = detailNum(d.sharePct);
-      if (n == null || late == null || pct == null) return null;
-      return `${fmtPctRule(pct, 1)} found late: ${fmtCount(late)} of ${plural(n, 'Osmosis move', 'Osmosis moves')} in the last 24 h were not heard live; the five-minute catch-up found them`;
+      const n = detailNum(d.flows), late = detailNum(d.catchUp);
+      if (n == null || late == null || n <= 0 || late < 0 || late > n) return null;
+      const min = detailNum(d.minFlows);
+      if (d.tooFew === true && min != null) {
+        return `Too few to judge: ${plural(n, 'Osmosis move', 'Osmosis moves')} in the last 24 h, ${late === 0 ? 'none' : fmtCount(late)} found late; the share is judged from ${plural(min, 'move', 'moves')}`;
+      }
+      if (late === 0) return `None found late: ${n === 1 ? 'the one Osmosis move' : `all ${plural(n, 'Osmosis move', 'Osmosis moves')}`} in the last 24 h ${n === 1 ? 'was' : 'were'} heard live`;
+      return `${lateShare(late, n, detailNum(d.okBelowPct))} found late: ${fmtCount(late)} of ${plural(n, 'Osmosis move', 'Osmosis moves')} in the last 24 h ${late === 1 ? 'was' : 'were'} not heard live; the five-minute catch-up found ${late === 1 ? 'it' : 'them'}`;
     }
     case 'depth_budget': {
       // The depth store's caps (worker/src/depth/budget.ts budgetCheckStmt): the rows written this month against the

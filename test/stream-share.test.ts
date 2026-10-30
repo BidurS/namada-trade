@@ -1,7 +1,9 @@
 // The stream-share check (scale plan, Stage 1 item 7): how much of the last 24 h of Osmosis moves reached the site only
 // through the five-minute catch-up search (meta.via 'catch-up search', live-hub.ts sweepOsmosis) and not the live
 // stream. The plan's critic measured 8% on 23 Oct, 13% on 28 Oct and 17% on 29 Oct (31 of 181 rows). The check passes
-// under 5%, has nothing to compare on a day with no Osmosis move (never 0%), runs hourly with one read of the day's rows
+// under 5%, has nothing to compare on a day with no Osmosis move (never 0%) or with too few to judge (under 21, where
+// one move found late would be 5% or more by itself), shows a share that passes under the line, never at it (review of
+// 2026-10-29: 9 of 181 read "5.0%" while it passed), runs hourly with one read of the day's rows
 // by time (flows_ts), and says its cadence, so the Status page reads "no recent result" only once an hourly run is
 // missed. The cron's tick also records its completion for the operator's incidents (worker/src/ops.ts); a tick the lock
 // skips records nothing. Fetch is stubbed: every host answers 503.
@@ -12,7 +14,7 @@ vi.mock('cloudflare:workers', () => ({
 }));
 import { testD1, insert, type TestD1 } from './d1-sqlite';
 import { kvJson, stubDiscord, tick } from './digest-net';
-import { streamShareCheck, streamShareDue, takeTickLock, STREAM_SHARE_SQL, STREAM_SHARE_EVERY_MS, STREAM_SHARE_OK_PCT } from '../worker/src/cron';
+import { streamShareCheck, streamShareDue, takeTickLock, STREAM_SHARE_SQL, STREAM_SHARE_EVERY_MS, STREAM_SHARE_MIN_FLOWS, STREAM_SHARE_OK_PCT } from '../worker/src/cron';
 import { checkOf, CHECK_STALE_MS } from '../worker/src/api';
 import { checkStaleMs } from '../worker/src/digest/freshness';
 import { shapeChecks } from '../worker/src/digest/operator';
@@ -46,14 +48,22 @@ const c = (detail: Record<string, unknown>, status: Check['status'] = 'ok'): Che
 afterEach(() => { vi.useRealTimers(); vi.unstubAllGlobals(); });
 
 describe('the stream-share check: math and status', () => {
-  it('17.13% of 181 (29 Oct) needs a look; under 5% passes; exactly 5% does not; a day with no move is idle, never 0%', () => {
+  it('17.13% of 181 (29 Oct) needs a look; under 5% passes; exactly 5% does not; a day with no move, or too few, is idle, never 0%', () => {
     const at = (n: number, late: number) => { const s = streamShareCheck(n, late, T); return { status: s.params[1], detail: JSON.parse(String(s.params[3])) }; };
-    expect(at(181, 31)).toEqual({ status: 'warn', detail: { flows: 181, catchUp: 31, sharePct: 17.13, okBelowPct: STREAM_SHARE_OK_PCT, windowHours: 24, everyMs: H, from: T - 24 * H, to: T } });
+    expect(at(181, 31)).toEqual({ status: 'warn', detail: { flows: 181, catchUp: 31, sharePct: 17.13, okBelowPct: STREAM_SHARE_OK_PCT, minFlows: 21, windowHours: 24, everyMs: H, from: T - 24 * H, to: T } });
     expect(at(200, 9)).toMatchObject({ status: 'ok', detail: { sharePct: 4.5 } });
     expect(at(100, 5)).toMatchObject({ status: 'warn', detail: { sharePct: 5 } });
-    // judged on the share itself, not the rounded figure
-    expect(at(100_000, 4_999)).toMatchObject({ status: 'ok', detail: { sharePct: 5 } });
-    expect(at(0, 0)).toEqual({ status: 'idle', detail: { flows: 0, catchUp: 0, sharePct: null, okBelowPct: 5, windowHours: 24, everyMs: H, from: T - 24 * H, to: T, noFlows: true } });
+    // judged on the share itself; a share that passes is written cut, never as the line (4.999% is 4.99, not 5)
+    expect(at(100_000, 4_999)).toMatchObject({ status: 'ok', detail: { sharePct: 4.99 } });
+    expect(at(181, 9)).toMatchObject({ status: 'ok', detail: { sharePct: 4.97 } });
+    expect(at(0, 0)).toEqual({ status: 'idle', detail: { flows: 0, catchUp: 0, sharePct: null, okBelowPct: 5, minFlows: 21, windowHours: 24, everyMs: H, from: T - 24 * H, to: T, noFlows: true } });
+    // 21 moves: the fewest of which one found late is under 5% (1 of 20 would be 5% by itself)
+    expect(STREAM_SHARE_MIN_FLOWS).toBe(21);
+    expect(at(20, 1)).toMatchObject({ status: 'idle', detail: { flows: 20, catchUp: 1, sharePct: 5, tooFew: true } });
+    expect(at(1, 1)).toMatchObject({ status: 'idle', detail: { tooFew: true } });
+    expect(at(21, 1)).toMatchObject({ status: 'ok', detail: { sharePct: 4.76 } });
+    expect(at(21, 1).detail.tooFew).toBeUndefined();
+    expect(at(21, 2)).toMatchObject({ status: 'warn' });
     expect(streamShareCheck(181, 31, T).params[0]).toBe('osmosis_stream_share');
   });
 
@@ -77,12 +87,25 @@ describe('the stream-share check: words and staleness', () => {
   it('a plain title and one line of what it found, in the words the site uses elsewhere', () => {
     expect(CHECK_TITLES.osmosis_stream_share).toBe('Osmosis moves reach this site as they happen');
     expect(checkTitle({ key: 'osmosis_stream_share' })).toBe(CHECK_TITLES.osmosis_stream_share);
+    const line = (n: number, late: number) => checkDetail(c(JSON.parse(String(streamShareCheck(n, late, T).params[3]))));
     const d = JSON.parse(String(streamShareCheck(181, 31, T).params[3]));
     expect(checkDetail(c(d, 'warn'))).toBe('17.1% found late: 31 of 181 Osmosis moves in the last 24 h were not heard live; the five-minute catch-up found them');
-    expect(checkDetail(c(JSON.parse(String(streamShareCheck(1, 0, T).params[3]))))).toBe('0.0% found late: 0 of 1 Osmosis move in the last 24 h were not heard live; the five-minute catch-up found them');
+    // one found late is "was ... it"; none is said as such, not as 0.0% of them not heard live
+    expect(line(181, 1)).toBe('0.6% found late: 1 of 181 Osmosis moves in the last 24 h was not heard live; the five-minute catch-up found it');
+    expect(line(181, 0)).toBe('None found late: all 181 Osmosis moves in the last 24 h were heard live');
+    // a share that passes never reads as the line, and one that is not nothing never reads 0.0%
+    expect(line(181, 9)).toBe('4.97% found late: 9 of 181 Osmosis moves in the last 24 h were not heard live; the five-minute catch-up found them');
+    expect(line(100_000, 4_999)).toMatch(/^4\.99% found late: 4,999 of 100,000 /);
+    expect(line(3_000, 1)).toMatch(/^0\.033% found late: 1 of 3,000 /);
+    expect(line(100, 5)).toMatch(/^5\.0% found late: 5 of 100 /);
+    // too few to judge: the counts, not a share
+    expect(line(7, 1)).toBe('Too few to judge: 7 Osmosis moves in the last 24 h, 1 found late; the share is judged from 21 moves');
+    expect(line(1, 0)).toBe('Too few to judge: 1 Osmosis move in the last 24 h, none found late; the share is judged from 21 moves');
     expect(checkDetail(c(JSON.parse(String(streamShareCheck(0, 0, T).params[3])), 'idle'))).toBe('No Osmosis move in the last 24 h to compare');
     expect(checkDetail(c({}))).toBeNull();
-    for (const s of [CHECK_TITLES.osmosis_stream_share, checkDetail(c(d))!, checkDetail(c({ noFlows: true }))!]) expect(s).not.toMatch(BANNED);
+    // counts that cannot be (more found late than moves) say nothing rather than a share over 100%
+    expect(checkDetail(c({ flows: 10, catchUp: 11 }))).toBeNull();
+    for (const s of [CHECK_TITLES.osmosis_stream_share, checkDetail(c(d))!, line(181, 1)!, line(181, 0)!, line(7, 1)!, checkDetail(c({ noFlows: true }))!]) expect(s).not.toMatch(BANNED);
   });
 
   it('is current for twice its hour, where a check run every tick is stale after 15 min', () => {
