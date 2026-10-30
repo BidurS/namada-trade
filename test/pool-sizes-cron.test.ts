@@ -73,7 +73,7 @@ const kv = <T,>(db: TestD1, key: string): T => JSON.parse(db.raw.prepare('SELECT
 const metric = (db: TestD1, key: string) => db.raw.prepare('SELECT ts, value FROM metrics WHERE key = ?').get(key) as { ts: number; value: number } | undefined;
 
 describe('the cron tick stores the Osmosis answers visitors read', () => {
-  it('every listed pool sized from its reserves, the depth minute\'s pools at its height; the totals beside the list; the size table quoted one size at a time', async () => {
+  it('every listed pool sized from its reserves, the depth minute\'s pools at its reference height; the totals beside the list; the size table quoted one size at a time', async () => {
     const db = seeded();
     const quotes = network();
     await tick(db);
@@ -83,15 +83,16 @@ describe('the cron tick stores the Osmosis answers visitors read', () => {
     expect(row.at).toBe(T);
     expect(row.depth).toMatchObject({ minute: latest.at, height: latest.ref.height, refPool: '3005', refUsd: latest.ref.usd });
     expect(row.price).toMatchObject({ usd: NAM_USD, source: 'Osmosis SQS' });
-    // a pool the depth minute covers: its NAM at the reference pool's own spot plus its counter value, at its read height
+    // a pool the depth minute covers: its NAM at the reference pool's own spot plus its counter value, stamped with the
+    // balances' time and the height of the spot the NAM is priced at
     const covered = row.pools.filter((p) => p.sizeProv?.source === SIZE_SOURCE.depth);
     expect(covered.length).toBe(latest.pools.length);
     for (const p of covered) {
       const d = latest.pools.find((x: any) => x.id === p.id);
       expect(p.liquidityUsd, p.id).toBeCloseTo(d.nam * latest.ref.usd + d.counterValueUsd, 9);
-      expect(p.sizeProv!.height, p.id).toBe(d.read.height ?? latest.ref.height);
+      expect(p.sizeProv, p.id).toMatchObject({ at: d.balancesAt, height: REF_HEIGHT, status: 'live' });
     }
-    expect(covered.find((p) => p.id === '3005')!.sizeProv!.height).toBe(REF_HEIGHT);
+    expect(latest.ref.height).toBe(REF_HEIGHT);
     // every other listed pool: the router's reserves at the tick's price, or not priced with the reason
     const rest = row.pools.filter((p) => p.sizeProv?.source === SIZE_SOURCE.list);
     expect(covered.length + rest.length).toBe(row.pools.length);

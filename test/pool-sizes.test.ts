@@ -56,7 +56,7 @@ describe('a pool\'s size from its reserves', () => {
     expect(p.namUsd).toBeCloseTo(982_189.503942 * 0.000873861, 9);
     expect(p).toMatchObject({ namReserve: 982_189.503942, counterReserve: 158.59, counterUsd: 158.59, routerLiquidityUsd: 151 });
     expect(p.sizeProv).toMatchObject({ source: SIZE_SOURCE.depth, at: T - 16_000, height: 73_489_118, status: 'live' });
-    expect(p.sizeProv!.note).toBe('982,190 NAM at pool 3005\'s own price on the chain, $0.000874 at height 73,489,118, plus 158.59 USDC (Noble USDC counted as one US dollar), from the depth minute of 20:17 UTC.');
+    expect(p.sizeProv!.note).toBe('From the depth minute of 20:17 UTC: 982,190 NAM at pool 3005\'s own price on the chain ($0.000874 at height 73,489,118) plus 158.59 USDC (Noble USDC counted as one US dollar); the balances as the router\'s pool list gave them at 20:17 UTC.');
   });
 
   it('a pool it does not cover: the router\'s reserves, NAM at the site\'s price and the other coin at a price the code already has', () => {

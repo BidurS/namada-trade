@@ -115,15 +115,18 @@ export function sizePools(input: SizeInput): PoolInfo[] {
   return sized.sort((a, b) => (fin(b.liquidityUsd) ? b.liquidityUsd : -1) - (fin(a.liquidityUsd) ? a.liquidityUsd : -1) || b.namReserve - a.namReserve);
 }
 
-/** A pool the depth minute covers: the minute's NAM at the reference pool's own spot plus its counter value; else null. */
+/**
+ * A pool the depth minute covers: the minute's NAM at the reference pool's own spot plus its counter value; else null.
+ * The minute's two balances are the pool list's of the same tick (DepthPool.balancesAt), so the stamp's time is theirs
+ * and its height the reference spot's, the chain read the NAM is priced at.
+ */
 function fromDepth(depth: DepthResponse | null, p: PoolInfo): PoolInfo | null {
   const d = depth?.pools.find((x) => x.id === p.id);
   if (!depth || !d || !fin(d.counterValueUsd) || !fin(d.nam) || d.counter == null || !(depth.ref.usd > 0)) return null;
   const namUsd = d.nam * depth.ref.usd;
-  const height = 'height' in d.read && d.read.height != null ? d.read.height : depth.ref.height;
   const sizeProv: Provenance = {
-    source: SIZE_SOURCE.depth, at: d.balancesAt, height, status: 'live',
-    note: `${coins(d.nam)} NAM at pool ${depth.ref.pool}'s own price on the chain, ${usdWords(depth.ref.usd)}${depth.ref.height != null ? ` at height ${depth.ref.height.toLocaleString('en-US')}` : ''}, plus ${coins(d.counter)} ${d.counterSymbol} (${d.counterUsdHow}), from the depth minute of ${fmtClock(depth.at)}.`,
+    source: SIZE_SOURCE.depth, at: d.balancesAt, height: depth.ref.height, status: 'live',
+    note: `From the depth minute of ${fmtClock(depth.at)}: ${coins(d.nam)} NAM at pool ${depth.ref.pool}'s own price on the chain (${usdWords(depth.ref.usd)}${depth.ref.height != null ? ` at height ${depth.ref.height.toLocaleString('en-US')}` : ''}) plus ${coins(d.counter)} ${d.counterSymbol} (${d.counterUsdHow}); the balances as the router's pool list gave them at ${fmtClock(d.balancesAt)}.`,
   };
   return { ...p, namReserve: d.nam, counterReserve: d.counter, liquidityUsd: namUsd + d.counterValueUsd, namUsd, counterUsd: d.counterValueUsd, sizeProv };
 }
