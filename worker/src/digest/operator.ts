@@ -2,7 +2,7 @@
 // health map, checks not passing, alert posts claimed and not sent, and the digest's own delivery record. Nothing in
 // them is personal: source names, counts, times. One db.batch wave; the pure shaper takes the answers, so the tests
 // shape literal health rows.
-import { CHECK_STALE_MS } from './freshness';
+import { checkStaleMs } from './freshness';
 import { SQL } from './sql';
 import { DAY_MS, DB_NOT_ANSWERED, ReadFailed, digestWindow, notRead, rowsOf, type Answer, type DigestKind, type DigestWindow, type Figure } from './types';
 import { Wave, type Prepared } from './waves';
@@ -14,12 +14,19 @@ export const DIGEST_LAST_KV = 'digest.last';
 export const DIGEST_LAST_WEEKLY_KV = 'digest.last.weekly';
 /** The delivery record of a kind of digest. */
 export const digestLastKv = (kind: DigestKind): string => (kind === 'weekly' ? DIGEST_LAST_WEEKLY_KV : DIGEST_LAST_KV);
-/** kv key of the health log cron.ts mergeHealth appends to on every ok flip: [{ name, at, ok, note }]. */
+/** kv key of the health log cron.ts mergeHealth appends to on every ok flip: [{ name, at, ok, note, cut?, cutFrom? }]. */
 export const DIGEST_HEALTH_LOG_KV = 'source.health.log';
+/**
+ * One name keeps at most this many entries of the health log (cron.ts keepHealthLog), so a source that flips all day
+ * cannot push the others' entries out; what a name's cap let go is counted on its oldest entry kept.
+ */
+export const HEALTH_LOG_PER_NAME = 20;
 
-export interface HealthLogRow { name: string; at: number; ok: number | boolean; note: string | null }
+/** `cut`, `cut_from`: on a name's oldest entry kept, how many older entries of it were let go, from when. */
+export interface HealthLogRow { name: string; at: number; ok: number | boolean; note: string | null; cut?: number | null; cut_from?: number | null }
 export interface HealthRow { name: string; ok: number | boolean; at: number | null; note: string | null }
-export interface CheckRow { key: string; status: string; checked_at: number }
+/** `every_ms`: the cadence a check that runs less often states in its detail (freshness.ts checkStaleMs). */
+export interface CheckRow { key: string; status: string; checked_at: number; every_ms?: number | null }
 export interface ClaimsRow {
   moves: number | null; crossing_repeats: number | null; crossings: number | null; governance: number | null; forum: number | null; digests: number | null;
   second_keys: number | null; other: number | null; first_at: number | null; last_at: number | null;
@@ -39,6 +46,8 @@ export interface OperatorReads {
 
 /** A source not ok from `from` until `to` (null: still not ok at T). */
 export interface HealthEpisode { name: string; from: number; to: number | null; note: string | null }
+/** A source whose `n` older changes, from `from`, are not kept: its entries held start at `to`. */
+export interface HealthCut { name: string; n: number; from: number; to: number }
 
 export interface SourcesLine {
   ok: number; total: number;
@@ -46,6 +55,8 @@ export interface SourcesLine {
   episodes: HealthEpisode[];
   /** the log's first entry in the window, or null when the log is empty: faults that cleared before it have no record */
   logFrom: number | null;
+  /** the sources in the window whose older changes the log let go (HEALTH_LOG_PER_NAME): their record starts later */
+  cut: HealthCut[];
 }
 /** `idle`: the checks that ran and had nothing to compare (status 'idle'), named so the count adds up. */
 export interface ChecksLine { ok: number; total: number; notPassing: { key: string; status: string; checkedAt: number; stale: boolean }[]; idle: string[] }
@@ -160,21 +171,27 @@ export function shapeSources(r: OperatorReads, win: DigestWindow): Figure<Source
   const okRows = health.filter((h) => h.ok === true || h.ok === 1);
   const notOk = health.filter((h) => !(h.ok === true || h.ok === 1)).map((h) => ({ name: h.name, since: h.at, note: h.note }));
   const at = health.reduce<number | null>((m, h) => (h.at != null && (m == null || h.at > m) ? h.at : m), null);
+  const cut = logRows
+    .filter((e) => Number(e.cut) > 0)
+    .map((e) => ({ name: e.name, n: Number(e.cut), from: Number.isFinite(Number(e.cut_from)) && e.cut_from != null ? Number(e.cut_from) : e.at, to: e.at }))
+    .sort((a, b) => a.to - b.to || a.name.localeCompare(b.name));
   return {
-    value: { ok: okRows.length, total: health.length, notOk, episodes: healthEpisodes(logRows), logFrom: logRows.length ? Math.min(...logRows.map((e) => e.at)) : null },
+    value: { ok: okRows.length, total: health.length, notOk, episodes: healthEpisodes(logRows), logFrom: logRows.length ? Math.min(...logRows.map((e) => e.at)) : null, cut },
     stamp: { source: 'source.health', at: at ?? win.now, status: 'live' },
   };
 }
 
 export function shapeChecks(r: OperatorReads, win: DigestWindow): Figure<ChecksLine> {
   const rows = rowsOf(r.checks, 'checks');
+  // a check that runs less often (hourly) is current for its own window, as the Status page judges it
+  const fresh = (c: CheckRow) => win.now - c.checked_at <= checkStaleMs(c.every_ms);
   const notPassing = rows
-    .map((c) => ({ key: c.key, status: c.status, checkedAt: c.checked_at, stale: win.now - c.checked_at > CHECK_STALE_MS }))
+    .map((c) => ({ key: c.key, status: c.status, checkedAt: c.checked_at, stale: !fresh(c) }))
     .filter((c) => (c.status !== 'ok' && c.status !== 'idle') || c.stale);
   return {
     value: {
-      ok: rows.filter((c) => c.status === 'ok' && win.now - c.checked_at <= CHECK_STALE_MS).length, total: rows.length, notPassing,
-      idle: rows.filter((c) => c.status === 'idle' && win.now - c.checked_at <= CHECK_STALE_MS).map((c) => c.key),
+      ok: rows.filter((c) => c.status === 'ok' && fresh(c)).length, total: rows.length, notPassing,
+      idle: rows.filter((c) => c.status === 'idle' && fresh(c)).map((c) => c.key),
     },
     stamp: { source: 'checks', at: rows.reduce((m, c) => Math.max(m, c.checked_at), 0) || win.now, status: 'live' },
   };

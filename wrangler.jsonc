@@ -81,5 +81,9 @@
   //   TELEGRAM_WEBHOOK_SECRET -> random, 32+ characters: Telegram sends it with each update (scripts/telegram-setup.mjs
   //                           sets the webhook with it); the webhook answers 404 without it
   //   TELEGRAM_CHANNEL     -> optional: the public channel of the site's own alerts ("@name"), the bot an admin there
+  //   TELEGRAM_OWNER_CHAT  -> optional: the operator's own Telegram chat id (the owner pressed Start with the bot): it
+  //                           hears the incidents (worker/src/ops.ts) beside DISCORD_WEBHOOK_URL. kv ops.alerts.on = '0'
+  //                           stops those posts; kv ops.quiet, a JSON list of names (a source's, or check:<key>), lets
+  //                           those go without a message
   //   ACCESS_AUD           -> optional: Cloudflare Access application AUD tag (checks the header is present only; Access itself is enforced at the edge)
 }

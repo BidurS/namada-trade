@@ -48,13 +48,17 @@ import { depthApp } from './api-depth';
 import { ROLLUP_KEYS } from './series-sql';
 import { DAY_HOURS, HISTORY_ALL_DAYS } from '../../shared/history';
 import { SINGLE_POOL_USDC_SWAP } from './cron';
+import { checkStaleMs } from './digest/freshness';
+import { readHealth } from './ops';
 
 /** A check that has not run for this long is served as 'stale': its last result is kept, but it no longer counts as
  *  passing (on 2026-10-19 the supply check kept a green "Passes" for 3.5 h after its source went quiet). */
 export const CHECK_STALE_MS = 15 * 60_000;
-export const checkOf = (r: any, now: number): Check => ({
-  key: r.key, status: now - Number(r.checked_at) > CHECK_STALE_MS ? 'stale' : r.status, title: r.title, detail: safeParseJson(r.detail), checkedAt: r.checked_at,
-});
+/** A check that runs less often (osmosis_stream_share, hourly) says its cadence in its detail and is stale after twice that (digest/freshness.ts checkStaleMs). */
+export const checkOf = (r: any, now: number): Check => {
+  const detail = safeParseJson(r.detail);
+  return { key: r.key, status: now - Number(r.checked_at) > Math.max(CHECK_STALE_MS, checkStaleMs(detail?.everyMs)) ? 'stale' : r.status, title: r.title, detail, checkedAt: r.checked_at };
+};
 
 /**
  * The stored source health as an answer may carry it: each note in words safe to publish (util.ts publicNote), so a
@@ -1823,6 +1827,15 @@ app.get('/api/integrity', async (c) => {
   const checks: Check[] = (rows.results || []).map((r: any) => checkOf(r, Date.now()));
   const health = (await kvGetJson<Record<string, SourceHealth>>(c.env.DB, 'source.health')) ?? {};
   return c.json({ checks, sources: publicSources(health), at: Date.now() });
+});
+
+// The probe of an uptime service outside Cloudflare (scale plan, Stage 1 item 4): whether the cron completed a tick
+// in the last 5 minutes and no incident is open (worker/src/ops.ts healthAnswer), 503 otherwise. Two kv rows by key in
+// one statement, 15 s at the edge (worker/src/http.ts keeps its 503 too); names and times only, no note, no address.
+app.get('/api/health', async (c) => {
+  const r = await readHealth(c.env.DB).catch((e) => { console.error('health', e); return null; });
+  if (!r) return c.json({ ok: false, lastTickAt: null, lastTickAgeMs: null, failing: [], incidents: [], note: 'The record of the last tick could not be read.' }, 503);
+  return c.json(r.body, r.status);
 });
 
 // No HTTP trigger for the cron: it ran the whole tick for anyone who asked (hundreds of node and Keplr requests,

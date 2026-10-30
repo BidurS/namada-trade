@@ -18,6 +18,8 @@ export interface Env {
   TELEGRAM_WEBHOOK_SECRET?: string;
   /** The public channel of the site's own alerts ("@name" or its id), the bot an admin there; unset: none */
   TELEGRAM_CHANNEL?: string;
+  /** The operator's own Telegram chat (its id), which hears the incidents (worker/src/ops.ts) through the bot; unset: Discord only */
+  TELEGRAM_OWNER_CHAT?: string;
   /** The owner's X app (OAuth 1.0a, Read and Write), secrets set by scripts/x-connect.sh: without all four nothing is posted on X (sources/x.ts) */
   X_API_KEY?: string;
   X_API_SECRET?: string;

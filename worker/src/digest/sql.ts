@@ -160,14 +160,15 @@ export const SQL = {
     WHERE a.day = ? AND a.state IS NOT b.state`,
 
   // ---- the operator embed (spec section 8)
-  /** the health log's entries in the window (kv PK + json_each) */
-  healthLog: `SELECT json_extract(e.value,'$.name') name, json_extract(e.value,'$.at') at, json_extract(e.value,'$.ok') ok, json_extract(e.value,'$.note') note
+  /** the health log's entries in the window (kv PK + json_each), with the count of a name's older entries let go (cron.ts keepHealthLog) */
+  healthLog: `SELECT json_extract(e.value,'$.name') name, json_extract(e.value,'$.at') at, json_extract(e.value,'$.ok') ok, json_extract(e.value,'$.note') note,
+      json_extract(e.value,'$.cut') cut, json_extract(e.value,'$.cutFrom') cut_from
     FROM kv, json_each(kv.value) e WHERE kv.key = 'source.health.log' AND json_extract(e.value,'$.at') >= ? ORDER BY name, at`,
   /** the current state of every source (kv PK + json_each) */
   health: `SELECT j.key name, json_extract(j.value,'$.ok') ok, json_extract(j.value,'$.at') at, json_extract(j.value,'$.note') note
     FROM kv, json_each(kv.value) j WHERE kv.key = 'source.health' ORDER BY ok, name`,
-  /** every check's latest status */
-  checks: 'SELECT key, status, checked_at FROM checks',
+  /** every check's latest status, and the cadence a check that runs less often states (freshness.ts checkStaleMs) */
+  checks: "SELECT key, status, checked_at, CASE WHEN json_valid(detail) THEN json_extract(detail, '$.everyMs') END every_ms FROM checks",
   /**
    * The alert claims taken in [from, to) by prefix (kv_alert_claim_time; its WHERE verbatim), counted as posts: a move
    * is one claim of its flow id (alert:flow:<id>, a primary-key join to flows for its kind); a NAM bridge crossing is

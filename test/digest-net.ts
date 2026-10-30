@@ -46,4 +46,5 @@ export const kvJson = (db: TestD1, key: string): any => {
 export const kvKeys = (db: TestD1, like: string): string[] => (db.raw.prepare('SELECT key FROM kv WHERE key LIKE ? ORDER BY key').all(like) as any[]).map((r) => r.key);
 /** Every word a post's embeds carry. */
 export const textOf = (p: SentPost): string => JSON.stringify(p.json.embeds);
-export const titlesOf = (p: SentPost): string[] => (p.json.embeds as any[]).map((e) => e.title ?? '');
+/** A post's embed titles; none for a post of text alone (the operator's incident lines, worker/src/ops.ts, after a gap between ticks). */
+export const titlesOf = (p: SentPost): string[] => ((p.json.embeds ?? []) as any[]).map((e) => e.title ?? '');

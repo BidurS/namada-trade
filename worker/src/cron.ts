@@ -29,7 +29,8 @@ import {
 } from './holders';
 import * as series from './series';
 import { prepareDigests, sendDigests, type DigestRun } from './digest/deliver';
-import { DIGEST_HEALTH_LOG_KV } from './digest/operator';
+import { DIGEST_HEALTH_LOG_KV, HEALTH_LOG_PER_NAME } from './digest/operator';
+import { runOps } from './ops';
 
 const INDEXER = 'https://indexer.namada.net/api/v1';
 /** kv key of the IBC packets stuck in the escrow (ibc-stuck.ts). */
@@ -61,7 +62,7 @@ export const SETTINGS_ROWS_HEALTH = 'Saved alert settings';
 /**
  * Not ok from 80% of either cap, and for a day after a cap refused a save (a wallet's first save past USER_ROWS_MAX,
  * or a channel turned on past DELIVERABLE_MAX). The numbers are said only from 80%: below it the row says there is
- * room, and no more.
+ * room, and no more. A refusal's row carries its time as `failedAt` (its words change as saves come in).
  */
 export async function settingsRowsHealth(db: D1Database, now: number): Promise<SourceHealth> {
   const DAY = 24 * 3600000;
@@ -76,8 +77,8 @@ export async function settingsRowsHealth(db: D1Database, now: number): Promise<S
     const nearOn = on >= Math.ceil(DELIVERABLE_MAX * 0.8);
     const places = `${taken} of ${USER_ROWS_MAX} places taken`;
     const channels = `${on} of ${DELIVERABLE_MAX} Discord channels on`;
-    if (recent) return { name: SETTINGS_ROWS_HEALTH, ok: false, at: refused!.lastAt, note: `${places}; a new wallet's first save was refused (${refused!.total} in all).` };
-    if (recentOn) return { name: SETTINGS_ROWS_HEALTH, ok: false, at: refused!.channelsAt!, note: `${channels}; a save turning one more on was refused (${refused!.channels ?? 0} in all).` };
+    if (recent) return { name: SETTINGS_ROWS_HEALTH, ok: false, at: refused!.lastAt, failedAt: refused!.lastAt, note: `${places}; a new wallet's first save was refused (${refused!.total} in all).` };
+    if (recentOn) return { name: SETTINGS_ROWS_HEALTH, ok: false, at: refused!.channelsAt!, failedAt: refused!.channelsAt!, note: `${channels}; a save turning one more on was refused (${refused!.channels ?? 0} in all).` };
     if (near) return { name: SETTINGS_ROWS_HEALTH, ok: false, at: now, note: `${places}; new wallets are refused at ${USER_ROWS_MAX}.` };
     if (nearOn) return { name: SETTINGS_ROWS_HEALTH, ok: false, at: now, note: `${channels}; more are refused at ${DELIVERABLE_MAX}.` };
     return { name: SETTINGS_ROWS_HEALTH, ok: true, at: now, note: `Room for new wallets (under ${Math.ceil(USER_ROWS_MAX * 0.8)} of ${USER_ROWS_MAX} places taken).` };
@@ -302,6 +303,44 @@ export const SINGLE_POOL_USDC_SWAP = `chain='osmosis' AND counter_denom='USDC' A
 /** How old the last hour with such a trade may be for the price check to compare against it. */
 export const PRICE_CHECK_WINDOW_MS = 6 * 3600000;
 
+/** The stream-share check (osmosis_stream_share) runs this often, over the moves of the last STREAM_SHARE_WINDOW_MS. */
+export const STREAM_SHARE_EVERY_MS = 3600_000;
+export const STREAM_SHARE_WINDOW_MS = 24 * 3600_000;
+/** Below this share of moves found by the catch-up search the check passes (scale plan, Stage 1 item 7). */
+export const STREAM_SHARE_OK_PCT = 5;
+/**
+ * The Osmosis rows of a window by time (flows_ts), and how many of them the catch-up search wrote (meta.via
+ * 'catch-up search', live-hub.ts sweepOsmosis): a row the stream wrote keeps its meta, as the search never rewrites a
+ * stored transaction. Matched with LIKE, so no row's meta is parsed. One row a move, as the list shows.
+ */
+export const STREAM_SHARE_SQL = `SELECT COUNT(*) n, COALESCE(SUM(CASE WHEN meta LIKE '%"via":"catch-up search"%' THEN 1 ELSE 0 END), 0) late
+  FROM flows INDEXED BY flows_ts WHERE ts >= ? AND ts < ? AND chain = 'osmosis'`;
+/** Whether the stream-share check runs this tick: never run, or its last run is STREAM_SHARE_EVERY_MS old. */
+export const streamShareDue = (lastAt: number | null, now: number): boolean => lastAt == null || now - lastAt >= STREAM_SHARE_EVERY_MS;
+/**
+ * Fewer moves than this in the window are too few to judge: the fewest of which one move found late is a share under
+ * STREAM_SHARE_OK_PCT (21 at 5%), so on a quiet day one late move alone never reads as a share over the line.
+ */
+export const STREAM_SHARE_MIN_FLOWS = Math.floor(100 / STREAM_SHARE_OK_PCT) + 1;
+/**
+ * The stream-share check from the window's counts: 'ok' under STREAM_SHARE_OK_PCT found late, 'warn' from it, 'idle'
+ * with no Osmosis move in the window (nothing to compare, never 0%) or fewer than STREAM_SHARE_MIN_FLOWS (`tooFew`).
+ * The detail says its cadence (`everyMs`), so the row reads "no recent result" only once an hourly run is missed
+ * (digest/freshness.ts checkStaleMs).
+ */
+export function streamShareCheck(n: number, late: number, now: number): Stmt {
+  // judged on the share itself; the detail keeps two decimals, cut rather than rounded under the line, so a share that
+  // passes is never written as the line (4.996% is 4.99, not 5)
+  const share = n > 0 ? (late / n) * 100 : null;
+  const pct = share == null ? null : share < STREAM_SHARE_OK_PCT ? Math.floor(share * 100) / 100 : Math.round(share * 100) / 100;
+  const tooFew = n > 0 && n < STREAM_SHARE_MIN_FLOWS;
+  const status = share == null || tooFew ? 'idle' : share < STREAM_SHARE_OK_PCT ? 'ok' : 'warn';
+  return stmt.check('osmosis_stream_share', status, 'Osmosis moves found by the catch-up search, not the live stream (24 h)', {
+    flows: n, catchUp: late, sharePct: pct, okBelowPct: STREAM_SHARE_OK_PCT, minFlows: STREAM_SHARE_MIN_FLOWS, windowHours: STREAM_SHARE_WINDOW_MS / 3600_000,
+    everyMs: STREAM_SHARE_EVERY_MS, from: now - STREAM_SHARE_WINDOW_MS, to: now, ...(pct == null ? { noFlows: true } : {}), ...(tooFew ? { tooFew: true } : {}),
+  }, now);
+}
+
 /**
  * The hourly stake estimate of every address from its bond and unbond flows (the figure shown only before any bond
  * listing has gone through, holders.ts stakeNum). A row is written only when its estimate changed: rewriting all
@@ -397,6 +436,15 @@ export async function takeTickLock(db: D1Database, id: string, now: number): Pro
       ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at WHERE kv.updated_at < ?`)
     .bind(id, now, now - TICK_LOCK_MS).run().catch(() => null);
   // A D1 without the kv table (or a failure) must not stop the tick: run unlocked.
+  return r == null ? true : Number(r.meta?.changes ?? 0) > 0;
+}
+/**
+ * Renews the tick lock this tick holds (kv cron.lock, its time set to `now`): true when it still holds it, so for the
+ * next TICK_LOCK_MS no other tick can take it; false when a later tick took it after it expired (a tick whose end ran
+ * past TICK_LOCK_MS). A D1 that cannot answer gives true, as takeTickLock runs unlocked then.
+ */
+export async function holdTickLock(db: D1Database, id: string, now: number): Promise<boolean> {
+  const r = await db.prepare(`UPDATE kv SET updated_at = ? WHERE key = 'cron.lock' AND value = ?`).bind(now, id).run().catch(() => null);
   return r == null ? true : Number(r.meta?.changes ?? 0) > 0;
 }
 export async function releaseTickLock(db: D1Database, id: string) {
@@ -1817,13 +1865,15 @@ export async function runCron(env: Env) {
         { totalStakeNam: stakeNam, posBalanceNam: posNam, notStakedNam: posNam - stakeNam }, now));
     }
 
-    // Live unbond decoder (LiveHub alarm): last outcome recorded in kv by liveUnbonds()
+    // Live unbond decoder (LiveHub alarm): last outcome recorded in kv by liveUnbonds(). The row's time is the last
+    // decode, which a success moves while the row stays not ok for a day after a failure; the failure's own time is
+    // `failedAt` (the operator's incidents count a new failure, ops.ts readMark), and so for the rows after it.
     const unb = await kvGetJson<LiveUnbondStatus>(env.DB, 'namada.unbonds.live');
     if (unb) {
       const lastFail = unb.failures[unb.failures.length - 1];
       const failedRecently = !!lastFail && now - lastFail.at < 24 * 3600000;
       health.push({
-        name: 'Namada RPC (live unbond decode)', ok: !failedRecently, at: unb.lastAt ?? lastFail?.at ?? now,
+        name: 'Namada RPC (live unbond decode)', ok: !failedRecently, at: unb.lastAt ?? lastFail?.at ?? now, ...(failedRecently ? { failedAt: lastFail.at } : {}),
         note: failedRecently
           ? `block ${lastFail.height}: ${lastFail.note}`.slice(0, 160)
           : `${unb.decoded} unbond request(s) decoded${unb.lastHeight ? `, last at block ${unb.lastHeight}` : ''}`,
@@ -1836,7 +1886,7 @@ export async function runCron(env: Env) {
       const lastFail = bnd.failures[bnd.failures.length - 1];
       const failedRecently = !!lastFail && now - lastFail.at < 24 * 3600000;
       health.push({
-        name: 'Namada RPC (live bond decode)', ok: !failedRecently, at: bnd.lastAt ?? lastFail?.at ?? now,
+        name: 'Namada RPC (live bond decode)', ok: !failedRecently, at: bnd.lastAt ?? lastFail?.at ?? now, ...(failedRecently ? { failedAt: lastFail.at } : {}),
         note: failedRecently
           ? `block ${lastFail.height}: ${lastFail.note}`.slice(0, 160)
           : `${bnd.decoded} bond request(s) decoded${bnd.lastHeight ? `, last block with a bond key read: ${bnd.lastHeight}` : ''}`,
@@ -1848,7 +1898,7 @@ export async function runCron(env: Env) {
     if (scan?.failures.length) {
       const last = scan.failures[scan.failures.length - 1];
       const recent = now - last.at < 24 * 3600000;
-      health.push({ name: 'Namada RPC (live block scan)', ok: !recent, at: last.at, note: (recent ? last.note : `last unreadable block ${last.height}, more than a day ago`).slice(0, 160) });
+      health.push({ name: 'Namada RPC (live block scan)', ok: !recent, at: last.at, ...(recent ? { failedAt: last.at } : {}), note: (recent ? last.note : `last unreadable block ${last.height}, more than a day ago`).slice(0, 160) });
     }
     // Alert posts that could not be sent (sources/discord.ts postAll: deadline passed or a webhook backed off). A
     // Worker that does not send alerts keeps the row pushed first (alertDeliveryOff), which this one never replaces.
@@ -1862,7 +1912,7 @@ export async function runCron(env: Env) {
       const waiting = pending && pending.parts > 0 ? ` ${pending.parts} alert part(s), ${pending.posts} post(s), wait in the live hub's pending list.` : '';
       if (skipped?.last.at) {
         const recent = now - skipped.last.at < 24 * 3600000;
-        health.push({ name: ALERT_DELIVERY_HEALTH, ok: !recent, at: skipped.last.at, note: `${skipped.last.n} post(s) for ${skipped.last.what} not sent; ${skipped.total} in all${waiting ? `.${waiting}` : ''}`.slice(0, 160) });
+        health.push({ name: ALERT_DELIVERY_HEALTH, ok: !recent, at: skipped.last.at, ...(recent ? { failedAt: skipped.last.at } : {}), note: `${skipped.last.n} post(s) for ${skipped.last.what} not sent; ${skipped.total} in all${waiting ? `.${waiting}` : ''}`.slice(0, 160) });
       } else health.push({ name: ALERT_DELIVERY_HEALTH, ok: true, at: now, note: `On: this Worker posts alerts, and no post not sent is on record.${waiting}` });
     }
     health.push(await settingsRowsHealth(env.DB, now));
@@ -1908,6 +1958,16 @@ export async function runCron(env: Env) {
       const swept = !!sw && now - sw.at <= OSMOSIS_SWEEP_STALE_MS;
       checkStmts.push(stmt.check('osmosis_index', streaming && swept ? 'ok' : streaming || swept ? 'warn' : 'fail',
         'This site\'s Osmosis flow index: live stream and catch-up search', { streaming, lastStreamReport: l?.at ?? null, sweptToHeight: sw?.height ?? null, sweptAt: sw?.at ?? null }, now));
+    }
+    // How much of the last 24 h of Osmosis moves reached the site only through the catch-up search, not the live
+    // stream: hourly (its last run read by key), one read of the day's rows by time (STREAM_SHARE_SQL). A read that
+    // fails writes nothing, and the row goes to "no recent result" once a run is missed.
+    if (!late()) {
+      const lastShare = await env.DB.prepare(`SELECT checked_at FROM checks WHERE key = 'osmosis_stream_share'`).first<{ checked_at: number }>().then((r) => r?.checked_at ?? null, () => undefined);
+      if (lastShare !== undefined && streamShareDue(lastShare, now)) {
+        const r = await env.DB.prepare(STREAM_SHARE_SQL).bind(now - STREAM_SHARE_WINDOW_MS, now).first<{ n: number | null; late: number | null }>().catch((e) => { console.error('stream share', e); return null; });
+        if (r) checkStmts.push(streamShareCheck(Number(r.n ?? 0), Number(r.late ?? 0), now));
+      }
     }
 
     // Every bridge crossing should be on record on both chains (14 days; the last 30 minutes are not judged). The two
@@ -2162,6 +2222,13 @@ export async function runCron(env: Env) {
     await intel;
     await trials;
     if (health.length > merged) await mergeHealth(env, health.slice(merged));
+    // The operator's incidents (ops.ts): the tick's rows and checks judged once all are written, and the tick's
+    // completion recorded (the live hub and /api/health read it). The lock expires TICK_LOCK_MS after it was taken,
+    // and a tick whose end ran past that may have a later one running: the lock is renewed first, so no later tick can
+    // take it during the pass, and a tick that lost it leaves the pass to the one that holds it (two passes would read
+    // one state, tell the same lines twice, and the later write would undo the other's).
+    if (await holdTickLock(env.DB, lockId, Date.now())) await runOps(env, now).catch((e) => console.error('ops', e));
+    else console.error('ops: a later tick holds the lock; its pass judges this one\'s rows');
     await releaseTickLock(env.DB, lockId);
   }
 }
@@ -2223,17 +2290,61 @@ export async function mergeHealth(env: Env, health: SourceHealth[]) {
   if (flips.length) await appendHealthLog(env.DB, flips, Date.now());
 }
 
-/** One entry of the health log (kv source.health.log): a health row's ok flip, or a check's status change (name `check:<key>`). */
-export interface HealthLogEntry { name: string; at: number; ok: boolean; note: string }
-/** The health log keeps the entries of this long, and at most HEALTH_LOG_MAX of them, the newest. */
+/**
+ * One entry of the health log (kv source.health.log): a health row's ok flip, or a check's status change (name
+ * `check:<key>`). `cut` and `cutFrom`, on a name's oldest entry kept: how many older entries of that name the caps let
+ * go (keepHealthLog), and the time of the first of them, so the digest can say what it no longer holds.
+ */
+export interface HealthLogEntry { name: string; at: number; ok: boolean; note: string; cut?: number; cutFrom?: number }
+/** The health log keeps the entries of this long, at most HEALTH_LOG_PER_NAME of one name and HEALTH_LOG_MAX in all, the newest. */
 export const HEALTH_LOG_KEEP_MS = 48 * 3600_000;
 export const HEALTH_LOG_MAX = 200;
+/**
+ * One name keeps at most HEALTH_LOG_PER_NAME entries (ten episodes; digest/operator.ts, whose embed says it), so a
+ * source that flips all day cannot push the others' entries out: on 2026-10-29 osmosis_index flipped 124 times in
+ * 9.6 h, and the 200 entries held little else.
+ */
+export { HEALTH_LOG_PER_NAME };
 export const HEALTH_LOG_NOTE_MAX = 120;
 
 /**
- * Appends entries to the health log: read once, the entries older than HEALTH_LOG_KEEP_MS dropped, the newest
- * HEALTH_LOG_MAX kept, written once. Called only when something flipped, so a quiet tick writes nothing. A log that
- * cannot be read is started again rather than left unwritten; a failed write is logged and costs only the entries.
+ * The log as kept, oldest first: entries older than HEALTH_LOG_KEEP_MS dropped, then each name's newest
+ * HEALTH_LOG_PER_NAME, then the newest HEALTH_LOG_MAX of all. Every entry a cap lets go is counted on its name's oldest
+ * entry kept (`cut`, with the time of the first one let go, `cutFrom`), the counts it carried included; an entry that
+ * ages out takes its count with it (all of it older than the window). A name every entry of which the overall cap lets
+ * go leaves no count: the log's own first entry says from when it holds anything, as before.
+ */
+export function keepHealthLog(entries: HealthLogEntry[], now: number): HealthLogEntry[] {
+  const fresh = entries.filter((e) => e.at >= now - HEALTH_LOG_KEEP_MS).sort((a, b) => a.at - b.at);
+  const cutOnto = (first: HealthLogEntry, gone: HealthLogEntry[]): HealthLogEntry => ({
+    ...first,
+    cut: (first.cut ?? 0) + gone.reduce((n, e) => n + 1 + (e.cut ?? 0), 0),
+    cutFrom: Math.min(first.cutFrom ?? first.at, ...gone.map((e) => e.cutFrom ?? e.at)),
+  });
+  const byName = new Map<string, HealthLogEntry[]>();
+  for (const e of fresh) (byName.get(e.name) ?? byName.set(e.name, []).get(e.name)!).push(e);
+  let kept: HealthLogEntry[] = [];
+  for (const list of byName.values()) {
+    if (list.length <= HEALTH_LOG_PER_NAME) { kept.push(...list); continue; }
+    const gone = list.slice(0, list.length - HEALTH_LOG_PER_NAME), rest = list.slice(gone.length);
+    kept.push(cutOnto(rest[0], gone), ...rest.slice(1));
+  }
+  kept.sort((a, b) => a.at - b.at);
+  if (kept.length > HEALTH_LOG_MAX) {
+    const gone = kept.slice(0, kept.length - HEALTH_LOG_MAX);
+    kept = kept.slice(gone.length);
+    for (const name of new Set(gone.map((e) => e.name))) {
+      const i = kept.findIndex((e) => e.name === name);
+      if (i >= 0) kept[i] = cutOnto(kept[i], gone.filter((e) => e.name === name));
+    }
+  }
+  return kept;
+}
+
+/**
+ * Appends entries to the health log: read once, kept as keepHealthLog keeps it, written once. Called only when
+ * something flipped, so a quiet tick writes nothing. A log that cannot be read is started again rather than left
+ * unwritten; a failed write is logged and costs only the entries.
  */
 export async function appendHealthLog(db: D1Database, entries: HealthLogEntry[], now: number): Promise<void> {
   if (!entries.length) return;
@@ -2242,8 +2353,7 @@ export async function appendHealthLog(db: D1Database, entries: HealthLogEntry[],
     const v = await kvGetJson<HealthLogEntry[]>(db, DIGEST_HEALTH_LOG_KV);
     if (Array.isArray(v)) cur = v.filter((e) => e && typeof e.name === 'string' && Number.isFinite(e.at));
   } catch { cur = []; }
-  const next = [...cur, ...entries].filter((e) => e.at >= now - HEALTH_LOG_KEEP_MS).sort((a, b) => a.at - b.at).slice(-HEALTH_LOG_MAX);
-  await kvSet(db, DIGEST_HEALTH_LOG_KV, next).catch((e) => console.error('health log: not written', e));
+  await kvSet(db, DIGEST_HEALTH_LOG_KV, keepHealthLog([...cur, ...entries], now)).catch((e) => console.error('health log: not written', e));
 }
 
 /**

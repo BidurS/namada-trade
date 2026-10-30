@@ -301,6 +301,12 @@ export interface SourceHealth {
   at: number;
   latencyMs?: number;
   note?: string;
+  /**
+   * On a row that stays not ok for a while after one failure (a day for the live decoders' and the scan's, a post not
+   * sent, a save refused): when that failure was. The operator's incidents (worker/src/ops.ts readMark) count a new
+   * failure as a new failed read, never the same one read again, a success since, or new words on the row.
+   */
+  failedAt?: number;
 }
 
 export interface Check {

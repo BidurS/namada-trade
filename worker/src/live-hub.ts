@@ -19,6 +19,7 @@ import { sendTelegramMove, telegramRun, TG_LIVE_MS, TG_LIVE_SENDS } from './sour
 import { postMoveOnX } from './sources/x';
 import { alarmBudget, configureAlerts, fanoutBudget, flushAlerts, isNamWhale, noteNotSent, offeredForAlerts, sendDiscordWhaleAlert, sendsAlerts, spentOut, FANOUT_DEADLINE_MS, UsersUnreadError, WEBHOOK_TIMEOUT_MS, type AlertBudget, type PendingAlert } from './sources/discord';
 import { fetchJson, redact, registerSecrets, FETCH_TEXT_MAX_BYTES, ReadBudgetError, ResponseTooLargeError, type ReadBudget } from './util';
+import { watchCronStall, OPS_STALL_LOOK_MS } from './ops';
 
 /** Moves found late (by the catch-up search, or by a Namada scan that was behind) alert only when they happened within this window. */
 export const LATE_ALERT_MAX_AGE_MS = 24 * 3600_000;
@@ -262,6 +263,8 @@ export class LiveHub extends DurableObject<Env> {
   private osmoLastMsgAt: number | null = null;
   private lastLiveReport = 0;
   private lastSweep = 0;
+  /** When the alarm last looked at the cron's last completed tick (ops.ts watchCronStall). */
+  private lastStallLook = 0;
   private needSweep = true;
   /** The NAM quote new moves are priced at, as osmoCtx.priceUsd: null when none is fresh (worker/src/live-quote.ts). */
   private lastPriceUsd: number | null = null;
@@ -809,6 +812,13 @@ export class LiveHub extends DurableObject<Env> {
 
       // Ensure Osmosis WS stays active
       this.ensureOsmosisWs();
+
+      // A cron that has stopped completing ticks cannot say so itself: the hub looks at its last completed tick at most
+      // once a minute (one kv read) and opens the operator's incident past CRON_STALE_MS (ops.ts watchCronStall).
+      if (Date.now() - this.lastStallLook >= OPS_STALL_LOOK_MS) {
+        this.lastStallLook = Date.now();
+        await watchCronStall(this.env).catch((e) => console.error('ops: the cron\'s ticks', e));
+      }
 
       // The Osmosis index's own state for the coverage stamps, and the catch-up search for what the stream missed.
       const t = Date.now();

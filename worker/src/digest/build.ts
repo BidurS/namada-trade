@@ -18,7 +18,7 @@ import {
   type QuoteSource, type RequestSide, type TrimState, type WatchLine as MessageWatchLine,
 } from './message';
 import { PRICE_HOW_KEY, priceHowAt, storedPriceNote, storedPriceSource, type PriceHowLog } from '../price-how';
-import { DIGEST_HEALTH_LOG_KV, digestKeysAsked, readOperatorFigures, type OperatorFigures as ReadOperator } from './operator';
+import { DIGEST_HEALTH_LOG_KV, HEALTH_LOG_PER_NAME, digestKeysAsked, readOperatorFigures, type OperatorFigures as ReadOperator } from './operator';
 import { SQL } from './sql';
 import {
   DAY_MS, DB_NOT_ANSWERED, digestWindow, isNotRead, notRead, type Change, type DigestKind, type Figure, type MetricFigure as ReadMetric,
@@ -431,7 +431,11 @@ export function toMessageOperator(o: ReadOperator, x: OperatorExtras): MessageOp
   };
   const fa = x.healthLogFirstAt;
   const healthLog: MessageOperator['healthLog'] = isNotRead(s) ? nr(s) : isNotRead(fa) ? nr(fa) : {
-    value: { firstAt: fa, flips: s.value.episodes.map((e) => ({ name: e.name, from: e.from, to: e.to, note: noteOf(e.note) })) },
+    value: {
+      firstAt: fa, flips: s.value.episodes.map((e) => ({ name: e.name, from: e.from, to: e.to, note: noteOf(e.note) })),
+      // a source whose older changes the log let go is named with how many, so its record's late start is said
+      ...(s.value.cut?.length ? { cut: s.value.cut, perName: HEALTH_LOG_PER_NAME } : {}),
+    },
   };
   const checks: MessageOperator['checks'] = isNotRead(o.checks) ? nr(o.checks) : {
     value: {

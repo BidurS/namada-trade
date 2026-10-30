@@ -5,7 +5,7 @@ import { DAY_MS, DAILY_DAYS, HISTORY_FETCH_DAYS } from '../../shared/history';
 import { TRADES_TAPE_LIMIT } from '../../shared/types';
 import { QUOTE_NAM_MIN, QUOTE_NAM_MAX, roundQuoteNam, HEAT_DAYS, CHANGES_LIMIT_MAX } from '../../shared/depth';
 
-export const CACHEABLE_API = /^\/api\/(overview|pools|pressure|blindspot|orderflow|flows|holders|search|metrics\/history|quote\/curve|alerts\/rules|alerts\/recent|intel|series|series\/changes|series\/volume|series\/pairs|series\/trades|series\/values|depth|depth\/quote|depth\/history|depth\/heat|depth\/owners|depth\/changes|integrity|donation)$/;
+export const CACHEABLE_API = /^\/api\/(overview|pools|pressure|blindspot|orderflow|flows|holders|search|metrics\/history|quote\/curve|alerts\/rules|alerts\/recent|intel|series|series\/changes|series\/volume|series\/pairs|series\/trades|series\/values|depth|depth\/quote|depth\/history|depth\/heat|depth\/owners|depth\/changes|integrity|donation|health)$/;
 
 const THRESHOLDS = ['ibcInventory', 'unlock', 'bigSwap', 'unshield', 'bond'];
 /**
@@ -44,6 +44,8 @@ export const CACHE_PARAMS: Record<string, string[]> = {
   // The cross-checks and the donation addresses: one kv read each, no parameter, no session
   '/api/integrity': [],
   '/api/donation': [],
+  // The uptime probe's answer (worker/src/ops.ts): two kv rows by key, no parameter, no session
+  '/api/health': [],
   '/api/export/holders': ['chain', 'by', 'category', 'search', 'limit', 'format', 'min', 'max'],
   '/api/export/flows': ['chain', 'kind', 'whale', 'minNam', 'arb', 'pairs', 'search', 'at', 'limit', 'format', 'since', 'addr', 'hash', 'height'],
 };
@@ -294,7 +296,9 @@ export async function cachedApi(request: Request, env: Env, ctx: ExecutionContex
   // The route reads the request as the key reads it: the key's own URL (only the parameters the route reads, each
   // once, as URLSearchParams decoded it), so the answer stored under a key is always the answer to that key.
   const res = await fetchApp(new Request(key.url, { method: 'GET', headers: request.headers }), env, ctx);
-  if (res.status !== 200) return apiHeaders(res, null);
+  // /api/health's 503 is its answer (the cron has stopped, or an incident is open), not a failure: it is kept too, so
+  // an outage that brings probes costs one read per location every 15 s
+  if (res.status !== 200 && !(res.status === 503 && url.pathname === '/api/health')) return apiHeaders(res, null);
   const stored = new Response(res.body, res);
   stored.headers.set('Cache-Control', isExport ? EXPORT_EDGE_CACHE : edgeCacheOf(url));
   stored.headers.set('X-Robots-Tag', 'noindex');

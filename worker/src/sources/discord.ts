@@ -970,6 +970,16 @@ async function postAll(targets: Target[], db: D1Database | undefined, what: stri
 const sleep = (ms: number) => new Promise<void>((r) => setTimeout(r, ms));
 
 /**
+ * One post to the operator's channel alone (DISCORD_WEBHOOK_URL): the operator's incidents (worker/src/ops.ts). It
+ * takes the path of every alert's operator part (postAll): never cut by a budget, a short Retry-After waited out in
+ * place, a hook in its backoff skipped and recorded with the posts not sent; a run that does not send alerts posts
+ * nothing. True when Discord took it.
+ */
+export async function sendDiscordOperator(webhookUrl: string, body: Record<string, unknown>, db: D1Database | undefined, what: string): Promise<boolean> {
+  return (await postAll([{ url: webhookUrl, body, op: true }], db, what)).posted > 0;
+}
+
+/**
  * Whether a run of the Worker posts alerts: only when its SEND_ALERTS secret is 'yes', which only production has
  * (`wrangler secret put SEND_ALERTS`, value yes; scripts/deploy-check.sh does not deploy without it). Any other run,
  * such as `wrangler dev` on a copy of the production database, posts nothing and never reads the users' settings: a

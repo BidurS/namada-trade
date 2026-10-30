@@ -129,7 +129,8 @@ describe('a Worker deployed before SEND_ALERTS is put', () => {
     // Posts not sent are reported as they were before the gate (sources/discord.ts postAll records them).
     insert(db, 'kv', [{ key: 'alerts.skipped', value: JSON.stringify({ total: 3, last: { what: 'whale alert', n: 2, at: PLAIN + 90_000 } }), updated_at: PLAIN + 90_000 }]);
     await tick({ ...env, SEND_ALERTS: 'yes' }, PLAIN + 120_000);
-    expect(deliveryRow(db)).toEqual({ name: 'Discord alert delivery', ok: false, at: PLAIN + 90_000, note: '2 post(s) for whale alert not sent; 3 in all' });
+    // the row stays not ok for a day after them, and says when they were (the operator's incidents count a new one only)
+    expect(deliveryRow(db)).toEqual({ name: 'Discord alert delivery', ok: false, at: PLAIN + 90_000, failedAt: PLAIN + 90_000, note: '2 post(s) for whale alert not sent; 3 in all' });
   });
 
   it('the row shows the live hub\'s pending list when alerts wait in it (live-hub.ts notePending), with or without posts not sent', async () => {
