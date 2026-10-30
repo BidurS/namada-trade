@@ -1,9 +1,10 @@
 import type { Env } from './util';
 import { runBatch, stmt, kvGet, kvSet, kvGetJson } from './db';
 import { fetchOsmosisHolderList, fetchOsmosisSupplyBase, fetchOsmosisBalanceBase, OSMOSIS_HOLDER_PAGES, OSMOSIS_NEXT_KEY_MAX, KEPLR_REST_SRC, type HolderListRead, type KeplrOpts, type OsmosisBalanceRead } from './sources/osmosis';
-import { fetchNamPools, fetchNamPrice, priceSourceName } from './sources/sqs';
+import { buildCurve, curveComplete, fetchNamPools, fetchNamPrice, priceSourceName, CURVE_TIERS } from './sources/sqs';
+import { CURVE_HEALTH_NAME, MINUTE_STALE_MS, sizePools, storeCurve, storePools, type SitePrice } from './pool-sizes';
 import * as depth from './depth/index';
-import { PRICE_HOW_KEY, priceHealth, priceHowStmt, type PriceHowLog } from './price-how';
+import { PRICE_HOW_KEY, priceHealth, priceHowAt, priceHowStmt, storedPriceSource, type PriceHowLog } from './price-how';
 import { QUOTE_KEYS } from '../../shared/settle';
 import { namBalance, namTotalSupply, namTotalStake, namadaEpoch, namadaStatusAll, delegationsAt, answeringRpcs, listingHeads, QUICK, RpcBreaker, allNamBalances, allBonds, ListingTooLargeError, LISTING_MAX_VALUE_BYTES, type BalanceListing, type BondListing, type ReadOpts, type Rpc } from './sources/namada';
 import { fetchIntelChecked } from './sources/intel';
@@ -377,6 +378,12 @@ export function ibcConservation(escrowNam: number, osmosisNam: number, stuckNam:
  * batches are not started after this, and reads still running are aborted at it.
  */
 export const TICK_DEADLINE_MS = 45_000;
+/**
+ * The size table's own phase in the tick (sources/sqs.ts buildCurve): started after the price read, beside the rest, one
+ * size at a time. Six sizes take 12 to 30 router calls (CURVE_CALLS_MAX), about 1 to 2 s a size; a size not reached
+ * by the phase's end is left out of that minute's table.
+ */
+export const CURVE_PHASE_MS = 20_000;
 /** Keplr REST reads in a tick: a short timeout and one retry, inside the tick's deadline. */
 export const KEPLR_TICK = { timeoutMs: 10_000, retries: 1 } as const;
 
@@ -1710,11 +1717,31 @@ export async function runCron(env: Env) {
     let metricsWrittenResolve: () => void = () => {};
     const metricsWritten = new Promise<void>((resolve) => { metricsWrittenResolve = resolve; });
     const depthPhase = late() ? null : phaseSignal(signal, Date.now() + depth.DEPTH_PHASE_MS);
-    const depthRun: Promise<unknown> = depthPhase
+    const depthRun: Promise<depth.MinuteResult | null> = depthPhase
       ? depth.minute(env, now, { health, signal: depthPhase.signal, late, pools: poolRes.raw ?? null, poolsAt: poolRes.at, routeOut: price.routeOut ?? null, writeAfter: metricsWritten })
-          .catch((e) => { console.error('depth minute', e); health.push({ name: depth.DEPTH_HEALTH.pools, ok: false, at: now, note: String(e).slice(0, 160) }); })
+          .catch((e) => { console.error('depth minute', e); health.push({ name: depth.DEPTH_HEALTH.pools, ok: false, at: now, note: String(e).slice(0, 160) }); return null; })
           .finally(depthPhase.done)
-      : Promise.resolve(health.push({ name: depth.DEPTH_HEALTH.pools, ok: false, at: now, note: 'Not run this tick: the tick was already late when the depth phase would have started.' }));
+      : Promise.resolve((health.push({ name: depth.DEPTH_HEALTH.pools, ok: false, at: now, note: 'Not run this tick: the tick was already late when the depth phase would have started.' }), null));
+
+    // 1c. The pool sizes (pool-sizes.ts sizePools): each pool's coins at their own price, never the router's
+    //     liquidity_cap. A pool the depth minute covers takes the minute it wrote this tick; any other the router's
+    //     reserves at this tick's NAM price (else the stored one, while under MINUTE_STALE_MS old). Visitors read the
+    //     list the tick stores below (kv osmosis.pools); the hourly pool rows take it too.
+    const sitePrice: Promise<SitePrice | null> = price.usd
+      ? Promise.resolve({ usd: price.usd, at: price.at, source: priceSourceName(price.how) })
+      : env.DB.prepare(`SELECT ts, value FROM metrics WHERE key = 'price.usd' AND ts >= ? ORDER BY ts DESC LIMIT 1`).bind(now - MINUTE_STALE_MS).first<{ ts: number; value: number }>()
+          .then((r) => (r && Number(r.value) > 0 ? { usd: Number(r.value), at: Number(r.ts), source: storedPriceSource(priceHowAt(howPrev ?? null, Number(r.ts))) } : null), () => null);
+    const sized = Promise.all([depthRun, sitePrice]).then(([d, p]) => ({
+      pools: sizePools({ pools: poolRes.pools, poolsAt: poolRes.at, depth: d?.written ? d.latest : null, price: p, coinUsd: price.coinUsd, coinAt: price.at }),
+      depth: d?.written ? d.latest : null, price: p,
+    }));
+    // 1d. The size table (sources/sqs.ts buildCurve), once a minute against this tick's price, so a visitor's
+    //     /api/quote/curve reads the stored table and never asks the router. Its own phase (CURVE_PHASE_MS), started
+    //     only with a price and while the tick is not late; stored at the end of the tick (6c), never waited on before.
+    const curvePhase = !price.usd || late() ? null : phaseSignal(signal, Date.now() + CURVE_PHASE_MS);
+    const curveRun = curvePhase
+      ? buildCurve(price, curvePhase.signal).catch((e) => { console.error('size table', e); return null; }).finally(curvePhase.done)
+      : Promise.resolve(null);
 
     // Every pool the quote service lists is labelled, so the holder list can leave pools out (holders.ts notPool).
     if (shouldSyncHolders && poolRes.pools.length) {
@@ -1754,10 +1781,12 @@ export async function runCron(env: Env) {
     const howStmt = price.usd && howPrev !== undefined ? priceHowStmt(howPrev, price.how, now) : null;
     for (const [symbol, v] of Object.entries(price.coinUsd ?? {})) if (QUOTE_KEYS[symbol]) metricStmts.push(stmt.metric(now, QUOTE_KEYS[symbol], v));
     if (poolRes.pools.length) {
-      // Pool depth is recorded so replay can show what liquidity looked like at the time.
-      metricStmts.push(stmt.metric(now, 'dex.liquidity_usd', poolRes.pools.reduce((a, p) => a + p.liquidityUsd, 0)), stmt.metric(now, 'dex.pool_count', poolRes.pools.length));
+      // The pool count and the reference pool's reserves are recorded so replay can show the pools at the time; the
+      // pools' size (dex.liquidity_usd, dex.ref_pool_liquidity_usd) is stored with the sized list after the depth minute.
+      metricStmts.push(stmt.metric(now, 'dex.pool_count', poolRes.pools.length));
       const ref = poolRes.pools.find((p) => p.id === OSMOSIS.refPoolId);
-      if (ref) metricStmts.push(stmt.metric(now, 'dex.ref_pool_liquidity_usd', ref.liquidityUsd), stmt.metric(now, 'dex.ref_pool_nam', ref.namReserve), stmt.metric(now, 'dex.ref_pool_counter', ref.counterReserve));
+      if (ref) metricStmts.push(stmt.metric(now, 'dex.ref_pool_nam', ref.namReserve));
+      if (ref && ref.counterReserve != null) metricStmts.push(stmt.metric(now, 'dex.ref_pool_counter', ref.counterReserve));
     }
 
     // 3. Executed-swap price for the current hour: median of single-pool NAM/USDC swaps.
@@ -1771,7 +1800,7 @@ export async function runCron(env: Env) {
       metricStmts.push(stmt.metric(hour, 'price.swap_1h', m), stmt.metric(hour, 'price.swap_1h.n', px.length));
     }
 
-    // A figure that is not a finite number (an SQS liquidity_cap or amount that does not parse; every other figure
+    // A figure that is not a finite number (an SQS amount or a quoted price that does not parse; every other figure
     // here is checked or counted from integers) is left out and the pools row says which: metrics.value is NOT NULL,
     // so one NaN would fail this whole batch and end the tick. The note joins the row's own (a refused pool address),
     // as the sheet keeps one row a name.
@@ -1792,7 +1821,7 @@ export async function runCron(env: Env) {
     //     and depth.params; its failure costs the tick nothing but its own health row.
     const seriesCtx = { health, signal, late, listingTick: which !== null };
     await Promise.all([
-      series.hourly(env, now, { ...seriesCtx, pools: poolRes.pools, poolsAt: poolRes.at }).catch((e) => { console.error('series hourly', e); health.push({ name: 'Series (hourly)', ok: false, at: now, note: String(e).slice(0, 160) }); }),
+      series.hourly(env, now, { ...seriesCtx, pools: sized.then((s) => s.pools), poolsAt: poolRes.at }).catch((e) => { console.error('series hourly', e); health.push({ name: 'Series (hourly)', ok: false, at: now, note: String(e).slice(0, 160) }); }),
       series.daily(env, now, seriesCtx).catch((e) => { console.error('series daily', e); health.push({ name: 'Series (daily snapshot)', ok: false, at: now, note: String(e).slice(0, 160) }); }),
       depth.hourly(env, now, { ...seriesCtx, writeAfter: depthRun }).catch((e) => { console.error('depth hourly', e); health.push({ name: depth.DEPTH_HEALTH.owners, ok: false, at: now, note: String(e).slice(0, 160) }); }),
     ]);
@@ -1997,6 +2026,11 @@ export async function runCron(env: Env) {
     // What has been learnt so far is written now: a stall in the stake phase must not hide it.
     // the depth phase ends inside its own budget; its health rows go out with this merge
     await depthRun;
+    // 4b. The sized pool list and its totals (pool-sizes.ts storePools), what visitors read of the pools: right after
+    //     the depth minute. A list that did not answer leaves the stored one, which its readers mark old.
+    const s = await sized;
+    await storePools(env.DB, { now, pools: s.pools, poolsAt: poolRes.at, depth: s.depth, price: s.price, refused: poolRes.refused })
+      .catch((e) => { console.error('stored pool list', e); poolsRow.ok = false; poolsRow.note = [poolsRow.note, `The sized pool list was not stored: ${String(e).slice(0, 80)}`].filter(Boolean).join(' ').slice(0, 160); });
     await mergeHealth(env, health);
 
     // 5. Bonded stake. Estimates for every address from bond/unbond history (hourly since 2026-10-20: the bond listing
@@ -2134,6 +2168,18 @@ export async function runCron(env: Env) {
           : null;
         health.push({ name: 'Namada indexer (unbond withdraw times)', ok: !notStored && failedUnbonds < Math.max(1, addrs.length / 2), at: now, note: `${Object.keys(byAddress).length} of ${addrs.length} addresses read${failedUnbonds ? `, ${failedUnbonds} failed` : ''}${notStored ? `; not stored: ${notStored}` : ''}` });
       }
+    }
+
+    // 6c. The size table built beside the tick (1d): stored now, its phase over or nearly (pool-sizes.ts storeCurve).
+    try {
+      const curve = await curveRun;
+      health.push(await storeCurve(env.DB, {
+        now, curve, complete: !!curve && curveComplete(curve), sizes: CURVE_TIERS.length, pools: s.pools,
+        why: !price.usd ? 'the NAM price was not read' : !curvePhase ? 'the tick was already late' : undefined,
+      }));
+    } catch (e) {
+      console.error('size table', e);
+      health.push({ name: CURVE_HEALTH_NAME, ok: false, at: now, note: `Not stored: ${String(e).slice(0, 120)}` });
     }
 
     // A node that answered its status but then failed reads is not "ok": the status alone cannot see a node that

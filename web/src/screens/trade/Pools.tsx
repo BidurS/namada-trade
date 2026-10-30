@@ -1,20 +1,21 @@
 // "Where NAM trades" (system.md 9.2, screener-plan 2.4): the NAM pools on Osmosis, below the split, full width,
-// black. With the pairs route answering, each pool is a row of the pairs list (ui/PairsList.tsx): depth and share,
+// black. With the pairs route answering, each pool is a row of the pairs list (ui/PairsList.tsx): size and share,
 // the Osmosis data API's dollars traded in 24 h and 7 days with its own update time, the trades this site recorded
-// through the pool, the NAM inside and the fee. Without it, the router's pool list as before, and one line says
-// the volume per pool is not served yet ("—" with the reason, never a stand-in). The pool list is a live reading:
-// under Rewind it is not requested, and the overview's figures as of that time stand in its place, each with its
-// own stamp. One SourceLine under the list.
+// through the pool, both coins inside and the fee. Without it, the stored pool list as before, and one line says
+// the volume per pool is not served yet ("—" with the reason, never a stand-in). A pool's size is its coins at their
+// own prices (worker/src/pool-sizes.ts); one that cannot be priced reads "—" with the reason and counts in no total.
+// The pool list is the newest stored reading: under Rewind it is not requested, and the overview's figures as of that
+// time stand in its place, each with its own stamp. One SourceLine under the list.
 import type { ReactNode } from 'react';
 import type { Overview, PairRow, PairsResponse, PoolInfo, Provenance } from '../../../../shared/types';
 import { NOT_SERVED } from '../../../../shared/types';
 import { REWIND_WORDS } from '../../app/index';
 import { DataList, Notice, Num, PoolRestRow, PoolRow, ProvScope, Skeleton, SourceLine, useUiNow } from '../../ui/index';
 import type { ScopeItem, Stamp } from '../../ui/index';
-import { PairsList } from '../../ui/PairsList';
+import { Inside, PairsList } from '../../ui/PairsList';
 import { NBSP, fmtAgo, fmtCount, fmtNamRule, fmtPctRule, fmtUsdWhole } from '../../lib/format';
 import type { Depth } from './model';
-import { pairName, splitPools } from './model';
+import { counterName, pairName, restOf, splitPools } from './model';
 import { oneSidedWords, poolSides } from '../../../../shared/pool-sides';
 import type { HistoryLoad } from './data';
 import { DepthLine } from '../depth/Line';
@@ -41,7 +42,7 @@ function PairsBody({ r, osmosisLine }: { r: PairsResponse; osmosisLine: ReactNod
   const anyHere = r.pairs.some((p) => p.here24h.value);
   const share = shown[0] && total > 0 && shown[0].liquidityUsd != null ? (shown[0].liquidityUsd / total) * 100 : null;
   const items: ScopeItem[] = [
-    { label: 'Pool depth, NAM inside and fee', p: stamp },
+    { label: 'Pool sizes, the coins inside and fee', p: stamp },
     { label: 'Dollars traded per pool (Osmosis pair summary)', p: osmoStamp },
     ...(hereStamp ? [{ label: 'Trades recorded here per pool', p: hereStamp }] : []),
   ];
@@ -94,11 +95,11 @@ export function Pools({ rewound, pools, pairs, depth, overview }: PoolsProps) {
     body = <PairsBody r={pairs.data} osmosisLine={osmosisLine} />;
   } else if (list.length) {
     const { shown, rest, oneSided, total } = splitPools(list);
-    const top = shown[0]?.liquidityUsd || 0;
-    const restUsd = rest.reduce((a, p) => a + (p.liquidityUsd || 0), 0);
-    const restMax = rest.reduce((a, p) => Math.max(a, p.liquidityUsd || 0), 0);
+    const top = Math.max(0, ...[...shown, ...oneSided].map((p) => (p.liquidityUsd != null && Number.isFinite(p.liquidityUsd) ? p.liquidityUsd : 0)));
+    const restSum = restOf(rest);
     const stamp: Stamp = { ...pools.data!.prov, plain: 'Osmosis pools' };
-    const share = (p: PoolInfo) => (total > 0 ? (p.liquidityUsd / total) * 100 : null);
+    const share = (p: PoolInfo) => (total > 0 && p.liquidityUsd != null ? (p.liquidityUsd / total) * 100 : null);
+    const size = (p: PoolInfo) => (p.liquidityUsd != null ? <Num v={p.liquidityUsd} fmt={fmtUsdWhole} showReason={false} /> : <Num v={null} prov={p.sizeProv ? { ...p.sizeProv, status: 'missing' } : null} />);
     body = (
       <ProvScope
         className="tk-scope"
@@ -117,11 +118,11 @@ export function Pools({ rewound, pools, pairs, depth, overview }: PoolsProps) {
               key={`${p.id}-${p.address}`}
               pair={pairName(p)}
               sub={<span className="mono">{p.id ? `#${p.id}` : 'no id'} · {p.type}</span>}
-              depth={<Num v={p.liquidityUsd} fmt={fmtUsdWhole} showReason={false} />}
+              depth={size(p)}
               share={<Num v={share(p)} fmt={(n) => fmtPctRule(n, 1)} unit="of all depth" showReason={false} />}
-              nam={<Num v={p.namReserve} fmt={fmtNamRule} unit="NAM" showReason={false} />}
+              nam={<Inside nam={p.namReserve} counter={p.counterReserve} coin={counterName(p)} />}
               fee={<Num v={Number.isFinite(p.spreadFactor) ? p.spreadFactor * 100 : null} fmt={(n) => fmtPctRule(n)} unit="fee" showReason={false} />}
-              bar={top > 0 ? p.liquidityUsd / top : null}
+              bar={top > 0 && p.liquidityUsd != null ? p.liquidityUsd / top : null}
             />
           ))}
           {oneSided.map((p) => {
@@ -131,21 +132,21 @@ export function Pools({ rewound, pools, pairs, depth, overview }: PoolsProps) {
                 key={`${p.id}-${p.address}`}
                 pair={pairName(p)}
                 sub={<><span className="mono">{p.id ? `#${p.id}` : 'no id'} · {p.type}</span> · {one.line}</>}
-                depth={one.depth}
-                share={null}
-                nam={<Num v={p.namReserve} fmt={fmtNamRule} unit="NAM" showReason={false} />}
+                depth={size(p)}
+                share={<Num v={share(p)} fmt={(n) => fmtPctRule(n, 1)} unit="of all depth" showReason={false} />}
+                nam={<Inside nam={p.namReserve} counter={p.counterReserve} coin={counterName(p)} />}
                 fee={<Num v={Number.isFinite(p.spreadFactor) ? p.spreadFactor * 100 : null} fmt={(n) => fmtPctRule(n)} unit="fee" showReason={false} />}
-                bar={null}
+                bar={top > 0 && p.liquidityUsd != null ? p.liquidityUsd / top : null}
               />
             );
           })}
           {rest.length ? (
-            <PoolRestRow end={<><Num v={restUsd} fmt={fmtUsdWhole} /> together, none above <Num v={restMax} fmt={fmtUsdWhole} /></>}>
+            <PoolRestRow end={<><Num v={restSum.usd} fmt={fmtUsdWhole} /> together, none above <Num v={restSum.max} fmt={fmtUsdWhole} />{restSum.notPriced ? <>; <Num v={restSum.notPriced} fmt={fmtCount} /> of them not priced, so not counted</> : null}</>}>
               <Num as="b" v={rest.length} fmt={fmtCount} /> more {rest.length === 1 ? 'pool' : 'pools'}
             </PoolRestRow>
           ) : null}
         </DataList>
-        <SourceLine items={[{ label: 'Pool depth and NAM inside', p: stamp }, ...(osmosis ? [{ label: 'NAM held on Osmosis', p: osmosis.prov }] : [])]} label="Where the pool figures come from" />
+        <SourceLine items={[{ label: 'Pool sizes and the coins inside', p: stamp }, ...(osmosis ? [{ label: 'NAM held on Osmosis', p: osmosis.prov }] : [])]} label="Where the pool figures come from" />
       </ProvScope>
     );
   } else if (!rewound && pools.loading) {

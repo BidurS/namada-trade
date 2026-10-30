@@ -83,6 +83,8 @@ export const PLAIN_SOURCE: Record<string, string> = {
 const PREFIXES: [string, string][] = [
   ['Namada RPC', 'Namada node'],
   ['Osmosis SQS pools', 'Osmosis pools'],
+  // the pools' sizes from their reserves (worker/src/pool-sizes.ts): the stored list, the depth minute's or the list's
+  ['Osmosis pool reserves', 'Osmosis pools'],
   ['Osmosis SQS', 'Osmosis quote'],
   ['Keplr Osmosis', 'Osmosis supply'],
   ['Osmosis public REST', 'Osmosis supply'],

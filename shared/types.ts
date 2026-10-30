@@ -323,9 +323,26 @@ export interface PoolInfo {
   pair: string;              // e.g. NAM/USDC
   counterDenom: string;
   counterSymbol: string;
+  /** whole NAM in the pool */
   namReserve: number;
-  counterReserve: number;
-  liquidityUsd: number;
+  /** whole coins of the other side; null when the coin's decimals are not known (an empty side is 0 in any unit) */
+  counterReserve: number | null;
+  /**
+   * The pool's size in US dollars: its NAM at the site's NAM price plus its other coin at that coin's price
+   * (worker/src/pool-sizes.ts), never the router's liquidity_cap. null when a side that holds coins cannot be priced:
+   * `sizeProv` then says why ("not priced"), never 0.
+   */
+  liquidityUsd: number | null;
+  /** the two sides of `liquidityUsd` in US dollars; null when that side cannot be priced (absent on the router's own list) */
+  namUsd?: number | null;
+  counterUsd?: number | null;
+  /** where the size came from: the depth minute or the pool list, its time, height and price, or why it is not priced */
+  sizeProv?: Provenance;
+  /**
+   * The Osmosis router's own liquidity_cap for the pool, kept for comparison only: it counts NAM at nothing while the
+   * router gives NAM no price (23 Oct to 29 Oct 2026), and it moves only in a block where the pool changes.
+   */
+  routerLiquidityUsd?: number | null;
   spreadFactor: number;
   volume24hUsd?: number | null;
 }
@@ -904,7 +921,8 @@ export interface SafeClipInfo {
 export interface QuoteCurveResponse {
   spotUsd: number | null;
   poolsCount: number;
-  totalLiquidityUsd: number;
+  /** the pools' size from their reserves (worker/src/pool-sizes.ts), the priced pools only; null when none is priced */
+  totalLiquidityUsd: number | null;
   refPoolLiquidityUsd: number | null;
   /**
    * The order size (NAM) at which the price move reaches 1% (resp. 3%) on the WORSE of the two sides (W6):
@@ -1331,11 +1349,17 @@ export interface PairRow {
   pair: string;
   counterSymbol: string | null;
   type: PoolInfo['type'] | null;
-  /** depth, reserves and fee from the router's pools answer (Osmosis SQS); null when the router did not list the pool */
+  /**
+   * the pool's size (its NAM at the site's price plus its other coin at that coin's price, the cron's stored pool list:
+   * worker/src/pool-sizes.ts), its reserves in whole coins and its fee; null when the pool is not listed, or the size
+   * when the pool cannot be priced (`sizeProv` says why)
+   */
   liquidityUsd: number | null;
   namReserve: number | null;
   counterReserve: number | null;
   spreadFactor: number | null;
+  /** where the size came from, or why the pool is not priced (absent when the pool list did not name the pool) */
+  sizeProv?: Provenance;
   /** the pair summary's dollars traded in 24 h and 7 d (priced leg only) and its liquidity; value null with "Osmosis does not list this pool's volume" when absent */
   osmosis: Sourced<{ volume24hUsd: number | null; volume7dUsd: number | null; liquidityUsd: number | null }>;
   /** trades recorded here through this pool in 24 h, from the swap legs; value null with the note until legs are recorded */
@@ -1348,7 +1372,7 @@ export interface PairRow {
 export interface PairsResponse {
   asOf: number;
   pairs: PairRow[];
-  /** the router's pools answer */
+  /** the cron's stored pool list (the router's reserves priced from the depth minute or the stored price), old past its age */
   prov: Provenance;
   /** the pair summary (its own update time, `last_update_at`) */
   osmosisProv: Provenance;

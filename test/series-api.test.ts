@@ -15,6 +15,8 @@ import { decodeFlowCursor, encodeFlowCursor } from '../shared/paging';
 import { fmtDay } from '../shared/search-grammar';
 import type { SeriesResponse, PriceChangesResponse, VolumeResponse, PairsResponse, TradesResponse, NotServedBody, TradeRow, ValuesResponse } from '../shared/types';
 import { TRADE_FOLD_MS } from '../shared/types';
+import { fetchNamPools } from '../worker/src/sources/sqs';
+import { POOLS_KEY, sizePools, type StoredPools } from '../worker/src/pool-sizes';
 
 const H = 3_600_000, D = 86_400_000, MIN = 60_000;
 /** 22:10 UTC on 20 Oct 2026 (the day this was built), whole minute. */
@@ -555,11 +557,20 @@ const SQS = [
   sqsPool('3368', 0, 'uosmo', 100000, 2000, 170, 0.002),
   sqsPool('9999', 0, 'ibc/ABCDEF0123456789', 10, 1, 5, 0.003),
 ];
-function stubSqs(answer: unknown, status = 200) {
-  vi.stubGlobal('fetch', vi.fn(async (url: string) => {
-    expect(String(url)).toContain(`${OSMOSIS.sqs}/pools`);
-    return new Response(JSON.stringify(answer), { status, headers: { 'content-type': 'application/json' } });
-  }));
+/** The router's list read once (stubbed), sized as the cron sizes it (NAM at $0.001, OSMO at $0.05), stored as the cron stores it. */
+async function storePools(db: TestD1, readAt = NOW - 30_000) {
+  vi.stubGlobal('fetch', vi.fn(async () => new Response(JSON.stringify(SQS), { headers: { 'content-type': 'application/json' } })));
+  const r = await fetchNamPools();
+  const price = { usd: 0.001, at: readAt, source: 'Osmosis SQS' };
+  const row: StoredPools = { at: readAt, pools: sizePools({ pools: r.pools, poolsAt: readAt, depth: null, price, coinUsd: { OSMO: 0.05 }, coinAt: readAt }), depth: null, price };
+  insert(db, 'kv', [{ key: POOLS_KEY, value: JSON.stringify(row), updated_at: readAt }]);
+  vi.unstubAllGlobals();
+}
+/** Any outside request fails the test: the route reads stored rows only. */
+function noRouter() {
+  const asked: string[] = [];
+  vi.stubGlobal('fetch', vi.fn(async (url: string) => { asked.push(String(url)); throw new Error(`no outside request: ${url}`); }));
+  return asked;
 }
 function seedPoolHours(db: TestD1) {
   const row = (hour: number, id: string, o: Partial<S.StoredPoolHour>) => ({ hour, pool_id: id, at: null, liquidity_usd: null, nam_reserve: null, counter_reserve: null, spread: null, volume_24h_usd_osmosis: null, volume_7d_usd_osmosis: null, liquidity_usd_osmosis: null, osmosis_at: null, ...o });
@@ -578,49 +589,73 @@ function seedPoolHours(db: TestD1) {
 }
 
 describe('GET /api/series/pairs', () => {
-  it('the router\'s live depth beside the Osmosis app\'s stored hour, deepest first; every missing figure says why', async () => {
+  it('the stored pool list, each pool its coins at their own prices, beside the Osmosis app\'s stored hour, deepest first; every missing figure says why; the router is never asked', async () => {
     at(NOW);
     const db = testD1();
     seedPoolHours(db);
-    stubSqs(SQS);
+    await storePools(db);
+    const asked = noRouter();
     const { status, body } = await call<PairsResponse>(db, '/api/series/pairs');
     expect(status).toBe(200);
-    expect(body.pairs.map((p) => p.poolId)).toEqual(['3005', '3008', '3368', '9999', '3017']);
-    const [p3005, p3008, p3368, p9999, p3017] = body.pairs;
-    expect(p3005).toMatchObject({ pair: 'NAM/USDC', counterSymbol: 'USDC', type: 'concentrated', liquidityUsd: 901, namReserve: 606004.9, spreadFactor: 0.002, createdAt: null });
+    expect(asked).toEqual([]);
+    // priced first by size, then the pools that cannot be priced by the NAM inside, then the summary's pool the list does not name
+    expect(body.pairs.map((p) => p.poolId)).toEqual(['3005', '3368', '3008', '9999', '3017']);
+    const [p3005, p3368, p3008, p9999, p3017] = body.pairs;
+    // 606,004.9 NAM at $0.001 plus 209.66 USDC at one dollar: never the router's 901
+    expect(p3005).toMatchObject({ pair: 'NAM/USDC', counterSymbol: 'USDC', type: 'concentrated', namReserve: 606004.9, counterReserve: 209.66, spreadFactor: 0.002, createdAt: null });
+    expect(p3005.liquidityUsd).toBeCloseTo(606.0049 + 209.66, 6);
+    expect(p3005.sizeProv).toMatchObject({ source: 'Osmosis pool reserves (pool list)', at: NOW - 30_000, status: 'live' });
     expect(p3005.osmosis).toEqual({ value: { volume24hUsd: 4.73, volume7dUsd: 420.64, liquidityUsd: 209.66 }, prov: { source: 'Osmosis data API', at: NOW - 25 * MIN, status: 'live' } });
     expect(p3005.here24h.value).toBeNull();
     expect(p3005.here24h.prov.note).toMatch(/cannot be split/);
-    expect(p3008).toMatchObject({ pair: 'NAM/another coin', counterSymbol: null, type: 'cosmwasm', liquidityUsd: 654 });
+    // 100,000 NAM at $0.001 plus 2,000 OSMO at $0.05
+    expect(p3368).toMatchObject({ pair: 'NAM/OSMO' });
+    expect(p3368.liquidityUsd).toBeCloseTo(200, 9);
+    // a coin whose decimals the code does not know: its amount is not read, so the pool is not priced, with the reason (never 0, never 654)
+    expect(p3008).toMatchObject({ pair: 'NAM/another coin', counterSymbol: null, type: 'cosmwasm', liquidityUsd: null, counterReserve: null, namReserve: 603698.3 });
+    expect(p3008.sizeProv).toMatchObject({ status: 'missing', note: 'Not priced: the number of decimals of the other coin is not known, so the pool is left out of the total.' });
     expect(p3008.osmosis).toMatchObject({ value: null, prov: { status: 'missing', note: 'Osmosis does not list this pool\'s volume.' } });
-    expect(p3368).toMatchObject({ pair: 'NAM/OSMO', liquidityUsd: 170 });
+    expect(p9999).toMatchObject({ liquidityUsd: null, counterSymbol: null });
     expect(p9999.osmosis.prov.note).toMatch(/Not recorded yet/);
-    expect(p9999.counterSymbol).toBeNull();
-    // the router did not list 3017: its depth is unknown (null), never the summary's figure in its place
+    // the list did not name 3017: its size is unknown (null), never the summary's figure in its place
     expect(p3017).toMatchObject({ liquidityUsd: null, namReserve: null, type: null });
+    expect(p3017.sizeProv).toBeUndefined();
     expect(p3017.osmosis.value).toEqual({ volume24hUsd: 0, volume7dUsd: 0.26, liquidityUsd: 1.68 });
     expect(body.pairs.some((p) => p.poolId === '2000')).toBe(false);
-    expect(body.prov).toMatchObject({ source: 'Osmosis SQS pools', status: 'live' });
+    expect(body.prov).toMatchObject({ source: 'Osmosis pool reserves', at: NOW - 30_000, status: 'live' });
+    expect(body.prov.note).toBe('4 pools from the router\'s pool list, NAM at the site\'s price of $0.001 at 22:09 UTC. Not priced, so left out of the total: pool 3008, pool 9999.');
     expect(body.osmosisProv).toMatchObject({ at: NOW - 25 * MIN, status: 'live' });
     expect(body.osmosisTotals.volume24hUsd).toBeCloseTo(4.73 + 6.03 + 0, 9);
     expect(body.osmosisTotals.volume7dUsd).toBeCloseTo(420.64 + 137.17 + 0.26, 9);
   });
 
-  it('when the router does not answer: depth from the stored hour, marked old with the reason', async () => {
+  it('a stored list older than ten minutes is served as old, with its age', async () => {
+    at(NOW);
+    const db = testD1();
+    await storePools(db, NOW - 20 * MIN);
+    noRouter();
+    const { body } = await call<PairsResponse>(db, '/api/series/pairs');
+    expect(body.prov).toMatchObject({ source: 'Osmosis pool reserves', at: NOW - 20 * MIN, status: 'stale' });
+    expect(body.prov.note).toMatch(/^The pool list was last read 20 min ago\./);
+    expect(body.pairs[0]).toMatchObject({ poolId: '3005' });
+  });
+
+  it('no stored list: size from the stored hour, marked old with the reason; the router is never asked', async () => {
     at(NOW);
     const db = testD1();
     seedPoolHours(db);
-    stubSqs({ message: 'nope' }, 400);
+    const asked = noRouter();
     const { body } = await call<PairsResponse>(db, '/api/series/pairs');
+    expect(asked).toEqual([]);
     expect(body.prov).toMatchObject({ source: 'Osmosis SQS pools (stored)', at: HOUR + 3000, status: 'stale' });
-    expect(body.prov.note).toMatch(/did not answer/);
+    expect(body.prov.note).toMatch(/has not been stored/);
     expect(body.pairs[0]).toMatchObject({ poolId: '3005', liquidityUsd: 900, namReserve: 606000, counterSymbol: null });
     expect(body.pairs.find((p) => p.poolId === '3017')!.liquidityUsd).toBeNull();
   });
 
-  it('nothing stored and no router: no pool, both stamps missing', async () => {
+  it('nothing stored: no pool, both stamps missing', async () => {
     at(NOW);
-    stubSqs({}, 400);
+    noRouter();
     const { body } = await call<PairsResponse>(testD1(), '/api/series/pairs');
     expect(body.pairs).toEqual([]);
     expect(body.prov.status).toBe('missing');

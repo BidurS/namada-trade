@@ -2,8 +2,9 @@
 // its stamp; its changes over 1 h, 6 h, 24 h, 7 days and 30 days, each a button that opens the two readings it is
 // measured between; the pool price's changes on their own row, labelled "pool price, not trades" and never mixed
 // with the quoted ones; then four figures: what traded in 24 h at the prices it traded at (with the Osmosis
-// pair summary's own figure beside it), the pools' depth, all NAM at today's price and spendable NAM at today's
-// price, each label a button that opens its definition. One SourceLine for every figure here.
+// pair summary's own figure beside it), the pools' depth with the coins inside (both reserves, in coin units), all NAM
+// at today's price and spendable NAM at today's price, each label a button that opens its definition. One SourceLine
+// for every figure here.
 //
 // A window not covered yet is said in one sentence with the server's reason, never 0 or a guess; a route this
 // server does not serve reads "—" with NOT_SERVED. "Market cap" is never written: each value says what it counts.
@@ -14,7 +15,7 @@ import { Button, Num, SkeletonBlock, SourceLine, derive, fmtPriceNode, type Stam
 import type { ScopeItem } from '../../ui/index';
 import { GlossPop, useGlossPop } from '../../ui/Term';
 import { VALUE_WORDS } from '../../../../shared/copy';
-import { NBSP, fmtAge, fmtCount, fmtDayClock, fmtDayMonthYear, fmtNamRule, fmtPctSigned, fmtUsdRule, fmtUsdWhole } from '../../lib/format';
+import { NBSP, fmtAge, fmtCoin, fmtCount, fmtDayClock, fmtDayMonthYear, fmtNamRule, fmtPctSigned, fmtUsdRule, fmtUsdWhole } from '../../lib/format';
 import type { HistoryLoad } from './data';
 import type { Depth } from './model';
 import { POOL_WINDOWS, QUOTED_WINDOWS, WINDOW_WORD, allNamValue, changeCells, lateBase, listWords, spendableValue, type ChangeCell } from './series';
@@ -26,7 +27,7 @@ import { POOL_WINDOWS, QUOTED_WINDOWS, WINDOW_WORD, allNamValue, changeCells, la
 export const DEFINE = {
   allNam: VALUE_WORDS.allNam,
   spendable: VALUE_WORDS.spendable,
-  depth: 'The money in every Osmosis pool that holds NAM, both sides counted, as the Osmosis router reports it.',
+  depth: 'The money in every Osmosis pool that holds NAM: the NAM inside at the NAM price plus the other coin at its own price, both sides counted. A pool whose side cannot be priced is left out of the sum, and the figure says how many.',
 } as const;
 
 /** A label that opens its definition (the glossary term's look: a solid underline, a 44 px hit). */
@@ -154,7 +155,13 @@ export function Head({ overview, overviewFailed, depth, changes, volume, rewound
         <li className="fact">
           <span className="fact__n">{depth ? <Num v={depth.usd} prov={depth.usd == null ? depth.stamp : undefined} fmt={fmtUsdWhole} /> : waiting ? <SkeletonBlock height={28} width={90} /> : <Num v={null} prov={NO_OVERVIEW} showReason={false} />}</span>
           <span className="fact__l"><Defined title="Pool depth" text={DEFINE.depth}>Pool depth</Defined></span>
-          {depth && depth.count != null ? <span className="fact__s">in <span data-num="">{fmtCount(depth.count)}</span> pools</span> : null}
+          {depth && depth.count != null ? (
+            <span className="fact__s">
+              in <span data-num="">{fmtCount(depth.count)}</span> pools
+              {depth.notPriced ? <>, <span data-num="">{fmtCount(depth.notPriced)}</span> of them not priced and left out</> : null}
+            </span>
+          ) : null}
+          {depth?.reserves ? <Coins r={depth.reserves} /> : null}
         </li>
         <li className="fact">
           <span className="fact__n">{overview ? <Num v={allV} prov={allV == null ? allStamp : undefined} fmt={fmtUsdWhole} /> : waiting ? <SkeletonBlock height={28} width={90} /> : <Num v={null} prov={NO_OVERVIEW} showReason={false} />}</span>
@@ -172,6 +179,23 @@ export function Head({ overview, overviewFailed, depth, changes, volume, rewound
       ) : null}
       {scope.length ? <SourceLine items={scope} label="Where the price, volume and depth come from" /> : <p className="src src--wait" aria-hidden="true" />}
     </section>
+  );
+}
+
+/** The coins the pools hold (both reserves, in coin units): all the NAM, then the other coins by name, the most dollars first. */
+function Coins({ r }: { r: NonNullable<Depth['reserves']> }) {
+  const named = r.coins.slice(0, 2);
+  const more = r.coins.length - named.length;
+  return (
+    <span className="fact__s">
+      holding <span data-num="">{fmtNamRule(r.nam)}</span>{NBSP}NAM
+      {named.map((c, i) => (
+        <span key={c.name}>
+          {i === named.length - 1 && !more ? ' and ' : ', '}<span data-num="">{fmtCoin(c.amount)}</span>{NBSP}{c.name}
+        </span>
+      ))}
+      {more ? <> and <span data-num="">{fmtCount(more)}</span> other {more === 1 ? 'coin' : 'coins'}</> : null}
+    </span>
   );
 }
 

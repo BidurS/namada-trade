@@ -194,6 +194,8 @@
   .pa__o7 { grid-area: o7; }
   .pa__here { grid-area: here; text-align: right; align-self: start; }
   .pa__nam { grid-area: nam; }
+  /* both reserves of a pool (ui/PairsList.tsx Inside), one line each, in the pairs list and the pool rows */
+  .inside__l { display: block; }
   .pa__fee { grid-area: fee; text-align: right; }
   .pa__o24, .pa__o7, .pa__here, .pa__nam, .pa__fee { font-size: var(--t-13); line-height: 20px; color: var(--c-ink-2); min-width: 0; }
   .pa__o24 [data-num], .pa__o7 [data-num], .pa__here [data-num] { color: var(--c-ink); }

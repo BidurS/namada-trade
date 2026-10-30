@@ -8,9 +8,10 @@ import { REWIND_WORDS, useClock, useReplay } from '../../app/index';
 import { BODY } from '../../../../shared/copy';
 import type { PoolInfo, QuoteCurveResponse } from '../../../../shared/types';
 import { DataList, HeroNumber, LadderRow, Num, PoolRestRow, PoolRow, ProvChip, Skeleton, SourceLine, derive, fmtPriceNode, type Stamp } from '../../ui';
+import { Inside } from '../../ui/PairsList';
 import { fetchPools, fetchQuoteCurve } from '../../api';
 import { fmtAgo, fmtCoin, fmtCount, fmtNamRule, fmtPctRule, fmtPctSigned, fmtUsdRule, fmtUsdWhole } from '../../lib/format';
-import { pairName, safeSize } from '../trade/model';
+import { counterName, pairName, restOf, safeSize } from '../trade/model';
 import { SafeFig, safeDerivedFrom } from '../trade/Safe';
 import { Band, Dateline, Facts, Fig, FigList, GoLink, Hero, QSection, Related, Say, fromOne, missing, noAnswer, ratio, useLoad, useOv } from './parts';
 
@@ -46,11 +47,14 @@ export function Osmosis({ route }: ScreenProps) {
   const osmoShare = ratio(o?.supply.osmosis, o?.supply.total);
   const osmoShareP = o && supplyP ? derive([o.supply.osmosisProv, supplyP], 'NAM on Osmosis divided by all NAM') : null;
 
-  // The deepest pools, from the live list.
-  const list = [...(pools.data?.pools ?? [])].sort((a, b) => b.liquidityUsd - a.liquidityUsd);
-  const total = list.reduce((a, p) => a + p.liquidityUsd, 0);
-  const deepest = list[0]?.liquidityUsd ?? 0;
+  // The deepest pools, from the stored list: each pool's coins at their own prices; one that cannot be priced has no
+  // size, comes after the priced ones and counts in no total.
+  const sizeOf = (p: PoolInfo) => (p.liquidityUsd != null && Number.isFinite(p.liquidityUsd) ? p.liquidityUsd : null);
+  const list = [...(pools.data?.pools ?? [])].sort((a, b) => (sizeOf(b) ?? -1) - (sizeOf(a) ?? -1) || b.namReserve - a.namReserve);
+  const total = list.reduce((a, p) => a + (sizeOf(p) ?? 0), 0);
+  const deepest = sizeOf(list[0] ?? ({} as PoolInfo)) ?? 0;
   const rest = list.slice(TOP);
+  const restSum = restOf(rest);
   const poolsP: Stamp | null = pools.loading ? null : pools.data ? pools.data.prov : noAnswer('Osmosis pools');
   const poolsOld = poolsP?.status === 'stale';
 
@@ -125,11 +129,11 @@ export function Osmosis({ route }: ScreenProps) {
                     key={`${p.id}-${p.address}-${i}`}
                     pair={pairName(p)}
                     sub={<span className="mono">{p.id ? `#${p.id}` : 'no id'} · {p.type}</span>}
-                    depth={<Num v={p.liquidityUsd} fmt={fmtUsdWhole} showReason={false} />}
-                    share={<Num v={total ? (p.liquidityUsd / total) * 100 : null} fmt={(n) => fmtPctRule(n, 1)} unit="of all depth" showReason={false} />}
-                    nam={<Num v={p.namReserve} fmt={fmtNamRule} unit="NAM" showReason={false} />}
+                    depth={sizeOf(p) != null ? <Num v={sizeOf(p)} fmt={fmtUsdWhole} showReason={false} /> : <Num v={null} prov={p.sizeProv ? { ...p.sizeProv, status: 'missing' } : null} />}
+                    share={<Num v={total && sizeOf(p) != null ? (sizeOf(p)! / total) * 100 : null} fmt={(n) => fmtPctRule(n, 1)} unit="of all depth" showReason={false} />}
+                    nam={<Inside nam={p.namReserve} counter={p.counterReserve} coin={counterName(p)} />}
                     fee={<Num v={Number.isFinite(p.spreadFactor) ? p.spreadFactor * 100 : null} fmt={(n) => fmtPctRule(n)} unit="fee" showReason={false} />}
-                    bar={deepest ? p.liquidityUsd / deepest : null}
+                    bar={deepest && sizeOf(p) != null ? sizeOf(p)! / deepest : null}
                   />
                 ))
               ) : (
@@ -138,7 +142,7 @@ export function Osmosis({ route }: ScreenProps) {
                 </PoolRestRow>
               )}
               {rest.length ? (
-                <PoolRestRow end={<><Num v={rest.reduce((a, p) => a + p.liquidityUsd, 0)} fmt={fmtUsdWhole} /> together, none above <Num v={rest.reduce((a, p) => Math.max(a, p.liquidityUsd || 0), 0)} fmt={fmtUsdWhole} /></>}>
+                <PoolRestRow end={<><Num v={restSum.usd} fmt={fmtUsdWhole} /> together, none above <Num v={restSum.max} fmt={fmtUsdWhole} />{restSum.notPriced ? <>; <Num v={restSum.notPriced} fmt={fmtCount} /> of them not priced, so not counted</> : null}</>}>
                   <Num as="b" v={rest.length} fmt={fmtCount} /> more {rest.length === 1 ? 'pool' : 'pools'}
                 </PoolRestRow>
               ) : null}

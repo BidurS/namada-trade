@@ -16,6 +16,8 @@ import { readFileSync } from 'node:fs';
 import { runCron, type BalanceListingRecord, type BondListingRecord } from '../worker/src/cron';
 import { BALANCE_LISTING_SRC, listingTimes } from '../worker/src/holders';
 import { testD1, insert } from './d1-sqlite';
+import { NAM, OSMOSIS } from '../worker/src/config';
+import { POOLS_KEY, type StoredPools } from '../worker/src/pool-sizes';
 
 afterEach(() => { vi.useRealTimers(); vi.unstubAllGlobals(); });
 
@@ -134,26 +136,30 @@ describe('an indexer totalSupply that is not a whole number', () => {
 });
 
 describe('an SQS pool whose liquidity_cap does not parse', () => {
-  it('no longer fails the metrics batch: the figure is left out, the pools row says which, the tick and the bond listing go on', async () => {
+  it('stores nothing from it: the size is the pool\'s reserves at the site\'s price, not priced without one, and the tick and the bond listing go on', async () => {
     const db = await listed();
-    const pools = (cap: string) => (u: string) => (u.includes('sqs.osmosis.zone/pools') ? json([{ chain_model: { id: '3005', address: 'osmo1m459jtgn77tz8cffvthq5jh0erswxu9872mjd9qde546mslc6udq85we5r' }, type: 1, balances: [{ denom: 'ibc/C7110DEC66869DAE9BE9C3C60F4B5313B16A2204AE020C3B0527DD6B322386A3', amount: '1000000' }], liquidity_cap: cap }]) : undefined);
-    const { calls } = network({ answer: pools('n/a') });
+    const pools = (u: string) => (u.includes('sqs.osmosis.zone/pools') ? json([{ chain_model: { id: '3005', address: 'osmo1m459jtgn77tz8cffvthq5jh0erswxu9872mjd9qde546mslc6udq85we5r' }, type: 1, balances: [{ denom: 'ibc/C7110DEC66869DAE9BE9C3C60F4B5313B16A2204AE020C3B0527DD6B322386A3', amount: '1000000' }], liquidity_cap: 'n/a' }]) : undefined);
+    const { calls } = network({ answer: pools });
     await virtualTick(env(db), PLAIN + 41 * MIN);
     await virtualTick(env(db), PLAIN + 42 * MIN);
     expect(record<BondListingRecord>(db, 'bond.listing')).toMatchObject({ at: PLAIN + 41 * MIN, failedAt: null });
     expect(bondReads(calls)).toHaveLength(1);
     expect(healthOf(db).cron).toBeUndefined();
-    expect(healthOf(db)['Osmosis SQS (pools)']).toMatchObject({ ok: false, note: 'Not a number, so not stored: dex.liquidity_usd, dex.ref_pool_liquidity_usd' });
-    // the rest of the batch landed: the supply, the pool count, the reference pool's reserves
+    // the router's own figure is kept for comparison only, so one that does not parse is no figure at all
+    expect(healthOf(db)['Osmosis SQS (pools)'].ok).toBe(true);
     expect(metricAt(db, 'supply.total', PLAIN + 42 * MIN)).not.toBeNull();
     expect(metricAt(db, 'dex.pool_count', PLAIN + 42 * MIN)).toBe(1);
+    // no NAM price was read (the price list answers 404 here), so the one NAM inside is not priced: no total, never 0
     expect(metricAt(db, 'dex.liquidity_usd', PLAIN + 42 * MIN)).toBeNull();
+    const stored = record<StoredPools>(db, POOLS_KEY)!;
+    expect(stored.pools[0]).toMatchObject({ id: '3005', namReserve: 1, liquidityUsd: null, routerLiquidityUsd: null, sizeProv: { status: 'missing', note: 'Not priced: the site has no NAM price this minute, so the pool is left out of the total.' } });
     expect(checkRow(db, 'rpc_consensus').checked_at).toBe(PLAIN + 42 * MIN);
-    // the next good answer clears the row and is stored
-    network({ answer: pools('724') });
+    // with a NAM price the same pool is its NAM at that price
+    network({ answer: (u: string) => pools(u) ?? (u.includes('sqs.osmosis.zone/tokens/prices') ? json({ [NAM.osmoDenom]: { [OSMOSIS.allUsdc]: '0.0009' } }) : undefined) });
     await virtualTick(env(db), PLAIN + 43 * MIN);
     expect(healthOf(db)['Osmosis SQS (pools)'].ok).toBe(true);
-    expect(metricAt(db, 'dex.liquidity_usd', PLAIN + 43 * MIN)).toBe(724);
+    expect(metricAt(db, 'dex.liquidity_usd', PLAIN + 43 * MIN)).toBeCloseTo(0.0009, 12);
+    expect(metricAt(db, 'dex.pools_priced', PLAIN + 43 * MIN)).toBe(1);
   });
 });
 
@@ -300,14 +306,14 @@ describe('a failed tick whose first read of the listing record failed too', () =
   });
 });
 
-describe('the Osmosis SQS (pools) row with a refused pool address and a figure that does not parse', () => {
-  it('says both in one row', async () => {
+describe('the Osmosis SQS (pools) row with a refused pool address and a liquidity_cap that does not parse', () => {
+  it('says the refused address; the cap is no stored figure, so it says nothing of it', async () => {
     const db = seeded();
     network({ answer: (u: string) => (u.includes('sqs.osmosis.zone/pools') ? json([{ chain_model: { id: '3005', address: 'tnam1qr4wemkpjfycn7ts7297e8qecg2t6pf2vq2wulsa' }, type: 1, balances: [{ denom: 'ibc/C7110DEC66869DAE9BE9C3C60F4B5313B16A2204AE020C3B0527DD6B322386A3', amount: '1000000' }], liquidity_cap: 'n/a' }]) : undefined) });
     await virtualTick(env(db), PLAIN);
     const row = healthOf(db)['Osmosis SQS (pools)'];
     expect(row.ok).toBe(false);
-    expect(row.note).toMatch(/^The pool list named 1 address that is not an Osmosis pool account; it is not labelled a pool\. Not a number, so not stored: dex\.liquidity_usd/);
+    expect(row.note).toBe('The pool list named 1 address that is not an Osmosis pool account; it is not labelled a pool.');
     expect(row.note.length).toBeLessThanOrEqual(160);
   });
 });

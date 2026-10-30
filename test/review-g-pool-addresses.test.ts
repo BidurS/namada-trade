@@ -114,9 +114,10 @@ describe('an address the quote service lists as a pool', () => {
     const ok = await fetchNamPools();
     expect(Object.keys(ok).sort()).toEqual(['at', 'pools', 'raw']); // raw: the list as given, for the depth module's own pool list (worker/src/depth/pools.ts)
     expect(ok.raw).toHaveLength(realPools.length);
-    expect(ok.pools.map((p) => [p.id, p.type, p.address, p.pair, p.liquidityUsd])).toEqual([
-      ['3008', 'cosmwasm', COSMWASM_3008, 'NAM / USDC', 748],
-      ['3005', 'concentrated', CL_3005, 'NAM / USDC', 724],
+    // the size is the cron's from the reserves (worker/src/pool-sizes.ts); the router's own figure stands beside it
+    expect(ok.pools.map((p) => [p.id, p.type, p.address, p.pair, p.liquidityUsd, p.routerLiquidityUsd, p.counterReserve])).toEqual([
+      ['3008', 'cosmwasm', COSMWASM_3008, 'NAM / USDC', null, 748, 0.00108],
+      ['3005', 'concentrated', CL_3005, 'NAM / USDC', null, 724, 155.773361],
     ]);
   });
 

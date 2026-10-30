@@ -7,8 +7,10 @@ import type {
   Overview, Holder, AddressReport, SearchResult, Check, IntelResponse, DonationConfig, SourceHealth, Provenance, Sourced,
   AlertsRecentResponse, HoldersResponse, FlowsResponse, HolderCountsKv, SearchGroup, SearchMatch, SearchResponse, Chain, Flow,
 } from '../../shared/types';
-import { fetchNamPools, fetchNamPrice, quoteNamTrade, quoteSlippageCurve, priceSourceName } from './sources/sqs';
-import { PRICE_HOW_KEY, livePriceProv, priceHowAt, storedPriceNote, storedPriceSource, type PriceHowLog } from './price-how';
+import { quoteNamTrade, priceSourceName } from './sources/sqs';
+import { PRICE_HOW_KEY, priceHowAt, storedPriceNote, storedPriceSource, type PriceHowLog } from './price-how';
+import { MINUTE_STALE_MS, POOLS_SOURCE, POOLS_STALE_MS, PRICED_KEY, poolsTotal, readStoredCurve, readStoredPools, routerCapNote, storedCurve, storedPoolsProv } from './pool-sizes';
+import { withOsmosisGap } from '../../shared/osmosis-gap';
 import { namBalance, namadaEpoch, delegationsAt, QUICK, type ReadOpts } from './sources/namada';
 import { fetchIntel } from './sources/intel';
 import { alertsOn, sendDiscordPreview, sendDiscordTestPost, testExample, testPostHeld, INVALID_WINDOW_MS, type TestPostAnswer, type WebhookPost } from './sources/discord';
@@ -140,20 +142,21 @@ app.get('/api/overview', async (c) => {
   const now = Date.now();
   const dayAgo = asOf - D;
 
-  const [priceLive, poolsLive, checksRes, health] = replay
-    ? [null, null, { results: [] as any[] }, null]
+  // Nothing here asks an outside service: the price and the pools are the cron's stored minute (pool-sizes.ts), so a
+  // cache miss costs D1 reads only, however many visitors arrive.
+  const [checksRes, health, storedPools] = replay
+    ? [{ results: [] as any[] }, null, null]
     : await Promise.all([
-        fetchNamPrice(),
-        fetchNamPools(),
         db.prepare('SELECT * FROM checks').all<any>().catch(() => ({ results: [] as any[] })),
         kvGetJson<Record<string, SourceHealth>>(db, 'source.health'),
+        readStoredPools(db),
       ]);
 
   const checks: Check[] = (checksRes.results || []).map((r: any) => checkOf(r, Date.now()));
 
   // Latest stored metrics as of `asOf`
   // supply.pos_bonded is the staking account's balance; supply.total_stake is what is staked (the chain's figure).
-  const keys = ['price.usd', 'price.swap_1h', 'dex.pool_count', 'supply.total', 'supply.pos_bonded', 'supply.total_stake', 'supply.pgf', 'supply.masp_shielded', 'supply.ibc_escrow', 'supply.osmosis', 'supply.liquid', 'epoch', 'dex.liquidity_usd', 'dex.ref_pool_liquidity_usd'];
+  const keys = ['price.usd', 'price.swap_1h', 'dex.pool_count', 'supply.total', 'supply.pos_bonded', 'supply.total_stake', 'supply.pgf', 'supply.masp_shielded', 'supply.ibc_escrow', 'supply.osmosis', 'supply.liquid', 'epoch', 'dex.liquidity_usd', 'dex.ref_pool_liquidity_usd', PRICED_KEY];
   const metricRows = await Promise.all(keys.map((k) => metricAt(db, k, asOf)));
   const m = new Map(keys.map((k, i) => [k, metricRows[i]]));
   const mv = (k: string) => m.get(k)?.value ?? null;
@@ -190,21 +193,20 @@ app.get('/api/overview', async (c) => {
   ]);
   const { counts: holderCounts, top10Osmosis: top10Osmo, top10Namada: top10Nam, dust } = holderFig;
 
-  // Price: live SQS when available; otherwise the last stored value, honestly marked stale. Each names how it was
-  // read: the price list ('Osmosis SQS') or the spot of the route the router quotes for 1,000 NAM, with its pools.
+  // Price: the minute the cron stored (it reads the Osmosis quote once a minute), old past MINUTE_STALE_MS, with the
+  // note that says why. Each names how it was read: the price list ('Osmosis SQS') or the spot of the route the router
+  // quotes for 1,000 NAM, with its pools. Rewound: the stored price is the price as of that time (the rewound banner
+  // says so; no note needed but the route's).
   let priceUsd: Sourced<number>;
-  if (priceLive?.usd) priceUsd = { value: priceLive.usd, prov: livePriceProv(priceLive) };
-  else if (mv('price.usd') != null) {
-    // A live fetch just failed: the stored value is at best "old", however recent it is, and the note says why.
-    // Rewound: the stored price is the price as of that time (the rewound banner says so; no note needed but the route's).
-    const how = priceHowAt(priceHow, mt('price.usd'));
+  if (mv('price.usd') != null) {
+    const at = mt('price.usd')!;
+    const how = priceHowAt(priceHow, at);
     const source = storedPriceSource(how), routeWords = storedPriceNote(how);
-    const base = replay
-      ? { source, at: mt('price.usd'), status: 'live' as const, ...(routeWords ? { note: routeWords } : {}) }
-      : provAt(source, mt('price.usd'), now, 0, { note: [priceLive?.error ?? 'The live price could not be fetched.', routeWords].filter(Boolean).join(' ') });
-    priceUsd = { value: mv('price.usd'), prov: base };
+    const old = !replay && now - at > MINUTE_STALE_MS;
+    const note = [old ? `The newest stored quote is ${Math.round((now - at) / 60_000)} min old.` : '', routeWords].filter(Boolean).join(' ');
+    priceUsd = { value: mv('price.usd'), prov: { source, at, status: old ? 'stale' : 'live', ...(note ? { note } : {}) } };
   }
-  else priceUsd = { value: null, prov: { source: 'Osmosis SQS', at: null, status: 'missing', note: priceLive?.error ?? 'no price recorded' } };
+  else priceUsd = { value: null, prov: { source: 'Osmosis SQS', at: null, status: 'missing', note: 'no price recorded' } };
 
   const swap1h: Sourced<number> = { value: mv('price.swap_1h'), prov: provAt('executed NAM/USDC swaps (hourly median)', mt('price.swap_1h'), asOf, 6 * H) };
   // Before 2026-10-15 only executed-swap prices exist: in replay, use them as the price rather than show nothing.
@@ -217,14 +219,23 @@ app.get('/api/overview', async (c) => {
   const supplyProv: Provenance = replay ? replayProv('Namada RPC abci_query', supplyAt) : provAt('Namada RPC abci_query', supplyAt, now, 5 * 60000);
   const osmoSupplyProv: Provenance = replay ? replayProv('Keplr Osmosis bank/supply', mt('supply.osmosis')) : provAt('Keplr Osmosis bank/supply', mt('supply.osmosis'), now, 5 * 60000);
 
-  const pools = poolsLive?.pools ?? [];
-  const liquidityUsd = pools.length ? pools.reduce((a, p) => a + p.liquidityUsd, 0) : mv('dex.liquidity_usd');
-  const refPoolLiquidityUsd = pools.length ? pools.find((p) => p.id === OSMOSIS.refPoolId)?.liquidityUsd ?? null : mv('dex.ref_pool_liquidity_usd');
-  const dexProv: Provenance = pools.length
-    ? { source: 'Osmosis SQS pools', at: poolsLive!.at, status: 'live' }
+  // Pools: the cron's stored list (pool-sizes.ts: each pool's coins at their own price, never the router's
+  // liquidity_cap), old past POOLS_STALE_MS. Under Rewind, and before a list is stored, the stored totals of the time;
+  // a total stored before the pools were sized from their reserves (no dex.pools_priced row yet) is the router's own
+  // figure, and its stamp says so.
+  const stored = replay ? null : storedPools;
+  const pools = stored?.pools ?? [];
+  const liquidityUsd = stored ? poolsTotal(pools).usd : mv('dex.liquidity_usd');
+  const refPoolLiquidityUsd = stored ? pools.find((p) => p.id === OSMOSIS.refPoolId)?.liquidityUsd ?? null : mv('dex.ref_pool_liquidity_usd');
+  const routerCap = mv(PRICED_KEY) == null;
+  const storedSource = routerCap ? 'Osmosis SQS pools (stored)' : `${POOLS_SOURCE} (stored)`;
+  const capNote = routerCap ? { note: 'Stored then as the Osmosis router\'s own figure, which counted NAM at nothing while it gave NAM no price.' } : {};
+  const dexProv: Provenance = stored
+    ? storedPoolsProv(stored, now)
     : mv('dex.liquidity_usd') != null
-    ? (replay ? replayProv('Osmosis SQS pools (stored)', mt('dex.liquidity_usd')) : provAt('Osmosis SQS pools (stored)', mt('dex.liquidity_usd'), asOf, 10 * 60000, { note: poolsLive?.error }))
-    : { source: 'Osmosis SQS pools', at: null, status: 'missing', note: replay ? 'Pool depth was not recorded before 16 Oct 2026.' : poolsLive?.error ?? 'The Osmosis pool list is not answering.' };
+    ? (replay ? { ...replayProv(storedSource, mt('dex.liquidity_usd')), ...capNote }
+      : provAt(storedSource, mt('dex.liquidity_usd'), asOf, POOLS_STALE_MS, { note: ['The pool list has not been stored yet, so this is the last stored total.', routerCap ? routerCapNote(null) : ''].filter(Boolean).join(' ') }))
+    : { source: POOLS_SOURCE, at: null, status: 'missing', note: replay ? 'Pool depth was not recorded before 16 Oct 2026.' : 'The pool list has not been stored yet.' };
 
   const rpcCheck = checks.find((k) => k.key === 'rpc_consensus');
   const rpcHeight = Math.max(0, ...(((rpcCheck?.detail as any)?.statuses ?? []) as any[]).map((s) => Number(s.height) || 0));
@@ -262,7 +273,8 @@ app.get('/api/overview', async (c) => {
       buyNam24h: osmoStats?.buy_nam || 0, sellNam24h: osmoStats?.sell_nam || 0,
       netIbc24h: netIbc,
       prov: dexProv,
-      coverage: cov.osmosis,
+      // the 24 hours behind these figures; under Rewind they may reach back before the stored Osmosis record is complete
+      coverage: withOsmosisGap(cov.osmosis, dayAgo),
     },
     namada: {
       holders: holderCounts?.namada ?? null,
@@ -759,20 +771,22 @@ app.get('/api/flows', async (c) => {
 });
 
 // ---------------------------------------------------------------- trade (D1)
+// The cron's stored pool list (pool-sizes.ts), never the router: each pool's size from its reserves, old past its age.
 app.get('/api/pools', async (c) => {
-  const r = await fetchNamPools();
-  const prov: Provenance = r.pools.length ? { source: 'Osmosis SQS pools', at: r.at, status: 'live' } : { source: 'Osmosis SQS pools', at: null, status: 'missing', note: r.error };
-  return c.json({ pools: r.pools, prov });
+  const r = await readStoredPools(c.env.DB);
+  return c.json({ pools: r?.pools ?? [], prov: storedPoolsProv(r, Date.now()) });
 });
 
 /** Far above all NAM in existence (about 1.15 billion): a larger size is refused before any quote service is asked. */
 export const QUOTE_MAX_NAM = 1e12;
 /**
  * The SQS calls every visitor's quotes may make together: QUOTE_LIMITER (wrangler.jsonc, 10 per 10 s) under one fixed
- * key. Its counters are per Cloudflare location, as is the outbound address the quote service limits, which the size
- * table, the overview and the cron share: no burst wider than the size table's own 6 at once, whoever asks and from
- * however many addresses. Past it a quote answers 'busy' and the ticket shows the size table; a repeat within 10 s is
- * the stored answer and spends nothing. Not bound (tests): no budget, as the other limiters.
+ * key. Its counters are per Cloudflare location, as is the outbound address the quote service limits, which the cron
+ * shares where it runs (its price and pool reads and the size table it builds, at most two calls at once): no burst
+ * wider than 6 at once, whoever asks and from however many addresses. A visitor's quote is the only route that asks
+ * the router; the overview, the pool list and the size table are stored. Past it a quote answers 'busy' and the ticket
+ * shows the size table; a repeat within 10 s is the stored answer and spends nothing. Not bound (tests): no budget, as
+ * the other limiters.
  */
 export const QUOTE_BUDGET_KEY = 'all:/api/quote';
 const quoteBudget = (env: Env) => async () =>
@@ -794,7 +808,8 @@ app.get('/api/quote', async (c) => {
   return c.json(await quoteNamTrade(amount, side, spot?.usd, quoteBudget(c.env), spot?.at, spot ? priceSourceName(priceHowAt(priceHow, spot.at)) : undefined));
 });
 
-app.get('/api/quote/curve', async (c) => c.json(await quoteSlippageCurve()));
+// The size table the cron builds once a minute (sources/sqs.ts buildCurve), never asked of the router here.
+app.get('/api/quote/curve', async (c) => c.json(storedCurve(await readStoredCurve(c.env.DB), Date.now())));
 
 // ---------------------------------------------------------------- GET /api/address/:addr
 /** How long the address report waits for the chain's live answers in all before it uses the stored readings. */

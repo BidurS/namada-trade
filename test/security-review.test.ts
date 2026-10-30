@@ -765,7 +765,7 @@ describe('D: an `at` the routes answer live is the live copy, under no replay bu
     expect(cacheKeyUrl(u('/api/flows?chain=namada&at=-1'))).toBe('https://namada.trade/api/flows?chain=namada');
     expect(cacheKeyUrl(u('/api/series/volume?at=soon'))).toBe('https://namada.trade/api/series/volume');
   });
-  it('answers every spelling from one live copy: one live read of the quote service, no replay budget spent', async () => {
+  it('answers every spelling from one live copy, no replay budget spent; the overview asks no quote service at all (it reads the stored minute)', async () => {
     const e = edge();
     const asked = quoteService();
     const limiter = { limit: vi.fn(async () => ({ success: false })) };
@@ -777,9 +777,8 @@ describe('D: an `at` the routes answer live is the live copy, under no replay bu
       expect(((await r.json()) as any).asOf, v).toBeNull();
       await e.settle();
     }
-    // the price list, the router's 1,000 NAM quote (the list gives NAM no price: sources/sqs.ts fetchNamPrice) and the pools
-    expect(asked).toHaveLength(3);
-    expect(asked.filter((s) => s.includes('/router/custom-direct-quote'))).toHaveLength(1);
+    // the price and the pools are the cron's stored rows (worker/src/pool-sizes.ts): a visitor's miss asks the quote service nothing
+    expect(asked).toHaveLength(0);
     expect([...e.store.keys()]).toEqual(['https://namada.trade/api/overview']);
     expect(limiter.limit).not.toHaveBeenCalled();
     // a time in the past is a rewound read: its own copy, under the replay budget, and no quote-service call
@@ -787,6 +786,6 @@ describe('D: an `at` the routes answer live is the live copy, under no replay bu
     expect((await cachedApi(new Request(`https://namada.trade/api/overview?at=${past}`, { headers: { 'cf-connecting-ip': '1.2.3.4' } }), env(db, { REPLAY_LIMITER: limiter }), e.ctx, fetchApp)).status).toBe(429);
     const ok = await cachedApi(new Request(`https://namada.trade/api/overview?at=${past}`), env(db), e.ctx, fetchApp);
     expect(((await ok.json()) as any).asOf).toBe(past);
-    expect(asked).toHaveLength(3);
+    expect(asked).toHaveLength(0);
   });
 });

@@ -12,6 +12,7 @@ import { citations, GUIDE_INDEPENDENCE, type GPara } from '../../shared/guide-ty
 import { metricAt, cachedChainParams, coverageOf, unbondingWait } from './analytics';
 import { holderFigureValues, listingTimes } from './holders';
 import { KV_KEYS } from './depth/sql';
+import { PRICED_KEY } from './pool-sizes';
 import { NAM_DEPTH } from './depth/config';
 import { DEPTH_OFFSETS_PCT, DEPTH_PLAIN_SOURCE, OFFSET_10_INDEX, bidQuotable, sellQuotable, type DepthResponse } from '../../shared/depth';
 import { fmtNamRule, fmtPctRule, fmtUsdRule } from '../../shared/format';
@@ -30,16 +31,17 @@ type Facts = Partial<Record<FactKey, Fact>>;
 /** The figures the server-rendered pages state, each with its source and time (cached 2 minutes at the edge). */
 export async function facts(env: Env): Promise<Facts> {
   const cache = caches.default;
-  const key = new Request(`${SITE.origin}/__seo/facts-v5`);
+  const key = new Request(`${SITE.origin}/__seo/facts-v6`);
   const hit = await cache.match(key).catch(() => null);
   if (hit) return hit.json();
   const db = env.DB;
   const now = Date.now();
   const listed = await listingTimes(db);
-  const [price, total, bonded, shielded, osmosis, liquidity, pools, holderFig, vol, cov, params, depthLatest] = await Promise.all([
+  const [price, total, bonded, shielded, osmosis, liquidity, pools, priced, holderFig, vol, cov, params, depthLatest] = await Promise.all([
     // Staked: the chain's own total stake, not the staking account's balance (which also holds NAM on its way out).
     metricAt(db, 'price.usd', now), metricAt(db, 'supply.total', now), metricAt(db, 'supply.total_stake', now), metricAt(db, 'supply.masp_shielded', now),
-    metricAt(db, 'supply.osmosis', now), metricAt(db, 'dex.liquidity_usd', now), metricAt(db, 'dex.pool_count', now),
+    // The pools' money: each pool's coins at their own prices (pool-sizes.ts), and how many pools that total counts.
+    metricAt(db, 'supply.osmosis', now), metricAt(db, 'dex.liquidity_usd', now), metricAt(db, 'dex.pool_count', now), metricAt(db, PRICED_KEY, now),
     // The holder figures the cron stores after each complete listing (holders.ts holderFigureValues; the queries only without them).
     holderFigureValues(db, now, listed).catch(() => null),
     db.prepare(`SELECT SUM(amount_num) nam, COUNT(*) n FROM flows WHERE chain='osmosis' AND kind IN ('buy','sell') AND ts >= ? AND ts < ?
@@ -57,7 +59,10 @@ export async function facts(env: Env): Promise<Facts> {
   if (bonded) f.staked = { text: `Staked with validators: ${num(bonded.value)} NAM${total ? `, ${pct(bonded.value)}` : ''}`, at: bonded.ts, source: 'Namada nodes' };
   if (shielded) f.shielded = { text: `In the shielded pool: ${num(shielded.value)} NAM${total ? `, ${pct(shielded.value)}` : ''}`, at: shielded.ts, source: 'Namada nodes' };
   if (osmosis) f.osmosis = { text: `Held on Osmosis (wallets and pools): ${num(osmosis.value)} NAM${total ? `, ${pct(osmosis.value)}` : ''}`, at: osmosis.ts, source: 'Osmosis bank' };
-  if (liquidity) f.depth = { text: `Money in the Osmosis NAM pools: $${num(liquidity.value)}${pools ? ` across ${num(pools.value)} pools` : ''}`, at: liquidity.ts, source: 'Osmosis router' };
+  // A total from the pools' reserves has its count stored beside it; one without (stored before) was the router's own.
+  const sized = priced != null && priced.ts === liquidity?.ts;
+  const across = !pools ? '' : sized && priced!.value < pools.value ? ` across ${num(priced!.value)} of ${num(pools.value)} pools (the others cannot be priced)` : ` across ${num(pools.value)} pools`;
+  if (liquidity) f.depth = { text: `Money in the Osmosis NAM pools: $${num(liquidity.value)}${across}`, at: liquidity.ts, source: sized ? 'Osmosis pool reserves' : 'Osmosis router' };
   // Stamped with how current the Osmosis index is (the scanner's own time, not the newest trade), so a stalled
   // index shows as an old figure and a quiet market does not.
   const osmoAt = cov?.osmosis.at ?? null;

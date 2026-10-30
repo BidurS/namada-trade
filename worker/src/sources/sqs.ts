@@ -1,6 +1,7 @@
 import { OSMOSIS, NAM } from '../config';
 import { poolHoldsSomething } from '../../../shared/pool-sides';
 import { fetchJson, toNam, HttpError, sleep, isPoolAccount } from '../util';
+import { counterDecimals } from '../pool-sizes';
 import type { PoolInfo, PriceQuote, Provenance, QuoteCurveResponse, SafeClipInfo, SlippageCurvePoint } from '../../../shared/types';
 import { SIZE_SLICE_JUMP_FROM_ZERO_PCT, SIZE_SLICE_JUMP_MIN_PCT, SIZE_SLICE_JUMP_RATIO } from '../../../shared/size-table';
 
@@ -25,14 +26,15 @@ function classify(e: unknown): QuoteErrorCode {
  * SQS answers bursts from one IP with 403/429. Retry those with jittered backoff (up to `tries` attempts in all;
  * a visitor's quote makes one: QuoteBudget); everything else fails fast.
  */
-async function sqsGet(url: string, timeoutMs = 12000, tries = 3): Promise<any> {
+async function sqsGet(url: string, timeoutMs = 12000, tries = 3, signal?: AbortSignal): Promise<any> {
   let last: unknown;
   for (let i = 0; i < tries; i++) {
     try {
-      return await fetchJson(url, { timeoutMs, retries: 0 });
+      return await fetchJson(url, { timeoutMs, retries: 0, signal });
     } catch (e) {
       last = e;
       if (!(e instanceof HttpError) || (e.status !== 403 && e.status !== 429 && e.status < 500)) throw e;
+      if (signal?.aborted) throw e;
       if (i < tries - 1) await sleep(350 * 2 ** i + Math.floor(Math.random() * 250));
     }
   }
@@ -194,9 +196,14 @@ function routeSpot(res: any): { usd: number; how: Extract<NamPriceHow, { how: 'r
 }
 
 /**
- * The NAM pools the quote service lists. `refused` counts the pools whose address was left out because it is not
+ * The NAM pools the quote service lists, with their reserves in whole coins (the other coin's only when its decimals
+ * are known: pool-sizes.ts counterDecimals; an empty side is 0 in any unit). A pool's size is not taken from the
+ * answer: `liquidityUsd` is null here and the cron sizes each pool from its reserves (pool-sizes.ts sizePools); the
+ * answer's own liquidity_cap, which counts NAM at nothing while the router gives NAM no price, is kept beside it as
+ * `routerLiquidityUsd` for comparison only. `refused` counts the pools whose address was left out because it is not
  * shaped like an Osmosis pool account (util.ts isPoolAccount): such a pool keeps its figures with no address, so it
- * is never labelled a pool (cron.ts) nor taken by the live parser as one (live-hub.ts).
+ * is never labelled a pool (cron.ts) nor taken by the live parser as one (live-hub.ts). Only the cron and the live
+ * hub ask it: visitors read the cron's stored list (pool-sizes.ts readStoredPools).
  */
 export async function fetchNamPools(): Promise<{ pools: PoolInfo[]; at: number; error?: string; refused?: number; raw?: unknown[] }> {
   const at = Date.now();
@@ -232,6 +239,11 @@ export async function fetchNamPools(): Promise<{ pools: PoolInfo[]; at: number; 
       }
 
       const typeMap: Record<number, string> = { 0: 'balancer', 1: 'stableswap', 2: 'concentrated', 3: 'cosmwasm' };
+      // the other side in whole coins when its decimals are known; a side of no base units is 0 in any unit
+      const counterAmount = counterBal ? String(counterBal.amount ?? '0') : '0';
+      const decimals = counterBal ? counterDecimals(counterBal.denom) : null;
+      const counterReserve = /^0*$/.test(counterAmount) ? 0 : decimals != null ? Number(counterAmount) / 10 ** decimals : null;
+      const cap = parseFloat(p.liquidity_cap);
 
       pools.push({
         id,
@@ -241,8 +253,9 @@ export async function fetchNamPools(): Promise<{ pools: PoolInfo[]; at: number; 
         counterDenom: counterBal?.denom || '',
         counterSymbol,
         namReserve: namBal ? toNam(namBal.amount) : 0,
-        counterReserve: counterBal ? Number(counterBal.amount) / 1e6 : 0,
-        liquidityUsd: parseFloat(p.liquidity_cap || '0'),
+        counterReserve: Number.isFinite(counterReserve) ? counterReserve : null,
+        liquidityUsd: null,
+        routerLiquidityUsd: Number.isFinite(cap) ? cap : null,
         spreadFactor: parseFloat(p.spread_factor || '0'),
         volume24hUsd: p.fees_data?.volume_24h ? parseFloat(p.fees_data.volume_24h) : null,
       });
@@ -250,7 +263,7 @@ export async function fetchNamPools(): Promise<{ pools: PoolInfo[]; at: number; 
 
     // a pool empty on both sides holds nothing to trade: it is left out of the list, the pool count and the labels
     const held = pools.filter(poolHoldsSomething);
-    held.sort((a, b) => b.liquidityUsd - a.liquidityUsd);
+    held.sort((a, b) => b.namReserve - a.namReserve);
     return refused ? { pools: held, at, refused, raw: list } : { pools: held, at, raw: list };
   } catch (e) {
     return { pools: [], at, error: quoteErrorText(classify(e)) };
@@ -325,9 +338,9 @@ export const QUOTE_TRIES = 3;
 type Raw = { inBase: string; out: number; impactPct: number; feePct: number; route: string[] };
 
 /** One exact-in router call: `inBase` base units of `inDenom` for `outDenom`. */
-async function routerQuote(inBase: string, inDenom: string, outDenom: string, tries = 3): Promise<Raw> {
+async function routerQuote(inBase: string, inDenom: string, outDenom: string, tries = 3, signal?: AbortSignal): Promise<Raw> {
   const url = `${OSMOSIS.sqs}/router/quote?tokenIn=${inBase}${encodeURIComponent(inDenom)}&tokenOutDenom=${encodeURIComponent(outDenom)}`;
-  const res = await sqsGet(url, 12000, tries);
+  const res = await sqsGet(url, 12000, tries, signal);
   const route: string[] = [];
   for (const r of res.route || []) for (const pool of r.pools || []) route.push(`Pool #${pool.id} (${pool.type === 2 ? 'CL' : 'AMM'})`);
   return {
@@ -414,9 +427,6 @@ export async function quoteBuyFor(amountNam: number, spotUsd: number, spotAt: nu
   return { quote: quoteOf(amountNam, 'buy', best.usdc, best.nam, best.raw, spotUsd, spotAt, note, spotFrom) };
 }
 
-export async function quoteSlippageCurve(): Promise<QuoteCurveResponse> {
-  return edgeCached('curve2', 60, buildCurve, (c) => c.curve.length > 0 && c.curve.every((p) => p.sellImpactPct != null && p.buyImpactPct != null));
-}
 
 /**
  * The largest size whose worse-side price move stays under `targetPct`: linear between the two quoted sizes
@@ -513,41 +523,50 @@ export function annotateSlippageCurve(
   return { curve: annotated, liquidityCliffNam, cliffNote };
 }
 
-async function buildCurve(): Promise<QuoteCurveResponse> {
-  const [priceRes, poolRes] = await Promise.all([fetchNamPrice(), fetchNamPools()]);
-  const pools = poolRes.pools;
-  const totalLiquidityUsd = pools.reduce((acc, p) => acc + p.liquidityUsd, 0);
-  const refPool = pools.find((p) => p.id === OSMOSIS.refPoolId) ?? null;
-  const spotUsd = priceRes.usd;
+/** The sizes the size table quotes, each sold and bought. */
+export const CURVE_TIERS = [1000, 5000, 10000, 25000, 50000, 100000] as const;
+/** Router calls one size table makes at most: a sale and up to BUY_MAX_CALLS buys per size. */
+export const CURVE_CALLS_MAX = CURVE_TIERS.length * (1 + BUY_MAX_CALLS);
 
+/** The price the size table is quoted against: the cron's read this tick, as fetchNamPrice gave it. */
+export type CurveSpot = Pick<NamPrice, 'usd' | 'at' | 'how' | 'error'>;
+
+/**
+ * The size table (GET /api/quote/curve): each of CURVE_TIERS sold and bought through the router against `spot`, the
+ * worse side's price move at each size, the largest sizes under a one and a three percent move, and where the marginal
+ * slippage jumps. The cron builds it once a minute from its own price read (pool-sizes.ts CURVE_KEY); visitors read
+ * the stored table and never ask the router for it. One size at a time (a sale and a buy together, the buy's
+ * corrections one after another), so the table never asks more than two calls at once beside the tick's other reads;
+ * a size not reached before `signal` ends is not listed, never estimated. The pool figures (poolsCount,
+ * totalLiquidityUsd, refPoolLiquidityUsd) are the tick's sized pools, set by the cron when it stores the table
+ * (pool-sizes.ts curveWithPools); here they are none.
+ */
+export async function buildCurve(spot: CurveSpot, signal?: AbortSignal): Promise<QuoteCurveResponse> {
+  const spotUsd = spot.usd;
   // the spot's own source name: the price list, or the route's spot when the list gives NAM no price
   const prov: Provenance = spotUsd
-    ? { source: priceSourceName(priceRes.how), at: priceRes.at, status: 'live' }
-    : { source: SOURCE, at: null, status: 'missing', note: priceRes.error ?? 'spot price unavailable' };
+    ? { source: priceSourceName(spot.how), at: spot.at, status: 'live' }
+    : { source: SOURCE, at: null, status: 'missing', note: spot.error ?? 'spot price unavailable' };
+  const call: typeof routerQuote = (inBase, inDenom, outDenom) => routerQuote(inBase, inDenom, outDenom, 3, signal);
 
-  const tiers = [1000, 5000, 10000, 25000, 50000, 100000];
-  // Three tiers at a time (a sell and a buy each; a buy takes up to BUY_MAX_CALLS calls one after another): more
-  // at once is what trips SQS's per-IP limit.
   const curve: SlippageCurvePoint[] = [];
   if (spotUsd) {
-    for (let i = 0; i < tiers.length; i += 3) {
-      const part = await Promise.all(tiers.slice(i, i + 3).map(async (amountNam) => {
-        const [sellQ, buyQ] = await Promise.all([quoteNamTrade(amountNam, 'sell', spotUsd), quoteNamTrade(amountNam, 'buy', spotUsd)]);
-        const s = sellQ.quote, b = buyQ.quote;
-        return {
-          amountNam,
-          usdSize: amountNam * spotUsd,
-          buyImpactPct: b ? Math.abs(b.priceImpactPct) : null,
-          sellImpactPct: s ? Math.abs(s.priceImpactPct) : null,
-          buyEffectiveUsd: b?.effectivePriceUsd ?? null,
-          sellEffectiveUsd: s?.effectivePriceUsd ?? null,
-          sellOutUsdc: s?.outAmount ?? null,
-          buyInUsdc: b?.inAmount ?? null,
-          buyOutNam: b?.outAmount ?? null,
-          buyExact: b ? Math.abs(b.outAmount - amountNam) / amountNam <= BUY_TOLERANCE : false,
-        };
-      }));
-      curve.push(...part);
+    for (const amountNam of CURVE_TIERS) {
+      if (signal?.aborted) break;
+      const [sellQ, buyQ] = await Promise.all([quoteSell(amountNam, spotUsd, spot.at, call, prov.source), quoteBuyFor(amountNam, spotUsd, spot.at, call, prov.source)]);
+      const s = sellQ.quote, b = buyQ.quote;
+      curve.push({
+        amountNam,
+        usdSize: amountNam * spotUsd,
+        buyImpactPct: b ? Math.abs(b.priceImpactPct) : null,
+        sellImpactPct: s ? Math.abs(s.priceImpactPct) : null,
+        buyEffectiveUsd: b?.effectivePriceUsd ?? null,
+        sellEffectiveUsd: s?.effectivePriceUsd ?? null,
+        sellOutUsdc: s?.outAmount ?? null,
+        buyInUsdc: b?.inAmount ?? null,
+        buyOutNam: b?.outAmount ?? null,
+        buyExact: b ? Math.abs(b.outAmount - amountNam) / amountNam <= BUY_TOLERANCE : false,
+      });
     }
   }
 
@@ -555,9 +574,9 @@ async function buildCurve(): Promise<QuoteCurveResponse> {
   const annotated = annotateSlippageCurve(curve, spotUsd);
   return {
     spotUsd,
-    poolsCount: pools.length,
-    totalLiquidityUsd,
-    refPoolLiquidityUsd: refPool?.liquidityUsd ?? null,
+    poolsCount: 0,
+    totalLiquidityUsd: null,
+    refPoolLiquidityUsd: null,
     maxSafeClip1PctNam: c1?.nam ?? null,
     maxSafeClip3PctNam: c3?.nam ?? null,
     safeClip1Pct: c1,
@@ -568,3 +587,6 @@ async function buildCurve(): Promise<QuoteCurveResponse> {
     prov,
   };
 }
+
+/** Every size of the table quoted on both sides. */
+export const curveComplete = (c: QuoteCurveResponse): boolean => c.curve.length === CURVE_TIERS.length && c.curve.every((p) => p.sellImpactPct != null && p.buyImpactPct != null);

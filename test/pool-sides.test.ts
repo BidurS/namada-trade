@@ -35,10 +35,12 @@ describe('a pool by what it holds', () => {
   it('the quote service\'s pool list leaves out a pool empty on both sides and keeps pool 3008', async () => {
     vi.stubGlobal('fetch', vi.fn(async () => new Response(JSON.stringify([twoSided, pool3008, emptyPool]), { headers: { 'content-type': 'application/json' } })));
     const r = await fetchNamPools();
-    expect(r.pools.map((p) => p.id)).toEqual(['3005', '3008']);
+    // most NAM first: the list carries no size of its own (the cron sizes each pool from its reserves)
+    expect(r.pools.map((p) => p.id)).toEqual(['3008', '3005']);
     const p = r.pools.find((x) => x.id === '3008')!;
     expect(p.namReserve).toBeCloseTo(910154.558525, 6);
     expect(p.counterReserve).toBe(0);
+    expect(p).toMatchObject({ liquidityUsd: null, routerLiquidityUsd: 0 });
   });
 
   it('the pairs answer leaves out a pool empty on both sides', async () => {

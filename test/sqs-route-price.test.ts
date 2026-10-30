@@ -283,27 +283,30 @@ describe('price.how: the way the price was read, written only when it changes', 
 describe('the readers name the route', () => {
   const env = (db: ReturnType<typeof testD1>) => ({ DB: db } as any);
 
-  it('the headline price, read live: the route spot SQS gave, with its source name and note', async () => {
-    sqs();
-    const o = (await (await app.request('/api/overview', {}, env(testD1()))).json()) as Overview;
-    expect(o.price.usd.value).toBe(SPOT);
-    expect(o.price.usd.prov).toMatchObject({ source: 'Osmosis SQS route spot, 1,000 NAM', status: 'live', note: routeNote(ROUTE_HOW) });
-  });
-
-  it('the headline price, stored: the stored minute names the route it was read from; one read by the list keeps its name', async () => {
-    vi.useFakeTimers({ toFake: ['setTimeout'] });
-    sqs({ list: 503 });
+  it('the headline price is the minute the cron stored, asked of no quote service: the route it was read from, with its note, fresh', async () => {
+    const asked = sqs();
     const now = Date.now();
     const db = testD1();
-    insert(db, 'metrics', [{ ts: now - 60_000, key: 'price.usd', value: SPOT }]);
+    insert(db, 'metrics', [{ ts: now - 40_000, key: 'price.usd', value: SPOT }]);
+    insert(db, 'kv', [{ key: PRICE_HOW_KEY, value: JSON.stringify({ log: [{ ...ROUTE_HOW, since: now - 1_800_000 }] }), updated_at: now - 1_800_000 }]);
+    const o = (await (await app.request('/api/overview', {}, env(db))).json()) as Overview;
+    expect(asked).toEqual([]);
+    expect(o.price.usd.value).toBe(SPOT);
+    expect(o.price.usd.prov).toEqual({ source: 'Osmosis SQS route spot, 1,000 NAM (stored)', at: now - 40_000, status: 'live', note: storedPriceNote({ ...ROUTE_HOW, since: now - 1_800_000 }) });
+  });
+
+  it('the headline price, stored long ago: old past three minutes, with its age; the stored minute names the route it was read from; one read by the list keeps its name', async () => {
+    const asked = sqs({ list: 503 });
+    const now = Date.now();
+    const db = testD1();
+    insert(db, 'metrics', [{ ts: now - 10 * 60_000, key: 'price.usd', value: SPOT }]);
     insert(db, 'kv', [{ key: PRICE_HOW_KEY, value: JSON.stringify({ log: [{ how: 'list', since: now - 3_600_000 }, { ...ROUTE_HOW, since: now - 1_800_000 }] }), updated_at: now - 1_800_000 }]);
-    const p = app.request('/api/overview', {}, env(db));
-    await vi.runAllTimersAsync();
-    const o = (await (await p).json()) as Overview;
+    const o = (await (await app.request('/api/overview', {}, env(db))).json()) as Overview;
+    expect(asked).toEqual([]);
     expect(o.price.usd.value).toBe(SPOT);
     expect(o.price.usd.prov.source).toBe('Osmosis SQS route spot, 1,000 NAM (stored)');
     expect(o.price.usd.prov.status).toBe('stale');
-    expect(o.price.usd.prov.note).toBe(`${quoteErrorText('unavailable')} ${storedPriceNote({ ...ROUTE_HOW, since: now - 1_800_000 })}`);
+    expect(o.price.usd.prov.note).toBe(`The newest stored quote is 10 min old. ${storedPriceNote({ ...ROUTE_HOW, since: now - 1_800_000 })}`);
     // rewound to a minute the list priced
     insert(db, 'metrics', [{ ts: now - 3_000_000, key: 'price.usd', value: 0.00095 }]);
     const r = (await (await app.request(`/api/overview?at=${now - 2_900_000}`, {}, env(db))).json()) as Overview;
