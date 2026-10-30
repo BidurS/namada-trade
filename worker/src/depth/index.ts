@@ -34,7 +34,7 @@ import { decToScaled, decodePool, decodeTickInfos, poolQuery, tickSubspaceQuery,
 import { counterDenoms, counterInfo, counterValueUsd, isDust, listPools, liveSet, pairOf, type CounterInfo, type ListedPool, type TakerFee, type TokenMeta } from './pools';
 import {
   Requests, isOk, liq, readBook, readBookFull, readClParams, readClPoolLcd, readEstimate, readGammPool, readPoolList, readPositions, readPriceList, readTakerFee, readTickRanges, readTokenMeta, rpcBatch,
-  type BookFullRead, type BookKv, type BookRead, type FetchLike, type GammPoolWire, type OrderRow, type PositionRead, type Read, type ReadOk, type TickRow,
+  type BookFullRead, type BookKv, type BookRead, type FetchLike, type GammPoolWire, type OrderRow, type PositionRead, type Read, type ReadOk, type TickCancels, type TickRow, type TickValues,
 } from './read';
 import { KV_KEYS, changeStmt, copyKvStmt, deleteOldMinutesStmts, hourlyRollupStmt, hourlyRowOf, hourlyStmt, kvManySql, kvStmt, minuteStmt, swapsStmt, type DepthHourlyRow, type DepthMinuteRow, type HourlyRollupRead } from './sql';
 import { STORE_HEALTH, budgetCheckStmt, budgetFor, budgetKvStmt, gate, killSwitchOff, KILL_SWITCH_NOTE, recordBytes, recordCapHit, recordR2Put, recordWrites, storeHealth, withBudgetRow, type DepthBudget } from './budget';
@@ -729,33 +729,73 @@ export function tickStoreCheck(walked: ClRange[], gateway: ClRange[]): { ok: boo
   }
   return { ok: true, walked: walked.length, gateway: gateway.length, firstDiff: null };
 }
+/** A figure at 18 places as a plain decimal: whole base units without a point, a fraction without its trailing zeros. */
+const plainUnits = (v: bigint): string => decString(v, 18).replace(/(\.\d*?)0+$/, '$1').replace(/\.$/, '');
 /**
- * Invariant 3: each live tick's totals against the sum of its orders' remaining quantities, each side, compared at 18
- * decimal places (a tick's total is a decimal field of the contract, an order's quantity a whole number of base units).
- * A figure that is not a number is a difference with the figure named, never a thrown error.
+ * An order's fill as the contract's claim_order computes it (read.ts TickValues), at 18 decimal places: the tick side's
+ * effective total amount swapped plus the side's unrealized cancels (what sync_tick would add to it), less the order's
+ * own etas, within zero and the order's quantity; what the order has left is its quantity less that fill. An order's
+ * `quantity` is what has not been claimed, so an order filled in part and not claimed keeps its placed quantity there
+ * while the tick's total has already lost the fill (order 993 of pool 3008 on 2026-10-30: quantity 200000000000, the
+ * tick's total 199372302400, 627697600 filled). A figure missing or not a number is named, never read as zero.
  */
-export function bookTotalsCheck(ticks: TickRow[], orders: Record<string, Read<OrderRow[]>>): { ok: boolean; compared: number; notRead: number; firstDiff: string | null } {
-  let compared = 0, notRead = 0, firstDiff: string | null = null;
-  const scaled = (v: string): bigint | null => { try { return decToScaled(v, 18); } catch { return null; } };
+/** A figure as the contract prints one (digits, then at most a point and digits; never a sign, Decimal256 and Uint128 have none) at 18 places; anything else, an empty or signed string included, is null, since decToScaled alone reads '' as zero and '-5' as a negative. */
+const scaledFigure = (v: unknown): bigint | null => { if (typeof v !== 'string' && typeof v !== 'number') return null; const s = String(v); if (!/^\d+(\.\d+)?$/.test(s)) return null; try { return decToScaled(s, 18); } catch { return null; } };
+export function orderLeft(values: TickValues | undefined, cancels: string | undefined, o: Pick<OrderRow, 'order_id' | 'quantity' | 'etas'>): { left: bigint; filled: bigint; quantity: bigint } | { error: string } {
+  const scaled = scaledFigure;
+  const quantity = scaled(o.quantity);
+  if (quantity == null) return { error: `order ${String(o.order_id)} quantity ${String(o.quantity)} is not a number` };
+  const own = scaled(o.etas);
+  if (own == null) return { error: `order ${String(o.order_id)} etas ${String(o.etas)} is not a number` };
+  const swapped = scaled(values?.effective_total_amount_swapped);
+  if (swapped == null) return { error: `the tick’s effective total amount swapped ${String(values?.effective_total_amount_swapped)} is not a number` };
+  const unreal = scaled(cancels);
+  if (unreal == null) return { error: `the tick’s unrealized cancels ${String(cancels)} are not a number` };
+  let filled = swapped + unreal - own;
+  if (filled < 0n) filled = 0n;
+  if (filled > quantity) filled = quantity;
+  return { left: quantity - filled, filled, quantity };
+}
+/**
+ * Invariant 3: each live tick's totals against what its orders have left (orderLeft: their quantities less their fills),
+ * each side, compared at 18 decimal places (a tick's total is a decimal field of the contract, an order's quantity a
+ * whole number of base units). The fills need the ticks' unrealized cancels: when that read failed, nothing is compared
+ * and `why` says so. The identity holds within one state only, so a tick whose three reads (the tick list at
+ * `ticksHeight`, the cancels, its orders) carry different heights is not compared and counted in `mixed`, with the
+ * heights in `why`; the reads are asked at one height (readBookFull), so this is the guard for a gateway that did not
+ * keep to it. A figure that is not a number is a difference with the figure named, never a thrown error.
+ */
+export function bookTotalsCheck(ticks: TickRow[], orders: Record<string, Read<OrderRow[]>>, cancels: Read<Record<string, TickCancels>> | null, ticksHeight: number | null = null): { ok: boolean; compared: number; notRead: number; mixed: number; firstDiff: string | null; why: string | null } {
+  let compared = 0, notRead = 0, mixed = 0, firstDiff: string | null = null;
+  const whys: string[] = [];
+  if (!cancels || !isOk(cancels)) return { ok: true, compared: 0, notRead: ticks.length, mixed: 0, firstDiff: null, why: `the ticks’ unrealized cancels were not read${cancels ? ` (${cancels.error})` : ''}` };
+  const scaled = scaledFigure;
   for (const t of ticks) {
     const r = orders[String(t.tick_id)];
     if (!r || !isOk(r)) { notRead++; continue; }
+    const heights = [ticksHeight, cancels.height, r.height].filter((h): h is number => h != null);
+    if (new Set(heights).size > 1) { mixed++; if (whys.length < 3) whys.push(`tick ${t.tick_id} read at heights ${ticksHeight ?? '?'} (ticks), ${cancels.height ?? '?'} (cancels), ${r.height ?? '?'} (orders)`); continue; }
     compared++;
+    const c = cancels.value[String(t.tick_id)];
+    if (!c) { firstDiff = `tick ${t.tick_id}: unrealized cancels not answered`; break; }
     for (const side of ['bid', 'ask'] as const) {
       if (firstDiff) break;
-      const totalText = liq(t.tick_state?.[`${side}_values`]);
+      const values = t.tick_state?.[`${side}_values`];
+      // the total as printed, not through liq, which reads a figure that is not a number as '0' for the ladder
+      const totalText = String(values?.total_amount_of_liquidity ?? '');
       const total = scaled(totalText);
       if (total == null) { firstDiff = `tick ${t.tick_id} ${side}: total ${totalText} is not a number`; break; }
-      let sum = 0n;
+      let left = 0n, unclaimed = 0n, filled = 0n;
       for (const o of r.value.filter((o) => o.order_direction === side)) {
-        const q = scaled(String(o.quantity ?? '0'));
-        if (q == null) { firstDiff = `tick ${t.tick_id} ${side}: order ${String(o.order_id)} quantity ${String(o.quantity)} is not a number`; break; }
-        sum += q;
+        const f = orderLeft(values, c[side], o);
+        if ('error' in f) { firstDiff = `tick ${t.tick_id} ${side}: ${f.error}`; break; }
+        left += f.left; unclaimed += f.quantity; filled += f.filled;
       }
-      if (!firstDiff && total !== sum) firstDiff = `tick ${t.tick_id} ${side}: total ${totalText}, orders ${decString(sum, 18).replace(/\.?0+$/, '')}`;
+      if (!firstDiff && total !== left) firstDiff = `tick ${t.tick_id} ${side}: total ${totalText}, orders have ${plainUnits(left)} left (${plainUnits(unclaimed)} not yet claimed, ${plainUnits(filled)} filled)`;
     }
+    if (firstDiff) break;
   }
-  return { ok: !firstDiff, compared, notRead, firstDiff };
+  return { ok: !firstDiff, compared, notRead, mixed, firstDiff, why: mixed ? `${mixed} ${mixed === 1 ? 'tick' : 'ticks'} not compared, read at different heights (${whys.join('; ')}${mixed > whys.length ? '; …' : ''})` : null };
 }
 
 /**
@@ -793,16 +833,21 @@ export function positionItem(cfg: DepthConfig, s: StoredPoolState, pool: Pick<Cl
   if (!item.inRange) item.side = p.upper_tick <= tick ? (namIs0 ? 'bid' : 'ask') : namIs0 ? 'ask' : 'bid';
   return item;
 }
-/** An order as an owner's item: an ask rests in the base coin, a bid in the counter coin, at the tick's price. */
-export function orderItem(cfg: DepthConfig, s: StoredPoolState, o: OrderRow): DepthOwnerItem {
+/**
+ * An order as an owner's item: an ask rests in the base coin, a bid in the counter coin, at the tick's price. `left` is
+ * what the order has left to fill in its coin's base units (orderLeft, a plain decimal); without it the order's own
+ * quantity stands, which is what has not been claimed and so counts an unclaimed fill as resting.
+ */
+export function orderItem(cfg: DepthConfig, s: StoredPoolState, o: OrderRow, left: string | null = null): DepthOwnerItem {
   const price = tickToPrice(o.tick_id) * usdPerState(s, cfg.base.decimals);
-  const q = Number(o.quantity ?? 0), placed = Number(o.placed_quantity ?? 0);
+  const quantity = left ?? String(o.quantity ?? '0');
+  const q = Number(quantity), placed = Number(o.placed_quantity ?? 0);
   const whole = (v: number) => (o.order_direction === 'ask' ? v / 10 ** cfg.base.decimals : v / 10 ** s.counterDecimals);
   const nam = o.order_direction === 'ask' ? whole(q) : price > 0 ? (whole(q) * s.counterUsd) / price : 0;
   const usd = o.order_direction === 'ask' ? whole(q) * price : whole(q) * s.counterUsd;
   let since: number | null = null;
   try { since = o.placed_at ? Number(BigInt(o.placed_at) / 1_000_000n) : null; } catch { since = null; }
-  return { pool: s.id, kind: 'order', id: String(o.order_id), side: o.order_direction, loUsd: price, hiUsd: price, nam, usd, since, remaining: whole(q), placed: whole(placed), quantity: String(o.quantity ?? '0') };
+  return { pool: s.id, kind: 'order', id: String(o.order_id), side: o.order_direction, loUsd: price, hiUsd: price, nam, usd, since, remaining: whole(q), placed: whole(placed), quantity };
 }
 /** Items grouped by owner, largest in USD first, with each owner's share of the total. */
 export function groupOwners(items: { owner: string; item: DepthOwnerItem }[]): { owners: DepthOwner[]; totals: DepthOwnersResponse['totals'] } {
@@ -994,16 +1039,20 @@ export async function hourly(env: Env, now: number, ctx: HourlyCtx): Promise<Hou
       if (!c.ok) console.error('depth owners: tick store', invariants.tickStore.note);
     } else invariants.tickStore = notCompared(refRanges && !isOk(refRanges) ? `gateway: ${refRanges.error}` : 'the tick store did not answer');
   } });
+  const mixedTicks = new Map<string, number>();
   guarded('bookTotals', () => { if (books.length) {
     const fails: string[] = [];
+    const whys: string[] = [];
     let compared = 0, notRead = 0;
     for (const b of books) {
       if (!isOk(b.read.ticks)) { fails.push(`${b.pool.id}: ticks not read (${b.read.ticks.error})`); continue; }
-      const c = bookTotalsCheck(b.read.ticks.value, b.read.orders);
+      const c = bookTotalsCheck(b.read.ticks.value, b.read.orders, b.read.cancels, b.read.ticks.height);
+      mixedTicks.set(b.pool.id, c.mixed);
       compared += c.compared; notRead += c.notRead;
+      if (c.why) whys.push(`${b.pool.id}: ${c.why}`);
       if (!c.ok) fails.push(`${b.pool.id}: ${c.firstDiff}`);
     }
-    invariants.bookTotals = fails.length ? { ok: false, note: `not held for ${fails.join('; ')}` } : compared ? { ok: true, note: `${INVARIANT_WORDS.bookTotals} (${compared} ticks${notRead ? `; ${notRead} ticks’ orders not read` : ''})` } : notCompared('no tick’s orders were read');
+    invariants.bookTotals = fails.length ? { ok: false, note: `not held for ${fails.join('; ')}` } : compared ? { ok: true, note: `${INVARIANT_WORDS.bookTotals} (${compared} ticks${notRead ? `; ${notRead} ticks’ orders not read` : ''}${whys.length ? `; ${whys.join('; ')}` : ''})` } : notCompared(whys.length ? whys.join('; ') : 'no tick’s orders were read');
     if (fails.length) console.error('depth owners: book totals', fails.join('; '));
   } else if (bookSkipped) invariants.bookTotals = notCompared(bookSkipped); });
   result.invariants = invariants;
@@ -1017,15 +1066,26 @@ export async function hourly(env: Env, now: number, ctx: HourlyCtx): Promise<Hou
     if (!s || !w || !positionPools.includes(p.pool_id)) continue;
     try { items.push({ owner: p.address, item: positionItem(cfg, s, w.wire, p) }); } catch (e) { notes.push(`position ${p.position_id}: ${String((e as Error)?.message ?? e).slice(0, 60)}`); }
   }
-  const bookRead = books.length > 0 && books.every((b) => isOk(b.read.ticks) && !b.read.notAsked.length && Object.values(b.read.orders).every((r) => isOk(r)));
+  // the book is read when every live tick's orders and the ticks' unrealized cancels were: an order's quantity left needs the cancels (orderLeft)
+  // and when every tick's three reads carry one height (bookTotalsCheck's mixed count), since an order's quantity left is built from the three
+  const bookRead = books.length > 0 && books.every((b) => isOk(b.read.ticks) && !b.read.notAsked.length && isOk(b.read.cancels) && Object.values(b.read.orders).every((r) => isOk(r)) && !(mixedTicks.get(b.pool.id) ?? 0));
   let orders = 0;
   if (bookRead) {
-    for (const b of books) for (const r of Object.values(b.read.orders)) if (isOk(r)) for (const o of r.value) { items.push({ owner: o.owner, item: orderItem(cfg, b.pool, o) }); orders++; }
+    for (const b of books) {
+      const ticks = new Map((b.read.ticks as ReadOk<TickRow[]>).value.map((t) => [String(t.tick_id), t]));
+      const cancels = (b.read.cancels as ReadOk<Record<string, TickCancels>>).value;
+      for (const [tick, r] of Object.entries(b.read.orders)) if (isOk(r)) for (const o of r.value) {
+        const f = orderLeft(ticks.get(tick)?.tick_state?.[`${o.order_direction}_values`], cancels[tick]?.[o.order_direction], o);
+        if ('error' in f) notes.push(`order ${String(o.order_id)} at tick ${tick}: ${f.error}`.slice(0, 120));
+        items.push({ owner: o.owner, item: orderItem(cfg, b.pool, o, 'error' in f ? null : plainUnits(f.left)) });
+        orders++;
+      }
+    }
   } else if (prevOwners?.orders?.read || prevOwners?.orders?.at != null) {
     // the hour before's orders, with their own time, so the owners list keeps the book while this hour did not read it
     for (const o of prevOwners.owners ?? []) for (const it of o.items ?? []) if (it.kind === 'order') { items.push({ owner: o.address, item: it }); orders++; }
   }
-  const bookWhy = !bookPools.length ? 'no order book in the live set' : bookSkipped ?? (books.length ? `the book answered in part: ${books.map((b) => (!isOk(b.read.ticks) ? b.read.ticks.error : b.read.notAsked.length ? `${b.read.notAsked.length} ticks’ orders not asked (the request cap)` : 'an order read failed')).join('; ')}` : 'not read');
+  const bookWhy = !bookPools.length ? 'no order book in the live set' : bookSkipped ?? (books.length ? `the book answered in part: ${books.map((b) => (!isOk(b.read.ticks) ? b.read.ticks.error : b.read.notAsked.length ? `${b.read.notAsked.length} ticks’ orders not asked (the request cap)` : !isOk(b.read.cancels) ? `the ticks’ unrealized cancels not read (${b.read.cancels?.error ?? 'not asked'})` : mixedTicks.get(b.pool.id) ? `${mixedTicks.get(b.pool.id)} ticks read at different heights` : 'an order read failed')).join('; ')}` : 'not read');
   const bookHeight = books.map((b) => (isOk(b.read.state) ? b.read.state.height : null)).find((h) => h != null) ?? null;
   const grouped = groupOwners(items);
   const posHeights = [...new Set(positions.map((p) => p.height).filter((h): h is number => h != null))];
@@ -1068,12 +1128,12 @@ export async function hourly(env: Env, now: number, ctx: HourlyCtx): Promise<Hou
       if (s.cl) raw.cl = { pool: s.cl.pool, ranges: s.cl.ranges, state: poolWire[s.id] ?? null, positions: positions.filter((p) => p.pool_id === s.id) };
       if (s.gamm) raw.gamm = { assets: s.gamm.assets, params: gammParamsOf(s.id) };
       if (s.stable) raw.stable = { liquidity: s.stable.liquidity, scaling: s.stable.scaling, params: gammParamsOf(s.id) };
-      if (s.book) { const b = books.find((x) => x.pool.id === s.id); raw.book = { contract: s.book.contract ?? null, bids: s.book.bids, asks: s.book.asks, state: b && isOk(b.read.state) ? { value: b.read.state.value, url: b.read.state.url, at: b.read.state.at, height: b.read.state.height } : null, ticks: b && isOk(b.read.ticks) ? b.read.ticks.value : null, orders: b ? Object.fromEntries(Object.entries(b.read.orders).map(([t, r]) => [t, isOk(r) ? r.value : { error: r.error }])) : null, notRead: bookSkipped ?? (b ? null : 'not read') }; }
+      if (s.book) { const b = books.find((x) => x.pool.id === s.id); raw.book = { contract: s.book.contract ?? null, bids: s.book.bids, asks: s.book.asks, state: b && isOk(b.read.state) ? { value: b.read.state.value, url: b.read.state.url, at: b.read.state.at, height: b.read.state.height } : null, ticks: b && isOk(b.read.ticks) ? b.read.ticks.value : null, cancels: b?.read.cancels ? (isOk(b.read.cancels) ? b.read.cancels.value : { error: b.read.cancels.error }) : null, orders: b ? Object.fromEntries(Object.entries(b.read.orders).map(([t, r]) => [t, isOk(r) ? r.value : { error: r.error }])) : null, notRead: bookSkipped ?? (b ? null : 'not read') }; }
       const r = await archiveObject(bucket, archiveKey(s.id, hour), raw, caps.r2ObjectMax);
       result.archive.push(r);
       if ('bytes' in r) { budget = recordR2Put(budget, r.bytes); result.archived++; } else notes.push(`archive ${r.key}: ${r.skipped}`);
     }
-    const r = await archiveObject(bucket, archiveKey(null, hour), { hour, at, positions, orders: books.map((b) => ({ pool: b.pool.id, contract: b.contract, ticks: isOk(b.read.ticks) ? b.read.ticks.value : null, orders: Object.fromEntries(Object.entries(b.read.orders).map(([t, o]) => [t, isOk(o) ? o.value : { error: o.error }])) })), missing, prov: req.prov }, caps.r2ObjectMax);
+    const r = await archiveObject(bucket, archiveKey(null, hour), { hour, at, positions, orders: books.map((b) => ({ pool: b.pool.id, contract: b.contract, ticks: isOk(b.read.ticks) ? b.read.ticks.value : null, cancels: b.read.cancels ? (isOk(b.read.cancels) ? b.read.cancels.value : { error: b.read.cancels.error }) : null, orders: Object.fromEntries(Object.entries(b.read.orders).map(([t, o]) => [t, isOk(o) ? o.value : { error: o.error }])) })), missing, prov: req.prov }, caps.r2ObjectMax);
     result.archive.push(r);
     if ('bytes' in r) { budget = recordR2Put(budget, r.bytes); result.archived++; } else notes.push(`archive ${r.key}: ${r.skipped}`);
   }

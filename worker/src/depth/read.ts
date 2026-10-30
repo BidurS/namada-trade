@@ -202,18 +202,64 @@ export async function readTokenMeta(req: Requests, cfg: DepthConfig, denoms: str
 }
 
 // ---------------------------------------------------------------------------------------------------- the order book contract
-/** One smart query of a contract through the gateway: the message base64 in the path, the answer's `data`. */
-export async function smartQuery<T>(req: Requests, cfg: DepthConfig, contract: string, msg: unknown, what: string): Promise<Read<T>> {
+/**
+ * One smart query of a contract through the gateway: the message base64 in the path, the answer's `data`. With `height`
+ * the query is answered at that block (the gateway's x-cosmos-block-height request header; the public node served the
+ * last 60 heights on 2026-10-30 and refused 120 back), so reads that must agree with each other, as the hourly book's
+ * do, come from one state.
+ */
+export async function smartQuery<T>(req: Requests, cfg: DepthConfig, contract: string, msg: unknown, what: string, height: number | null = null): Promise<Read<T>> {
   const url = `${cfg.hosts.rest}/cosmwasm/wasm/v1/contract/${contract}/smart/${enc(bytesToBase64(te.encode(JSON.stringify(msg))))}`;
-  const r = await readJson<{ data: T }>(req, what, url);
+  const r = await readJson<{ data: T }>(req, what, url, height != null ? { headers: { 'x-cosmos-block-height': String(height) } } : undefined);
   if (!isOk(r)) return r;
   return { ...r, value: r.value?.data as T };
 }
+/** The contract's answer to orders_by_tick: the orders listed and the count of all the tick's orders in the bounds asked. */
+interface OrdersWire { orders: OrderRow[]; count?: number }
+/**
+ * Every order resting at one tick, orders_by_tick in pages of `pageSize` from the last order id on until the list holds
+ * the contract's `count` (the page cap is the contract's `limit`, so a tick with more orders than one page needs more
+ * reads): a list that stays short of the count is an error, never a tick read as whole, since the fill check and the
+ * owners list are only right when every order is there. The last page's read is the one returned, its height included;
+ * when a height was asked for, pages answered at different heights (a gateway that did not keep to the pin) are an
+ * error naming them, since the list would then describe no one state; the minute's unpinned reads take a block between
+ * two pages as ordinary.
+ */
+export async function readTickOrders(req: Requests, cfg: DepthConfig, contract: string, tick: number, height: number | null = null, pageSize = 200): Promise<Read<OrderRow[]>> {
+  const all: OrderRow[] = [];
+  let start: number | null = null, firstHeight: number | null = null;
+  for (let page = 0; page < 50; page++) {
+    const r = await smartQuery<OrdersWire>(req, cfg, contract, { orders_by_tick: { tick_id: tick, ...(start != null ? { start_from: start } : {}), limit: pageSize } }, `order book orders at tick ${tick}${page ? `, page ${page + 1}` : ''}`, height);
+    if (!isOk(r)) return r;
+    // pages at different heights are an error only when a height was asked for; the minute reads unpinned, where a block between two pages is ordinary
+    if (firstHeight == null) firstHeight = r.height;
+    else if (height != null && r.height != null && r.height !== firstHeight) return { error: `tick ${tick}: its orders were read across heights ${firstHeight} and ${r.height}`, url: r.url, at: r.at, ms: r.ms, status: r.status };
+    const got: OrderRow[] = Array.isArray(r.value?.orders) ? r.value.orders : Array.isArray(r.value) ? (r.value as unknown as OrderRow[]) : [];
+    all.push(...got);
+    const count = typeof r.value?.count === 'number' ? r.value.count : null;
+    // the count is of the orders from start_from on, so the page's count plus what came before is the whole
+    const whole = count == null ? got.length < pageSize : got.length >= count;
+    if (whole) return { ...r, value: all };
+    if (got.length < pageSize) return { error: `tick ${tick}: a page listed ${got.length} orders of ${count} counted`, url: r.url, at: r.at, ms: r.ms, status: r.status };
+    start = Number(got[got.length - 1].order_id) + 1;
+  }
+  return { error: `tick ${tick}: more than 50 pages of orders`, url: '', at: req.clock(), ms: 0 };
+}
 
 export interface BookState { quote_denom: string; base_denom: string; current_tick: number; next_bid_tick: number; next_ask_tick: number }
-interface TickValues { total_amount_of_liquidity: string; effective_total_amount_swapped?: string }
+/**
+ * One side of a tick as the contract keeps it (sumtree-orderbook TickValues, decimal fields): the liquidity resting,
+ * which a swap lowers at once, and the effective total amount swapped (ETAS), the running count of what has been
+ * filled at the tick, which a swap raises by the same amount. An order's own `etas` is the tick's count when it was
+ * placed, so its fill is the tick's count since, less whatever cancelled orders placed before it held (the unrealized
+ * cancels, get_unrealized_cancels), capped at its quantity; the contract's claim_order does this sum, and lazily, so
+ * an order's `quantity` is what has not been claimed, not what is left to fill.
+ */
+export interface TickValues { total_amount_of_liquidity: string; effective_total_amount_swapped?: string; cumulative_total_value?: string; cumulative_realized_cancels?: string; last_tick_sync_etas?: string }
 export interface TickRow { tick_id: number; tick_state: { ask_values: TickValues; bid_values: TickValues } }
-export interface OrderRow { tick_id: number; order_id: number; order_direction: 'bid' | 'ask'; owner: string; quantity: string; placed_quantity: string; placed_at: string }
+export interface OrderRow { tick_id: number; order_id: number; order_direction: 'bid' | 'ask'; owner: string; quantity: string; placed_quantity: string; placed_at: string; etas?: string }
+/** A tick's cancelled liquidity the contract has not yet realized into its ETAS, each side, as get_unrealized_cancels gives it. */
+export interface TickCancels { ask: string; bid: string }
 
 /** What the minute keeps of the book between ticks (kv depth.book): the live ticks and each one's last totals and order count. */
 export interface BookKv {
@@ -251,30 +297,68 @@ export interface BookFullRead {
   orders: Record<string, Read<OrderRow[]>>;
   /** Live ticks whose orders were not asked for, the request cap reached. */
   notAsked: number[];
+  /** Every live tick's unrealized cancels, by tick id, from one get_unrealized_cancels query; null when there was no live set to ask about. */
+  cancels: Read<Record<string, TickCancels>> | null;
+  /** The height every read after orderbook_state was asked at (the state's own), so the ticks, the cancels and the orders describe one state; null when the state read gave none. */
+  height: number | null;
 }
 
 /**
- * The book in full: orderbook_state, all_ticks in pages until a short page, then orders_by_tick for every live tick,
- * `parallel` at a time, as far as the request cap allows. A list cut by the cap is an error, never a live set.
+ * The book in full: orderbook_state, then at the state's height (smartQuery's `height`) all_ticks in pages until a
+ * short page, the live ticks' unrealized cancels in one query, then every live tick's orders (readTickOrders),
+ * `parallel` ticks at a time, as far as the request cap allows. A list cut by the cap is an error, never a live set.
+ * The cancels come before the orders because the fill check and the owners' quantities left need them for every tick;
+ * when the cancels query is the last request the cap allows, every tick's orders are left unasked and named in notAsked.
+ * One height for all the reads is what makes the fill check's identity hold (a swap between two reads would move a
+ * tick's total and count without the orders, or the cancels, following): the gateway kept the last 60 heights on
+ * 2026-10-30 and the whole read takes seconds, so a pinned read that fails is an error like any other and the hour
+ * keeps the hour before's orders.
  */
 export async function readBookFull(req: Requests, cfg: DepthConfig, contract: string, parallel = 6): Promise<BookFullRead> {
-  const out: BookFullRead = { state: { error: 'not asked', url: '', at: req.clock(), ms: 0 }, ticks: { error: 'not asked', url: '', at: req.clock(), ms: 0 }, pages: 0, orders: {}, notAsked: [] };
+  const out: BookFullRead = { state: { error: 'not asked', url: '', at: req.clock(), ms: 0 }, ticks: { error: 'not asked', url: '', at: req.clock(), ms: 0 }, pages: 0, orders: {}, notAsked: [], cancels: null, height: null };
   out.state = await smartQuery<BookState>(req, cfg, contract, { orderbook_state: {} }, 'order book state');
-  const listed = await listAllTicks(req, cfg, contract);
+  const height = isOk(out.state) ? out.state.height : null;
+  out.height = height;
+  // no height to pin to (the state read failed, or answered without the header): the book is not read this hour, since
+  // its reads could then describe different states and the owners' quantities left would be built from them
+  if (height == null) { out.ticks = { error: isOk(out.state) ? 'not asked: the book state’s answer carried no height to read the book at' : `not asked: the book state was not read (${out.state.error})`, url: out.state.url, at: req.clock(), ms: 0 }; return out; }
+  const listed = await listAllTicks(req, cfg, contract, height);
   out.pages = listed.pages;
   if (listed.ticks) out.ticks = listed.ticks;
   if (!listed.live) return out;
   const live = listed.live;
+  if (req.made >= req.max) { out.cancels = { error: 'not asked: the request cap was reached', url: '', at: req.clock(), ms: 0 }; out.notAsked.push(...live.map((t) => t.tick_id)); return out; }
+  out.cancels = await readTickCancels(req, cfg, contract, live.map((t) => t.tick_id), height);
   for (let i = 0; i < live.length; i += parallel) {
     const chunk = live.slice(i, i + parallel);
     if (req.made >= req.max) { out.notAsked.push(...live.slice(i).map((t) => t.tick_id)); break; }
     await Promise.all(chunk.map(async (t) => {
       if (req.made >= req.max) { out.notAsked.push(t.tick_id); return; }
-      const r = await smartQuery<{ orders: OrderRow[] }>(req, cfg, contract, { orders_by_tick: { tick_id: t.tick_id, limit: 200 } }, `order book orders at tick ${t.tick_id}`);
-      out.orders[String(t.tick_id)] = isOk(r) ? { ...r, value: Array.isArray(r.value?.orders) ? r.value.orders : Array.isArray(r.value) ? (r.value as unknown as OrderRow[]) : [] } : r;
+      out.orders[String(t.tick_id)] = await readTickOrders(req, cfg, contract, t.tick_id, height);
     }));
   }
   return out;
+}
+
+/**
+ * The unrealized cancels of the ticks named, one get_unrealized_cancels query: an answer that is not the list asked
+ * for, or that leaves a tick out, is an error, so the fill check never reads a missing tick as zero cancels.
+ */
+export async function readTickCancels(req: Requests, cfg: DepthConfig, contract: string, tickIds: number[], height: number | null = null): Promise<Read<Record<string, TickCancels>>> {
+  type Wire = { ticks: { tick_id: number; unrealized_cancels: { ask_unrealized_cancels: string; bid_unrealized_cancels: string } }[] };
+  const r = await smartQuery<Wire>(req, cfg, contract, { get_unrealized_cancels: { tick_ids: tickIds } }, 'order book unrealized cancels', height);
+  if (!isOk(r)) return r;
+  const rows = Array.isArray(r.value?.ticks) ? r.value.ticks : null;
+  if (!rows) return { error: 'unrealized cancels: not a tick list', url: r.url, at: r.at, ms: r.ms, status: r.status };
+  const value: Record<string, TickCancels> = {};
+  for (const t of rows) {
+    const c = t?.unrealized_cancels;
+    if (typeof c?.ask_unrealized_cancels !== 'string' || typeof c?.bid_unrealized_cancels !== 'string') return { error: `unrealized cancels: tick ${String(t?.tick_id)} has no figures`, url: r.url, at: r.at, ms: r.ms, status: r.status };
+    value[String(t.tick_id)] = { ask: c.ask_unrealized_cancels, bid: c.bid_unrealized_cancels };
+  }
+  const missing = tickIds.filter((id) => !(String(id) in value));
+  if (missing.length) return { error: `unrealized cancels: ${missing.length} of ${tickIds.length} ticks not answered (${missing.slice(0, 3).join(', ')})`, url: r.url, at: r.at, ms: r.ms, status: r.status };
+  return { ...r, value };
 }
 
 export const liq = (v: TickValues | undefined): string => { const n = Number(v?.total_amount_of_liquidity ?? 0); return Number.isFinite(n) && n > 0 ? String(v!.total_amount_of_liquidity) : '0'; };
@@ -289,15 +373,19 @@ export interface TickListing {
 
 /**
  * The contract's whole tick list, all_ticks a page at a time until a short page, as far as the request cap allows (the
- * minute's discovery and the hour's book read share it). A list cut by the cap is an error, never a live set.
+ * minute's discovery and the hour's book read share it). A list cut by the cap is an error, never a live set, and so
+ * is, when a height was asked for, a list whose pages were answered at different heights (a gateway that did not keep
+ * to the pin); the minute's unpinned listing takes a block between two pages as ordinary.
  */
-export async function listAllTicks(req: Requests, cfg: DepthConfig, contract: string): Promise<TickListing> {
+export async function listAllTicks(req: Requests, cfg: DepthConfig, contract: string, height: number | null = null): Promise<TickListing> {
   const all: TickRow[] = [];
-  let start: number | null = null, complete = false, last: Read<{ ticks: TickRow[] }> | null = null, pages = 0;
+  let start: number | null = null, complete = false, last: Read<{ ticks: TickRow[] }> | null = null, pages = 0, firstHeight: number | null = null;
   for (let page = 0; page < 20; page++) {
-    const r: Read<{ ticks: TickRow[] }> = await smartQuery<{ ticks: TickRow[] }>(req, cfg, contract, { all_ticks: { start_from: start, limit: cfg.read.bookPageSize } }, `order book ticks, page ${page + 1}`);
+    const r: Read<{ ticks: TickRow[] }> = await smartQuery<{ ticks: TickRow[] }>(req, cfg, contract, { all_ticks: { start_from: start, limit: cfg.read.bookPageSize } }, `order book ticks, page ${page + 1}`, height);
     last = r; pages++;
     if (!isOk(r)) break;
+    if (firstHeight == null) firstHeight = r.height;
+    else if (height != null && r.height != null && r.height !== firstHeight) return { live: null, ticks: { error: `the tick list was read across heights ${firstHeight} and ${r.height}`, url: r.url, at: r.at, ms: r.ms, status: r.status }, pages };
     const got: TickRow[] = Array.isArray(r.value?.ticks) ? r.value.ticks : [];
     all.push(...got.filter((t) => start === null || t.tick_id !== start));
     if (got.length < cfg.read.bookPageSize) { complete = true; break; }
@@ -348,11 +436,10 @@ export async function readBook(req: Requests, cfg: DepthConfig, contract: string
     else out.changed.push(t.tick_id);
     next.ticks[String(t.tick_id)] = entry;
   }
-  // orders only where the totals moved (0 most minutes), one request a tick, within the cap
+  // orders only where the totals moved (0 most minutes), a request a page (one page holds a tick of 200 orders or fewer), within the cap
   for (const tick of out.changed) {
     if (req.made >= req.max) break;
-    const r = await smartQuery<{ orders: OrderRow[] }>(req, cfg, contract, { orders_by_tick: { tick_id: tick, limit: 200 } }, `order book orders at tick ${tick}`);
-    out.orders[String(tick)] = isOk(r) ? { ...r, value: Array.isArray(r.value?.orders) ? r.value.orders : Array.isArray(r.value) ? (r.value as unknown as OrderRow[]) : [] } : r;
+    out.orders[String(tick)] = await readTickOrders(req, cfg, contract, tick);
     if (isOk(out.orders[String(tick)])) next.ticks[String(tick)].orders = (out.orders[String(tick)] as ReadOk<OrderRow[]>).value.length;
   }
   for (const [id, t] of Object.entries(next.ticks)) {

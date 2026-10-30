@@ -157,14 +157,26 @@ export function tickStoreValue(poolId: string, ranges: ClRange[]): Uint8Array {
 const json = (body: unknown, headers: Record<string, string> = {}) => new Response(JSON.stringify(body), { status: 200, headers: { 'content-type': 'application/json', ...headers } });
 const b64 = (b: Uint8Array) => bytesToBase64(b);
 
-/** The book's live ticks in the contract's answer shape (with one order's fill applied to its tick's total when asked, and each total through `tickTotal` when given). */
-const tickRows = (fill?: NetOptions['fillOrder'], tickTotal?: NetOptions['tickTotal']) => BOOK.live_ticks.map((t: any) => {
+/**
+ * The book's live ticks in the contract's answer shape: one order's claimed fill applied to its tick's total when asked
+ * (`fillOrder`), a fill not yet claimed taken off a tick side's total and added to its effective total amount swapped
+ * (`unclaimedFill`, as a swap leaves the tick: the orders there keep their quantities), and each total through
+ * `tickTotal` when given.
+ */
+const tickRows = (fill?: NetOptions['fillOrder'], tickTotal?: NetOptions['tickTotal'], unclaimed?: NetOptions['unclaimedFill']) => BOOK.live_ticks.map((t: any) => {
   const filled = fill ? BOOK.orders.find((o: any) => o.order_id === fill.id && o.tick_id === t.tick_id) : null;
   const less = filled ? BigInt(filled.quantity) - BigInt(fill!.quantity) : 0n;
   let bid: string = filled?.side === 'bid' ? (BigInt(t.bid_liq) - less).toString() : t.bid_liq, ask: string = filled?.side === 'ask' ? (BigInt(t.ask_liq) - less).toString() : t.ask_liq;
+  let bidSwapped: string = t.bid_swapped, askSwapped: string = t.ask_swapped;
+  if (unclaimed && unclaimed.tick === t.tick_id) {
+    const amount = BigInt(unclaimed.amount);
+    if (unclaimed.side === 'bid') { bid = (BigInt(bid) - amount).toString(); bidSwapped = (BigInt(bidSwapped) + amount).toString(); } else { ask = (BigInt(ask) - amount).toString(); askSwapped = (BigInt(askSwapped) + amount).toString(); }
+  }
   if (tickTotal) { bid = tickTotal(t.tick_id, 'bid', bid); ask = tickTotal(t.tick_id, 'ask', ask); }
-  return { tick_id: t.tick_id, tick_state: { bid_values: { total_amount_of_liquidity: bid, effective_total_amount_swapped: t.bid_swapped }, ask_values: { total_amount_of_liquidity: ask, effective_total_amount_swapped: t.ask_swapped } } };
+  return { tick_id: t.tick_id, tick_state: { bid_values: { total_amount_of_liquidity: bid, effective_total_amount_swapped: bidSwapped }, ask_values: { total_amount_of_liquidity: ask, effective_total_amount_swapped: askSwapped } } };
 });
+/** The ticks' unrealized cancels as get_unrealized_cancels answers: zero each side unless `cancels` names a tick's. */
+const cancelRows = (tickIds: number[], cancels?: NetOptions['cancels']) => tickIds.map((tick_id) => ({ tick_id, unrealized_cancels: { ask_unrealized_cancels: cancels?.[String(tick_id)]?.ask ?? '0', bid_unrealized_cancels: cancels?.[String(tick_id)]?.bid ?? '0' } }));
 const ordersAt = (tick: number, fill?: NetOptions['fillOrder']) => BOOK.orders.filter((o: any) => o.tick_id === tick).map((o: any) => ({ tick_id: o.tick_id, order_id: o.order_id, order_direction: o.side, owner: o.owner, quantity: fill && o.order_id === fill.id ? fill.quantity : o.quantity, placed_quantity: o.placed_quantity, placed_at: o.placed_at_ns, etas: o.etas, claim_bounty: o.claim_bounty }));
 
 /** kv depth.book as a minute that had listed the ticks would leave it: every live tick's totals and its order count. */
@@ -212,8 +224,18 @@ export interface NetOptions {
   fillOrder?: { id: number; quantity: string };
   /** A tick's total as the contract would print it (its totals are decimal fields): the figure given, or another in its place. */
   tickTotal?: (tick: number, side: 'bid' | 'ask', total: string) => string;
+  /** A fill at one tick side that no order has claimed: the side's total is lower and its effective total amount swapped higher by the amount, the orders unchanged (pool 3008's tick -26750000 on 2026-10-30). */
+  unclaimedFill?: { tick: number; side: 'bid' | 'ask'; amount: string };
+  /** Ticks' unrealized cancels, by tick id as a string; a tick not named has none. */
+  cancels?: Record<string, { ask: string; bid: string }>;
+  /** The get_unrealized_cancels query answered with an error (a gateway failure), so the fills cannot be computed. */
+  failCancels?: boolean;
+  /** The gateway ignores the x-cosmos-block-height request header on smart queries and answers each one a height later than the last (the heights guard of the book check). */
+  ignorePin?: boolean;
+  /** The orderbook_state answer carries no block-height header, so there is no height to read the book at. */
+  stateNoHeight?: boolean;
 }
-export interface Net { fetch: FetchLike; calls: { url: string; body: string | null; method: string }[]; posts: () => number }
+export interface Net { fetch: FetchLike; calls: { url: string; body: string | null; method: string; headers: Record<string, string> }[]; posts: () => number }
 
 /** The fetch of the tests, answering from the fixtures as the header says. */
 export function depthNetwork(opts: NetOptions = {}): Net {
@@ -222,11 +244,12 @@ export function depthNetwork(opts: NetOptions = {}): Net {
   const positions = positionsOf(states);
   const byPositionId = new Map(Object.values(positions).flat().map((p) => [p.position_id, p]));
   const height = opts.height ?? REF_HEIGHT;
+  let smartCalls = 0;
   const calls: Net['calls'] = [];
   const hangUntilAbort = (init?: RequestInit) => new Promise<Response>((_, reject) => { const s = init?.signal; if (s?.aborted) reject(new Error('aborted')); else s?.addEventListener('abort', () => reject(new Error(`aborted: ${String(s.reason)}`))); });
   const fetchFn: FetchLike = async (url, init) => {
     const body = typeof init?.body === 'string' ? init.body : null;
-    calls.push({ url, body, method: init?.method ?? 'GET' });
+    calls.push({ url, body, method: init?.method ?? 'GET', headers: (init?.headers as Record<string, string> | undefined) ?? {} });
     if (opts.hang?.(url, body)) return hangUntilAbort(init);
     const st = opts.status?.(url);
     if (st && st !== 200) return new Response('no', { status: st });
@@ -280,10 +303,15 @@ export function depthNetwork(opts: NetOptions = {}): Net {
       if (smart) {
         if (smart[1] !== BOOK_CONTRACT) return new Response('not found', { status: 404 });
         const msg = JSON.parse(td.decode(base64Bytes(decodeURIComponent(smart[2]))));
-        if (msg.orderbook_state) return json({ data: BOOK_STATE }, hh);
-        if (msg.all_ticks) { const rows = tickRows(opts.fillOrder, opts.tickTotal); const from = msg.all_ticks.start_from; const i = from == null ? 0 : rows.findIndex((r: any) => r.tick_id === from); return json({ data: { ticks: rows.slice(i < 0 ? 0 : i, (i < 0 ? 0 : i) + msg.all_ticks.limit) } }, hh); }
-        if (msg.ticks_by_id) { const want = new Set<number>(msg.ticks_by_id.tick_ids); return json({ data: { ticks: tickRows(opts.fillOrder, opts.tickTotal).filter((r: any) => want.has(r.tick_id)) } }, hh); }
-        if (msg.orders_by_tick) { const orders = ordersAt(msg.orders_by_tick.tick_id, opts.fillOrder); return json({ data: { orders, count: orders.length } }, hh); }
+        // a smart query asked at a height (the x-cosmos-block-height request header) is answered at it, as the gateway does, unless the fake is told to ignore the pin and drift a height a query
+        const pinned = (init?.headers as Record<string, string> | undefined)?.['x-cosmos-block-height'];
+        const smartHeaders = () => ({ 'grpc-metadata-x-cosmos-block-height': opts.ignorePin ? String(Number(hh['grpc-metadata-x-cosmos-block-height']) + smartCalls++) : pinned ?? hh['grpc-metadata-x-cosmos-block-height'] });
+        if (msg.orderbook_state) return json({ data: BOOK_STATE }, opts.stateNoHeight ? {} : smartHeaders());
+        if (msg.all_ticks) { const rows = tickRows(opts.fillOrder, opts.tickTotal, opts.unclaimedFill); const from = msg.all_ticks.start_from; const i = from == null ? 0 : rows.findIndex((r: any) => r.tick_id === from); return json({ data: { ticks: rows.slice(i < 0 ? 0 : i, (i < 0 ? 0 : i) + msg.all_ticks.limit) } }, smartHeaders()); }
+        if (msg.ticks_by_id) { const want = new Set<number>(msg.ticks_by_id.tick_ids); return json({ data: { ticks: tickRows(opts.fillOrder, opts.tickTotal, opts.unclaimedFill).filter((r: any) => want.has(r.tick_id)) } }, smartHeaders()); }
+        // the contract's orders_by_tick: the orders from start_from on (by order id, ascending), `count` of all of them in the bounds, `limit` of them listed
+        if (msg.orders_by_tick) { const q = msg.orders_by_tick; const inBounds = ordersAt(q.tick_id, opts.fillOrder).sort((a: any, b: any) => a.order_id - b.order_id).filter((o: any) => (q.start_from == null || o.order_id >= q.start_from) && (q.end_at == null || o.order_id <= q.end_at)); const orders = q.limit == null ? inBounds : inBounds.slice(0, q.limit); return json({ data: { orders, count: inBounds.length } }, smartHeaders()); }
+        if (msg.get_unrealized_cancels) { if (opts.failCancels) return new Response('bad gateway', { status: 502 }); return json({ data: { ticks: cancelRows(msg.get_unrealized_cancels.tick_ids, opts.cancels) } }, smartHeaders()); }
         return json({ code: 3, message: 'Error parsing into type sumtree_orderbook::msg::QueryMsg' });
       }
       return new Response('not here', { status: 404 });

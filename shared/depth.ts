@@ -354,7 +354,13 @@ export interface DepthOwnerItem {
   placed?: number;
   /** A position's liquidity as the chain gives it (an 18-decimal string), so two hours' readings compare exactly. */
   liquidity?: string;
-  /** An order's remaining quantity in base units as the contract gives it (the coin the order rests in), for the same exact comparison. */
+  /**
+   * An order's quantity left to fill in base units (the coin the order rests in): what the contract gives as its quantity
+   * less its fill not yet claimed, a plain decimal, for the same exact comparison. When the fill could not be computed
+   * (a figure missing from the chain's answer) the figure is the contract's own quantity, with the fill still in it, and
+   * the hour's notes name the order. Hours stored before this field took that meaning hold the contract's quantity, so
+   * the first hour after it writes one 'filled' row, timed at that hour, for each order then carrying an unclaimed fill.
+   */
   quantity?: string;
   /** A position whose range holds the pool's price (it gives both coins), from the hourly read. */
   inRange?: boolean;

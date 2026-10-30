@@ -13,7 +13,7 @@
 import { describe, it, expect, vi } from 'vitest';
 import { gunzipSync } from 'node:zlib';
 import { testD1, d1Json, insert, runStmts, type TestD1 } from './d1-sqlite';
-import { minute, hourly, hoursToRoll, inRangeCheck, tickStoreCheck, bookTotalsCheck, fitOwners, DEPTH_HEALTH, HOURLY_WINDOW, type DepthOwnersKv, type HourlyCtx, type MinuteCtx, type DepthStates } from '../worker/src/depth/index';
+import { minute, hourly, hoursToRoll, inRangeCheck, tickStoreCheck, bookTotalsCheck, orderLeft, orderItem, fitOwners, DEPTH_HEALTH, HOURLY_WINDOW, type DepthOwnersKv, type HourlyCtx, type MinuteCtx, type DepthStates } from '../worker/src/depth/index';
 import { JOB_WINDOW_MS, JOB_CLOSING_MS, hoursToRoll as seriesHoursToRoll } from '../worker/src/series';
 import { NAM_DEPTH, type DepthConfig } from '../worker/src/depth/config';
 import { freshBudget } from '../worker/src/depth/budget';
@@ -23,7 +23,8 @@ import { rangesFromTicks } from '../worker/src/depth/model';
 import { decodeTickInfos } from '../worker/src/depth/proto';
 import { INVARIANT_WORDS, OWNERS_NO_ARCHIVE, BOOK_NOT_READ_CLOSING, OWNERS_NO_MINUTE, type DepthChangeRow } from '../shared/depth';
 import type { SourceHealth } from '../shared/types';
-import { depthNetwork, bookKvFromFixture, paramsKvFromFixture, clStates, tickStoreValue, positionsOf, SQS_POOLS, BOOK, POSITIONS_3005, REF_HEIGHT, INVARIANT_CHAIN_BACKED_POOLS, type NetOptions, type ClState } from './depth-minute-net';
+import { depthNetwork, bookKvFromFixture, paramsKvFromFixture, clStates, tickStoreValue, positionsOf, SQS_POOLS, BOOK, BOOK_CONTRACT, POSITIONS_3005, REF_HEIGHT, INVARIANT_CHAIN_BACKED_POOLS, type NetOptions, type ClState } from './depth-minute-net';
+import { Requests, readTickOrders, listAllTicks } from '../worker/src/depth/read';
 import { depthFixture, depthFixtureHeader } from './depth-fixtures';
 
 const cfg = NAM_DEPTH;
@@ -91,7 +92,7 @@ describe('the owners read of a steady hour', () => {
     expect(paths.filter((p) => p.startsWith('/osmosis/gamm/v1beta1/pools/'))).toHaveLength(LIVE_GAMM);
     expect(paths.filter((p) => p === '/osmosis/concentratedliquidity/v1beta1/params')).toHaveLength(1);
     expect(paths.filter((p) => p === '/osmosis/concentratedliquidity/v1beta1/liquidity_per_tick_range')).toHaveLength(1);
-    expect(paths.filter((p) => p.includes('/smart/'))).toHaveLength(1 + 1 + LIVE_TICKS); // the state, one page of ticks (34 live of 34 given), the orders of every live tick
+    expect(paths.filter((p) => p.includes('/smart/'))).toHaveLength(1 + 1 + 1 + LIVE_TICKS); // the state, one page of ticks (34 live of 34 given), the live ticks' unrealized cancels in one query, the orders of every live tick
     expect(res.requests).toBe(net.calls.length);
     expect(res.requests).toBeLessThanOrEqual(cfg.caps.hourlyRequests);
     expect(res.bytes).toBeGreaterThan(0);
@@ -250,21 +251,189 @@ describe('the invariants', () => {
     expect(tickStoreCheck(walked, served)).toEqual({ ok: true, walked: 31, gateway: 31, firstDiff: null });
     expect(tickStoreCheck(walked.slice(1), served).firstDiff).toBe('30 ranges walked, 31 served');
     expect(tickStoreCheck(walked.map((r, i) => (i === 3 ? { ...r, liquidity_amount: '1' } : r)), served).firstDiff).toMatch(/^range 3: walked /);
-    const ticks = BOOK.live_ticks.map((t: any) => ({ tick_id: t.tick_id, tick_state: { bid_values: { total_amount_of_liquidity: t.bid_liq }, ask_values: { total_amount_of_liquidity: t.ask_liq } } }));
+    const ticks = BOOK.live_ticks.map((t: any) => ({ tick_id: t.tick_id, tick_state: { bid_values: { total_amount_of_liquidity: t.bid_liq, effective_total_amount_swapped: t.bid_swapped }, ask_values: { total_amount_of_liquidity: t.ask_liq, effective_total_amount_swapped: t.ask_swapped } } }));
     const orders = Object.fromEntries(BOOK.live_ticks.map((t: any) => [String(t.tick_id), { value: BOOK.orders.filter((o: any) => o.tick_id === t.tick_id).map((o: any) => ({ ...o, order_direction: o.side })), url: '', at: 0, height: null, bytes: 0, ms: 0, status: 200 }]));
-    expect(bookTotalsCheck(ticks, orders as any)).toEqual({ ok: true, compared: LIVE_TICKS, notRead: 0, firstDiff: null });
+    const noCancels = { value: Object.fromEntries(BOOK.live_ticks.map((t: any) => [String(t.tick_id), { ask: '0', bid: '0' }])), url: '', at: 0, height: null, bytes: 0, ms: 0, status: 200 };
+    expect(bookTotalsCheck(ticks, orders as any, noCancels)).toEqual({ ok: true, compared: LIVE_TICKS, notRead: 0, mixed: 0, firstDiff: null, why: null });
     const { ['-36000000']: _, ...rest } = orders;
-    expect(bookTotalsCheck(ticks, rest as any)).toMatchObject({ ok: true, compared: LIVE_TICKS - 1, notRead: 1 });
-    expect(bookTotalsCheck(ticks, { ...orders, '-36000000': { ...orders['-36000000'], value: [] } } as any).firstDiff).toBe('tick -36000000 bid: total 25000000, orders 0');
+    expect(bookTotalsCheck(ticks, rest as any, noCancels)).toMatchObject({ ok: true, compared: LIVE_TICKS - 1, notRead: 1 });
+    expect(bookTotalsCheck(ticks, { ...orders, '-36000000': { ...orders['-36000000'], value: [] } } as any, noCancels).firstDiff).toBe('tick -36000000 bid: total 25000000, orders have 0 left (0 not yet claimed, 0 filled)');
+    // the cancels not read: nothing is compared and the reason is given, never a difference
+    expect(bookTotalsCheck(ticks, orders as any, null)).toEqual({ ok: true, compared: 0, notRead: LIVE_TICKS, mixed: 0, firstDiff: null, why: 'the ticks’ unrealized cancels were not read' });
+    expect(bookTotalsCheck(ticks, orders as any, { error: 'HTTP 502', url: '', at: 0, ms: 0 })).toMatchObject({ compared: 0, notRead: LIVE_TICKS, why: 'the ticks’ unrealized cancels were not read (HTTP 502)' });
+    // a tick the cancels query left out is a difference naming it
+    const { ['-26750000']: __, ...fewer } = noCancels.value;
+    expect(bookTotalsCheck(ticks, orders as any, { ...noCancels, value: fewer }).firstDiff).toBe('tick -26750000: unrealized cancels not answered');
+  });
+
+  it('an order filled in part and not claimed (pool 3008’s order 993 on 2026-10-30, read live): the tick’s total is what the orders have left, their quantity less the fill the contract’s claim would compute from its etas and the tick’s unrealized cancels', () => {
+    // the contract's answers at 19:20 UTC: ticks_by_id -26750000 ask_values total 199372302400, effective_total_amount_swapped 230435697600; get_unrealized_cancels ask 100000000000; orders_by_tick: order 993 quantity 200000000000, etas 329808000000
+    const tick = { tick_id: -26750000, tick_state: { bid_values: { total_amount_of_liquidity: '0', effective_total_amount_swapped: '182080000' }, ask_values: { total_amount_of_liquidity: '199372302400', effective_total_amount_swapped: '230435697600', cumulative_total_value: '529808000000', cumulative_realized_cancels: '0', last_tick_sync_etas: '229808000000' } } };
+    const order993 = { tick_id: -26750000, order_id: 993, order_direction: 'ask', owner: 'osmo16u4xsll7kwgs9w8z6zy86z3galv7le4ywv5qmm', quantity: '200000000000', placed_quantity: '200000000000', placed_at: '1792612199527074537', etas: '329808000000' };
+    const read = <T,>(value: T) => ({ value, url: '', at: 0, height: null, bytes: 0, ms: 0, status: 200 });
+    const orders = { '-26750000': read([order993]) };
+    expect(orderLeft(tick.tick_state.ask_values, '100000000000', order993)).toEqual({ left: 199372302400n * 10n ** 18n, filled: 627697600n * 10n ** 18n, quantity: 200000000000n * 10n ** 18n });
+    expect(bookTotalsCheck([tick], orders as any, read({ '-26750000': { ask: '100000000000', bid: '150000000' } }))).toEqual({ ok: true, compared: 1, notRead: 0, mixed: 0, firstDiff: null, why: null });
+    // with the cancels read as zero the fill is 0 (the tick's count is under the order's etas) and the old failure comes back, in the figures the health row carried
+    expect(bookTotalsCheck([tick], orders as any, read({ '-26750000': { ask: '0', bid: '0' } })).firstDiff).toBe('tick -26750000 ask: total 199372302400, orders have 200000000000 left (200000000000 not yet claimed, 0 filled)');
+    // the fill is within zero and the quantity: a tick far past the order is filled whole, one before it not at all
+    expect(orderLeft({ total_amount_of_liquidity: '0', effective_total_amount_swapped: '999999999999999' }, '0', order993)).toMatchObject({ left: 0n, filled: 200000000000n * 10n ** 18n });
+    expect(orderLeft({ total_amount_of_liquidity: '0', effective_total_amount_swapped: '1' }, '0', order993)).toMatchObject({ left: 200000000000n * 10n ** 18n, filled: 0n });
+    // a figure missing is named, never read as zero
+    expect(orderLeft(tick.tick_state.ask_values, undefined, order993)).toEqual({ error: 'the tick’s unrealized cancels undefined are not a number' });
+    expect(orderLeft(tick.tick_state.ask_values, '0', { ...order993, etas: undefined })).toEqual({ error: 'order 993 etas undefined is not a number' });
+    expect(orderLeft({ total_amount_of_liquidity: '1' }, '0', order993)).toEqual({ error: 'the tick’s effective total amount swapped undefined is not a number' });
+    // a figure that is not digits is named too, never read as zero or as a hex number (review of 2026-10-30: decToScaled alone reads '' as 0 and '0x10' as 16)
+    expect(orderLeft(tick.tick_state.ask_values, '', order993)).toEqual({ error: 'the tick’s unrealized cancels  are not a number' });
+    expect(orderLeft(tick.tick_state.ask_values, '0', { ...order993, etas: '0x10' })).toEqual({ error: 'order 993 etas 0x10 is not a number' });
+    expect(orderLeft(tick.tick_state.ask_values, '0', { ...order993, quantity: '1.2.3' })).toEqual({ error: 'order 993 quantity 1.2.3 is not a number' });
+    expect(orderLeft(tick.tick_state.ask_values, '-5', order993)).toEqual({ error: 'the tick’s unrealized cancels -5 are not a number' });
+    expect(orderLeft(tick.tick_state.ask_values, ' 0', order993)).toEqual({ error: 'the tick’s unrealized cancels  0 are not a number' });
+    expect(bookTotalsCheck([{ ...tick, tick_state: { ...tick.tick_state, ask_values: { ...tick.tick_state.ask_values, total_amount_of_liquidity: '1e5' } } }], orders as any, read({ '-26750000': { ask: '0', bid: '0' } })).firstDiff).toBe('tick -26750000 ask: total 1e5 is not a number');
+    // the three reads at different heights (review of 2026-10-30): the tick is not compared and the heights are named, since the identity holds within one state only
+    const mixed = bookTotalsCheck([tick], { '-26750000': { ...read([order993]), height: 73597901 } } as any, { ...read({ '-26750000': { ask: '100000000000', bid: '150000000' } }), height: 73597900 }, 73597900);
+    expect(mixed).toEqual({ ok: true, compared: 0, notRead: 0, mixed: 1, firstDiff: null, why: '1 tick not compared, read at different heights (tick -26750000 read at heights 73597900 (ticks), 73597900 (cancels), 73597901 (orders))' });
+    expect(bookTotalsCheck([tick], { '-26750000': { ...read([order993]), height: 73597900 } } as any, { ...read({ '-26750000': { ask: '100000000000', bid: '150000000' } }), height: 73597900 }, 73597900)).toMatchObject({ ok: true, compared: 1, mixed: 0, why: null });
+    // the owner's item carries what is left, in NAM (an ask rests in the base coin), and the placed quantity beside it
+    const bookState = { id: '3008', type: 'cosmwasm', counterDenom: 'ibc/498A0751C798A0D9A389AA3691123DADA57DAA4FE165D5C75894505B876BA6E4', counterUsd: 1, counterDecimals: 6, taker: 0.001, spread: 0, at: 0, height: null, book: { bids: [], asks: [] } } as any;
+    const item = orderItem(cfg, bookState, order993 as any, '199372302400');
+    expect(item).toMatchObject({ kind: 'order', id: '993', side: 'ask', remaining: 199372.3024, placed: 200000, nam: 199372.3024, quantity: '199372302400' });
+    expect(orderItem(cfg, bookState, order993 as any)).toMatchObject({ remaining: 200000, quantity: '200000000000' });
+  });
+
+  it('through the hour: a fill no order has claimed holds the book check and is what the owner has left; the cancels query failed, nothing is compared, the reason is given and the hour before’s orders stand', async () => {
+    // the live case of 2026-10-30 on the saved book (whose tick -26750000 has ask count 229808000000 and order 993's etas 329808000000, the 100000000000 between them a cancelled order the contract has not realized): 627,697,600 base units of order 993's ask filled and not claimed (the tick's total down, its count up to the chain's 230435697600, the order as it was), the tick's unrealized cancels as the chain gave them
+    const fill = { tick: -26750000, side: 'ask' as const, amount: '627697600' };
+    const live = { unclaimedFill: fill, cancels: { '-26750000': { ask: '100000000000', bid: '150000000' } } };
+    const db = await twoMinutes();
+    const { res, net, health } = await runHour(db, { mutate: withdraw3368, ...live });
+    expect(res.skipped).toBeUndefined();
+    expect(res.invariants!.bookTotals).toEqual({ ok: true, note: `${INVARIANT_WORDS.bookTotals} (${LIVE_TICKS} ticks)` });
+    expect(rowOf(health, DEPTH_HEALTH.owners)!.ok).toBe(true);
+    // one get_unrealized_cancels query, for every live tick, before the orders
+    const smart = net.calls.filter((c) => c.url.includes('/smart/')).map((c) => JSON.parse(Buffer.from(decodeURIComponent(c.url.split('/smart/')[1]), 'base64').toString('utf8')));
+    const cancels = smart.filter((m) => m.get_unrealized_cancels);
+    expect(cancels).toHaveLength(1);
+    expect(cancels[0].get_unrealized_cancels.tick_ids).toHaveLength(LIVE_TICKS);
+    expect(smart.findIndex((m) => m.get_unrealized_cancels)).toBeLessThan(smart.findIndex((m) => m.orders_by_tick));
+    // every read after orderbook_state is asked at the state's height (review of 2026-10-30), so the ticks, the cancels and the orders describe one state
+    const smartCalls = net.calls.filter((c) => c.url.includes('/smart/'));
+    expect(smartCalls[0].headers['x-cosmos-block-height']).toBeUndefined();
+    expect(smartCalls.slice(1).every((c) => c.headers['x-cosmos-block-height'] === String(REF_HEIGHT))).toBe(true);
+    expect(smartCalls.length).toBe(1 + 1 + 1 + LIVE_TICKS);
+    expect(res.requests).toBeLessThanOrEqual(cfg.caps.hourlyRequests);
+    const o = kv<DepthOwnersKv>(db, 'depth.owners')!;
+    const item = o.owners.flatMap((w) => w.items).find((i) => i.kind === 'order' && i.id === '993')!;
+    expect(item).toMatchObject({ remaining: 199372.3024, placed: 200000, nam: 199372.3024, quantity: '199372302400' });
+    expect(o.orders.read).toBe(true);
+    // the hour after, the book unchanged: no change row for order 993 (its quantity left is the same)
+    const same = await runHour(db, { mutate: withdraw3368, ...live }, {}, TH + H);
+    expect(same.res.changes).toBe(0);
+    const beforeAt = kv<DepthOwnersKv>(db, 'depth.owners')!.orders.at;
+    // the hour after that, the cancels query fails: the check is not compared with the reason, the book counts as read in part, the hour before's orders stand with their own time
+    const err = vi.spyOn(console, 'error').mockImplementation(() => {});
+    try {
+      const failed = await runHour(db, { mutate: withdraw3368, ...live, failCancels: true }, {}, TH + 2 * H);
+      expect(failed.res.invariants!.bookTotals).toEqual({ ok: null, note: 'not compared: 3008: the ticks’ unrealized cancels were not read (status 502)' });
+      const after = kv<DepthOwnersKv>(db, 'depth.owners')!;
+      expect(after.orders.read).toBe(false);
+      expect(after.orders.why).toBe('the book answered in part: the ticks’ unrealized cancels not read (status 502)');
+      expect(after.orders.at).toBe(beforeAt);
+      expect(after.owners.flatMap((w) => w.items).find((i) => i.kind === 'order' && i.id === '993')).toMatchObject({ quantity: '199372302400' });
+      expect(failed.res.changes).toBe(0);
+    } finally { err.mockRestore(); }
+  });
+
+  it('a gateway that ignores the height pin (review of 2026-10-30): the ticks, the cancels and each tick’s orders come from different heights, so no tick is compared, the heights are named, and the book does not count as read this hour', async () => {
+    const db = await twoMinutes();
+    const { res, health } = await runHour(db, { mutate: withdraw3368, ignorePin: true });
+    expect(res.skipped).toBeUndefined();
+    expect(res.invariants!.bookTotals.ok).toBe(null);
+    expect(res.invariants!.bookTotals.note).toMatch(new RegExp(`^not compared: 3008: ${LIVE_TICKS} ticks not compared, read at different heights \\(tick -?\\d+ read at heights \\d+ \\(ticks\\), \\d+ \\(cancels\\), \\d+ \\(orders\\); tick .*; …\\)$`));
+    // the book does not count as read, as when the closing window skips it: the owners row is not ok for the hour and says why, and an order's quantity left is never built from three reads of different states, so the owners list keeps no orders of this hour (the first hour has none before it)
+    const row = rowOf(health, DEPTH_HEALTH.owners)!;
+    expect(row.ok).toBe(false);
+    expect(row.note).toContain(`0 orders (the book answered in part: ${LIVE_TICKS} ticks read at different heights)`);
+    const o = kv<DepthOwnersKv>(db, 'depth.owners')!;
+    expect(o.orders.read).toBe(false);
+    expect(o.orders.why).toBe(`the book answered in part: ${LIVE_TICKS} ticks read at different heights`);
+    expect(res.orders).toBe(0);
+  });
+
+  it('the book state answered without a height (review of 2026-10-30): nothing after it is read, since there is no height to pin the ticks, the cancels and the orders to, and the hour says so', async () => {
+    const db = await twoMinutes();
+    const { res, net } = await runHour(db, { mutate: withdraw3368, stateNoHeight: true });
+    expect(res.skipped).toBeUndefined();
+    expect(net.calls.filter((c) => c.url.includes('/smart/'))).toHaveLength(1);
+    // a tick list not read is the check not held, as any failed tick read has been; the reason is the missing height
+    expect(res.invariants!.bookTotals).toEqual({ ok: false, note: 'not held for 3008: ticks not read (not asked: the book state’s answer carried no height to read the book at)' });
+    const o = kv<DepthOwnersKv>(db, 'depth.owners')!;
+    expect(o.orders.read).toBe(false);
+    expect(o.orders.why).toBe('the book answered in part: not asked: the book state’s answer carried no height to read the book at');
+    expect(res.orders).toBe(0);
+  });
+
+  it('pages answered at different heights (review of 2026-10-30): a tick list or an order list read across two heights is an error naming them, never a list read as one state', async () => {
+    const small = { ...cfg, read: { ...cfg.read, bookPageSize: 10 } };
+    const drifting = depthNetwork({ ignorePin: true });
+    const req = new Requests(60, undefined, drifting.fetch, 5000, () => TH);
+    const listed = await listAllTicks(req, small, BOOK_CONTRACT, REF_HEIGHT);
+    expect(listed.live).toBe(null);
+    expect(listed.ticks).toMatchObject({ error: `the tick list was read across heights ${REF_HEIGHT} and ${REF_HEIGHT + 1}` });
+    // unpinned (the minute's listing) the drift is ordinary and the list is whole
+    const unpinned = await listAllTicks(new Requests(60, undefined, depthNetwork({ ignorePin: true }).fetch, 5000, () => TH), small, BOOK_CONTRACT);
+    expect(unpinned.live).toHaveLength(LIVE_TICKS);
+    // the same list pinned and honoured: whole, at the height asked
+    const steady = new Requests(60, undefined, depthNetwork({}).fetch, 5000, () => TH);
+    const ok = await listAllTicks(steady, small, BOOK_CONTRACT, REF_HEIGHT);
+    expect(ok.live).toHaveLength(LIVE_TICKS);
+    expect(ok.ticks).toMatchObject({ height: REF_HEIGHT });
+    expect(ok.pages).toBeGreaterThan(1);
+    // a tick's orders in two pages at two heights
+    const byTick = new Map<number, number>();
+    for (const o of BOOK.orders) byTick.set(o.tick_id, (byTick.get(o.tick_id) ?? 0) + 1);
+    const [tick] = [...byTick.entries()].sort((a, b) => b[1] - a[1])[0];
+    const r = await readTickOrders(new Requests(60, undefined, depthNetwork({ ignorePin: true }).fetch, 5000, () => TH), cfg, BOOK_CONTRACT, tick, REF_HEIGHT, 2);
+    expect(r).toMatchObject({ error: `tick ${tick}: its orders were read across heights ${REF_HEIGHT} and ${REF_HEIGHT + 1}` });
+  });
+
+  it('a tick with more orders than one page (review of 2026-10-30): orders_by_tick is read from the last order id on until the contract’s count is reached, a short list is an error, the request cap stops it as an error', async () => {
+    const byTick = new Map<number, number>();
+    for (const o of BOOK.orders) byTick.set(o.tick_id, (byTick.get(o.tick_id) ?? 0) + 1);
+    const [tick, n] = [...byTick.entries()].sort((a, b) => b[1] - a[1])[0];
+    expect(n).toBeGreaterThanOrEqual(3);
+    const net = depthNetwork({});
+    const req = new Requests(60, undefined, net.fetch, 5000, () => TH);
+    const r = await readTickOrders(req, cfg, BOOK_CONTRACT, tick, REF_HEIGHT, 2);
+    expect(r).toMatchObject({ height: REF_HEIGHT });
+    expect((r as any).value.map((o: any) => o.order_id)).toEqual(BOOK.orders.filter((o: any) => o.tick_id === tick).map((o: any) => o.order_id).sort((a: number, b: number) => a - b));
+    expect(req.made).toBe(Math.ceil(n / 2));
+    const pages = net.calls.map((c) => JSON.parse(Buffer.from(decodeURIComponent(c.url.split('/smart/')[1]), 'base64').toString('utf8')).orders_by_tick);
+    expect(pages[0]).toEqual({ tick_id: tick, limit: 2 });
+    expect(pages[1].start_from).toBe((r as any).value[1].order_id + 1);
+    expect(net.calls.every((c) => c.headers['x-cosmos-block-height'] === String(REF_HEIGHT))).toBe(true);
+    // one page at 200 reads the tick whole in one request, as the live book's ticks (one to a few orders each) are read
+    const one = new Requests(60, undefined, depthNetwork({}).fetch, 5000, () => TH);
+    expect((await readTickOrders(one, cfg, BOOK_CONTRACT, tick, REF_HEIGHT) as any).value).toHaveLength(n);
+    expect(one.made).toBe(1);
+    // the cap reached before the second page: the tick's read is the cap's error, never a short list read as whole
+    const capped = new Requests(1, undefined, depthNetwork({}).fetch, 5000, () => TH);
+    expect(await readTickOrders(capped, cfg, BOOK_CONTRACT, tick, REF_HEIGHT, 2)).toMatchObject({ error: 'not asked: the minute’s request cap was reached' });
+    // a page short of the count (an answer that contradicts itself) is an error naming the figures
+    const odd = depthNetwork({});
+    const lying: typeof odd.fetch = async (url, init) => { const res = await odd.fetch(url, init); const body = await res.json() as any; if (body?.data?.orders) body.data.count = body.data.orders.length + 5; return new Response(JSON.stringify(body), { status: 200, headers: { 'grpc-metadata-x-cosmos-block-height': String(REF_HEIGHT) } }); };
+    const short = new Requests(60, undefined, lying, 5000, () => TH);
+    expect(await readTickOrders(short, cfg, BOOK_CONTRACT, tick, REF_HEIGHT)).toMatchObject({ error: `tick ${tick}: a page listed ${n} orders of ${n + 5} counted` });
   });
 
   it('a tick total printed as a decimal (the contract’s totals are decimal fields) is compared at 18 places and never thrown on: a fraction is a difference with the figures, a whole number with places holds', async () => {
-    const at = (tick: number, side: string, total: string) => ({ tick_id: tick, tick_state: { bid_values: { total_amount_of_liquidity: side === 'bid' ? total : '0' }, ask_values: { total_amount_of_liquidity: side === 'ask' ? total : '0' } } });
-    const bid = (q: string) => ({ '-36000000': { value: [{ order_id: 996, order_direction: 'bid', quantity: q }], url: '', at: 0, height: null, bytes: 0, ms: 0, status: 200 } });
-    expect(() => bookTotalsCheck([at(-36000000, 'bid', '25000000.5')] as any, bid('25000000') as any)).not.toThrow();
-    expect(bookTotalsCheck([at(-36000000, 'bid', '25000000.5')] as any, bid('25000000') as any).firstDiff).toBe('tick -36000000 bid: total 25000000.5, orders 25000000');
-    expect(bookTotalsCheck([at(-36000000, 'bid', '25000000.000000000000000000')] as any, bid('25000000') as any)).toMatchObject({ ok: true, compared: 1 });
-    expect(bookTotalsCheck([at(-36000000, 'bid', '25000000')] as any, bid('2.5e7') as any).firstDiff).toBe('tick -36000000 bid: order 996 quantity 2.5e7 is not a number');
+    const at = (tick: number, side: string, total: string) => ({ tick_id: tick, tick_state: { bid_values: { total_amount_of_liquidity: side === 'bid' ? total : '0', effective_total_amount_swapped: '0' }, ask_values: { total_amount_of_liquidity: side === 'ask' ? total : '0', effective_total_amount_swapped: '0' } } });
+    const bid = (q: string) => ({ '-36000000': { value: [{ order_id: 996, order_direction: 'bid', quantity: q, etas: '0' }], url: '', at: 0, height: null, bytes: 0, ms: 0, status: 200 } });
+    const zero = { value: { '-36000000': { ask: '0', bid: '0' } }, url: '', at: 0, height: null, bytes: 0, ms: 0, status: 200 };
+    expect(() => bookTotalsCheck([at(-36000000, 'bid', '25000000.5')] as any, bid('25000000') as any, zero)).not.toThrow();
+    expect(bookTotalsCheck([at(-36000000, 'bid', '25000000.5')] as any, bid('25000000') as any, zero).firstDiff).toBe('tick -36000000 bid: total 25000000.5, orders have 25000000 left (25000000 not yet claimed, 0 filled)');
+    expect(bookTotalsCheck([at(-36000000, 'bid', '25000000.000000000000000000')] as any, bid('25000000') as any, zero)).toMatchObject({ ok: true, compared: 1 });
+    expect(bookTotalsCheck([at(-36000000, 'bid', '25000000')] as any, bid('2.5e7') as any, zero).firstDiff).toBe('tick -36000000 bid: order 996 quantity 2.5e7 is not a number');
     // through the hour: a half base unit on one tick's bid total is not held, the owners row says the figures, console.error is called, the rest is written
     const err = vi.spyOn(console, 'error').mockImplementation(() => {});
     try {
@@ -272,7 +441,7 @@ describe('the invariants', () => {
       const { res, health } = await runHour(db, { mutate: withdraw3368, tickTotal: (tick, side, total) => (tick === -36000000 && side === 'bid' ? `${total}.5` : total) });
       expect(res.skipped).toBeUndefined();
       expect(res.written).toBe(true);
-      expect(res.invariants!.bookTotals).toEqual({ ok: false, note: 'not held for 3008: tick -36000000 bid: total 25000000.5, orders 25000000' });
+      expect(res.invariants!.bookTotals).toEqual({ ok: false, note: 'not held for 3008: tick -36000000 bid: total 25000000.5, orders have 25000000 left (25000000 not yet claimed, 0 filled)' });
       expect(err).toHaveBeenCalledWith('depth owners: book totals', expect.stringContaining('25000000.5'));
       expect(rowOf(health, DEPTH_HEALTH.owners)).toMatchObject({ ok: false });
       expect(res.orders).toBe(ORDERS);
