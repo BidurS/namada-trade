@@ -504,6 +504,11 @@ describe('the allowlist', () => {
     // no command, hashtag or cashtag; a slash inside a word, a sum and a number stay
     expect(plainOutsider('/stop now #airdrop $SCAM (#join) ＃free /1_x', 80)).toBe('stop now airdrop SCAM (join) free 1_x');
     expect(plainOutsider('Yes and/or no: 1/2 of $100 to proposal #12', 80)).toBe('Yes and/or no: 1/2 of $100 to proposal #12');
+    // a host written as four numbers is a link as much as a name (merged stage 1 review): its dots are broken too,
+    // in decimal or in hex; a version or a sum of fewer parts stays
+    expect(plainOutsider('Airdrop claim: http://45.67.89.10/claim', 80)).toBe('Airdrop claim: 45[.]67[.]89[.]10/claim');
+    expect(plainOutsider('45.67.89.10:8080/airdrop and 0x2d.0x43.0x59.0x0a/x', 80)).toBe('45[.]67[.]89[.]10:8080/airdrop and 0x2d[.]0x43[.]0x59[.]0x0a/x');
+    expect(plainOutsider('Upgrade v1.2.3 to 1.2.4, 1.5 NAM each', 80)).toBe('Upgrade v1.2.3 to 1.2.4, 1.5 NAM each');
   });
 });
 

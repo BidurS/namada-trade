@@ -317,7 +317,9 @@ export const publicRecord = (m: PublicMove) =>
  * - no control, format, private-use or lone surrogate character (the private range is the one sources/telegram.ts
  *   hide uses for escapes);
  * - no link: a scheme is dropped, and every dot between a character that is not a space and a letter is written
- *   "[.]" ("namada-claim[.]xyz"), whatever that character is (a combining mark NFKC cannot compose ends a label too);
+ *   "[.]" ("namada-claim[.]xyz"), whatever that character is (a combining mark NFKC cannot compose ends a label too),
+ *   and so is every dot of a host written as four numbers ("45[.]67[.]89[.]10/claim", "0x2d[.]0x43[.]0x59[.]0x0a"),
+ *   which a client links as readily as a name;
  * - no mention: an @ is "(at)";
  * - no command, hashtag or cashtag: a # or $ that starts a word before a letter, and a / that starts one before a
  *   letter, digit or _, is dropped ("/stop", "#airdrop", "$SCAM" read "stop", "airdrop", "SCAM"; "and/or", "1/2",
@@ -330,6 +332,7 @@ export function plainOutsider(s: unknown, max: number): string {
     .replace(/\u3002/g, '.')
     .replace(/\b[a-z][a-z0-9+.-]*:\/\/+/gi, '')
     .replace(/(?<=\S)\.(?=\p{L})/gu, '[.]')
+    .replace(/(?<![\p{L}\p{N}_.])(?:0x[0-9a-f]+|\d+)(?:\.(?:0x[0-9a-f]+|\d+)){3}(?![\p{L}\p{N}_]|\.[\p{L}\p{N}])/giu, (host) => host.replace(/\./g, '[.]'))
     .replace(/@/g, '(at)')
     .replace(/(?<![\p{L}\p{M}\p{N}_])(?:[#$]+(?=\p{L})|\/+(?=[\p{L}\p{N}_]))/gu, '')
     .replace(/\s+/g, ' ')
