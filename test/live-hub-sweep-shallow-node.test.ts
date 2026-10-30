@@ -8,12 +8,19 @@
 // earliest_block_height, the cursor keeps the shallowest depth seen (nodeDepth), and an answer for a range that begins
 // below it is not taken: the cursor stays, the cursor's `shallow` note says why, and an answer that reaches below the
 // cursor (the deep backend) finishes the query. A range inside the shallow depth (the searches every five minutes) is
-// read as before.
+// read as before. The review of 2026-10-29 changed three things: the kept depth no longer gives way to the first
+// answer after it has gone unseen (after a long outage that answer may be the deep backend's), only to twelve deeper
+// answers in a row once it has gone unseen for a day; a depth under about an hour of blocks (a backend just synced
+// from a snapshot) is not kept, so it cannot hold back every search; and the note reaches the cron's osmosis_index
+// check, and goes with the next search that finishes.
 import { afterEach, describe, expect, it, vi } from 'vitest';
+import { readFileSync } from 'node:fs';
 
 vi.mock('cloudflare:workers', () => ({ DurableObject: class {} }));
-import { LiveHub, OSMOSIS_DEPTH_KEEP_MS, nodeDepth } from '../worker/src/live-hub';
+import { LiveHub, OSMOSIS_DEPTH_FLOOR, OSMOSIS_DEPTH_KEEP_MS, OSMOSIS_DEPTH_RETIRE, nodeDepth } from '../worker/src/live-hub';
 import { HubQuote } from '../worker/src/live-quote';
+import { indexState } from '../worker/src/analytics';
+import { runCron } from '../worker/src/cron';
 import { NAM } from '../worker/src/config';
 import { testD1, type TestD1 } from './d1-sqlite';
 
@@ -25,7 +32,10 @@ const HEAD = 1_100_000;
 const SHALLOW = 1_050_000;
 const HOUR = 3_600_000;
 type Key = 'swap' | 'transfer' | 'recv' | 'send';
-type Backend = 'deep' | 'shallow';
+/** `fresh`: a backend just synced from a snapshot, holding the newest 100 blocks only. */
+type Backend = 'deep' | 'shallow' | 'fresh';
+const FRESH = HEAD - 100;
+const earliestOf = (b: Backend) => (b === 'deep' ? 1 : b === 'shallow' ? SHALLOW : FRESH);
 const hashOf = (p: string, i: number) => `${p}${String(i).padStart(64 - p.length, '0')}`;
 
 /** A 50 NAM bank transfer: one transfer flow. */
@@ -50,7 +60,7 @@ function node(pick: (what: 'status' | 'search', n: number) => Backend) {
     if (url.pathname.endsWith('/status')) {
       calls.status++;
       const b = pick('status', n++);
-      return Response.json({ result: { sync_info: { latest_block_height: String(HEAD), earliest_block_height: String(b === 'deep' ? 1 : SHALLOW) } } });
+      return Response.json({ result: { sync_info: { latest_block_height: String(HEAD), earliest_block_height: String(earliestOf(b)) } } });
     }
     if (url.pathname.endsWith('/block')) return Response.json({ result: { block: { header: { time: new Date(Date.now() - 60_000).toISOString() } } } });
     if (!url.pathname.endsWith('/tx_search')) throw new Error(`unexpected ${url}`);
@@ -59,7 +69,7 @@ function node(pick: (what: 'status' | 'search', n: number) => Backend) {
     const per = Number(url.searchParams.get('per_page')), page = Number(url.searchParams.get('page'));
     const b = pick('search', n++);
     calls.search.push(`${b} ${key} ${page}`);
-    const list = lists[key].filter((t) => b === 'deep' || Number(t.height) >= SHALLOW);
+    const list = lists[key].filter((t) => Number(t.height) >= earliestOf(b));
     // past its last page a node answers an error, as CometBFT does
     if (page > 1 && (page - 1) * per >= list.length) return Response.json({ jsonrpc: '2.0', error: { code: -32603, message: 'Internal error', data: `page should be within [1, ${Math.max(1, Math.ceil(list.length / per))}] range, given ${page}` } }, { status: 500 });
     return Response.json({ result: { txs: list.slice((page - 1) * per, page * per), total_count: String(list.length) } });
@@ -119,9 +129,11 @@ describe('the catch-up search after an outage longer than the shallow backend ho
     expect(done.height).toBe(HEAD);
     expect(done.error).toBeUndefined();
     expect(done.resume).toBeUndefined();
-    // the shallowest depth is kept (the deep backend's /status says nothing of the shallow one), and so is the last note
+    // the shallowest depth is kept (the deep backend's /status says nothing of the shallow one); the note goes with
+    // the search that finished
     expect(done.depth.blocks).toBe(HEAD - SHALLOW);
-    expect(done.shallow).toEqual(again.shallow);
+    expect(again.shallow.note).toContain('it is asked again');
+    expect(done.shallow).toBeUndefined();
   });
 
   it('load balanced: a /status from the deep backend does not vouch for the shallow one that answers the search', async () => {
@@ -156,6 +168,53 @@ describe('the catch-up search after an outage longer than the shallow backend ho
     expect(calls.search.filter((c) => c.startsWith('shallow')).length).toBeGreaterThan(0);
   });
 
+  it('after an outage of eight days the kept depth still stands: a /status from the deep backend does not let the shallow one\'s short answer move the cursor', async () => {
+    // the shallow backend was last seen eight days ago (the searches were down since), past OSMOSIS_DEPTH_KEEP_MS
+    const seen = Date.now() - 8 * 24 * HOUR;
+    expect(Date.now() - seen).toBeGreaterThan(OSMOSIS_DEPTH_KEEP_MS);
+    const db = await seeded({ height: CURSOR, at: 1, depth: { blocks: HEAD - SHALLOW, at: seen } });
+    const hub = hubOn(db);
+    node((what) => (what === 'status' ? 'deep' : 'shallow'));
+    await hub.sweepOsmosis();
+    const c = cursorOf(db);
+    expect(c.height).toBe(CURSOR);
+    expect(stored(db, 'DD%')).toBe(0);
+    expect(c.error).toMatch(/may not reach back to the cursor/);
+    // the deep answer is counted towards retiring the kept depth, not taken
+    expect(c.depth).toEqual({ blocks: HEAD - SHALLOW, at: seen, deeper: { blocks: HEAD - 1, n: 1 } });
+    // the deep backend answers the searches: the missed transfer is written and the cursor moves past it
+    node(() => 'deep');
+    for (let i = 0; i < 4 && cursorOf(db).height !== HEAD; i++) await hub.sweepOsmosis();
+    expect(stored(db, 'DD%')).toBe(1);
+    expect(cursorOf(db).height).toBe(HEAD);
+    expect(cursorOf(db).depth.blocks).toBe(HEAD - SHALLOW);
+  });
+
+  it('a backend just synced from a snapshot (100 blocks) holds no search back, and a tiny depth kept from before the floor is let go', async () => {
+    // its /status is not taken as a depth: the search of the last 300 blocks, answered by the 16-hour backend, ends
+    let db = await seeded({ height: HEAD - 300, at: 1 });
+    let hub = hubOn(db);
+    node((what) => (what === 'status' ? 'fresh' : 'shallow'));
+    await hub.sweepOsmosis();
+    expect(cursorOf(db).height).toBe(HEAD);
+    expect(cursorOf(db).depth).toBeUndefined();
+    expect(cursorOf(db).error).toBeUndefined();
+    expect(stored(db, 'AA%')).toBe(10);
+    // a cursor that kept 100 blocks as its depth: the 16-hour backend's /status replaces it, and the search ends
+    db = await seeded({ height: HEAD - 300, at: 1, depth: { blocks: 100, at: Date.now() - HOUR } });
+    hub = hubOn(db);
+    node(() => 'shallow');
+    await hub.sweepOsmosis();
+    expect(cursorOf(db).height).toBe(HEAD);
+    expect(cursorOf(db).depth.blocks).toBe(HEAD - SHALLOW);
+    // and with it kept and no /status depth at all (a node that does not give it), it holds nothing either
+    db = await seeded({ height: HEAD - 300, at: 1, depth: { blocks: 100, at: Date.now() - HOUR } });
+    hub = hubOn(db);
+    node(() => 'fresh');
+    await hub.sweepOsmosis();
+    expect(cursorOf(db).height).toBe(HEAD);
+  });
+
   it('a range inside what the shallow backend holds (searches every five minutes) is read as before', async () => {
     const db = await seeded({ height: HEAD - 200, at: 1 });
     const hub = hubOn(db);
@@ -186,21 +245,113 @@ describe('the catch-up search after an outage longer than the shallow backend ho
   });
 });
 
+// ---------------------------------------------------------------- the tick (as test/bridge-pair-sequence.test.ts runs it)
+const fx = (n: string) => JSON.parse(readFileSync(new URL(`./fixtures/${n}`, import.meta.url), 'utf8'));
+const u256 = (n: bigint) => { const b = new Uint8Array(32); let v = n; for (let i = 0; i < 32; i++) { b[i] = Number(v & 0xffn); v >>= 8n; } return btoa(String.fromCharCode(...b)); };
+function cronNetwork() {
+  const BAL = fx('balance_listing.json'), BONDS = fx('bonds_listing.json');
+  vi.stubGlobal('fetch', vi.fn((input: RequestInfo | URL) => {
+    const url = String(input);
+    if (url.includes('/ibc/')) return Promise.resolve(new Response('not here', { status: 404 }));
+    if (url.includes('/status')) return Promise.resolve(Response.json({ result: { sync_info: { latest_block_height: '8458700', latest_block_time: new Date().toISOString(), catching_up: false, earliest_block_height: '1' } } }));
+    if (url.includes('abci_query')) {
+      const path = decodeURIComponent(url.split('path=')[1] ?? '');
+      if (path.includes('/vp/pos/bond/')) return Promise.resolve(Response.json({ result: { response: { code: 1, info: 'RPC error: Cannot find bond', value: null, height: '1' } } }));
+      const value = path.includes('/shell/epoch') ? btoa(String.fromCharCode(155, 10, 0, 0, 0, 0, 0, 0))
+        : path.includes('/shell/prefix/') ? BAL.value
+        : path.includes('/vp/pos/bonds_and_unbonds/to') ? BONDS.value
+        : path.includes('delegations_at') ? null
+        : path.includes('balance/minted') ? u256(BigInt(BAL.expected.minted))
+        : u256(path.includes('total_stake') ? 75338381473000n : 1000000n);
+      return Promise.resolve(Response.json({ result: { response: { code: 0, value, height: '8458700' } } }));
+    }
+    if (url.includes('denom_owners')) return Promise.resolve(Response.json({ denom_owners: [], pagination: { next_key: null, total: '0' } }));
+    if (url.includes('supply/by_denom')) return Promise.resolve(Response.json({ amount: { denom: 'x', amount: '1000000' } }));
+    return Promise.resolve(new Response('not here', { status: 404 }));
+  }));
+}
+async function tick(env: any, start: number) {
+  vi.useFakeTimers({ now: start, toFake: ['setTimeout', 'clearTimeout', 'setInterval', 'clearInterval', 'Date'] });
+  let done = false, err: unknown = null;
+  runCron(env).catch((e) => { err = e; }).finally(() => { done = true; });
+  for (let i = 0; !done && i < 4000; i++) await vi.advanceTimersByTimeAsync(250);
+  vi.useRealTimers();
+  if (err) throw err;
+  expect(done).toBe(true);
+}
+
+describe('the note of a search the guard held, where the owner reads it', () => {
+  it('indexState carries the cursor\'s error and the answers not taken, the cron\'s osmosis_index check puts them in its detail, and a search that finishes drops them', async () => {
+    const db = await seeded({ height: CURSOR, at: 1 });
+    const hub = hubOn(db);
+    node(() => 'shallow');
+    await hub.sweepOsmosis();
+    const note = (await indexState(db as any, Date.now())).osmosisSweep?.note;
+    expect(note).toMatch(/^The last catch-up search did not finish: a node answered from blocks that may not reach back to the cursor, and the next search asks again\. query "/);
+    expect(note).toContain(`only from ${SHALLOW}, above block ${CURSOR + 1} where the range starts; it is asked again`);
+    expect(note!.length).toBeLessThanOrEqual(1200);
+
+    cronNetwork();
+    await tick({ DB: db }, Date.now());
+    const check = db.raw.prepare("SELECT status, detail FROM checks WHERE key='osmosis_index'").get() as { status: string; detail: string };
+    expect(check.status).toBe('fail'); // no stream report, and the search's stamp is the one before the outage
+    expect(JSON.parse(check.detail)).toMatchObject({ sweptToHeight: CURSOR, sweptAt: 1, sweepNote: note });
+
+    node(() => 'deep');
+    await hub.sweepOsmosis();
+    const after = (await indexState(db as any, Date.now())).osmosisSweep;
+    expect(after?.height).toBe(HEAD);
+    expect(after?.note).toBeUndefined();
+    cronNetwork();
+    await tick({ DB: db }, Date.now());
+    expect(JSON.parse((db.raw.prepare("SELECT detail FROM checks WHERE key='osmosis_index'").get() as { detail: string }).detail).sweepNote).toBeNull();
+  });
+});
+
 describe('nodeDepth: the shallowest node a search has seen', () => {
   const NOW = Date.UTC(2026, 9, 29, 20);
   it('keeps the fewer blocks; a depth up to twice the kept one refreshes it; one far deeper leaves it as it was', () => {
     expect(nodeDepth(undefined, 73_526_601, '73431644', NOW)).toEqual({ blocks: 94_957, at: NOW });
     const kept = { blocks: 94_957, at: NOW - HOUR };
     expect(nodeDepth(kept, 73_526_700, '68229727', NOW)).toBe(kept); // the deep backend: 5.3 million blocks
-    expect(nodeDepth(kept, 73_528_000, '73431644', NOW)).toEqual({ blocks: 94_957, at: NOW }); // the shallow one again, pruned in a step
+    expect(nodeDepth(kept, 73_528_000, '73431644', NOW)).toEqual({ blocks: 94_957, at: NOW }); // the shallow one again, grown
     expect(nodeDepth(kept, 73_526_601, '73441644', NOW)).toEqual({ blocks: 84_957, at: NOW });
   });
-  it('a depth not seen for a week gives way to the next answer; an answer without an earliest block, or a broken one, keeps what was kept', () => {
-    const old = { blocks: 94_957, at: NOW - OSMOSIS_DEPTH_KEEP_MS - 1 };
-    expect(nodeDepth(old, 73_526_601, '68229727', NOW)).toEqual({ blocks: 5_296_874, at: NOW });
-    expect(nodeDepth(old, 73_526_601, undefined, NOW)).toBeUndefined();
+  it('an answer without an earliest block, or a broken one, keeps what was kept', () => {
     const kept = { blocks: 94_957, at: NOW - HOUR };
     for (const e of [undefined, null, '', '0', '-5', '1e6', '73526602', 'abc', {}, 1.5]) expect(nodeDepth(kept, 73_526_601, e, NOW), String(e)).toBe(kept);
     expect(nodeDepth(kept, 73_526_601, 73_431_644, NOW)).toEqual({ blocks: 94_957, at: NOW });
+    expect(nodeDepth(undefined, 73_526_601, undefined, NOW)).toBeUndefined();
+  });
+  it('a depth not seen for a day still stands: only OSMOSIS_DEPTH_RETIRE deeper answers in a row retire it, for the fewest blocks among them', () => {
+    const old = { blocks: 94_957, at: NOW - OSMOSIS_DEPTH_KEEP_MS - 1 };
+    // the first answer after an outage of more than a day comes from the deep backend: it is counted, not taken
+    let d = nodeDepth(old, 73_526_601, '68229727', NOW);
+    expect(d).toEqual({ blocks: 94_957, at: old.at, deeper: { blocks: 5_296_874, n: 1 } });
+    // a /status without its earliest block counts for nothing
+    expect(nodeDepth(d, 73_526_601, undefined, NOW)).toBe(d);
+    for (let i = 2; i < OSMOSIS_DEPTH_RETIRE; i++) {
+      d = nodeDepth(d, 73_526_601, i % 2 ? '68229727' : '73300000', NOW + i);
+      expect(d?.blocks, String(i)).toBe(94_957);
+      expect(d?.deeper?.n).toBe(i);
+    }
+    // the twelfth: the kept depth gives way to the shallowest of the twelve (a backend grown past twice the kept one)
+    expect(nodeDepth(d, 73_526_601, '68229727', NOW + 99)).toEqual({ blocks: 226_601, at: NOW + 99 });
+    // a node as shallow as the kept one, or up to twice it, seen in the count ends it: the kept one is current again
+    expect(nodeDepth(d, 73_526_601, '73400000', NOW + 99)).toEqual({ blocks: 94_957, at: NOW + 99 });
+    expect(nodeDepth(d, 73_526_601, '73450000', NOW + 99)).toEqual({ blocks: 76_601, at: NOW + 99 });
+    // still current (seen within the day), a deeper answer is not even counted
+    const fresh = { blocks: 94_957, at: NOW - OSMOSIS_DEPTH_KEEP_MS };
+    expect(nodeDepth(fresh, 73_526_601, '68229727', NOW)).toBe(fresh);
+  });
+  it(`a depth under OSMOSIS_DEPTH_FLOOR (${OSMOSIS_DEPTH_FLOOR} blocks, about an hour) is not taken, and one kept from before the rule is let go`, () => {
+    const kept = { blocks: 94_957, at: NOW - HOUR };
+    // a backend synced from a snapshot a few minutes ago
+    expect(nodeDepth(kept, 73_526_601, String(73_526_601 - 300), NOW)).toBe(kept);
+    expect(nodeDepth(undefined, 73_526_601, String(73_526_601 - OSMOSIS_DEPTH_FLOOR + 1), NOW)).toBeUndefined();
+    expect(nodeDepth(undefined, 73_526_601, String(73_526_601 - OSMOSIS_DEPTH_FLOOR), NOW)).toEqual({ blocks: OSMOSIS_DEPTH_FLOOR, at: NOW });
+    const tiny = { blocks: 100, at: NOW - HOUR };
+    expect(nodeDepth(tiny, 73_526_601, '73431644', NOW)).toEqual({ blocks: 94_957, at: NOW });
+    expect(nodeDepth(tiny, 73_526_601, undefined, NOW)).toBeUndefined();
   });
 });

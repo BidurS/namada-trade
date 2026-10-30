@@ -101,34 +101,64 @@ export const OSMOSIS_SWEEP_MAX_BYTES = 24 * 1024 * 1024;
  * the transactions a search could not read (each one alone past the cap on every node), newest last. `resume`: for a
  * search that did not finish, how far it read each query above `height`, so the next one goes on from there.
  * `depth`: the fewest blocks a node answering a search's /status held behind its head (its latest height less its
- * earliest_block_height), and when a node that shallow was last seen (nodeDepth). `shallow`: the last short answers not
- * taken as the end of their query, because the range began below the blocks that depth reaches.
+ * earliest_block_height), and when a node that shallow was last seen (nodeDepth). `shallow`: the short answers the
+ * last search did not take as the end of their query, because the range began below the blocks that depth reaches;
+ * dropped by the next search that finishes.
  */
 export interface OsmosisCursor {
   height: number; at: number; added?: number; error?: string; skipped?: { at: number; note: string }[]; resume?: Record<string, OsmosisResume>;
-  depth?: { blocks: number; at: number }; shallow?: { at: number; note: string };
+  depth?: OsmosisDepth; shallow?: { at: number; note: string };
 }
 /**
- * How long a search keeps the shallowest node it has seen without seeing one that shallow again (OsmosisCursor
- * `depth`). osmosis-rpc.publicnode.com answers each request from one of two backends: one held blocks from
- * 73,431,644 (about 16 hours), the other from 68,229,727 (2026-08-10), and its tx_search counted 123 and 3,913 swaps of
- * pool 3005 from one request to the next (2026-10-29). A /status from the deep one says nothing of the one that
- * answers the next read, so the search goes by the shallowest seen, which about half the searches' /status show.
+ * The shallowest node the searches have seen (OsmosisCursor `depth`): how many blocks it held behind its head, and
+ * when a node that shallow was last seen. `deeper`: once it has not been seen for OSMOSIS_DEPTH_KEEP_MS, the /status
+ * answers since then, all deeper (how many, and the fewest blocks among them), counted to OSMOSIS_DEPTH_RETIRE.
  */
-export const OSMOSIS_DEPTH_KEEP_MS = 7 * 86_400_000;
+export interface OsmosisDepth { blocks: number; at: number; deeper?: { blocks: number; n: number } }
+/**
+ * How long the shallowest depth seen stands on its own without a node that shallow seen again (OsmosisDepth).
+ * osmosis-rpc.publicnode.com answers each request from one of two backends: one held blocks from 73,431,644 (about 16
+ * hours), the other from 68,229,727 (2026-08-10), and its tx_search counted 123 and 3,913 swaps of pool 3005 from one
+ * request to the next (2026-10-29). A /status from the deep one says nothing of the one that answers the next read,
+ * so the search goes by the shallowest seen, which about half the searches' /status show. Past this time the kept
+ * depth still stands: only OSMOSIS_DEPTH_RETIRE deeper answers in a row retire it, never the first one after an
+ * outage, which is when the searches have the oldest range to read.
+ */
+export const OSMOSIS_DEPTH_KEEP_MS = 86_400_000;
+/**
+ * The /status answers in a row, each deeper than the kept depth and all after OSMOSIS_DEPTH_KEEP_MS, that retire it
+ * for the fewest blocks among them (the shallow backend gone, or grown past twice what was kept): with two backends
+ * taking turns at random, twelve answers in a row from the deep one while the shallow one still answers is one chance
+ * in 4,096. One a search, so twelve searches, an hour at OSMOSIS_SWEEP_EVERY_MS.
+ */
+export const OSMOSIS_DEPTH_RETIRE = 12;
+/**
+ * A /status depth of fewer blocks is not taken as a node's (nor is a kept one, from code before this rule): about an
+ * hour of Osmosis blocks (a block about every 0.86 s on 2026-10-29: heights 73,444,230 at 06:31 UTC and 73,489,118 at
+ * the 17:16 epoch block), against 350 between two searches. A backend that has just synced from a snapshot answers
+ * with a few hundred blocks; kept, it would hold every search's range below it and stop the cursor for as long as it
+ * stood, while such a node may only miss the minutes it has not yet synced.
+ */
+export const OSMOSIS_DEPTH_FLOOR = 4_000;
 /**
  * The cursor's `depth` after a /status at `now` whose head is `head` and whose earliest_block_height is `earliest`:
  * the fewer blocks of the kept and the new; a depth up to twice the kept one is the same backend seen again (it
- * prunes in steps) and keeps it current; the kept one not seen for OSMOSIS_DEPTH_KEEP_MS gives way to the new answer.
- * An answer without an earliest height (or one above its head) says nothing, and the kept depth stays as it was.
+ * prunes in steps, or keeps growing from one earliest block) and keeps it current; a deeper one leaves it as it was,
+ * and once the kept one has not been seen for OSMOSIS_DEPTH_KEEP_MS, OSMOSIS_DEPTH_RETIRE of those in a row give way to
+ * the shallowest of them. An answer without an earliest height (or one above its head), or under OSMOSIS_DEPTH_FLOOR,
+ * says nothing, and the kept depth stays as it was.
  */
-export function nodeDepth(kept: OsmosisCursor['depth'] | undefined, head: number, earliest: unknown, now: number): OsmosisCursor['depth'] | undefined {
+export function nodeDepth(kept: OsmosisDepth | undefined, head: number, earliest: unknown, now: number): OsmosisDepth | undefined {
   const e = typeof earliest === 'string' && /^\d+$/.test(earliest) ? Number(earliest) : typeof earliest === 'number' ? earliest : NaN;
   const seen = Number.isSafeInteger(e) && e > 0 && e <= head ? head - e : null;
-  const k = kept && Number.isSafeInteger(kept.blocks) && kept.blocks >= 0 && Number.isFinite(kept.at) && now - kept.at <= OSMOSIS_DEPTH_KEEP_MS ? kept : undefined;
-  if (seen == null) return k;
+  const k = kept && Number.isSafeInteger(kept.blocks) && kept.blocks >= OSMOSIS_DEPTH_FLOOR && Number.isFinite(kept.at) ? kept : undefined;
+  if (seen == null || seen < OSMOSIS_DEPTH_FLOOR) return k;
   if (!k || seen <= k.blocks) return { blocks: seen, at: now };
-  return seen <= 2 * k.blocks ? { blocks: k.blocks, at: now } : k;
+  if (seen <= 2 * k.blocks) return { blocks: k.blocks, at: now };
+  if (now - k.at <= OSMOSIS_DEPTH_KEEP_MS) return k;
+  const d = k.deeper && Number.isSafeInteger(k.deeper.blocks) && Number.isSafeInteger(k.deeper.n) && k.deeper.n > 0
+    ? { blocks: Math.min(k.deeper.blocks, seen), n: k.deeper.n + 1 } : { blocks: seen, n: 1 };
+  return d.n >= OSMOSIS_DEPTH_RETIRE ? { blocks: d.blocks, at: now } : { blocks: k.blocks, at: k.at, deeper: d };
 }
 /**
  * Where a catch-up search that did not finish left one query. The search can only page from the newest transaction,
@@ -222,6 +252,7 @@ export const ALARM_LEASE_MS = 10 * 60_000;
  * after the hour ends. `site.live_sockets.minutes`, beside it: how many minutes of the hour the count covered (60, or
  * fewer when it began after the hour did: the first hour after a deploy that brought the count, or a count the
  * object's storage could not give back). An hour with no row was not counted (no instance ran in it); it is never 0.
+ * No route serves them (api.ts HISTORY_KEYS says why): the owner reads them in D1.
  */
 export const LIVE_SOCKETS_KEY = 'site.live_sockets';
 export const LIVE_SOCKETS_MINUTES_KEY = `${LIVE_SOCKETS_KEY}.minutes`;
@@ -446,9 +477,11 @@ export class LiveHub extends DurableObject<Env> {
     console.log('Connected to Osmosis WebSocket');
 
     ws.addEventListener('message', async (event) => {
+      // the time it came, which a wait for the pool addresses does not move (handleOsmosisMessage)
+      const at = Date.now();
       try {
         const msg = JSON.parse(event.data as string);
-        await this.handleOsmosisMessage(msg);
+        await this.handleOsmosisMessage(msg, at);
       } catch (e) {
         console.error('Error handling Osmosis WS message:', e);
       }
@@ -488,12 +521,14 @@ export class LiveHub extends DurableObject<Env> {
     this.broadcastStatus();
   }
 
-  private async handleOsmosisMessage(msg: any) {
-    // Read with the pool addresses: a message that comes before they are read waits for them (in order, as it came).
+  /** One stream message, `at` the time it came: a move's time is when the stream gave it (normFromWs). */
+  private async handleOsmosisMessage(msg: any, at = Date.now()) {
+    // Read with the pool addresses: a message that comes before they are read waits for them (in order, as it came),
+    // and keeps the time it came, not the time the wait ended (the router can take a minute and more).
     if (this.context && !this.contextRead) await this.context;
-    const norm = normFromWs(msg, Date.now());
+    const norm = normFromWs(msg, at);
     if (!norm) return;
-    this.osmoLastMsgAt = Date.now();
+    this.osmoLastMsgAt = at;
 
     // Deduplicate multiple WS subscription matches for the same Osmosis tx hash. The hash is held while the
     // transaction is written (the other subscriptions' copies of it return here) and stays seen only once its rows
@@ -1566,9 +1601,10 @@ export class LiveHub extends DurableObject<Env> {
       }
     }
     const behind = Object.keys(resume).length > 0;
-    // The depth the nodes are known to hold, and the last short answer not taken for it (kept until another).
+    // The depth the nodes are known to hold, and the short answers not taken for it: kept until a search finishes
+    // (the cron's osmosis_index check carries them with the cursor's error, analytics.ts indexState).
     for (const note of shallowNotes) console.warn(`Osmosis catch-up search: ${note}`);
-    const shallow = shallowNotes.length ? { at: now, note: shallowNotes.join('; ').slice(0, 1000) } : prev?.shallow;
+    const shallow = shallowNotes.length ? { at: now, note: shallowNotes.join('; ').slice(0, 1000) } : complete ? undefined : prev?.shallow;
     const known = { ...(depth ? { depth } : {}), ...(shallow ? { shallow } : {}) };
     const next: OsmosisCursor = complete
       ? { height: upTo, at: Date.now(), added, ...kept, ...known }

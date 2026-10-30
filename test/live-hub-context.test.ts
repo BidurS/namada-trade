@@ -3,8 +3,9 @@
 // is asked three times with a 15 s timeout each for the pools and three times again for the price. A router slow to
 // answer held the whole hub: no socket was accepted and the Namada scan did not run. The constructor now waits on the
 // object's own storage only; the router is read after it (the hub's context), and only Osmosis moves wait for it: a
-// stream message waits and is then read with the pool addresses (a deposit to a pool stays liquidity), and the
-// catch-up search starts once the context is read.
+// stream message waits and is then read with the pool addresses (a deposit to a pool stays liquidity) and with the
+// time it came (the review of 2026-10-29 found it stamped with the time the wait ended), and the catch-up search
+// starts once the context is read.
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
 vi.mock('cloudflare:workers', () => ({
@@ -82,8 +83,17 @@ const deposit = {
     ] } } } },
   },
 };
+/** The same deposit in another transaction (the stream's socket delivers it). */
+const deposit2 = structuredClone(deposit);
+deposit2.result.events['tx.hash'] = ['CTX0000000000000000000000000000000000000000000000000000000000002'];
 const settled = (p: Promise<unknown>) => { let done = false; p.then(() => { done = true; }, () => { done = true; }); return () => done; };
 const flowsOf = (db: TestD1) => db.raw.prepare("SELECT kind FROM flows WHERE chain = 'osmosis' ORDER BY id").all().map((r: any) => r.kind);
+const timesOf = (db: TestD1) => db.raw.prepare("SELECT tx_hash, ts FROM flows WHERE chain = 'osmosis' ORDER BY tx_hash").all().map((r: any) => [r.tx_hash, r.ts]);
+/** The hub's Osmosis socket: its listeners kept, so the test can deliver a message as the stream does. */
+function osmosisSocket() {
+  const on = new Map<string, (ev: any) => unknown>();
+  return { on, ws: { addEventListener: (t: string, f: (ev: any) => unknown) => { on.set(t, f); }, send() {}, close() {} } };
+}
 
 describe('the live hub while the Osmosis router does not answer', () => {
   it('the constructor waits on its own storage only: sockets, the alarm and the Namada scan go on, and Osmosis moves wait for the pool addresses', async () => {
@@ -108,9 +118,15 @@ describe('the live hub while the Osmosis router does not answer', () => {
     expect(r.status).toBe(101);
     expect(hub.sessions.size).toBe(1);
 
-    // a stream message waits for the pool addresses
+    // a stream message waits for the pool addresses, one handed in and one through the hub's Osmosis socket
+    const arrived = Date.now();
     const msg = hub.handleOsmosisMessage(deposit);
     const read = settled(msg);
+    const osmo = osmosisSocket();
+    hub.openedOsmosisWs(osmo.ws);
+    await vi.advanceTimersByTimeAsync(1000);
+    const arrived2 = Date.now();
+    const msg2 = osmo.on.get('message')!({ data: JSON.stringify(deposit2) }) as Promise<unknown>;
     await vi.advanceTimersByTimeAsync(0);
     expect(read()).toBe(false);
     expect(flowsOf(db)).toEqual([]);
@@ -125,12 +141,17 @@ describe('the live hub while the Osmosis router does not answer', () => {
     expect(net.log.filter((u) => u.includes('/tx_search'))).toEqual([]);
     expect(hub.needSweep).toBe(true);
 
-    // the router answers: the message is read with pool 3005's address (liquidity, not a transfer)
+    // the router answers: the messages are read with pool 3005's address (liquidity, not a transfer), each with the
+    // time it came, not the time the router answered (the stream's moves carry no block time)
+    expect(Date.now() - arrived2).toBeGreaterThanOrEqual(10_000);
     net.release();
     await vi.advanceTimersByTimeAsync(0);
     await msg;
+    await msg2;
     expect(hub.osmoCtx.poolAddrs.get(CL_3005)).toBe('3005');
-    expect(flowsOf(db)).toEqual(['lp_add']);
+    expect(flowsOf(db)).toEqual(['lp_add', 'lp_add']);
+    expect(timesOf(db)).toEqual([[deposit.result.events['tx.hash'][0], arrived], [deposit2.result.events['tx.hash'][0], arrived2]]);
+    expect(hub.osmoLastMsgAt).toBe(arrived2);
 
     // and the next alarm runs the catch-up search
     done = false;

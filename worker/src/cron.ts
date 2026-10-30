@@ -1895,7 +1895,8 @@ export async function runCron(env: Env) {
       }
     }
 
-    // This site's own flow index: the Namada block scanner against the node head, the Osmosis stream and catch-up.
+    // This site's own flow index: the Namada block scanner against the node head, the Osmosis stream and catch-up
+    // (with why the catch-up search has not finished, when it has not: indexState's note).
     const ix = await indexState(env.DB, now).catch(() => null);
     if (ix) {
       const c = ix.namadaCursor;
@@ -1907,7 +1908,7 @@ export async function runCron(env: Env) {
       const streaming = !!l && l.connected && now - l.at <= OSMOSIS_LIVE_STALE_MS;
       const swept = !!sw && now - sw.at <= OSMOSIS_SWEEP_STALE_MS;
       checkStmts.push(stmt.check('osmosis_index', streaming && swept ? 'ok' : streaming || swept ? 'warn' : 'fail',
-        'This site\'s Osmosis flow index: live stream and catch-up search', { streaming, lastStreamReport: l?.at ?? null, sweptToHeight: sw?.height ?? null, sweptAt: sw?.at ?? null }, now));
+        'This site\'s Osmosis flow index: live stream and catch-up search', { streaming, lastStreamReport: l?.at ?? null, sweptToHeight: sw?.height ?? null, sweptAt: sw?.at ?? null, sweepNote: sw?.note ?? null }, now));
     }
 
     // Every bridge crossing should be on record on both chains (14 days; the last 30 minutes are not judged). The two

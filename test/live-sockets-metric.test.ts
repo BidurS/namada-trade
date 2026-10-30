@@ -4,7 +4,8 @@
 // batch an hour, at the first alarm after the hour ends, from the count it keeps in memory, so nothing of a reader is
 // kept and nothing is written per socket. The hour's count so far is kept in the object's storage at most once a
 // minute (and at once after a write), so a deploy mid-hour goes on counting the hour; a write D1 refuses is tried
-// again by the next alarm; an hour written again never lowers its figure. /api/metrics/history serves both keys.
+// again by the next alarm; an hour written again never lowers its figure. No route serves either key (the review of
+// 2026-10-29: while the site has a handful of readers, an hour's count shows when one of them reads it).
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
 vi.mock('cloudflare:workers', () => ({
@@ -139,13 +140,17 @@ describe('the live feed\'s hourly count of open sockets', () => {
     expect(rows(r.db)).toEqual([[T10, LIVE_SOCKETS_KEY, 1], [T10, LIVE_SOCKETS_MINUTES_KEY, 15]]);
   });
 
-  it('is served by /api/metrics/history, one point an hour', async () => {
+  it('no route serves it: the rows stay in D1 for the owner (an hour\'s 1 or 0 would show when one person reads the site)', async () => {
     const db = testD1();
-    await runStmts(db, [...liveSocketStmts({ hour: T10, max: 6, from: at(10, 20) }), ...liveSocketStmts({ hour: T10 + HOUR, max: 3, from: T10 + HOUR })]);
-    const get = async (q: string) => (await app.request(`/api/metrics/history?${q}`, {}, { DB: db } as any)).json() as Promise<any>;
-    const marks = await get(`key=${LIVE_SOCKETS_KEY}&hours=24&at=${at(12, 30)}`);
-    expect(marks.history.map((p: any) => [p.ts, p.value])).toEqual([[T10, 6], [T10 + HOUR, 3]]);
-    const minutes = await get(`key=${LIVE_SOCKETS_MINUTES_KEY}&hours=24&at=${at(12, 30)}`);
-    expect(minutes.history.map((p: any) => [p.ts, p.value])).toEqual([[T10, 40], [T10 + HOUR, 60]]);
+    await runStmts(db, [...liveSocketStmts({ hour: T10, max: 6, from: at(10, 20) }), ...liveSocketStmts({ hour: T10 + HOUR, max: 1, from: T10 + HOUR })]);
+    for (const key of [LIVE_SOCKETS_KEY, LIVE_SOCKETS_MINUTES_KEY]) {
+      for (const u of [`/api/metrics/history?key=${key}&hours=24&at=${at(12, 30)}`, `/api/series?key=${key}`]) {
+        const r = await app.request(u, {}, { DB: db } as any);
+        expect(r.status, u).toBe(404);
+        expect(await r.text(), u).not.toMatch(/"value"\s*:\s*[16]\b/);
+      }
+    }
+    // the owner reads them with a read-only query
+    expect(db.raw.prepare("SELECT ts, value FROM metrics WHERE key = 'site.live_sockets' ORDER BY ts").all()).toEqual([{ ts: T10, value: 6 }, { ts: T10 + HOUR, value: 1 }]);
   });
 });
