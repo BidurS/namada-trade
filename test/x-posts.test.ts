@@ -7,7 +7,7 @@ import { join } from 'node:path';
 import { createHmac } from 'node:crypto';
 import { testD1, type TestD1 } from './d1-sqlite';
 import { configureAlerts, govCard, moveCard } from '../worker/src/sources/discord';
-import { cardText, cutX, oauthHeader, postMoveOnX, postOnce, postRecapOnX, recapChart, repostNamada, recapText, xLength, xSafe, X_DAILY_MAX, X_MAX_AGE_MS, X_RECAP_HOUR_UTC } from '../worker/src/sources/x';
+import { cardText, cutX, govRecord, oauthHeader, postGovOnX, postMoveOnX, postOnce, postRecapOnX, recapChart, repostNamada, recapText, xLength, xSafe, X_DAILY_MAX, X_MAX_AGE_MS, X_RECAP_HOUR_UTC } from '../worker/src/sources/x';
 import { rowToFlow } from '../worker/src/analytics';
 import type { Flow, GovernanceProposal } from '../shared/types';
 
@@ -27,6 +27,7 @@ function x(answer: (n: number) => { status: number; json: any } = (n) => ({ stat
   }));
   return { posts, headers };
 }
+const prop = (title: string, discussionsUrl: string | null = null) => ({ id: 42, title, authors: null, abstract: null, type: 'default', status: 'votingPeriod', startEpoch: 1, endEpoch: 9, activationEpoch: 10, yayNam: 1_000_000, nayNam: 2_000, abstainNam: 0, discussionsUrl }) as GovernanceProposal;
 const whale = (n: number, extra: Partial<Flow> = {}): Flow =>
   ({ id: `osmosis:XW${n}:0`, chain: 'osmosis', height: 100 + n, ts: t - 60_000, txHash: `XW${n}`, kind: 'sell', from: 'osmo1sellerxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx', to: null, amount: 50_000, meta: null, ...extra }) as unknown as Flow;
 
@@ -59,12 +60,12 @@ describe('the text', () => {
     const rows: Record<string, any> = JSON.parse(readFileSync(join(__dirname, 'fixtures', 'discord-rows.json'), 'utf8')).rows;
     for (const k of Object.keys(rows)) {
       const f = rowToFlow(rows[k]);
-      const tag = '@someone ＠other claim-nam.xyz';
+      const tag = '@someone ＠other claim-nam.xyz #airdrop $SCAM';
       const text = cardText(moveCard({ ...f, fromLabel: tag, fromLabelPlain: tag, toLabel: tag, toLabelPlain: tag } as Flow, { whaleNam: 10000, validatorName: 'stake-nam.io ﹫val' }));
       expect(xLength(text), k).toBeLessThanOrEqual(280);
       expect(text, k).not.toMatch(/https?:\/\//);
       expect(text, k).not.toMatch(/claim-nam|stake-nam/);
-      expect(text, k).not.toMatch(/[@＠﹫]\w/);
+      expect(text, k).not.toMatch(/[@＠﹫]\w|#airdrop|\$SCAM/);
       expect(text, k).toMatch(/UTC/);
     }
   });
@@ -81,13 +82,22 @@ describe('the text', () => {
       ['claim。xyz claim．xyz claim｡xyz claim․xyz claim﹒xyz', Array(5).fill('[link removed]').join(' ')],
       ['пример.рф 例子.中国 xn--e1afmkfd.xn--p1ai ｃｌａｉｍ．ｘｙｚ', Array(4).fill('[link removed]').join(' ')],
       // a character that shows nothing cannot hide one
-      ['claim​.xyz claim.⁠xyz cl‍aim.xyz ‮zyx.mialc claim.͏xyz', Array(5).fill('[link removed]').join(' ')],
+      ['claim\u200B.xyz claim.\u2060xyz cl\u200Daim.xyz \u202Ezyx.mialc claim.\u034Fxyz', Array(5).fill('[link removed]').join(' ')],
       ['@namada ＠namada ﹫namada user@claim.xyz', '(at)namada (at)namada (at)namada user(at)[link removed]'],
       ['claim.xyz…', '[link removed]…'],
       // a word that only looks like a domain goes too, so that no cut of what is left can end in one ("x.co…")
       ['x.co1 and cap.Then', '[link removed]1 and [link removed]'],
       ['Raise the cap to 1,500,000.5 NAM in v0.45.1, e.g. 1.5M by a.m. U.S.A. time', 'Raise the cap to 1,500,000.5 NAM in v0.45.1, e.g. 1.5M by a.m. U.S.A. time'],
       ['Tag by tnam1qauthor…', 'Tag by tnam1qauthor…'],
+      // a hashtag or cashtag loses its signs, before the links are read; a figure, a keycap or a sign inside a word stays
+      ['#airdrop ##nam #$SCAM ＃tag ＄SCAM $scam.ab', 'airdrop nam SCAM tag SCAM [link removed]'],
+      ['a.#co claim.$xyz', '[link removed] [link removed]'],
+      // a link taken out leaves no tag behind it
+      ['claim.xyz＃airdrop claim.xyz$SCAM', '[link removed] [link removed]'],
+      ['$0.0012, #42, $12 million, #\uFE0F\u20E3', '$0.0012, #42, $12 million, #\uFE0F\u20E3'],
+      // whatever stands before the sign: X reads a tag after an emoji's variation selector, "²", "½", or a letter newer
+      // than its tables, and a sign inside a word costs only the sign
+      ['\u2764\uFE0F#airdrop \u00B2#SCAM NAM\u00BD#airdrop \u0560#ab café#latte #\uF870', '\u2764\uFE0Fairdrop \u00B2SCAM NAM\u00BDairdrop \u0560ab cafélatte \uF870'],
     ];
     for (const [s, want] of out) expect(xSafe(s), s).toBe(want);
     // the two characters X refuses a post for go with the invisible ones, and the text is left in the form X counts
@@ -96,23 +106,29 @@ describe('the text', () => {
   });
 
   it('a proposal\'s title, a wallet\'s tag, a validator\'s name and a bridge receiver\'s text reach X without their links', () => {
-    const prop = (title: string) => ({ id: 42, title, authors: null, abstract: null, type: 'default', status: 'votingPeriod', startEpoch: 1, endEpoch: 9, activationEpoch: 10, yayNam: 1_000_000, nayNam: 2_000, abstainNam: 0, discussionsUrl: null }) as GovernanceProposal;
-    const gov = cardText(govCard(prop('Claim your NAM at claim-nam.xyz ＠namada'), true));
-    expect(gov).toContain('Claim your $NAM at [link removed] (at)namada');
-    expect(gov).not.toMatch(/claim-nam|＠/);
-    // the record's source is the site's own words, and X counts its domain 23: a long title still fits as X counts
-    expect(gov).toContain('indexer.namada.net');
+    const post = (p: GovernanceProposal) => cardText(govCard(p, true), t, govRecord(p));
+    const gov = post(prop('Claim your NAM at claim-nam.xyz ＠namada #airdrop $SCAM'));
+    expect(gov).toContain('Claim your $NAM at [link removed] (at)namada airdrop SCAM');
+    expect(gov).not.toMatch(/claim-nam|＠|#airdrop|\$SCAM/);
+    // the site's $NAM never becomes a longer cashtag from the words after it
+    expect(post(prop('Raise NAM.x cap'))).toContain('Raise NAM.x cap');
+    // the record sends readers to the chain, and to the forum when the proposal is discussed there, in words: no
+    // domain, so no link (X bills a post with one at $0.20, not $0.015)
+    expect(gov.endsWith('· votes on-chain, read from the Namada indexer')).toBe(true);
+    expect(gov).not.toContain('namada.net');
+    expect(post(prop('Raise the cap', 'https://forum.namada.net/t/raise-the-cap/123')).endsWith('votes on-chain, read from the Namada indexer · discussion on the Namada forum')).toBe(true);
+    expect(post(prop('Raise the cap', 'https://claim-nam.xyz/forum.namada.net'))).not.toContain('forum');
     // a title of characters X counts longer (NFC) still fits as X counts, and is posted in that form
     for (const title of ['\u095C'.repeat(250), '\u{1D15E}'.repeat(125)]) {
-      const text = cardText(govCard(prop(title), true));
+      const text = post(prop(title));
       expect(text, title.slice(0, 2)).toBe(text.normalize('NFC'));
       expect(xLength(text), title.slice(0, 2)).toBeLessThanOrEqual(280);
     }
-    // a long title gives way, never the record: a cut there could leave another domain ("indexer.namada.ne…")
+    // a long title gives way, never the record
     for (let n = 150; n <= 250; n++) {
-      const text = cardText(govCard(prop('A'.repeat(n)), true));
+      const text = post(prop('A'.repeat(n), 'https://forum.namada.net/t/1'));
       expect(xLength(text), String(n)).toBeLessThanOrEqual(280);
-      expect(text.endsWith('status and votes as read from indexer.namada.net'), String(n)).toBe(true);
+      expect(text.endsWith('votes on-chain, read from the Namada indexer · discussion on the Namada forum'), String(n)).toBe(true);
     }
 
     const staker = 'tnam1qstaker' + '0'.repeat(35);
@@ -202,6 +218,17 @@ describe('posting', () => {
     await postMoveOnX(env(db), whale(3, { amount: 9_999 }));
     await postMoveOnX(env(db), whale(4, { kind: 'rewards' } as any));
     expect(s.posts).toHaveLength(1);
+  });
+
+  it('posts a proposal with its record in words and no link, once per status', async () => {
+    const db = testD1();
+    const s = x();
+    const p = prop('Raise the cap, see claim-nam.xyz', 'https://forum.namada.net/t/raise-the-cap/123');
+    await postGovOnX(env(db), p, true);
+    await postGovOnX(env(db), p, true);
+    expect(s.posts).toEqual([cardText(govCard(p, true), t, govRecord(p))]);
+    expect(s.posts[0]).not.toMatch(/https?:\/\/|namada\.net|claim-nam/);
+    expect(s.posts[0].endsWith('discussion on the Namada forum')).toBe(true);
   });
 
   it('posts nothing from a Worker that sends no alerts, or without all four keys', async () => {

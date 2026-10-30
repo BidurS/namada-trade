@@ -19,6 +19,7 @@ import { cachedApi, inlineScriptHashes, pagePolicies, BROWSER_CACHE, cacheKeyUrl
 import { createSession, sessionFromRequest, revokeAllSessions, listSessions, tokenHash, MAX_SESSIONS, MAX_API_KEYS } from '../worker/src/auth';
 import { csvText, csvCell } from '../worker/src/api';
 import { isBotFlow, isIbcRefund, safeHttpUrl } from '../shared/flow-rules';
+import { govCard } from '../worker/src/sources/discord';
 import { category_plain, label_plain } from '../shared/labels';
 import { BODY } from '../shared/copy';
 import type { ChainParams, Overview, SlippageCurvePoint } from '../shared/types';
@@ -581,6 +582,9 @@ describe('links from on-chain text', () => {
   it('only http(s) passes', () => {
     for (const bad of ['javascript:alert(1)', 'JAVASCRIPT:alert(1)', ' javascript:alert(1)', 'data:text/html,x', 'vbscript:x', 'forum.namada.net/t/1', '', null, 42]) expect(safeHttpUrl(bad), String(bad)).toBeNull();
     expect(safeHttpUrl('https://forum.namada.net/t/x/1')).toBe('https://forum.namada.net/t/x/1');
+    // a host written in a form no parser takes back ("xn--xn---…"): the proposal card parses the link again for its host
+    expect(safeHttpUrl('https://\u0440\u0444\u65E5\u672Cxn--.xyz/')).toBeNull();
+    expect(() => govCard({ id: 1, title: 't', authors: null, abstract: null, type: 'default', status: 'votingPeriod', startEpoch: 1, endEpoch: 2, activationEpoch: 3, yayNam: 0, nayNam: 0, abstainNam: 0, discussionsUrl: 'https://\u0440\u0444\u65E5\u672Cxn--.xyz/' }, true)).not.toThrow();
   });
   it('pressure never sends a script link, even from an old cached proposal', async () => {
     const db = testD1();

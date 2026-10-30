@@ -104,7 +104,10 @@ export const isBotFlow = (f: FlowLike): boolean => f.meta?.arb === true || (f.ki
 
 /**
  * A link taken from on-chain or third-party text (a governance proposal's `discussions-to`, a forum URL) as a
- * safe href: only http(s) URLs pass; `javascript:`, `data:`, `vbscript:` and anything unparsable give null.
+ * safe href: only http(s) URLs pass; `javascript:`, `data:`, `vbscript:` and anything unparsable give null, and so
+ * does one whose written form does not parse again (Node writes a host such as "рф日本xn--.xyz" as "xn--xn---…" and
+ * then refuses it; workerd takes it back): callers parse the answer again (the proposal card reads its host), and that
+ * must not throw on any runtime.
  */
 export function safeHttpUrl(x: unknown): string | null {
   if (typeof x !== 'string') return null;
@@ -112,7 +115,8 @@ export function safeHttpUrl(x: unknown): string | null {
   if (!s) return null;
   try {
     const u = new URL(s);
-    return u.protocol === 'https:' || u.protocol === 'http:' ? u.toString() : null;
+    if (u.protocol !== 'https:' && u.protocol !== 'http:') return null;
+    return new URL(u.toString()).toString();
   } catch {
     return null;
   }

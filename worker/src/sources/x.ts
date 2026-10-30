@@ -5,16 +5,16 @@
 // them under the site's name.
 //
 // X's API is paid per call (https://docs.x.com/x-api/getting-started/pricing: $0.015 a post, $0.20 a post with a
-// link, checked 2026-10-29), so only the recap carries the site's link; an alert names the move, its figures and their
-// source in words, and the profile links the site. A proposal's post names its source, indexer.namada.net, which X
-// makes a link. Posts a day are capped (X_DAILY_MAX), and a move older than X_MAX_AGE_MS when it is offered (a
-// catch-up search, a late scan) is not posted: the account reads as live.
+// link, checked 2026-10-29), so only the recap carries a link; an alert names the move, its figures and their source
+// in words, a proposal's post sends readers to the chain and the forum in words (owner, 2026-10-29: govRecord), and
+// the profile links the site. Posts a day are capped (X_DAILY_MAX), and a move older than X_MAX_AGE_MS when it is
+// offered (a catch-up search, a late scan) is not posted: the account reads as live.
 //
 // Each post is claimed once (`alert:x:` keys, swept with the other claims: auth.ts sweepAuth). An answer that is no
 // answer, a 5xx or a 429 gives the claim back, so the alert offered again is posted; a refusal (401/403: the keys, 402:
 // no credits, 400: the text) is not tried again, and kv `x.last` records it for the health view. Text an outsider
-// wrote (a label, a proposal, a validator's name) carries no link and mentions no one (xSafe): a link or bare domain is
-// "[link removed]", an @ "(at)".
+// wrote (a label, a proposal, a validator's name) carries no link, mentions no one and tags nothing (xSafe): a link or
+// bare domain is "[link removed]", an @ "(at)", and a hashtag or cashtag loses its sign.
 //
 // The keys are the owner's X app's (OAuth 1.0a, Read and Write): X_API_KEY, X_API_SECRET, X_ACCESS_TOKEN,
 // X_ACCESS_SECRET, set by scripts/x-connect.sh at hidden prompts. Without all four nothing is posted.
@@ -22,6 +22,7 @@ import type { Flow, GovernanceProposal } from '../../../shared/types';
 import { SITE } from '../../../shared/site';
 import { kvSet } from '../db';
 import { readMoveContext } from './discord-context';
+import { safeHttpUrl } from '../../../shared/flow-rules';
 import { alertsOn, claimDiscordAlert, crossingOf, fits, govCard, moveCard, operatorMove, releaseClaims, type Card, type GovContext } from './discord';
 import { mdToPlain } from './telegram';
 import { CHART_MINUTE_BOUND_MS, readChartRows, shapePriceChart, type ChartContext } from '../digest/charts/read';
@@ -64,6 +65,13 @@ const PART = '[\\p{L}\\p{N}\\p{M}_-]+';
  */
 const LINK = new RegExp(`[a-z][a-z0-9+.-]*:\\/\\/\\S*|${PART}(?:${DOT}${PART})*${DOT}(?:xn--[a-z0-9-]+|\\p{M}*\\p{L}[\\p{L}\\p{M}]+)(?::\\d+)?(?:[/?#]\\S*)?`, 'giu');
 /**
+ * A hashtag's or cashtag's signs: before a word holding a letter or mark (twitter-text 3.1.0 also counts private-use
+ * characters, and its few joining ones, · ・ ～…), never a keycap ("#️⃣"). Whatever stands before the sign: X's own
+ * boundary takes an emoji's variation selector, "²" or a letter newer than its tables, so a sign inside a word goes
+ * too ("café#latte" is "cafélatte"), which costs a sign, never a tag.
+ */
+const TAG = /[#＃$＄]+(?![\uFE0F\u20E3])(?=[\p{L}\p{M}\p{N}\p{Co}_\u00B7\u05BE\u05F3\u05F4\u0F0B\u0F0C\u3003\u301C\u309B\u309C\u30A0\u30FB\uA67E\uFF5E]*[\p{L}\p{M}\p{Co}])/gu;
+/**
  * Characters that show nothing (zero-width spaces and joiners, direction marks), one of which could hide a link from
  * LINK, and the two X refuses a post for (U+FFFE, U+FFFF): a post that holds one is never made.
  */
@@ -94,31 +102,38 @@ export function cutX(s: string, max = X_MAX): string {
 export const X_LINK_WORDS = '[link removed]';
 /**
  * Text an outsider wrote (a proposal's title, a wallet's tag, a validator's name, a bridge receiver's free text) as a
- * post carries it: no link and no bare domain (each is X_LINK_WORDS, the punctuation after it kept), and no one
- * mentioned (an @ and its wide form ＠, which X reads as one, and the small ﹫, which only looks like one, are written
- * "(at)"). Invisible characters go first, then the text is put in the NFC form X counts.
+ * post carries it: no link and no bare domain (each is X_LINK_WORDS, the punctuation after it kept), no one mentioned
+ * (an @ and its wide form ＠, which X reads as one, and the small ﹫, which only looks like one, are written "(at)"),
+ * and nothing tagged: a hashtag ("#airdrop") or cashtag ("$SCAM") is its word without its signs (TAG), so the post is
+ * never listed under it; a figure ("$0.0012", "#42", "$12 million") is no tag and keeps its sign, and the site's own
+ * prices never put a letter after one. Invisible characters go first, then the
+ * text is put in the NFC form X counts.
  */
 export function xSafe(s: string): string {
+  // a tag's signs go before the links are read, since taken out after they could join two pieces into one ("a.#co");
+  // the second pass is a backstop for a sign the replacements leave before a word (none is known)
   return s.replace(INVISIBLE, '').normalize('NFC')
+    .replace(TAG, '')
     .replace(LINK, (m) => X_LINK_WORDS + (/[.,;:!?'")\]}»”’]+$/.exec(m)?.[0] ?? ''))
-    .replace(/[@＠﹫]/g, '(at)');
+    .replace(/[@＠﹫]/g, '(at)')
+    .replace(TAG, '');
 }
 
 /**
  * A card as a post: the title, the first paragraph (who moved it and the price, or a proposal's votes) and the record
- * it comes from, in X's 280. Only the record may hold a domain (a proposal's source), the site's own words.
+ * it comes from (the card's footer, or `record` in its place), without links, in X's 280.
  */
-export function cardText(card: Card, now = Date.now()): string {
+export function cardText(card: Card, now = Date.now(), record?: string): string {
   const e = fits(card);
   const first = mdToPlain((e.description ?? '').split('\n\n')[0], now).replace(/\s+/g, ' ').trim();
-  const record = (e.footer?.text ?? '').replace(/^NamadaTrade · /, '');
+  record ??= (e.footer?.text ?? '').replace(/^NamadaTrade · /, '');
   const when = e.timestamp ? new Date(e.timestamp).toISOString().slice(0, 16).replace('T', ' ') + ' UTC' : '';
   const tail = [when, record].filter(Boolean).join(' · ');
-  // the tail is kept whole: the opening words give way first, then the title. A cut inside the tail could leave a
-  // part of its domain that is another one ("indexer.namada.ne…", "indexer.na…").
+  // the tail, where the figures come from, is kept whole: the opening words give way first, then the title
   const tailRoom = tail ? xLength(tail) + 2 : 0;
-  // $NAM once, in the title (a cashtag: X lists the post under the coin)
-  const head = cutX(xSafe(e.title ?? '').replace(/(^|\s)NAM\b/, '$1$$NAM'), X_MAX - tailRoom);
+  // $NAM once, in the title (a cashtag: X lists the post under the coin), never where X would read a longer one from
+  // the words after it ("NAM.x" would be the cashtag $NAM.x)
+  const head = cutX(xSafe(e.title ?? '').replace(/(^|\s)NAM\b(?![._][A-Za-z])/, '$1$$NAM'), X_MAX - tailRoom);
   const body = xSafe(first);
   const room = X_MAX - xLength(head) - tailRoom - 2;
   return cutX([head, room > 20 && body ? cutX(body, room) : '', tail].filter(Boolean).join('\n\n'));
@@ -252,8 +267,19 @@ export async function postMoveOnX(env: XEnv, flow: Flow, whaleNam = 10000): Prom
   }, `move ${flow.id}`);
 }
 
+/**
+ * A proposal's record on X, in words: the card's footer names indexer.namada.net, which X would make a link (a post
+ * with one costs $0.20, not $0.015), so the post says where the votes are and, when the proposal's own discussion is
+ * on forum.namada.net, where it is discussed (owner, 2026-10-29: send readers to the forum and the chain).
+ */
+export function govRecord(p: GovernanceProposal): string {
+  const own = safeHttpUrl(p.discussionsUrl);
+  const forum = own != null && new URL(own).hostname === 'forum.namada.net';
+  return `votes on-chain, read from the Namada indexer${forum ? ' · discussion on the Namada forum' : ''}`;
+}
+
 export const postGovOnX = (env: XEnv, prop: GovernanceProposal, isNew: boolean, g: GovContext = {}) =>
-  postOnce(env, `alert:x:gov:prop:${prop.id}:${prop.status}`, () => cardText(govCard(prop, isNew, g)), `proposal ${prop.id} ${prop.status}`);
+  postOnce(env, `alert:x:gov:prop:${prop.id}:${prop.status}`, () => cardText(govCard(prop, isNew, g), Date.now(), govRecord(prop)), `proposal ${prop.id} ${prop.status}`);
 
 // ---------------------------------------------------------------- the daily recap
 
