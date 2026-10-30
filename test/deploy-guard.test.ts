@@ -67,6 +67,8 @@ case "$*" in
   *kv_user_deliverable*) echo '[{"results":[{"n":1}]}]' ;;
   *kv_user_telegram*) echo '[{"results":[{"n":2}]}]' ;;
   *depth_minute*) if [ -n "\${STANDIN_PENDING:-}" ]; then echo '[{"results":[{"tables":0,"n":0}]}]'; else echo '[{"results":[{"tables":3,"n":2}]}]'; fi ;;
+  *flow_count_mark*) echo '[{"results":[{"tables":2,"n":3}]}]' ;;
+  *pool_legs*) echo '[{"results":[{"tables":1,"n":1}]}]' ;;
   *"r2 bucket list"*) echo 'name: namada-trade-depth' ;;
   *) echo '[{"results":[{}]}]' ;;
 esac
@@ -230,7 +232,8 @@ describe('deploy-check.sh', () => {
       'npm ci', 'npm run typecheck', 'npm run build', 'npx vitest run --maxWorkers=4 --minWorkers=1',
       'npx wrangler secret list --format json', 'npx wrangler deployments status --json', 'npx wrangler d1 time-travel info namada-trade-db --json',
       'npx wrangler d1 migrations list namada-trade-db --remote', 'npx wrangler d1 migrations apply namada-trade-db --remote',
-      ...Array(7).fill('npx wrangler d1 execute namada-trade-db --remote --json --command …'),
+      // the schema checks: the seven before stage 1, then 0017 (stored counts) and 0018 (pool legs)
+      ...Array(9).fill('npx wrangler d1 execute namada-trade-db --remote --json --command …'),
       'npx wrangler r2 bucket list', 'npx wrangler deploy',
     ]);
     expect(r.out).not.toContain('dry run');

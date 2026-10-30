@@ -158,7 +158,10 @@ describe('the live hub while the Osmosis router does not answer', () => {
     const b = hub.alarm().finally(() => { done = true; });
     for (let i = 0; !done && i < 60; i++) await vi.advanceTimersByTimeAsync(500);
     await b;
-    expect(net.log.filter((u) => u.includes('/tx_search')).length).toBe(4);
+    // the four OSMOSIS_QUERIES, and pool 3005's two address queries now that its address is known (osmosisPoolQueries)
+    const searches = net.log.filter((u) => u.includes('/tx_search'));
+    expect(searches.length).toBe(6);
+    expect(searches.filter((u) => decodeURIComponent(u).includes(CL_3005)).length).toBe(2);
     expect(hub.needSweep).toBe(false);
   });
 });
