@@ -72,9 +72,14 @@ export const fetchAlertRules = () => get<{ rules: AlertRuleInfo[] }>('/api/alert
  * ALERT_WINDOW_DAYS: 24 hours, 7 or 31 days; one edge copy each) and the hits before `since` are left out here, so a
  * last visit stays in this browser. The answer's `since` is the later of the two starts: a window that ends before the
  * one asked (a last visit more than 31 days ago, or more moves than the server reads at once) says where it starts.
+ *
+ * `end`: the moment `since` was measured back from, when it is a window of its own (the Alerts page's 24 hours or 7
+ * days, before its end). The span is then that window's, so it asks for that window and never the next wider one for
+ * the milliseconds between that moment and this request; the window answered starts that much later, and its `since`
+ * says so. Left out (a last visit), the span runs to now, so the window asked always reaches back to `since`.
  */
-export async function fetchAlertsRecent(asOf: number | null, since?: number): Promise<AlertsRecentResponse> {
-  const days = since != null ? alertWindowDays((asOf ?? Date.now()) - since) : 1;
+export async function fetchAlertsRecent(asOf: number | null, since?: number, end?: number): Promise<AlertsRecentResponse> {
+  const days = since != null ? alertWindowDays((asOf ?? end ?? Date.now()) - since) : 1;
   const r = await get<AlertsRecentResponse>(`/api/alerts/recent${at(asOf, new URLSearchParams(days > 1 ? { days: String(days) } : {}))}`);
   if (since == null) return r;
   const from = Math.max(since, r.since);
@@ -99,8 +104,8 @@ const LAST_WINDOW_MS = 30 * 86_400_000;
  * one 30-day read finds the newest hit. A current server answers in one request (and omits `last` when its
  * own search failed, which reads as not known).
  */
-export async function fetchAlertsRecentWithLast(asOf: number | null, since?: number): Promise<AlertsWithLast> {
-  const r = await fetchAlertsRecent(asOf, since);
+export async function fetchAlertsRecentWithLast(asOf: number | null, since?: number, end?: number): Promise<AlertsWithLast> {
+  const r = await fetchAlertsRecent(asOf, since, end);
   if (r.last !== undefined) return r;
   if (r.hits.length) return { ...r, last: r.hits[0] };
   const wide = await fetchAlertsRecent(asOf, (asOf ?? Date.now()) - LAST_WINDOW_MS).catch(() => null);

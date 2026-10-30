@@ -135,6 +135,45 @@ describe('GET /api/alerts/recent: one shared window per span, the reader’s own
     }
   });
 
+  it('the Alerts page\'s 24 hours and 7 days ask for that window, measured from their end, however late the request goes (a real clock)', async () => {
+    const urls: string[] = [];
+    vi.stubGlobal('fetch', async (u: RequestInfo | URL) => {
+      const url = new URL(String(u), 'https://namada.trade');
+      urls.push(`${url.pathname}${url.search}`);
+      return new Response(JSON.stringify({ since: Date.now() - D, until: Date.now(), hits: [] }), { headers: { 'content-type': 'application/json' } });
+    });
+    try {
+      // the page computes its window, then the request leaves a little later
+      const end = Date.now() - 5;
+      await fetchAlertsRecent(null, end - D, end);
+      await fetchAlertsRecent(null, end - 7 * D, end);
+      // a last visit has no end of its own: the span runs to now, so a visit just over a day ago gets the 7-day window
+      await fetchAlertsRecent(null, end - D);
+      // rewound, the span is measured from the rewind time
+      await fetchAlertsRecent(NOW, NOW - D, Date.now());
+      expect(urls).toEqual(['/api/alerts/recent', '/api/alerts/recent?days=7', '/api/alerts/recent?days=7', `/api/alerts/recent?at=${NOW}`]);
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+
+  it('the window answered starts later than the page\'s by the moments between: the answer\'s since says where', async () => {
+    const db = testD1();
+    insert(db, 'flows', [row('edge', NOW - D + 2, 'osmosis', 'sell', 20_000), row('in', NOW - H, 'osmosis', 'sell', 20_000)]);
+    vi.stubGlobal('fetch', async (u: RequestInfo | URL) => {
+      const url = new URL(String(u), 'https://namada.trade');
+      return app.request(`${url.pathname}${url.search}${url.search ? '&' : '?'}at=${NOW + 5}`, {}, { DB: db } as any);
+    });
+    try {
+      // the page's window ends 5 ms before the server reads it: the hit 2 ms after the page's start is before the window's
+      const r = await fetchAlertsRecent(null, NOW - D, NOW);
+      expect(r.since).toBe(NOW + 5 - D);
+      expect(r.hits.map((h) => h.flowId)).toEqual(['in']);
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+
   it('a window holding more moves than one read takes starts after the oldest read, so its hits are all of [since, until)', async () => {
     const db = testD1();
     insert(db, 'flows', Array.from({ length: ALERTS_READ_MAX + 20 }, (_, i) => row(`s${i}`, NOW - H - i * 60_000, 'osmosis', 'sell', 20_000)));
