@@ -324,6 +324,23 @@ describe("the cron's own ticks", () => {
     expect(discordPosts()).toHaveLength(2);
   });
 
+  it('a second gap while the first is still resolving keeps the one incident, counts its good ticks again and resolves it once', async () => {
+    net();
+    const db = testD1();
+    const e = env(db);
+    await tickAt(e, T0, UP);
+    await tickAt(e, T0 + 30 * MIN, UP);
+    await tickAt(e, T0 + 31 * MIN, UP);
+    expect(discordPosts()).toHaveLength(1);
+    await tickAt(e, T0 + 60 * MIN, UP);
+    expect(state(db)!.open[CRON_TICKS]).toMatchObject({ since: T0, told: true, good: 1, okSince: T0 + 60 * MIN });
+    await tickAt(e, T0 + 61 * MIN, UP);
+    expect(discordPosts()).toHaveLength(1);
+    await tickAt(e, T0 + 62 * MIN, UP);
+    expect(textsOf()).toHaveLength(2);
+    expect(textsOf()[1]).toMatch(/^Resolved: Cron ticks: ok again since 29 Oct 2026, 11:00 UTC \(3 ticks in a row\)/);
+  });
+
   it('the hub judges nothing before the first tick has written its record, and never twice for one gap', async () => {
     net();
     const db = testD1();

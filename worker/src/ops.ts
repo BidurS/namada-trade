@@ -288,17 +288,22 @@ export async function runOps(env: OpsEnv, tickAt: number, now = Date.now()): Pro
   const prev = opsOf(parsed(kv.get(OPS_KV)));
   const health = (parsed(kv.get('source.health')) ?? {}) as Record<string, SourceHealth>;
   const stall = stallOf(parsed(kv.get(OPS_STALL_KV)));
-  const s = stepIncidents(prev, judge(health, checks, tickAt, now), now);
-  // The cron's own gap: the hub's incident, or a gap it did not see, opened now as one already ok for this tick.
+  // The cron's own gap, the hub's incident or one it did not see: open as bad up to this tick, which is its first good
+  // one (the step below counts it). A gap while the last one is still resolving keeps that incident (its start, whether
+  // it was told) and counts its good ticks again.
+  const before = prev ? structuredClone(prev) : emptyOps();
   const gapFrom = stall?.since ?? (prev?.lastTickAt != null && tickAt - prev.lastTickAt > CRON_STALE_MS ? prev.lastTickAt : null);
-  if (gapFrom != null && gapFrom !== prev?.stallSince && !s.open[CRON_TICKS]) {
-    s.open[CRON_TICKS] = {
-      name: CRON_TICKS, since: gapFrom, openedAt: stall?.openedAt ?? now, what: 'stopped', good: 1, okSince: tickAt, told: !!stall?.toldAt,
+  if (gapFrom != null && gapFrom !== prev?.stallSince) {
+    const cur = before.open[CRON_TICKS];
+    before.open[CRON_TICKS] = {
+      name: CRON_TICKS, since: cur?.since ?? gapFrom, openedAt: cur?.openedAt ?? stall?.openedAt ?? now, what: 'stopped', good: 0,
+      told: !!cur?.told || !!stall?.toldAt,
       words: `no tick completed from ${when(gapFrom)} to ${when(tickAt)} (${lasting(tickAt - gapFrom)}); ticks complete again`,
     };
-    if (stall?.remindedAt != null) s.remindedAt = Math.max(s.remindedAt ?? 0, stall.remindedAt);
-    s.stallSince = gapFrom;
+    if (stall?.remindedAt != null) before.remindedAt = Math.max(before.remindedAt ?? 0, stall.remindedAt);
+    before.stallSince = gapFrom;
   }
+  const s = stepIncidents(before, judge(health, checks, tickAt, now), now);
   if (opsSending(env, kv.get(OPS_SWITCH_KV))) {
     const o = outbox(s, now);
     if (o.lines.length && (await tellOperator(env, o.lines, 'ops incidents'))) o.apply(s);
