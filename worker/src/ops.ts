@@ -342,6 +342,19 @@ export function outbox(s: OpsState, now: number): { lines: string[]; apply: (st:
  */
 const READ_KV = `SELECT key, value FROM kv WHERE key IN ('${OPS_KV}', '${OPS_STALL_KV}', '${OPS_SWITCH_KV}', '${OPS_QUIET_KV}', '${DEPTH_KV.on}', 'source.health')`;
 const READ_CHECKS = `SELECT key, status, title, checked_at, CASE WHEN json_valid(detail) THEN json_extract(detail, '$.everyMs') END every_ms FROM checks`;
+/**
+ * The newest minute a tick ran far enough to store before `?1` (one seek on each key): the NAM price and the supply,
+ * which every version of the cron stores each tick it runs (a tick the lock skips stores neither). Only this module
+ * writes ops.incidents' lastTickAt, so a rolled-back Worker (scripts/deploy-check.sh) completes ticks that leave it as
+ * it was: without this, the first look after a roll-forward read the whole rollback as a cron that had stopped, told
+ * the operator so, and held /api/health at 503.
+ */
+export const TICK_MARK_SQL = `SELECT MAX((SELECT MAX(ts) FROM metrics WHERE key = 'price.usd' AND ts < ?1), (SELECT MAX(ts) FROM metrics WHERE key = 'supply.total' AND ts < ?1)) AS t`;
+/** The later of the last completed tick on record and the newest minute a tick stored (TICK_MARK_SQL's answer). */
+const lastRan = (lastTickAt: number | null, mark: unknown): number | null => {
+  const m = Number(mark);
+  return mark != null && Number.isFinite(m) ? Math.max(lastTickAt ?? m, m) : lastTickAt;
+};
 
 /**
  * The cron's pass, once a tick, after the tick's health rows and checks are written (`tickAt`: the tick's start) and
@@ -351,11 +364,13 @@ const READ_CHECKS = `SELECT key, status, title, checked_at, CASE WHEN json_valid
  * this Worker posts, and writes the state. A read that fails changes nothing: the next tick judges again.
  */
 export async function runOps(env: OpsEnv, tickAt: number, now = Date.now()): Promise<OpsState | null> {
-  let kv: Map<string, string>, checks: OpsCheckRow[];
+  let kv: Map<string, string>, checks: OpsCheckRow[], mark: unknown;
   try {
-    const [a, b] = await env.DB.batch([env.DB.prepare(READ_KV), env.DB.prepare(READ_CHECKS)]);
+    // the tick mark before this tick's own start: this tick stored its own minute already
+    const [a, b, m] = await env.DB.batch([env.DB.prepare(READ_KV), env.DB.prepare(READ_CHECKS), env.DB.prepare(TICK_MARK_SQL).bind(tickAt)]);
     kv = new Map(((a.results ?? []) as { key: string; value: string }[]).map((r) => [r.key, r.value]));
     checks = (b.results ?? []) as OpsCheckRow[];
+    mark = (m.results?.[0] as { t?: unknown } | undefined)?.t;
   } catch (e) {
     console.error('ops: not read', e);
     return null;
@@ -367,7 +382,8 @@ export async function runOps(env: OpsEnv, tickAt: number, now = Date.now()): Pro
   // one (the step below counts it). A gap while the last one is still resolving keeps that incident (its start, whether
   // it was told) and counts its good ticks again.
   const before = prev ? structuredClone(prev) : emptyOps();
-  const gapFrom = stall?.since ?? (prev?.lastTickAt != null && tickAt - prev.lastTickAt > CRON_STALE_MS ? prev.lastTickAt : null);
+  const ran = prev?.lastTickAt != null ? lastRan(prev.lastTickAt, mark) : null;
+  const gapFrom = stall?.since ?? (ran != null && tickAt - ran > CRON_STALE_MS ? ran : null);
   if (gapFrom != null && gapFrom !== prev?.stallSince) {
     const cur = before.open[CRON_TICKS];
     before.open[CRON_TICKS] = {
@@ -403,16 +419,22 @@ export async function runOps(env: OpsEnv, tickAt: number, now = Date.now()): Pro
  * never written (no tick has completed since this module was deployed) is not judged here; /api/health says it.
  */
 export async function watchCronStall(env: OpsEnv, now = Date.now()): Promise<'fresh' | 'stalled' | 'unknown'> {
-  let kv: Map<string, string>;
+  let kv: Map<string, string>, mark: unknown;
   try {
-    const r = await env.DB.prepare(`SELECT key, value FROM kv WHERE key IN ('${OPS_KV}', '${OPS_STALL_KV}', '${OPS_SWITCH_KV}')`).all<{ key: string; value: string }>();
-    kv = new Map((r.results ?? []).map((x) => [x.key, x.value]));
+    const [r, m] = await env.DB.batch([
+      env.DB.prepare(`SELECT key, value FROM kv WHERE key IN ('${OPS_KV}', '${OPS_STALL_KV}', '${OPS_SWITCH_KV}')`),
+      env.DB.prepare(TICK_MARK_SQL).bind(now + 1),
+    ]);
+    kv = new Map(((r.results ?? []) as { key: string; value: string }[]).map((x) => [x.key, x.value]));
+    mark = (m.results?.[0] as { t?: unknown } | undefined)?.t;
   } catch (e) {
     console.error('ops: the cron\'s last tick not read', e);
     return 'unknown';
   }
-  const last = opsOf(parsed(kv.get(OPS_KV)))?.lastTickAt ?? null;
-  if (last == null) return 'unknown';
+  const recorded = opsOf(parsed(kv.get(OPS_KV)))?.lastTickAt ?? null;
+  if (recorded == null) return 'unknown';
+  // a tick that stored its minute ran, whichever version of the cron ran it (TICK_MARK_SQL)
+  const last = lastRan(recorded, mark)!;
   if (now - last <= CRON_STALE_MS) return 'fresh';
   let stall = stallOf(parsed(kv.get(OPS_STALL_KV)));
   if (!stall || stall.since !== last) {
