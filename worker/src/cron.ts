@@ -186,8 +186,11 @@ async function syncIntelAndAlerts(env: Env, health: SourceHealth[]) {
           // Telegram after Discord, under its own claims and share of the run (sources/telegram.ts): a proposal whose
           // Discord subscribers wait is offered again next run, and the claims keep Telegram from hearing it twice.
           await sendTelegramGov(env, prop, !prevStatus, await govContext(), tgRun);
-          await postGovOnX(env, prop, !prevStatus, await govContext());
-          if (discord === 'waiting') continue;
+          // X's post that was not made and was given back (X down or busy, the kill switch not read: sources/x.ts
+          // postOnce 'again') keeps the stored state too, so it is offered again; the claims keep Discord and Telegram
+          // from sending it twice.
+          const onX = await postGovOnX(env, prop, !prevStatus, await govContext());
+          if (discord === 'waiting' || onX === 'again') continue;
           changed = true;
           prevState[String(prop.id)] = prop.status;
         }

@@ -86,6 +86,13 @@ describe('the text', () => {
       ['(www.claim.xyz), then vote', '([link removed]), then vote'],
       ['CLAIM.XYZ:8080/a?b=c', '[link removed]'],
       ['ftp://claim.xyz and http://1.2.3.4/x', '[link removed] and [link removed]'],
+      // a word holding a host written as four numbers, which X does not link but a reader can type, goes whole, in any
+      // form a browser reads as one, with no link left in pieces; a version, a date or an amount stays
+      ['go 45.67.89.10/claim now, 0x2d.0x43.0x59.0x0a:8080, (1.2.3.4). user@9.9.9.9 1.2.3.4/claim.xyz', 'go [link removed] now, [link removed], ([link removed]). [link removed] [link removed]'],
+      ['IP:45.67.89.10 http:/45.67.89.10 http:45.67.89.10 //45.67.89.10 here...45.67.89.10 [::ffff:45.67.89.10]/a 45.0x.89.10', Array(7).fill('[link removed]').join(' ')],
+      ['\uFF14\uFF15\uFF0E\uFF16\uFF17\uFF0E\uFF18\uFF19\uFF0E\uFF11\uFF10 \u32BA.\u2465\u2466.\u2467\u2468.\u2469 45.\uFE0F67.89.10 45\u034F.67.89.10 at\u316445.67.89.10\u3164now 45.\u316467.89.10 \u034545.67.89.10', Array(7).fill('[link removed]').join(' ')],
+      ['http://admin@45.67.89.10/claim now, https://claim.xyz/?ip=45.67.89.10 then', '[link removed] now, [link removed] then'],
+      ['v1.2.3.4, 1.2.3, 1.2.3.4.5, 29.10.2026, 1.500.000.000 NAM, 045.089.0.1', 'v1.2.3.4, 1.2.3, 1.2.3.4.5, 29.10.2026, 1.500.000.000 NAM, 045.089.0.1'],
       // the forms a browser reads as a full stop, two that only look like one, and a domain in other scripts or in
       // punycode
       ['claim。xyz claim．xyz claim｡xyz claim․xyz claim﹒xyz', Array(5).fill('[link removed]').join(' ')],
@@ -261,11 +268,11 @@ describe('posting', () => {
     expect(await postOnce(env(db), `alert:x:test:${X_SHARES.move}`, 'move', () => 'again', 'again')).toBe('posted');
   });
 
-  it('X down or busy: the claim and the day\'s post are given back; a refusal keeps them', async () => {
+  it('X down or busy: the claim and the day\'s post are given back, to be offered again; a refusal keeps them', async () => {
     const db = testD1();
     let status = 503;
     const s = x(() => (status === 201 ? { status, json: { data: { id: '1' } } } : { status, json: { title: 'Service Unavailable' } }));
-    expect(await postOnce(env(db), 'alert:x:k1', 'move', () => 'one', 'one')).toBe('failed');
+    expect(await postOnce(env(db), 'alert:x:k1', 'move', () => 'one', 'one')).toBe('again');
     status = 201;
     expect(await postOnce(env(db), 'alert:x:k1', 'move', () => 'one', 'one')).toBe('posted');
     status = 403;
@@ -277,6 +284,33 @@ describe('posting', () => {
     expect(Number(used!.value)).toBe(2);
     const last = JSON.parse((await db.prepare("SELECT value FROM kv WHERE key = 'x.last'").first<{ value: string }>())!.value);
     expect(last).toMatchObject({ status: 403, ok: false });
+  });
+
+  it('a kill switch or a day\'s count that cannot be read posts nothing and claims nothing, to be offered again', async () => {
+    const db = testD1();
+    const s = x();
+    const prepare = db.prepare.bind(db);
+    let down = (sql: string) => sql === 'SELECT value FROM kv WHERE key = ?';
+    const spy = vi.spyOn(db, 'prepare').mockImplementation((sql: string) => { if (down(sql)) throw new Error('D1 down'); return prepare(sql); });
+    expect(await postGovOnX(env(db), proposal(8), true)).toBe('again');
+    down = (sql) => sql.startsWith('INSERT INTO kv (key, value, updated_at) VALUES (?1');
+    expect(await postGovOnX(env(db), proposal(8), true)).toBe('again');
+    expect(db.raw.prepare("SELECT key FROM kv WHERE key LIKE 'alert:x:%'").all()).toEqual([]);
+    spy.mockRestore();
+    expect(await postGovOnX(env(db), proposal(8), true)).toBe('posted');
+    expect(s.posts).toHaveLength(1);
+  });
+
+  it('several keys are claimed together before the post: one taken already claims none of them', async () => {
+    const db = testD1();
+    const s = x();
+    insert(db, 'kv', [{ key: 'alert:x:flow:m1', value: '1', updated_at: t }]);
+    expect(await postOnce(env(db), ['alert:x:hour:h1', 'alert:x:flow:m1'], 'move', () => 'm1', 'm1')).toBe('claimed');
+    expect(kv(db, 'alert:x:hour:h1')).toBeNull();
+    expect(await postOnce(env(db), ['alert:x:hour:h1', 'alert:x:flow:m2'], 'move', () => 'm2', 'm2')).toBe('posted');
+    expect(kv(db, 'alert:x:hour:h1')).not.toBeNull();
+    expect(kv(db, 'alert:x:flow:m2')).not.toBeNull();
+    expect(s.posts).toEqual(['m2']);
   });
 
   it('posts the recap once a day from 13:00 UTC; an overview that cannot be read posts nothing and keeps the day open', async () => {

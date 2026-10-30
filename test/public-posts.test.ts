@@ -310,6 +310,8 @@ describe('choosing the hour\'s move', () => {
     await tick(db, at(9, 10));
     expect(kv(db, 'alert:x:hour:2026-10-29T08')).toBeNull();
     expect(kv(db, 'alert:tg:ch:hour:2026-10-29T08')).toBeNull();
+    // the move's own claim, taken with the hour's, went back with it (the hour's crossing part, with no crossing, is quiet)
+    expect(db.raw.prepare("SELECT key FROM kv WHERE key LIKE 'alert:%' AND key NOT LIKE 'alert:x:day:%' AND key NOT LIKE '%:ibc'").all()).toEqual([]);
     down = false;
     expect(await tick(db, at(9, 11))).toBe('posted');
     expect(s.x).toHaveLength(1);
@@ -360,6 +362,42 @@ describe('choosing the hour\'s move', () => {
     expect(s2.tg[1].text).toContain('<i>Largest priced move of the hour ending 07:00 UTC not posted already,');
     // the crossing led each hour, so neither hour gave a crossing post of its own
     expect(s2.x).toHaveLength(2);
+  });
+
+  it('a move whose post cannot be checked is not passed over as posted: the hour waits, then posts it as the largest', async () => {
+    const db = indexed();
+    const first = move(db, at(8, 5), { amount_num: 2_000_000, value_usd: 300 });
+    move(db, at(8, 6));
+    const s = voices();
+    const prepare = db.prepare.bind(db);
+    const spy = vi.spyOn(db, 'prepare').mockImplementation((sql: string) => {
+      const st = prepare(sql);
+      if (sql !== 'SELECT 1 x FROM kv WHERE key = ?') return st;
+      return { bind: (k: string) => (k.endsWith(`flow:${first}`) ? { first: async () => { throw new Error('D1 down'); } } : st.bind(k)) } as any;
+    });
+    expect(await tick(db, at(9, 10))).toBe('failed');
+    expect(s.x).toEqual([]);
+    expect(s.tg).toEqual([]);
+    // nothing of the move part is claimed (its crossing part, with no crossing, is quiet)
+    expect(db.raw.prepare("SELECT key FROM kv WHERE key LIKE 'alert:%' AND key NOT LIKE '%:ibc'").all()).toEqual([]);
+    spy.mockRestore();
+    expect(await tick(db, at(9, 11))).toBe('posted');
+    expect(s.x[0]).toMatch(/^2,000,000 \$NAM sold/);
+    expect(s.x[0]).not.toContain('not posted already');
+    expect(s.tg[0].text).toContain('2,000,000 NAM sold');
+    expect(s.tg[0].text).not.toContain('not posted already');
+  });
+
+  it('a crossing X refused is claimed with its hour: its other record, an hour later, is not offered to X again', async () => {
+    const db = indexed();
+    move(db, at(5, 53), { id: 'namada:SEQ3:4', chain: 'namada', kind: 'ibc_out', from_addr: NAMADA, to_addr: RECEIVER, amount_num: 800_000, pool_id: null, price_usd: 0.00015, value_usd: 120, meta: { priceSource: 'spot', channel: 'channel-1', packetSequence: '9100' } });
+    move(db, at(6, 31), { kind: 'ibc_in', from_addr: NAMADA, to_addr: RECEIVER, amount_num: 800_000, pool_id: null, price_usd: 0.00015, value_usd: 120, meta: { priceSource: 'spot', channel: 'channel-98451', packetSequence: '9100' } });
+    let tries = 0;
+    voices((url) => (url === 'https://api.x.com/2/tweets' ? (tries++, { status: 403, json: { detail: 'You are not allowed to create a Tweet with duplicate content.' } }) : null));
+    expect(await tick(db, at(6, 10), false)).toBe('failed');
+    expect(db.raw.prepare("SELECT key FROM kv WHERE key LIKE 'alert:x:ibc:%'").all()).toHaveLength(1);
+    expect(await tick(db, at(7, 10), false)).toBe('quiet');
+    expect(tries).toBe(1);
   });
 
   it('a move the live posts carried before this selector is not posted again: the hour\'s next one is', async () => {

@@ -10,8 +10,8 @@
 // The public channel hears the moves the X account posts, from the same selector and allowlist (public-posts.ts: at
 // most one move a closed hour, its largest by dollars, and the hour's largest bridge crossing when its move is no
 // crossing; sendTelegramHour), never each move as it arrives, and the forum posts and proposals the subscribers hear:
-// a forum post as the subscribers get it, a proposal as X posts it (public-posts.ts publicProposal: its title as plain
-// words, none of its authors, abstract or discussion link).
+// a forum post as the subscribers get it, a proposal as its card with the title as plain words and none of its
+// authors, abstract or discussion link (public-posts.ts publicProposal; X posts the title through xSafe instead).
 //
 // Kept simpler than the Discord dispatcher on purpose: Telegram's limits are the bot's, not a link's (about 30
 // messages a second, one a second to one chat: https://core.telegram.org/bots/faq), a chat is never made up (it
@@ -393,7 +393,11 @@ async function sendTelegramCard(env: TelegramEnv, message: (channel: boolean) =>
 
 export const sendTelegramForum = (env: TelegramEnv, post: ForumPost, categoryName: string | null | undefined, run: TgRun) =>
   sendTelegramCard(env, () => forumMessage(post, categoryName), `forum:post:${post.id}`, `forum post ${post.id}`, run);
-/** A proposal: the subscribers get its card as Discord's do; the public channel gets what X posts (publicProposal). */
+/**
+ * A proposal: the subscribers get its card as Discord's do; the public channel gets it with its title as plain words
+ * and none of its authors, abstract or discussion link (publicProposal). X posts the card's title through xSafe and
+ * its record in words (sources/x.ts postGovOnX, govRecord).
+ */
 export const sendTelegramGov = (env: TelegramEnv, prop: GovernanceProposal, isNew: boolean, g: GovContext, run: TgRun) =>
   sendTelegramCard(env, (channel) => cardMessage(govCard(channel ? publicProposal(prop) : prop, isNew, g)), `gov:prop:${prop.id}:${prop.status}`, `proposal ${prop.id} ${prop.status}`, run);
 

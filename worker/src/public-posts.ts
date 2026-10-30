@@ -240,10 +240,13 @@ export async function claimTaken(db: D1Database, key: string): Promise<boolean> 
  * The first of the hour's moves a voice has not posted, by the key `postedKey` names for each (its crossing, so a
  * crossing's other record, an hour later, gives way to that hour's next move; else its record, so a move the live
  * posts carried before this selector is not posted again), and whether a larger one was passed over. One kv seek a
- * move, until the first not posted.
+ * move, until the first not posted. Throws when a seek fails (where claimTaken reads a failure as taken): a move
+ * whose post cannot be checked is not passed over as posted, and the hour waits, unclaimed, for a tick that reads it.
  */
 export async function firstUnposted(db: D1Database, moves: PublicMove[], postedKey: (m: PublicMove) => string): Promise<{ move: PublicMove; passed: boolean } | null> {
-  for (const [i, m] of moves.entries()) if (!(await claimTaken(db, postedKey(m)))) return { move: m, passed: i > 0 };
+  for (const [i, m] of moves.entries()) {
+    if (!(await db.prepare('SELECT 1 x FROM kv WHERE key = ?').bind(postedKey(m)).first())) return { move: m, passed: i > 0 };
+  }
   return null;
 }
 

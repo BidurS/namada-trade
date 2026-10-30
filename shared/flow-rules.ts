@@ -122,6 +122,33 @@ export function safeHttpUrl(x: unknown): string | null {
   }
 }
 
+/**
+ * Four numbers with dots between ("45.67.89.10", "0x2d.0x43.0x59.0x0a", "45.0x.89.10"), not after or before a letter or
+ * a number. No i flag: under it a mark that case-folds to a letter (U+0345 to ι) would count as one.
+ */
+const FOUR_NUMBERS = /(?<![\p{L}\p{N}_]|\p{N}\.)(?:0[xX][0-9a-fA-F]*|\d+)(?:\.(?:0[xX][0-9a-fA-F]*|\d+)){3}(?![\p{L}\p{N}_]|\.[\p{L}\p{N}])/gu;
+/**
+ * Whether a word (text between spaces) holds a host written as four numbers, as a browser's address bar reads one:
+ * the word in the form a host parser reads it (NFKC folds "４５．６７" and "㊺" to "45.67" and "45", the marks that show
+ * nothing are taken out, and a blank Hangul filler is read both as the space it shows and as the nothing a host
+ * parser makes of it), wherever the host starts ("IP:45.67.89.10/claim", "http:/45.67.89.10", "here...45.67.89.10"),
+ * but not inside a longer number ("v1.2.3.4", the end of "1.2.3.4.5"), and only when the URL parser takes it as one
+ * ("1.500.000.000" and "045.089.0.1" are none). A link X makes of none (twitter-text 3.1.0), but a reader can type it
+ * into a browser, so a public post carries no word that holds one.
+ */
+export function holdsNumericHost(word: string): boolean {
+  const folded = word.normalize('NFKC').replace(/[。｡]/g, '.');
+  return [' ', ''].some((filler) => {
+    const view = folded.replace(/[ᅟᅠㅤﾠ]/g, filler).replace(/[\p{Default_Ignorable_Code_Point}\p{Cf}]/gu, '');
+    for (const m of view.matchAll(FOUR_NUMBERS)) {
+      try {
+        if (/^\d+\.\d+\.\d+\.\d+$/.test(new URL(`http://${m[0]}/`).hostname)) return true;
+      } catch { /* not a host */ }
+    }
+    return false;
+  });
+}
+
 // ---------------------------------------------------------------- how a move's price was set
 
 /**

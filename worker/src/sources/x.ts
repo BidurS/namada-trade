@@ -18,17 +18,18 @@
 // (xSwitch), and @namada's posts made while it was off are never reposted.
 //
 // Each post is claimed once (`alert:x:` keys, swept with the other claims: auth.ts sweepAuth). An answer that is no
-// answer, a 5xx or a 429 gives the claim back, so the post is tried again; a refusal (401/403: the keys, 402: no
-// credits, 400: the text) is not tried again, and kv `x.last` records it for the health view. Text an outsider
-// wrote (a label, a proposal, a validator's name) carries no link, mentions no one and tags nothing (xSafe): a link or
-// bare domain is "[link removed]", an @ "(at)", and a hashtag or cashtag loses its sign.
+// answer, a 5xx or a 429 gives the claim back, so the post is tried again (a proposal at the cron's next run: postOnce
+// 'again'); a refusal (401/403: the keys, 402: no credits, 400: the text) is not tried again, and kv `x.last` records it
+// for the health view. Text an outsider wrote (a proposal's title, the one such text posted) carries no link, mentions
+// no one and tags nothing (xSafe): a link, a bare domain or a word holding a host written as four numbers is
+// "[link removed]", an @ "(at)", and a hashtag or cashtag loses its sign.
 //
 // The keys are the owner's X app's (OAuth 1.0a, Read and Write): X_API_KEY, X_API_SECRET, X_ACCESS_TOKEN,
 // X_ACCESS_SECRET, set by scripts/x-connect.sh at hidden prompts. Without all four nothing is posted.
 import type { GovernanceProposal } from '../../../shared/types';
 import { SITE } from '../../../shared/site';
 import { kvSet } from '../db';
-import { safeHttpUrl } from '../../../shared/flow-rules';
+import { holdsNumericHost, safeHttpUrl } from '../../../shared/flow-rules';
 import { alertsOn, claimDiscordAlert, fits, govCard, releaseClaims, type Card, type GovContext } from './discord';
 import { mdToPlain } from './telegram';
 import { claimTaken, hourPick, publicRecord, publicTitle, publicValue, publicWho, publicWhy, type HourPart, type PublicHour, type PublicMove } from '../public-posts';
@@ -63,8 +64,9 @@ export const postsOnX = (env: XEnv): boolean => alertsOn() && !!(env.X_API_KEY &
 export const X_ON_KEY = 'x.on';
 /**
  * The kill switch: kv `x.on` holding '0' stops every post on X, the moves, the proposals, the recap and the @namada
- * reposts ('off'); anything else, or no row, leaves posting on ('on'). A read that fails ('unread') posts nothing this
- * time, and claims nothing, so the next tick asks again.
+ * reposts ('off'), and what was offered while it was off is not posted once it is on again; anything else, or no row,
+ * leaves posting on ('on'). A read that fails ('unread') posts nothing this time, and claims nothing, so the post is
+ * offered again (postOnce 'again': the hour and the recap at the next tick, a proposal at the cron's next run).
  */
 export async function xSwitch(db: D1Database): Promise<'on' | 'off' | 'unread'> {
   try {
@@ -134,7 +136,9 @@ export function cutX(s: string, max = X_MAX): string {
 export const X_LINK_WORDS = '[link removed]';
 /**
  * Text an outsider wrote (a proposal's title, a wallet's tag, a validator's name, a bridge receiver's free text) as a
- * post carries it: no link and no bare domain (each is X_LINK_WORDS, the punctuation after it kept), no one mentioned
+ * post carries it: no link and no bare domain (each is X_LINK_WORDS, the punctuation after it kept), no word holding a
+ * host written as four numbers (shared/flow-rules.ts holdsNumericHost: the word is X_LINK_WORDS, the brackets and
+ * punctuation around it kept), no one mentioned
  * (an @ and its wide form ＠, which X reads as one, and the small ﹫, which only looks like one, are written "(at)"),
  * and nothing tagged: a hashtag ("#airdrop") or cashtag ("$SCAM") is its word without its signs (TAG), so the post is
  * never listed under it; a figure ("$0.0012", "#42", "$12 million") is no tag and keeps its sign, and the site's own
@@ -143,10 +147,14 @@ export const X_LINK_WORDS = '[link removed]';
  */
 export function xSafe(s: string): string {
   // a tag's signs go before the links are read, since taken out after they could join two pieces into one ("a.#co");
-  // the second pass is a backstop for a sign the replacements leave before a word (none is known)
+  // the second pass is a backstop for a sign the replacements leave before a word (none is known). A word holding a
+  // four-number host goes whole, before the links are read, so no link is left in pieces ("claim.xyz/?ip=1.2.3.4").
+  const trail = (m: string) => /[.,;:!?'")\]}»”’]+$/.exec(m)?.[0] ?? '';
+  const host = (w: string) => (holdsNumericHost(w) ? (/^[({"'«“‘]+/.exec(w)?.[0] ?? '') + X_LINK_WORDS + trail(w) : w);
   return s.replace(INVISIBLE, '').normalize('NFC')
     .replace(TAG, '')
-    .replace(LINK, (m) => X_LINK_WORDS + (/[.,;:!?'")\]}»”’]+$/.exec(m)?.[0] ?? ''))
+    .replace(/\S+/g, host)
+    .replace(LINK, (m) => X_LINK_WORDS + trail(m))
     .replace(/[@＠﹫]/g, '(at)')
     .replace(TAG, '');
 }
@@ -256,22 +264,35 @@ const giveBackDaily = (db: D1Database, now: number, share: XShare) =>
   db.prepare(`UPDATE kv SET value = CAST(CAST(value AS INTEGER) - 1 AS TEXT) WHERE key = ? AND CAST(value AS INTEGER) > 0`).bind(dailyKey(now, share)).run().catch(() => {});
 
 /**
- * Posts `text` under claim `key` and one of the day's posts of its kind (`share`). Never throws. While the kill switch
- * is off (xOn) nothing is claimed or posted. The claim and the day's post are given back when X gave no answer, a 5xx
- * or a 429; a refusal keeps them, and is recorded.
+ * Posts `text` under claim `key` (each of the keys, when several: claimed together before the post, so whatever stops
+ * the run after X took it, the post is not made again) and one of the day's posts of its kind (`share`). Never throws.
+ * While the kill switch is off (xSwitch) nothing is claimed or posted ('off'). 'again': nothing was posted and the
+ * claims and the day's post were given back, for a later offer (X gave no answer, a 5xx or a 429; the switch or the
+ * day's count could not be read). A refusal keeps them, and is recorded ('failed').
  */
-export async function postOnce(env: XEnv, key: string, share: XShare, text: () => Promise<string> | string, what: string, picture?: () => Promise<Uint8Array | null>): Promise<'posted' | 'claimed' | 'full' | 'off' | 'failed'> {
+export async function postOnce(env: XEnv, key: string | string[], share: XShare, text: () => Promise<string> | string, what: string, picture?: () => Promise<Uint8Array | null>): Promise<'posted' | 'claimed' | 'full' | 'off' | 'again' | 'failed'> {
   try {
     if (!postsOnX(env)) return 'failed';
-    if (!(await xOn(env.DB))) return 'off';
-    if (!(await claimDiscordAlert(env.DB, [key]))) return 'claimed';
+    const on = await xSwitch(env.DB);
+    if (on !== 'on') return on === 'off' ? 'off' : 'again';
+    const keys = [key].flat();
+    for (const [i, k] of keys.entries()) {
+      if (!(await claimDiscordAlert(env.DB, [k]))) { if (i) await releaseClaims(env.DB, keys.slice(0, i)); return 'claimed'; }
+    }
     const now = Date.now();
-    if (!(await takeDaily(env.DB, now, share))) { await releaseClaims(env.DB, [key]); return 'full'; }
+    let took: boolean;
+    try { took = await takeDaily(env.DB, now, share); } catch (e) {
+      // the day's count could not be read: nothing was posted, so the claims go back for a later tick
+      console.error(`x: ${what}: the day's posts not counted`, e);
+      await releaseClaims(env.DB, keys);
+      return 'again';
+    }
+    if (!took) { await releaseClaims(env.DB, keys); return 'full'; }
     let body: string;
     try { body = await text(); } catch (e) {
       // the text could not be read (the recap's overview): nothing was posted, so the claim and the day's post go back
       console.error(`x: ${what} not built`, e);
-      await releaseClaims(env.DB, [key]);
+      await releaseClaims(env.DB, keys);
       await giveBackDaily(env.DB, now, share);
       return 'failed';
     }
@@ -282,8 +303,10 @@ export async function postOnce(env: XEnv, key: string, share: XShare, text: () =
     await kvSet(env.DB, 'x.last', JSON.stringify({ at: now, what, status: a.status, ok: a.ok, ...(a.detail ? { detail: a.detail } : {}) })).catch(() => {});
     if (a.ok) return 'posted';
     console.error(`x: ${what} not posted (${a.status}${a.detail ? `: ${a.detail}` : ''})`);
-    if (transient(a)) { await releaseClaims(env.DB, [key]); await giveBackDaily(env.DB, now, share); }
-    return 'failed';
+    if (!transient(a)) return 'failed';
+    await releaseClaims(env.DB, keys);
+    await giveBackDaily(env.DB, now, share);
+    return 'again';
   } catch (e) {
     console.error(`x: ${what} not posted`, e);
     return 'failed';
@@ -323,9 +346,10 @@ export function govRecord(p: GovernanceProposal): string {
  * `alert:x:hour:<hour>:ibc`), while fresh, under that part's share of the day. A quiet part (nothing qualifies) is
  * claimed and posts nothing, as is one whose share of the day was spent before; an hour whose moves cannot be read is
  * left for the next tick. A move is posted once (`alert:x:ibc:<crossing>` or `alert:x:flow:<id>`, the keys the live
- * posts used): a crossing's other record, in a later hour, gives way to that hour's next move. Never throws.
+ * posts used, claimed with the hour's before the post): a crossing's other record, in a later hour, gives way to that
+ * hour's next move. Never throws.
  */
-async function postHourPart(env: XEnv, hour: PublicHour, part: HourPart, now: number): Promise<'posted' | 'quiet' | 'skipped' | 'claimed' | 'full' | 'off' | 'failed'> {
+async function postHourPart(env: XEnv, hour: PublicHour, part: HourPart, now: number): Promise<'posted' | 'quiet' | 'skipped' | 'claimed' | 'full' | 'off' | 'again' | 'failed'> {
   if (!postsOnX(env)) return 'skipped';
   try {
     const key = `alert:x:hour:${hour.key}${part === 'ibc' ? ':ibc' : ''}`;
@@ -334,9 +358,8 @@ async function postHourPart(env: XEnv, hour: PublicHour, part: HourPart, now: nu
     const first = await hourPick(env.DB, await hour.moves(), part, posted);
     if (!first || now - first.move.ts > X_MAX_AGE_MS) { await claimDiscordAlert(env.DB, [key]); return 'quiet'; }
     const pick = first.move;
-    const r = await postOnce(env, key, part, () => hourText(pick, first.passed, part), `hour ${hour.key}: ${part === 'ibc' ? 'crossing' : 'move'} ${pick.id}`);
+    const r = await postOnce(env, [key, posted(pick)], part, () => hourText(pick, first.passed, part), `hour ${hour.key}: ${part === 'ibc' ? 'crossing' : 'move'} ${pick.id}`);
     if (r === 'full') await claimDiscordAlert(env.DB, [key]);
-    if (r === 'posted') await claimDiscordAlert(env.DB, [posted(pick)]);
     return r;
   } catch (e) {
     console.error(`x: the hour ${hour.key} (${part}) not posted`, e);

@@ -279,6 +279,34 @@ describe('a cron tick', () => {
     }
   });
 
+  it('with the X keys set, a proposal X does not take (503) keeps its stored state and goes on X the next run, its Discord alert sent once', async () => {
+    const base = 883500, prop = 883950;
+    const { db, env } = await seededTick('cy', 2, base, prop);
+    insert(db, 'kv', [{ key: `alert:x:recap:${new Date().toISOString().slice(0, 10)}`, value: '1', updated_at: NOW }]);
+    const hooks = network(base, 3, prop);
+    const chain = globalThis.fetch;
+    let status = 503;
+    const tweets: string[] = [];
+    vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      if (String(input) !== 'https://api.x.com/2/tweets') return chain(input, init);
+      tweets.push(JSON.parse(String(init?.body)).text);
+      return new Response(JSON.stringify(status === 201 ? { data: { id: '1', text: '' } } : { title: 'Service Unavailable' }), { status, headers: { 'content-type': 'application/json' } });
+    }));
+    const withX = { ...env, X_API_KEY: 'ck', X_API_SECRET: 'cs', X_ACCESS_TOKEN: 'at', X_ACCESS_SECRET: 'as' };
+    await runCron(withX);
+    expect(tweets).toHaveLength(1);
+    expect(kv(db, `alert:x:gov:prop:${prop}:voting`)).toBeNull();
+    expect(JSON.parse(kv(db, 'gov.state')!)).toEqual({ [prop]: 'pending' });
+    const sent = hooks.length;
+    status = 201;
+    await runCron(withX);
+    expect(tweets).toHaveLength(2);
+    expect(tweets[1]).toContain('Raise the cap');
+    expect(kv(db, `alert:x:gov:prop:${prop}:voting`)).not.toBeNull();
+    expect(JSON.parse(kv(db, 'gov.state')!)).toEqual({ [prop]: 'voting' });
+    expect(hooks.length, 'Discord heard the proposal once').toBe(sent);
+  });
+
   it('with the X keys set posts the closed hour\'s largest move once (public-posts.ts), and a later tick of that hour nothing more', async () => {
     // The clock is held at minute 30 of this run's hour (Date alone; it still moves on in real time), so the hour the
     // tick reads is always the one before it, 30 minutes past its close: on the wall clock a move early in that hour
