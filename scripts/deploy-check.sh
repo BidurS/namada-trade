@@ -69,6 +69,13 @@ for i in 1 2 3 4 5; do out=$(npx wrangler d1 execute namada-trade-db --remote --
 echo "$out" | python3 -c "
 import sys,json; r=json.load(sys.stdin)[0]['results'][0]; print('0014/0015 tables and indexes:', r)
 sys.exit(0 if r['tables'] == 3 and r['n'] == 2 else 1)" || { echo "FAIL migration 0014 or 0015 is not in place: not deploying"; exit 1; }
+# 0018 (pool_legs, a NAM pool's legs in its other coins): the live hub writes them beside each Osmosis transaction's NAM
+# rows, in a batch of its own that only logs a refusal, so without the table the NAM rows are still written and every
+# pool leg is lost until it is there
+for i in 1 2 3 4 5; do out=$(npx wrangler d1 execute namada-trade-db --remote --json --command "SELECT (SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name = 'pool_legs') tables, (SELECT COUNT(*) FROM sqlite_master WHERE type='index' AND name = 'pool_legs_pool_ts') n" 2>&1) && ! echo "$out" | grep -q 7403 && break; echo "retrying (Cloudflare 7403)"; sleep 6; done
+echo "$out" | python3 -c "
+import sys,json; r=json.load(sys.stdin)[0]['results'][0]; print('0018 table and index:', r)
+sys.exit(0 if r['tables'] == 1 and r['n'] == 1 else 1)" || { echo "FAIL migration 0018 is not in place: not deploying"; exit 1; }
 # the depth archive bucket (wrangler.jsonc r2_buckets DEPTH_R2): wrangler refuses to upload a Worker bound to a bucket
 # that does not exist, so the bucket is created once by hand before the first deploy of the binding (the code tolerates
 # the binding missing; the deploy does not)

@@ -1,5 +1,6 @@
 import type { Flow, Move } from '../../shared/types';
 import type { BalanceUpdate } from './parse/namada';
+import type { PoolLeg } from './parse/osmosis';
 import { toNam, boundFlowText } from './util';
 
 export interface Stmt { sql: string; params: unknown[] }
@@ -19,6 +20,11 @@ export const stmt = {
   move: (m: Move): Stmt => ({
     sql: 'INSERT OR IGNORE INTO moves (chain,address,height,ts,tx_hash,idx,delta_num) VALUES (?,?,?,?,?,?,?)',
     params: [m.chain, m.address, m.height, m.ts, m.txHash, m.idx, m.delta],
+  }),
+  /** A pool's leg in a coin other than NAM (migration 0018; parse/osmosis.ts poolLegsOf). Written again, it changes nothing. */
+  poolLeg: (l: PoolLeg): Stmt => ({
+    sql: 'INSERT OR IGNORE INTO pool_legs (chain,pool_id,address,height,ts,tx_hash,idx,denom,delta) VALUES (?,?,?,?,?,?,?,?,?)',
+    params: [l.chain, l.poolId, l.address, l.height, l.ts, l.txHash, l.idx, l.denom, l.delta],
   }),
   /** A flow row, with its senders' text bounded whichever writer gives it (util.ts boundFlowText; the parsers bound it too). */
   flow: (given: Flow): Stmt => {

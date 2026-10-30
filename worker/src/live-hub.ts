@@ -1,8 +1,9 @@
 import { DurableObject } from 'cloudflare:workers';
 import type { Env } from './util';
 import type { LiveMessage, Flow } from '../../shared/types';
-import { OSMOSIS, NAM, NAMADA, keplrHeaders } from './config';
-import { normFromWs, normFromTxSearch, osmoAssets, parseOsmosisTx, type OsmoCtx, type OsmoParsed } from './parse/osmosis';
+import { OSMOSIS, NAMADA, keplrHeaders } from './config';
+import { normFromWs, normFromTxSearch, osmoAssets, parseOsmosisTx, poolLegsOf, type OsmoCtx, type OsmoParsed, type PoolLeg } from './parse/osmosis';
+import { OSMOSIS_QUERIES, osmosisPoolQueries } from './sources/osmosis';
 import { parseNamadaBlock } from './parse/namada';
 import { blockHasUnbond, parseNamadaUnbonds } from './parse/namada-unbond';
 import { blockHasBond, parseNamadaBonds } from './parse/namada-bond';
@@ -72,13 +73,17 @@ export interface AlertsPending { parts: number; posts: number; at: number }
  */
 export const LATE_SCAN_MS = 5 * 60_000;
 
-/** The Osmosis subscriptions: the stream listens to these and the catch-up search repeats them. */
-export const OSMOSIS_QUERIES = [
-  "token_swapped.pool_id='3005'",
-  `transfer.amount CONTAINS '${NAM.osmoHash}'`,
-  `recv_packet.packet_dst_channel='${NAM.osmoChannel}'`,
-  `send_packet.packet_src_channel='${NAM.osmoChannel}'`,
-];
+/** The Osmosis subscriptions (sources/osmosis.ts): the stream listens to these and the catch-up search repeats them. */
+export { OSMOSIS_QUERIES };
+/**
+ * The most NAM pools whose addresses the catch-up search also reads (osmosisPoolQueries, two queries each), in the
+ * order the hub learned them (the router's list, largest first). Anyone can create a pool holding NAM; past this many,
+ * a pool's transactions in its other coin alone are left to scripts/backfill-osmosis.ts, and its NAM is still read by
+ * OSMOSIS_QUERIES. The router listed 26 on 2026-10-29.
+ */
+export const OSMOSIS_POOL_QUERY_MAX = 40;
+/** Pool-address queries probed at once by a catch-up search (one transaction each, newest first). */
+const POOL_PROBES_AT_ONCE = 4;
 /** How often the stream state is written to kv (osmosis.live) and the catch-up search runs. */
 export const OSMOSIS_LIVE_EVERY_MS = 60_000;
 export const OSMOSIS_SWEEP_EVERY_MS = 5 * 60_000;
@@ -432,7 +437,12 @@ export class LiveHub extends DurableObject<Env> {
     // priced at the quote for now, its age checked here (a slow alarm tick can hold the last refresh for minutes)
     const q = this.quote.current(Date.now());
     const parsed = parseOsmosisTx(norm, { ...this.osmoCtx, priceUsd: q?.usd ?? null });
-    if (!parsed.flows.length && !parsed.moves.length) return;
+    const legs = poolLegsOf(norm, this.osmoCtx.poolAddrs);
+    if (!parsed.flows.length && !parsed.moves.length) {
+      // a pool's other coin alone: no NAM row, nothing to show or alert
+      if (legs.length) await this.writeOsmoTx(parsed, legs);
+      return;
+    }
     stampPriceRoute(parsed.flows, await this.routeOf(q && { at: q.at, stored: q.source === 'stored', routeNam: q.routeNam }));
 
     // Persist to D1, in one batch. A write that fails (a transient D1 error) is neither broadcast nor alerted, and it
@@ -443,7 +453,7 @@ export class LiveHub extends DurableObject<Env> {
     // the same way again.
     if (norm.hash) this.osmoWriting.set(norm.hash, { height: norm.height, since: Date.now() });
     try {
-      await this.writeOsmoTx(parsed);
+      await this.writeOsmoTx(parsed, legs);
     } catch (e) {
       this.noteOsmoWriteFailed(norm.hash, norm.height);
       throw e;
@@ -462,10 +472,16 @@ export class LiveHub extends DurableObject<Env> {
    * none of them (in runBatch's 80-statement batches the first ones of a large transaction, a relayer's many receives
    * or a multi-send, would stay stored on their own, and the rest be lost). The links go first: each is counted only
    * while its flow is not stored yet (db.ts stmt.linkOnce), so a transaction written twice counts its links once.
+   * The pool's legs in its other coins (`legs`, parse/osmosis.ts poolLegsOf, migration 0018) follow in a batch of
+   * their own, and a failure there is logged, never thrown: the NAM rows never wait on them, and a write that threw
+   * would hold the catch-up's cursor below the transaction (a database without the table refuses every one).
    */
-  private async writeOsmoTx(parsed: OsmoParsed) {
+  private async writeOsmoTx(parsed: OsmoParsed, legs: PoolLeg[] = []) {
     const stmts = [...parsed.links.map(stmt.linkOnce), ...parsed.flows.map(stmt.flow), ...parsed.moves.map(stmt.move)];
-    await runBatch(this.env.DB, stmts, Math.max(1, stmts.length));
+    if (stmts.length) await runBatch(this.env.DB, stmts, stmts.length);
+    if (legs.length) {
+      await runBatch(this.env.DB, legs.map(stmt.poolLeg), legs.length).catch((e) => console.error(`Osmosis pool legs of ${legs[0].txHash} not written:`, e));
+    }
   }
 
   /** A write of Osmosis transaction `hash` at `height` threw: the next catch-up search reads it again (osmoRetryTx). */
@@ -1122,7 +1138,10 @@ export class LiveHub extends DurableObject<Env> {
   /**
    * The catch-up search: the stream is not a ledger (a dropped connection or a missed message loses a transaction,
    * as on 2026-10-17 a 20,000 NAM bridge send was lost). Each query is searched newest first until it reaches the
-   * height already covered; transactions not yet in `flows` are parsed and written with their block time, and those
+   * height already covered, the stream's OSMOSIS_QUERIES and two for each NAM pool's address (osmosisPoolQueries: a
+   * pool's transactions in its other coin alone, which the stream never sees; a pool the hub learns of is searched from
+   * the cursor on, and what came before is scripts/backfill-osmosis.ts's); transactions not yet in `flows` are parsed
+   * and written with their block time, a pool's legs in its other coins with them (poolLegsOf), and those
    * whose write threw (osmoRetryTx) are alerted even when that write stored them. The cursor moves to the head read
    * at the start only when every query answered, and to just below a stream transaction still being written or
    * retried. A query with more than OSMOSIS_SWEEP_PAGES pages above the cursor is read on by the next search from
@@ -1206,8 +1225,9 @@ export class LiveHub extends DurableObject<Env> {
         if (looked.has(hash)) continue;
         looked.add(hash);
         if ((have.has(hash) && !this.osmoRetryTx.has(hash)) || this.seenOsmoTx.has(hash) || this.rowlessOsmoTx?.has(hash)) continue;
-        const probe = parseOsmosisTx(normFromTxSearch(t, 0), { ...this.osmoCtx, priceUsd: null });
-        if (!probe.flows.length && !probe.moves.length) { this.noteRowless(hash); continue; }
+        const norm = normFromTxSearch(t, 0);
+        const probe = parseOsmosisTx(norm, { ...this.osmoCtx, priceUsd: null });
+        if (!probe.flows.length && !probe.moves.length && !poolLegsOf(norm, this.osmoCtx.poolAddrs).length) { this.noteRowless(hash); continue; }
         found.set(hash, t);
         keptBytes += JSON.stringify(t).length;
       }
@@ -1313,10 +1333,25 @@ export class LiveHub extends DurableObject<Env> {
       const from = o.low > floor ? o.low : floor + 1;
       return [...this.osmoRetryTx.values()].some((h) => h >= from && h <= o.top) ? null : o;
     };
+    // The pool-address queries (osmosisPoolQueries) find what moves only a pool's other coin, which matches none of
+    // OSMOSIS_QUERIES. Most pools see nothing for hours, so each is first asked for its newest transaction alone (a few
+    // kilobytes, not a page of 50) and is read like the others only when that one is above the floor, or the last
+    // search left a place in it. A probe that fails says nothing, and its query is read like the others.
+    const poolQueries = [...this.osmoCtx.poolAddrs.keys()].slice(0, OSMOSIS_POOL_QUERY_MAX).flatMap(osmosisPoolQueries);
+    const quiet = new Set<string>();
+    for (let i = 0; floor > 0 && i < poolQueries.length; i += POOL_PROBES_AT_ONCE) {
+      await Promise.all(poolQueries.slice(i, i + POOL_PROBES_AT_ONCE).map(async (q) => {
+        if (placeOf(q)) return;
+        const r = await get(`/tx_search?query=${encodeURIComponent(`"${q}"`)}&page=1&per_page=1&order_by=%22desc%22`).catch(() => null);
+        const txs = r?.result?.txs;
+        if (Array.isArray(txs) && (txs.length === 0 || Number(txs[0]?.height) <= floor)) quiet.add(q);
+      }));
+    }
     let complete = true;
     const walks = new Map<string, { done: boolean; old: OsmosisResume | null; stand?: boolean; rows: Map<string, Row> } | null>();
-    for (const q of OSMOSIS_QUERIES) {
+    for (const q of [...OSMOSIS_QUERIES, ...poolQueries]) {
       const rows = new Map<string, Row>();
+      if (quiet.has(q)) { walks.set(q, { done: true, old: null, rows }); continue; }
       try {
         const w = await walk(q, placeOf(q), rows);
         walks.set(q, { ...w, rows });
@@ -1356,15 +1391,18 @@ export class LiveHub extends DurableObject<Env> {
         complete = false;
         continue;
       }
-      const parsed = parseOsmosisTx(normFromTxSearch(t, times.get(h)!), { ...this.osmoCtx, priceUsd });
+      const norm = normFromTxSearch(t, times.get(h)!);
+      const parsed = parseOsmosisTx(norm, { ...this.osmoCtx, priceUsd });
+      // a pool's legs in its other coins, at the block's time (a transaction may have these alone: no flow to show or alert)
+      const legs = poolLegsOf(norm, this.osmoCtx.poolAddrs);
       stampPriceRoute(parsed.flows, route);
       // Written below, or the search ends here (a write that throws ends it before the cursor is written).
       unwritten.delete(hash);
-      if (!parsed.flows.length && !parsed.moves.length) continue;
+      if (!parsed.flows.length && !parsed.moves.length && !legs.length) continue;
       for (const f of parsed.flows) f.meta = { ...(f.meta ?? {}), tsSource: 'block', via: 'catch-up search' };
       if (!have.has(hash)) {
         try {
-          await this.writeOsmoTx(parsed);
+          await this.writeOsmoTx(parsed, legs);
         } catch (e) {
           this.noteOsmoWriteFailed(hash, h);
           throw e;

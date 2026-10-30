@@ -556,6 +556,49 @@ export function parseOsmosisTx(tx: NormTx, ctx: OsmoCtx): OsmoParsed {
   return out;
 }
 
+/**
+ * A coin other than NAM moving into or out of a NAM pool's address: one end of a bank transfer leg (migration 0018,
+ * table pool_legs). `delta` is in the coin's base units, signed (into the pool positive), as text, so a coin of 18
+ * decimals stays exact; `idx` is the leg's index as a move's (moves.idx).
+ */
+export interface PoolLeg { chain: 'osmosis'; poolId: string; address: string; height: number; ts: number; txHash: string; idx: number; denom: string; delta: string }
+
+/**
+ * The pool side of a transaction in every coin but NAM: each bank transfer leg with a pool's address (ctx.poolAddrs,
+ * a CosmWasm pool's contract among them) on one end, per coin. parseOsmosisTx keeps NAM only (moves are NAM deltas),
+ * so a transaction that moves only a pool's other coin (a bid placed or cancelled on the 3008 order book, a USDC-only
+ * position withdrawal from 3005) made no row at all, and a swap's USDC or OSMO leg into the pool was not kept either.
+ * These legs are a ledger of their own beside the NAM one: no NAM figure reads them. A failed transaction moved
+ * nothing, and a leg from a pool to itself changes nothing.
+ */
+export function poolLegsOf(tx: NormTx, poolAddrs: Map<string, string>): PoolLeg[] {
+  if (tx.code !== 0 || !poolAddrs.size) return [];
+  const legs = new Map<string, PoolLeg>();
+  const add = (address: string, idx: number, denom: string, base: bigint) => {
+    const poolId = poolAddrs.get(address);
+    if (poolId == null) return;
+    const key = `${idx}|${address}|${denom}`;
+    const had = legs.get(key);
+    legs.set(key, { chain: 'osmosis', poolId, address, height: tx.height, ts: tx.ts, txHash: tx.hash, idx, denom, delta: String((had ? BigInt(had.delta) : 0n) + base) });
+  };
+  tx.events.forEach((e, i) => {
+    if (e.type !== 'transfer') return;
+    attrGroups(e, 'recipient').forEach((g, j) => {
+      if (!g.sender || !g.recipient || g.sender === g.recipient) return;
+      // the same index as the leg's NAM move (parseOsmosisTx), so a leg of several coins is one index
+      const idx = i * 100 + j;
+      for (const c of parseCoins(g.amount)) {
+        if (c.denom === NAM.osmoDenom) continue;
+        const base = BigInt(c.amount);
+        if (base === 0n) continue;
+        add(g.sender, idx, c.denom, -base);
+        add(g.recipient, idx, c.denom, base);
+      }
+    });
+  });
+  return [...legs.values()].filter((l) => l.delta !== '0');
+}
+
 function mv(tx: NormTx, address: string, delta: number, idx: number): Move {
   return { chain: 'osmosis', address, height: tx.height, ts: tx.ts, txHash: tx.hash, idx, delta };
 }
