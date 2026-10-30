@@ -25,6 +25,7 @@ import type { Flow } from '../shared/types';
 
 vi.mock('cloudflare:workers', () => ({ DurableObject: class {} }));
 import { LiveHub, PENDING_POSTS_MAX, PENDING_PREFIX } from '../worker/src/live-hub';
+import { alertDeliveryRow } from '../worker/src/cron';
 
 afterEach(() => { vi.unstubAllGlobals(); vi.useRealTimers(); });
 
@@ -110,6 +111,12 @@ describe('Security review (2026-10-22), parts for a hook its owner keeps rate-li
     expect(await partsOf(storage)).toHaveLength(0);
     expect(skipped.total).toBe(20 * HOOKS);
     expect(skipped.last.what).toMatch(/held for the window/);
+    // every one of them held by the subscriber's own link: no post the site failed to send is on record, and the
+    // health row stays ok (merged stage 1 review: it opened an operator incident and held /api/health at 503)
+    expect(skipped.last.own).toBe(skipped.last.n);
+    expect(skipped.site).toBeUndefined();
+    expect(alertDeliveryRow(skipped, Date.now())).toMatchObject({ ok: true });
+    expect(alertDeliveryRow(skipped, Date.now()).failedAt).toBeUndefined();
     // No part was written back unchanged.
     expect(puts, 'a part offered again is written back only when it changed').toBe(0);
     // Fifteen hooks times three answers: the hold caps what the hooks cost the window's budget.

@@ -59,6 +59,28 @@ export function alertDeliveryOff(env: { SEND_ALERTS?: string }, now: number): So
 }
 
 /**
+ * The alert delivery row of a Worker that sends alerts, from kv alerts.skipped: not ok for a day after the last posts
+ * the site did not send for its own reasons (AlertsSkipped `site`; a record from before they were counted apart counts
+ * whole), with when that was (SourceHealth.failedAt). Posts a subscriber's own link held (its bucket filled from
+ * elsewhere, its own Retry-After, its backoff) are said in the note and never set it not ok: one outsider's webhook
+ * would otherwise open an operator incident and hold /api/health at 503 for as long as it lasted and a day more.
+ * `waiting`: the live hub's pending list, in words.
+ */
+export function alertDeliveryRow(skipped: AlertsSkipped, now: number, waiting = ''): SourceHealth {
+  const last = skipped.last;
+  const site = skipped.site ?? (last.own == null ? last : null);
+  const tail = `; ${skipped.total} in all${waiting ? `.${waiting}` : ''}`;
+  if (site?.at && now - site.at < 24 * 3600000) {
+    return { name: ALERT_DELIVERY_HEALTH, ok: false, at: site.at, failedAt: site.at, note: `${site.n} post(s) for ${site.what} not sent${tail}`.slice(0, 160) };
+  }
+  const theirs = last.own != null && last.own >= last.n && now - last.at < 24 * 3600000;
+  return {
+    name: ALERT_DELIVERY_HEALTH, ok: true, at: last.at,
+    note: (theirs ? `Subscribers' own links held ${last.n} post(s) (their own rate limits or backoff), not the site's delivery: ${last.what}${tail}` : `${last.n} post(s) for ${last.what} not sent${tail}`).slice(0, 160),
+  };
+}
+
+/**
  * The Sources sheet's row for the saved alert settings: room for new wallets under settings.ts USER_ROWS_MAX, and
  * for Discord channels under DELIVERABLE_MAX.
  */
@@ -1956,10 +1978,8 @@ export async function runCron(env: Env) {
       // delay shows here, not only a post not sent.
       const pending = await kvGetJson<AlertsPending>(env.DB, 'alerts.pending').catch(() => null);
       const waiting = pending && pending.parts > 0 ? ` ${pending.parts} alert part(s), ${pending.posts} post(s), wait in the live hub's pending list.` : '';
-      if (skipped?.last.at) {
-        const recent = now - skipped.last.at < 24 * 3600000;
-        health.push({ name: ALERT_DELIVERY_HEALTH, ok: !recent, at: skipped.last.at, ...(recent ? { failedAt: skipped.last.at } : {}), note: `${skipped.last.n} post(s) for ${skipped.last.what} not sent; ${skipped.total} in all${waiting ? `.${waiting}` : ''}`.slice(0, 160) });
-      } else health.push({ name: ALERT_DELIVERY_HEALTH, ok: true, at: now, note: `On: this Worker posts alerts, and no post not sent is on record.${waiting}` });
+      if (skipped?.last.at) health.push(alertDeliveryRow(skipped, now, waiting));
+      else health.push({ name: ALERT_DELIVERY_HEALTH, ok: true, at: now, note: `On: this Worker posts alerts, and no post not sent is on record.${waiting}` });
     }
     health.push(await settingsRowsHealth(env.DB, now));
 

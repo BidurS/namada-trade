@@ -387,8 +387,14 @@ async function storeInvalid(db: D1Database | undefined, w: number, n: number) {
   ).bind(INVALID_KEY, w, n, Date.now(), w, w, n).run().catch((e) => console.error('alerts.invalid:', e));
 }
 
-/** kv `alerts.skipped`: posts that were not sent, in all and the last case. */
-export interface AlertsSkipped { total: number; last: { what: string; n: number; at: number } }
+/**
+ * kv `alerts.skipped`: posts that were not sent, in all and the last case. `last.own`: how many of the last case's posts
+ * a subscriber's own link held (its own rate limit filled from elsewhere, its own Retry-After, its backoff or dead hold:
+ * postAll), not the site's delivery; absent on a record written before it was counted, whose posts all count as the
+ * site's. `site`: the last case of posts the site did not send for its own reasons (a budget, a deadline, a window, a
+ * body refused, the operator's channel, a limit on the site's address), which alone sets the health row not ok.
+ */
+export interface AlertsSkipped { total: number; last: { what: string; n: number; at: number; own?: number }; site?: { what: string; n: number; at: number } }
 
 /**
  * The most webhook posts the forum and governance alerts of one cron run make in all. Every post is a subrequest of
@@ -428,7 +434,7 @@ export const LIVE_ALERT_POSTS = 520;
  * subscriber (`spent`) and the dispatch's own (`pending`), the posts not sent (`skipped`, over `alerts` alerts), and
  * the links posted to with success (`ok`). flushAlerts writes them once, at the end of the dispatch.
  */
-interface DispatchRecords { w: number; spent: number | null; pending: number; skipped: { n: number; what: string; alerts: number } | null; ok: Set<string> }
+interface DispatchRecords { w: number; spent: number | null; pending: number; skipped: { n: number; what: string; alerts: number; own: number } | null; ok: Set<string> }
 /**
  * One dispatch's alert budget, shared by every alert the dispatch sends: a cron run's forum and governance alerts
  * (alertBudget), one LiveHub alarm's move alerts (alarmBudget) or one live stream message's (fanoutBudget). Every post
@@ -512,9 +518,9 @@ async function recordsOf(db: D1Database | undefined, b: AlertBudget, w: number):
   }
   return (b.rec ??= { w, spent: null, pending: 0, skipped: null, ok: new Set() });
 }
-/** Adds `n` posts not sent for `what` to the dispatch's records (written by flushAlerts). */
-function noteSkipped(r: DispatchRecords, n: number, what: string) {
-  r.skipped = { n: (r.skipped?.n ?? 0) + n, what, alerts: (r.skipped?.alerts ?? 0) + 1 };
+/** Adds `n` posts not sent for `what` to the dispatch's records (written by flushAlerts), `own` of them held by subscribers' own links. */
+function noteSkipped(r: DispatchRecords, n: number, what: string, own = 0) {
+  r.skipped = { n: (r.skipped?.n ?? 0) + n, what, alerts: (r.skipped?.alerts ?? 0) + 1, own: (r.skipped?.own ?? 0) + own };
 }
 /** Records `n` posts not sent for `what`: in the dispatch's records when there is a budget (written once, by flushAlerts), else at once. */
 export async function noteNotSent(db: D1Database | undefined, budget: AlertBudget | undefined, n: number, what: string) {
@@ -532,7 +538,7 @@ export async function flushAlerts(db: D1Database | undefined, budget: AlertBudge
   if (!r) return;
   budget!.rec = undefined;
   await storeInvalid(db, r.w, r.pending);
-  if (r.skipped) await recordSkipped(db, r.skipped.n, r.skipped.alerts > 1 ? `${r.skipped.what}, and ${r.skipped.alerts - 1} other alert(s) of the same pass` : r.skipped.what);
+  if (r.skipped) await recordSkipped(db, r.skipped.n, r.skipped.alerts > 1 ? `${r.skipped.what}, and ${r.skipped.alerts - 1} other alert(s) of the same pass` : r.skipped.what, r.skipped.own);
   if (r.ok.size) await noteHooksOk(db, r.ok);
 }
 
@@ -626,11 +632,19 @@ async function postOnce(url: string, body: Record<string, unknown>, files: PostF
   return { a, counted: noteAnswer(url, a, user, startedAt) };
 }
 
-/** Adds `n` posts not sent for `what` to kv `alerts.skipped` (the cron's health view shows the last). */
-export async function recordSkipped(db: D1Database | undefined, n: number, what: string) {
+/**
+ * Adds `n` posts not sent for `what` to kv `alerts.skipped` (the cron's health view shows the last), `own` of them held
+ * by subscribers' own links (AlertsSkipped): the site's last case of its own is kept apart.
+ */
+export async function recordSkipped(db: D1Database | undefined, n: number, what: string, own = 0) {
   if (!db) return;
   const cur = (await kvGetJson<AlertsSkipped>(db, 'alerts.skipped').catch(() => null)) ?? { total: 0, last: { what, n: 0, at: 0 } };
-  await kvSet(db, 'alerts.skipped', { total: cur.total + n, last: { what, n, at: Date.now() } }).catch(() => {});
+  const at = Date.now();
+  const mine = Math.max(0, Math.min(n, own));
+  // a record from before `own` was counted: its last case was the site's
+  const before = cur.site ?? (cur.last?.at && cur.last.own == null ? { what: cur.last.what, n: cur.last.n, at: cur.last.at } : undefined);
+  const site = n > mine ? { what, n: n - mine, at } : before;
+  await kvSet(db, 'alerts.skipped', { total: cur.total + n, last: { what, n, at, own: mine }, ...(site ? { site } : {}) }).catch(() => {});
 }
 
 /**
@@ -790,7 +804,8 @@ async function postAll(targets: Target[], db: D1Database | undefined, what: stri
   const opened = b.shared ? (b.opened ??= Date.now()) : Date.now();
   const span = windowFor(subs.reduce((n, t) => n + postsOf(t), 0));
   const deadline = b.deadline ?? Infinity;
-  let posted = 0, reached = 0, skipped = 0, refused = 0, held = 0, invalid = 0, over = 0, late = 0, limited = 0;
+  // `own`: the posts not sent that a subscriber's own link held (AlertsSkipped), counted in `skipped` or `rateLimited` too
+  let posted = 0, reached = 0, skipped = 0, refused = 0, held = 0, invalid = 0, over = 0, late = 0, limited = 0, own = 0;
   // Posts sent again without their pictures (Discord refused the files), and posts that follow a target's first that
   // were not taken (a digest's second message).
   let fellBack = 0, lostAfter = 0;
@@ -848,6 +863,7 @@ async function postAll(targets: Target[], db: D1Database | undefined, what: stri
         // would otherwise be offered again at every alarm for a day and never drain.
         skipped++;
         if (!(f.until > Date.now())) limited++;
+        if (!t.op) own++;
         continue;
       }
       // Discord limits the site's address (a 429 of global scope, or with none of its headers, to any post): a
@@ -867,7 +883,7 @@ async function postAll(targets: Target[], db: D1Database | undefined, what: stri
         // later (the pause is a few seconds; the alarm comes after it), else it is skipped as before; the operator's
         // channel waits a short pause out here.
         if (!t.op) {
-          if (defers) { left.push(t); waits.paused++; } else skipped++;
+          if (defers) { left.push(t); waits.paused++; } else { skipped++; own++; }
           continue;
         }
         const wait = f.pause - Date.now();
@@ -925,7 +941,7 @@ async function postAll(targets: Target[], db: D1Database | undefined, what: stri
           if (defers) { left.push(t); waits.paused++; }
           // not the hook's own bucket (the site's address, or a bucket shared beyond this hook): posted once more
           else if (a.scope !== 'user' && !retried.has(t) && a.waitMs <= opWait() && Date.now() + a.waitMs < deadline) { retried.add(t); await sleep(a.waitMs); queue.push(t); }
-          else rateLimited++;
+          else { rateLimited++; if (a.scope === 'user') own++; }
         }
         else if (a.waitMs <= opWait()) { await sleep(a.waitMs); queue.unshift(t); }
       }
@@ -952,7 +968,7 @@ async function postAll(targets: Target[], db: D1Database | undefined, what: stri
     ].filter(Boolean);
     const label = notes.length ? `${what} (${notes.join('; ')})` : what;
     console.error(`alerts: ${n} of ${targets.length} posts for ${label} not sent (window passed, webhook backed off, budget spent or body refused)`);
-    noteSkipped(rec, n, label);
+    noteSkipped(rec, n, label, own);
   }
   if (left.length) {
     const notes = [
