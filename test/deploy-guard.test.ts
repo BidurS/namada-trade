@@ -122,6 +122,13 @@ describe('deploy-check.sh', () => {
     expect(since, r.out).not.toBeNull();
     expect(Math.abs(Number(since![1]) - Date.now())).toBeLessThan(5 * 60_000);
     expect(r.out).toContain("(key LIKE 'alert:digest:%' OR key LIKE 'alert:x:recap:%')");
+    // the hour's public posts are claimed only by a Worker that sends, and due until ten past the next hour: counted
+    // apart, since the bookmark (merged stage 1 review)
+    expect(r.out).toContain("(key LIKE 'alert:x:hour:%' OR key LIKE 'alert:tg:ch:hour:%') AND updated_at >= ");
+    expect(r.out).toContain('when only the hour\'s count was above 0, not before ten minutes past the next whole hour');
+    // 0008's triggers are named: 0017 adds three, which a count of every trigger took for three of 0008's
+    const t0008 = r.calls.find((c) => c.includes('holders_total'))!;
+    for (const t of ['holders_total_ai', 'holders_total_au', 'stakes_total_ai', 'stakes_total_au', 'stakes_total_ad', 'label_tokens_ai', 'label_tokens_au', 'label_tokens_ad']) expect(t0008).toContain(`'${t}'`);
     // nothing here says whether the commit is public: no origin/main in this repository
     expect(r.out).toMatch(/note [0-9a-f]{9} is not on origin\/main as last fetched/);
     // no node_modules here: the install is printed, and so is the typecheck, which would have nothing to run with

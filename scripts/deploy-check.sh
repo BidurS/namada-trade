@@ -168,7 +168,9 @@ echo "D1 bookmark at $bookmark_at: $bookmark"
 # it comes before SEND_ALERTS is deleted. The cursor-driven alerts a restore replays are claimed and not posted while
 # SEND_ALERTS is off (sources/discord.ts postAll), but the day's digest, the week's and the X recap are claimed per
 # period and only by a Worker that sends (digest/deliver.ts prepareDigests, sources/x.ts postRecapOnX): one that went
-# out after the bookmark is due again, unclaimed, until its period ends, so step 2 counts them, read-only.
+# out after the bookmark is due again, unclaimed, until its period ends, so step 2 counts them, read-only. So are the
+# hour's public posts (public-posts.ts publicHour: X and the Telegram channel), due until ten minutes past the next
+# hour (HOUR_SETTLE_MS) and claimed only by a Worker that sends, so step 2 counts them apart.
 rollback_words() {
   echo "   the Worker, first when it goes back too (it brings back that version's secrets, SEND_ALERTS among them;"
   echo "   wrangler lists the secrets changed since and asks):"
@@ -178,9 +180,12 @@ rollback_words() {
   echo "     1. npx wrangler secret delete SEND_ALERTS   (restored claims and cursors would post old alerts again)"
   echo "     2. the day's and the week's digest and the X recap claimed today since the bookmark (a read):"
   echo "        npx wrangler d1 execute namada-trade-db --remote --command \"SELECT COUNT(*) n FROM kv WHERE key >= 'alert:' AND key < 'alert;' AND (key LIKE 'alert:digest:%' OR key LIKE 'alert:x:recap:%') AND updated_at >= MAX(${bookmark_s}000, CAST(strftime('%s', 'now', 'start of day') AS INTEGER) * 1000)\""
+  echo "        and the hour's public posts claimed since the bookmark (a read):"
+  echo "        npx wrangler d1 execute namada-trade-db --remote --command \"SELECT COUNT(*) n FROM kv WHERE key >= 'alert:' AND key < 'alert;' AND (key LIKE 'alert:x:hour:%' OR key LIKE 'alert:tg:ch:hour:%') AND updated_at >= ${bookmark_s}000\""
   echo "     3. npx wrangler d1 time-travel restore namada-trade-db --bookmark=$bookmark"
   echo "     4. put SEND_ALERTS back (npx wrangler secret put SEND_ALERTS, value yes) once the ticks have caught up, and"
-  echo "        when step 2 counted more than 0, not before 00:00 UTC: until then those posts would go out a second time"
+  echo "        when step 2 counted more than 0, not before 00:00 UTC: until then those posts would go out a second time;"
+  echo "        when only the hour's count was above 0, not before ten minutes past the next whole hour"
 }
 echo "to go back:"
 rollback_words
@@ -188,12 +193,13 @@ rollback_words
 echo "== 1. migrations"
 for i in 1 2 3 4 5; do out=$(npx wrangler d1 migrations list namada-trade-db --remote 2>&1) && ! echo "$out" | grep -q 7403 && { echo "$out" | tail -4; break; }; echo "retrying (Cloudflare 7403)"; sleep 6; done
 if dry; then would npx wrangler d1 migrations apply namada-trade-db --remote; else { yes || true; } | npx wrangler d1 migrations apply namada-trade-db --remote; fi
-# 0008 (stored totals, wider indexes, the word table): its 8 triggers and 7 new objects must be there before the
+# 0008 (stored totals, wider indexes, the word table): its 8 triggers, by name (0017 adds three of its own, so a count
+# of every trigger passed with three of 0008's missing), and 7 new objects must be there before the
 # worker that reads them goes out (read-only check)
-for i in 1 2 3 4 5; do out=$(npx wrangler d1 execute namada-trade-db --remote --json --command "SELECT (SELECT COUNT(*) FROM sqlite_master WHERE type='trigger') triggers, (SELECT COUNT(*) FROM sqlite_master WHERE name IN ('holders_total','holders_stake','holders_tail','flows_hash','flows_hash_wrapper','flows_hash_inner','label_tokens')) objects" 2>&1) && ! echo "$out" | grep -q 7403 && break; echo "retrying (Cloudflare 7403)"; sleep 6; done
+for i in 1 2 3 4 5; do out=$(npx wrangler d1 execute namada-trade-db --remote --json --command "SELECT (SELECT COUNT(*) FROM sqlite_master WHERE type='trigger' AND name IN ('holders_total_ai','holders_total_au','stakes_total_ai','stakes_total_au','stakes_total_ad','label_tokens_ai','label_tokens_au','label_tokens_ad')) triggers, (SELECT COUNT(*) FROM sqlite_master WHERE name IN ('holders_total','holders_stake','holders_tail','flows_hash','flows_hash_wrapper','flows_hash_inner','label_tokens')) objects" 2>&1) && ! echo "$out" | grep -q 7403 && break; echo "retrying (Cloudflare 7403)"; sleep 6; done
 echo "$out" | python3 -c "
 import sys,json; r=json.load(sys.stdin)[0]['results'][0]; print('0008 objects:', r)
-sys.exit(0 if r['triggers'] >= 8 and r['objects'] == 7 else 1)" || stop "migration 0008 is not in place: not deploying"
+sys.exit(0 if r['triggers'] == 8 and r['objects'] == 7 else 1)" || stop "migration 0008 is not in place: not deploying"
 # 0009 (the session rows' partial indexes): the Worker names them (auth.ts INDEXED BY), so they must be there first
 for i in 1 2 3 4 5; do out=$(npx wrangler d1 execute namada-trade-db --remote --json --command "SELECT COUNT(*) n FROM sqlite_master WHERE type='index' AND name IN ('kv_session_addr','kv_session_expiry','kv_session_legacy')" 2>&1) && ! echo "$out" | grep -q 7403 && break; echo "retrying (Cloudflare 7403)"; sleep 6; done
 echo "$out" | python3 -c "
