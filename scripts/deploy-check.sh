@@ -11,8 +11,8 @@
 #   2. deploy the build the tests ran against,
 #   3. smoke checks on the live site (docs/security-review.md "Before deploying").
 # usage: scripts/deploy-check.sh [--dry-run] [--skip-tests] [--off-tip]   (asks nothing; stops at the first failure)
-#   --dry-run     (or DRY_RUN=1) runs the local checks that write nothing (the guard, the packages check, the
-#                 typecheck) and the remote reads (secret names, the migration list and the schema checks, the bucket,
+#   --dry-run     (or DRY_RUN=1) runs the local checks that write nothing (the guard, the packages check, and the
+#                 typecheck when node_modules is in place) and the remote reads (secret names, the migration list and the schema checks, the bucket,
 #                 the live version, the bookmark), and prints every step that would write instead of running it: npm
 #                 ci, the build, the tests, the migrations, the deploy and the smoke checks. With a migration pending,
 #                 a dry run stops at the schema check of the object that migration adds (it applied nothing).
@@ -86,17 +86,19 @@ bad+=[k + ' installed, not in the lock' for k in got if k not in lock]
 if bad: print('   node_modules does not match package-lock.json:', '; '.join(bad[:5]), '(and %d more)' % (len(bad)-5) if len(bad)>5 else ''); sys.exit(1)
 print('ok   node_modules matches package-lock.json (%d packages)' % len(got))"
 }
+installed=1
 if [ -L node_modules ]; then
   # a worktree's link to another checkout's packages: npm ci empties the folder it points at, which would break that
   # checkout, so it is never run through a link
   if lock_matches; then echo "     node_modules is a link to $(readlink node_modules); no npm ci"
-  else stop "node_modules is a link to another checkout and does not match the lock: deploy from a checkout with its own (npm ci there)"; fi
-elif [ ! -d node_modules ]; then echo "   node_modules is missing"; if dry; then would npm ci; else npm ci; fi
-elif ! lock_matches; then if dry; then would npm ci; else npm ci; fi
+  else installed=0; stop "node_modules is a link to another checkout and does not match the lock: deploy from a checkout with its own (npm ci there)"; fi
+elif [ ! -d node_modules ]; then echo "   node_modules is missing"; if dry; then installed=0; would npm ci; else npm ci; fi
+elif ! lock_matches; then if dry; then installed=0; would npm ci; else npm ci; fi
 fi
 
 echo "== checks: typecheck, build, tests"
-npm run typecheck
+# a dry run that installed nothing over a missing or stale tree has no typecheck to run either
+if dry && [ "$installed" = 0 ]; then would npm run typecheck; else npm run typecheck; fi
 if dry; then would npm run build; else npm run build; fi
 # the suite has wall-clock tests (5 s timeouts, a 15 s alarm walk) that fail on a loaded machine with more workers
 if [ "$SKIP_TESTS" = 1 ]; then loud "WARNING --skip-tests: the test suite was NOT run." "Only for an emergency fix or rollback deploy; run it on this commit as soon as the site is safe."

@@ -2,8 +2,8 @@
 // integration from a clean tree (--off-tip overrides, loudly), runs npm ci only when node_modules does not match
 // package-lock.json and never through a link to another checkout's packages, runs the typecheck, the build and the
 // test suite before anything remote changes (--skip-tests leaves the suite out, loudly), and reads the live Worker
-// version and a D1 Time Travel bookmark before the migrations, printing the one command that goes back to each, the
-// database's behind the removal of SEND_ALERTS; --dry-run (or DRY_RUN=1) runs the reads and prints every write.
+// version and a D1 Time Travel bookmark before the migrations, printing the one command that goes back to each (the
+// database's restore after the removal of SEND_ALERTS); --dry-run (or DRY_RUN=1) runs the reads and prints every write.
 // scripts/export-offsite.sh writes the weekly copy of the database only into an existing folder outside any git
 // working tree. Nothing here reaches Cloudflare: the script runs in a scratch repository with stand-ins for npx, npm
 // and curl that record each call and answer the reads from saved answers, and the steps' parsers run on saved text.
@@ -90,12 +90,13 @@ describe('deploy-check.sh', () => {
     // SEND_ALERTS goes first, then the restore, then it comes back
     expect(r.out.indexOf('secret delete SEND_ALERTS')).toBeLessThan(r.out.indexOf('time-travel restore'));
     expect(r.out.indexOf('time-travel restore')).toBeLessThan(r.out.indexOf('secret put SEND_ALERTS, value yes'));
-    for (const w of ['npm ci', 'npm run build', 'npx vitest run --maxWorkers=4 --minWorkers=1', 'npx wrangler d1 migrations apply namada-trade-db --remote', 'npx wrangler deploy']) expect(r.out).toContain(`dry run, not run: ${w}`);
+    // no node_modules here: the install is printed, and so is the typecheck, which would have nothing to run with
+    for (const w of ['npm ci', 'npm run typecheck', 'npm run build', 'npx vitest run --maxWorkers=4 --minWorkers=1', 'npx wrangler d1 migrations apply namada-trade-db --remote', 'npx wrangler deploy']) expect(r.out).toContain(`dry run, not run: ${w}`);
     expect(r.out).toContain('== dry run done');
     // who deployed the live version is in the answer and never printed
     expect(r.out).not.toContain(AUTHOR);
     // only reads were made: no install, build, test run, migration, deploy or smoke request
-    expect(r.calls.filter((c) => c.startsWith('npm '))).toEqual(['npm run typecheck']);
+    expect(r.calls.filter((c) => c.startsWith('npm '))).toEqual([]);
     expect(r.calls.some((c) => /migrations apply|wrangler deploy( |$)|secret (put|delete)|time-travel restore|rollback/.test(c))).toBe(false);
     expect(r.calls.some((c) => c.startsWith('curl '))).toBe(false);
     expect(r.calls.filter((c) => /d1 execute/.test(c)).every((c) => /SELECT/.test(c))).toBe(true);
@@ -164,13 +165,14 @@ describe('deploy-check.sh', () => {
       expect(r.out).toContain('FAIL node_modules is a link to another checkout and does not match the lock');
       expect(r.calls).toEqual([]);
       expect(readdirSync(other)).toEqual(['.package-lock.json']);
-      // the same link matching the lock: no npm ci, and the run goes on
+      // the same link matching the lock: no npm ci, and the run goes on, its typecheck run (a read of the tree)
       writeFileSync(join(other, '.package-lock.json'), JSON.stringify({ packages: { 'node_modules/a': { version: '1.0.0', integrity: 'sha512-a' } } }));
       const ok = deploy(['--dry-run']);
       expect(ok.status, ok.out).toBe(0);
       expect(ok.out).toContain('ok   node_modules matches package-lock.json (1 packages)');
       expect(ok.out).toContain(`node_modules is a link to ${other}; no npm ci`);
       expect(ok.out).not.toContain('dry run, not run: npm ci');
+      expect(ok.calls.filter((c) => c.startsWith('npm '))).toEqual(['npm run typecheck']);
     } finally {
       rmSync(join(repo, 'node_modules'));
     }
