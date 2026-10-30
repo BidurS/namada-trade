@@ -1890,9 +1890,11 @@ export const HISTORY_MAX_HOURS = HISTORY_ALL_DAYS * DAY_HOURS;
 /**
  * The keys the app charts from this route (web/src/api.ts fetchMetricSeries: home/data.ts, trade/data.ts
  * chartFromHistory, supply/Unlocks.tsx); every other stored series is served by /api/series. A minute key among
- * them has hourly rollups (series-sql.ts ROLLUP_KEYS).
+ * them has hourly rollups (series-sql.ts ROLLUP_KEYS). Beside them, the live feed's hourly count of open sockets and
+ * the minutes of each hour it covered (live-hub.ts LIVE_SOCKETS_KEY): one row an hour, the site's own measure of its
+ * readers, kept as one number an hour with nothing of any reader.
  */
-export const HISTORY_KEYS: readonly string[] = ['price.swap_1h', 'price.usd', 'supply.total_stake'];
+export const HISTORY_KEYS: readonly string[] = ['price.swap_1h', 'price.usd', 'supply.total_stake', 'site.live_sockets', 'site.live_sockets.minutes'];
 /** A whole number as the app writes it: no sign, no leading zero, no fraction or exponent. */
 const WHOLE = /^[1-9]\d{0,14}$/;
 
