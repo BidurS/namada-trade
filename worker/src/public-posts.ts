@@ -5,8 +5,8 @@
 // arrive (the live path posted every move of 10,000 NAM and up until the day's posts were spent: on 29 Oct by 19:30
 // UTC, before the evening's moves, and a run of them could crowd out the 13:00 UTC recap). Beside it each hour may
 // give its largest bridge crossing (HourPart 'ibc'), under its own small share of X's day (sources/x.ts X_SHARES), when
-// the hour's largest move is no crossing: so a crossing a larger trade outweighs is still heard of, and an hour posts a
-// crossing once at most.
+// the move it posts is no crossing (hourPick): so a crossing a larger trade outweighs is still heard of, and an hour
+// posts a crossing once at most.
 //
 // A move qualifies when the site's own channel hears of it (sources/discord.ts operatorMove: NAM, at or above the
 // chain's whale size, no bot round trip, no rewards claim) and its dollars are known and at least PUBLIC_POST_USD_MIN:
@@ -21,7 +21,7 @@
 // category); plainOutsider keeps it to plain words: no link, no bare domain, no mention, no hidden character.
 import type { Chain, Flow, FlowKind, GovernanceProposal } from '../../shared/types';
 import { INTERNAL_ADDRESSES, isInternal } from '../../shared/alerts';
-import { isIbcRefund, priceAtOf, priceHowOf, priceRouteOf, priceSourceWords, type PriceHow } from '../../shared/flow-rules';
+import { holdsNumericHost, isIbcRefund, priceAtOf, priceHowOf, priceRouteOf, priceSourceWords, type PriceHow } from '../../shared/flow-rules';
 import { CHAIN_WORD, listWords, moveTitle, partiesOf } from '../../shared/flow-words';
 import { bridgeDest } from '../../shared/kinds';
 import { fmtAddr, fmtUsdRule } from '../../shared/format';
@@ -167,7 +167,7 @@ export async function hourMoves(db: D1Database, start: number, end: number, floo
 
 /**
  * The two posts an hour may give: its move (the largest of all its moves) and its crossing (the largest of its bridge
- * crossings, when the hour's largest move is no crossing), each claimed and counted apart.
+ * crossings, when the move the hour posts is no crossing: hourPick), each claimed and counted apart.
  */
 export type HourPart = 'move' | 'ibc';
 
@@ -250,16 +250,31 @@ export async function firstUnposted(db: D1Database, moves: PublicMove[], postedK
   return null;
 }
 
+/** A voice's claim on one part of the hour: `voice` its prefix ("alert:x:hour:"), the crossing part's with ":ibc". */
+export const hourKey = (voice: string, hour: Pick<PublicHour, 'key'>, part: HourPart) => `${voice}${hour.key}${part === 'ibc' ? ':ibc' : ''}`;
+
 /**
  * The move a voice posts for one part of the hour (HourPart), as firstUnposted gives it: for 'move' any of the hour's
- * moves; for 'ibc' its crossings alone, and none when the hour's largest move is a crossing (that hour's move part
- * carries it, so a crossing is posted once an hour at most), a rule read from the ranking alone, the same at every tick.
+ * moves; for 'ibc' its crossings alone, once the hour's move part has made its choice (its hour claim, hourKey under
+ * `voice`, taken; before, 'wait', and the crossing part waits, unclaimed, for a later tick). A move part that
+ * picks a crossing claims the crossing part's hour with its own (hourClaims), so a crossing is posted once an hour at
+ * most. The rule follows the move part's pick, not the ranking's first: the move part passes over a first posted the
+ * hour before (a crossing whose other record is in that hour), and the hour's own crossings are then still posted.
  */
-export async function hourPick(db: D1Database, moves: PublicMove[], part: HourPart, postedKey: (m: PublicMove) => string): Promise<{ move: PublicMove; passed: boolean } | null> {
+export async function hourPick(db: D1Database, moves: PublicMove[], part: HourPart, postedKey: (m: PublicMove) => string, voice: string, hour: Pick<PublicHour, 'key'>): Promise<{ move: PublicMove; passed: boolean } | null | 'wait'> {
   if (part === 'move') return firstUnposted(db, moves, postedKey);
-  if (!moves.length || moves[0].bridge) return null;
+  if (!(await db.prepare('SELECT 1 x FROM kv WHERE key = ?').bind(hourKey(voice, hour, 'move')).first())) return 'wait';
   return firstUnposted(db, moves.filter((m) => m.bridge), postedKey);
 }
+
+/**
+ * The claims a voice takes together with one part's post of `pick`, in order, all or none: when the move part posts a
+ * crossing, the crossing part's hour first, which then has none to carry (hourPick), so the move part's hour is never
+ * taken without it and a crossing part that sees the move chosen never posts a second crossing; then the part's hour
+ * (hourKey) and the move's own (`postedKey`).
+ */
+export const hourClaims = (voice: string, hour: Pick<PublicHour, 'key'>, part: HourPart, pick: PublicMove, postedKey: (m: PublicMove) => string) =>
+  [...(part === 'move' && pick.bridge ? [hourKey(voice, hour, 'ibc')] : []), hourKey(voice, hour, part), postedKey(pick)];
 
 // ---------------------------------------------------------------- the words
 
@@ -321,26 +336,65 @@ export const publicRecord = (m: PublicMove) =>
  *   hide uses for escapes);
  * - no link: a scheme is dropped, and every dot between a character that is not a space and a letter is written
  *   "[.]" ("namada-claim[.]xyz"), whatever that character is (a combining mark NFKC cannot compose ends a label too),
- *   and so is every dot of a host written as four numbers ("45[.]67[.]89[.]10/claim", "0x2d[.]0x43[.]0x59[.]0x0a"),
- *   which a client links as readily as a name;
+ *   and through the marks that show nothing, which a host parser drops ("claim[.]\uFE0Fxyz"); so is every dot of a
+ *   word that holds a host written as four numbers, or would once cut (holdsHostCut: "45[.]67[.]89[.]10/claim",
+ *   "0x2d[.]0x43[.]0x59[.]0x0a", "45[.]67[.]89[.]1000"), which a reader can type as readily as a name, but for the dots
+ *   that end the word ("at 45[.]67[.]89[.]10."); a word whose escapes a host parser would read as a dot or a host has
+ *   its "%" written "[%]" ("claim[%]2Exyz"), and the brackets of an IPv6 host are "(" and ")";
  * - no mention: an @ is "(at)";
- * - no command, hashtag or cashtag: a # or $ that starts a word before a letter, and a / that starts one before a
- *   letter, digit or _, is dropped ("/stop", "#airdrop", "$SCAM" read "stop", "airdrop", "SCAM"; "and/or", "1/2",
- *   "$100" and "#12" stay), so a group's members tap no command and X files the post under no outsider's tag or coin;
+ * - no command, hashtag or cashtag: a / that starts a word before a letter, digit or _, a # before a tag (digits may
+ *   lead it) and a $ before a letter are dropped, until none is left ("/stop", "#airdrop", "$SCAM", "/#stop",
+ *   "#2024airdrop" read "stop", "airdrop", "SCAM", "stop", "2024airdrop"; "and/or", "1/2", "$100" and "#12" stay; an
+ *   emoji's presentation mark joins no sign to the word before it), so a group's members tap no command and X files the
+ *   post under no outsider's tag or coin. The signs go before the links are read: taken out after, they could join two
+ *   pieces into one ("claim./xyz", "a.#co", "45.67.89./10");
  * - one line.
  */
 export function plainOutsider(s: unknown, max: number): string {
-  const t = String(s ?? '').normalize('NFKC')
+  // read no further than the post can show, with room for what the steps take out (the host test reads each word's starts)
+  let t = String(s ?? '').slice(0, max * 8 + 256).normalize('NFKC')
     .replace(/[\p{Cc}\p{Cf}\p{Co}\p{Cs}]/gu, ' ')
     .replace(/\u3002/g, '.')
-    .replace(/\b[a-z][a-z0-9+.-]*:\/\/+/gi, '')
-    .replace(/(?<=\S)\.(?=\p{L})/gu, '[.]')
-    .replace(/(?<![\p{L}\p{N}_.])(?:0x[0-9a-f]+|\d+)(?:\.(?:0x[0-9a-f]+|\d+)){3}(?![\p{L}\p{N}_]|\.[\p{L}\p{N}])/giu, (host) => host.replace(/\./g, '[.]'))
+    .replace(/\[([0-9a-f:.%]*:[0-9a-f:.%]*)\]/gi, '($1)')
+    .replace(/\b[a-z][a-z0-9+.-]*:\/\/+/gi, '');
+  // the signs until none is left: taking one out can leave another at a word's start ("/#stop")
+  for (let was = ''; was !== t; ) { was = t; t = t.replace(SIGN, ''); }
+  t = t.replace(NAME_DOT, '[.]')
+    .replace(/\S+/g, (w) => {
+      const broken = holdsHostCut(w) ? w.replace(HOST_DOT, '[.]') : w;
+      if (!broken.includes('%')) return broken;
+      const view = unescaped(broken);
+      return holdsHostCut(view) || view.match(NAME_DOT) ? broken.replace(/%/g, '[%]') : broken;
+    })
     .replace(/@/g, '(at)')
-    .replace(/(?<![\p{L}\p{M}\p{N}_])(?:[#$]+(?=\p{L})|\/+(?=[\p{L}\p{N}_]))/gu, '')
     .replace(/\s+/g, ' ')
     .trim();
   return cutText(t, max);
+}
+
+/** A command's, tag's or coin's sign at the start of a word (plainOutsider); U+FE0E and U+FE0F join none to the word before. */
+const SIGN = /(?<![\p{L}\p{N}_]|[^\uFE0E\uFE0F\P{M}])(?:\/+(?=[\p{L}\p{N}_])|#+(?=[\p{N}_]*\p{L})|\$+(?=\p{L}))/gu;
+/** A dot a name's label follows, through marks and characters that show nothing, which a host parser drops. */
+const NAME_DOT = /(?<=\S)\.(?=[\p{M}\p{Default_Ignorable_Code_Point}]*\p{L})/gu;
+/** A dot of a word holding a host that plainOutsider breaks: none of a "[.]" already there, nor of the dots that end the word. */
+const HOST_DOT = /(?<!\[)\.(?!\.*$)(?!\])/g;
+/** A word's escapes as a host parser reads them ("%2E" a dot, "%E3%80%82" the ideographic one, "%36" a 6), folded as plainOutsider folds its text. */
+const unescaped = (w: string) => w
+  .replace(/(?:%[0-9a-f]{2})+/gi, (run) => { try { return decodeURIComponent(run); } catch { return run.replace(/%([0-7][0-9a-f])/gi, (_, h: string) => String.fromCharCode(parseInt(h, 16))); } })
+  .normalize('NFKC').replace(/\u3002/g, '.');
+/**
+ * Whether a word, or any start of it a later cut could leave (cutText here, fits() on a card's title), holds a host
+ * written as four numbers (shared/flow-rules.ts holdsNumericHost): "45.67.89.1000" and "45.67.89.10x" are none, but
+ * their cut "45.67.89.10…" is one. A start is read where it ends in a number's character, past the third dot (the
+ * text is folded already: NFKC made the wide dots and digits plain ones).
+ */
+function holdsHostCut(w: string): boolean {
+  let dots = 0;
+  for (let i = 0; i < w.length; i++) {
+    if (w[i] === '.') dots++;
+    else if (dots >= 3 && /[0-9a-fA-FxX]/.test(w[i]) && holdsNumericHost(w.slice(0, i + 1))) return true;
+  }
+  return false;
 }
 
 /**

@@ -32,7 +32,7 @@ import {
   alertsOn, claimDiscordAlert, claimEach, crossingOf, releaseClaims, fits, govCard, moveCard, recordSkipped, settingsFields, sitePage,
   CARD_WORDS, TEXT_MAX, type Card, type Embed, type GovContext, type TestExample,
 } from './discord';
-import { claimTaken, hourPick, plainOutsider, publicProposal, publicRecord, publicTitle, publicValue, publicWho, publicWhy, type HourPart, type PublicHour, type PublicMove } from '../public-posts';
+import { claimTaken, hourClaims, hourKey, hourPick, plainOutsider, publicProposal, publicRecord, publicTitle, publicValue, publicWho, publicWhy, type HourPart, type PublicHour, type PublicMove } from '../public-posts';
 
 export interface TelegramEnv { DB: D1Database; SETTINGS_KEY?: string; TELEGRAM_BOT_TOKEN?: string; TELEGRAM_CHANNEL?: string }
 
@@ -438,24 +438,35 @@ export function hourMessage(m: PublicMove, hour: Pick<PublicHour, 'end'>, passed
   };
 }
 
+/** The channel's claims on the hour's parts (public-posts.ts hourKey). */
+const TG_HOUR = 'alert:tg:ch:hour:';
+/** Every one of `keys` claimed, in order, or none: a key taken already gives back the ones this call took (as sources/x.ts postOnce). */
+async function claimAll(db: D1Database, keys: string[]): Promise<boolean> {
+  for (const [i, k] of keys.entries()) {
+    if (!(await claimDiscordAlert(db, [k]))) { if (i) await releaseClaims(db, keys.slice(0, i)); return false; }
+  }
+  return true;
+}
 /**
  * The cron's tick: the closed hour's move and then its crossing (public-posts.ts publicHour and hourPick, the X
  * account's) to the public channel, each once (`alert:tg:ch:hour:<hour>`, `alert:tg:ch:hour:<hour>:ibc`), under the
  * run's share. A quiet part is claimed and sends nothing; an hour whose moves cannot be read, or whose message Telegram
  * did not answer, is left for the next tick (sendPart gives its claims back). A move is sent once
  * (`alert:tg:ibc:<crossing>:channel` or `alert:tg:ch:flow:<id>`, the keys the live channel posts used), so a
- * crossing's other record gives way to its hour's next move. Never throws.
+ * crossing's other record gives way to its hour's next move. The crossing part waits for the move part's choice, and
+ * a move part that sends a crossing claims the crossing part's hour with its own (hourPick, hourClaims). Never throws.
  */
 export async function sendTelegramHour(env: TelegramEnv, hour: PublicHour, run: TgRun): Promise<void> {
   if (!sendsTelegram(env) || !env.TELEGRAM_CHANNEL) return;
   for (const part of ['move', 'ibc'] as const) {
     try {
-      const key = `alert:tg:ch:hour:${hour.key}${part === 'ibc' ? ':ibc' : ''}`;
+      const key = hourKey(TG_HOUR, hour, part);
       if ((await claimTaken(env.DB, key)) || !open(run)) continue;
       const posted = (m: PublicMove) => (m.crossing ? `alert:tg:ibc:${m.crossing}:channel` : `alert:tg:ch:flow:${m.id}`);
-      const first = await hourPick(env.DB, await hour.moves(), part, posted);
-      const keys = [key, ...(first ? [posted(first.move)] : [])];
-      if (!(await claimDiscordAlert(env.DB, keys)) || !first) continue;
+      const first = await hourPick(env.DB, await hour.moves(), part, posted, TG_HOUR, hour);
+      if (first === 'wait') continue;
+      const keys = first ? hourClaims(TG_HOUR, hour, part, first.move, posted) : [key];
+      if (!(await claimAll(env.DB, keys)) || !first) continue;
       await sendPart(env, [{ chat: env.TELEGRAM_CHANNEL, user: false, msg: hourMessage(first.move, hour, first.passed, part) }], keys, `hour ${hour.key}: ${part === 'ibc' ? 'crossing' : 'move'} ${first.move.id} (channel)`, run);
     } catch (e) {
       // the hour's moves not read: its other part would read the same failure

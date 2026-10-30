@@ -32,7 +32,7 @@ import { kvSet } from '../db';
 import { holdsNumericHost, safeHttpUrl } from '../../../shared/flow-rules';
 import { alertsOn, claimDiscordAlert, fits, govCard, releaseClaims, type Card, type GovContext } from './discord';
 import { mdToPlain } from './telegram';
-import { claimTaken, hourPick, publicRecord, publicTitle, publicValue, publicWho, publicWhy, type HourPart, type PublicHour, type PublicMove } from '../public-posts';
+import { claimTaken, hourClaims, hourKey, hourPick, publicRecord, publicTitle, publicValue, publicWho, publicWhy, type HourPart, type PublicHour, type PublicMove } from '../public-posts';
 import { CHART_MINUTE_BOUND_MS, readChartRows, shapePriceChart, type ChartContext } from '../digest/charts/read';
 import { isNotRead, priceChart, toPng } from '../digest/charts/charts';
 
@@ -341,25 +341,30 @@ export function govRecord(p: GovernanceProposal): string {
   return `votes on-chain, read from the Namada indexer${forum ? ' · discussion on the Namada forum' : ''}`;
 }
 
+/** X's claims on the hour's parts (public-posts.ts hourKey). */
+const X_HOUR = 'alert:x:hour:';
 /**
  * One part of the closed hour (public-posts.ts publicHour, hourPick), once (`alert:x:hour:<hour>`, the crossing's
  * `alert:x:hour:<hour>:ibc`), while fresh, under that part's share of the day. A quiet part (nothing qualifies) is
  * claimed and posts nothing, as is one whose share of the day was spent before; an hour whose moves cannot be read is
  * left for the next tick. A move is posted once (`alert:x:ibc:<crossing>` or `alert:x:flow:<id>`, the keys the live
  * posts used, claimed with the hour's before the post): a crossing's other record, in a later hour, gives way to that
- * hour's next move. Never throws.
+ * hour's next move. The crossing part waits for the move part's choice (hourPick), and a move part that posts a
+ * crossing claims the crossing part's hour with its own (hourClaims). Never throws.
  */
 async function postHourPart(env: XEnv, hour: PublicHour, part: HourPart, now: number): Promise<'posted' | 'quiet' | 'skipped' | 'claimed' | 'full' | 'off' | 'again' | 'failed'> {
   if (!postsOnX(env)) return 'skipped';
   try {
-    const key = `alert:x:hour:${hour.key}${part === 'ibc' ? ':ibc' : ''}`;
+    const key = hourKey(X_HOUR, hour, part);
     if ((await claimTaken(env.DB, key)) || !(await xOn(env.DB))) return 'skipped';
     const posted = (m: PublicMove) => (m.crossing ? `alert:x:ibc:${m.crossing}` : `alert:x:flow:${m.id}`);
-    const first = await hourPick(env.DB, await hour.moves(), part, posted);
+    const first = await hourPick(env.DB, await hour.moves(), part, posted, X_HOUR, hour);
+    if (first === 'wait') return 'skipped';
     if (!first || now - first.move.ts > X_MAX_AGE_MS) { await claimDiscordAlert(env.DB, [key]); return 'quiet'; }
     const pick = first.move;
-    const r = await postOnce(env, [key, posted(pick)], part, () => hourText(pick, first.passed, part), `hour ${hour.key}: ${part === 'ibc' ? 'crossing' : 'move'} ${pick.id}`);
-    if (r === 'full') await claimDiscordAlert(env.DB, [key]);
+    const r = await postOnce(env, hourClaims(X_HOUR, hour, part, pick, posted), part, () => hourText(pick, first.passed, part), `hour ${hour.key}: ${part === 'ibc' ? 'crossing' : 'move'} ${pick.id}`);
+    // a share spent closes the part, and a crossing the move part could not post closes the crossing part too
+    if (r === 'full') await claimDiscordAlert(env.DB, [key, ...(part === 'move' && pick.bridge ? [hourKey(X_HOUR, hour, 'ibc')] : [])]);
     return r;
   } catch (e) {
     console.error(`x: the hour ${hour.key} (${part}) not posted`, e);

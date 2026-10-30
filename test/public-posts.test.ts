@@ -23,6 +23,9 @@ import {
   hourCovered, hourMoves, plainOutsider, publicHour, publicMoveOf, HOUR_MOVES_SQL, HOUR_SETTLE_MS, PUBLIC_HOUR_READ, PUBLIC_POST_USD_MIN, type NamFloors,
 } from '../worker/src/public-posts';
 import type { Flow, ForumPost, GovernanceProposal } from '../shared/types';
+import { TEXT_MAX } from '../worker/src/sources/discord';
+
+const TEXT_MAX_TITLE = TEXT_MAX.title;
 
 const KEYS = { X_API_KEY: 'ck', X_API_SECRET: 'cs', X_ACCESS_TOKEN: 'at', X_ACCESS_SECRET: 'as' };
 const KEY = 'DQ0NDQ0NDQ0NDQ0NDQ0NDQ0NDQ0NDQ0NDQ0NDQ0NDQ0=';
@@ -310,8 +313,9 @@ describe('choosing the hour\'s move', () => {
     await tick(db, at(9, 10));
     expect(kv(db, 'alert:x:hour:2026-10-29T08')).toBeNull();
     expect(kv(db, 'alert:tg:ch:hour:2026-10-29T08')).toBeNull();
-    // the move's own claim, taken with the hour's, went back with it (the hour's crossing part, with no crossing, is quiet)
-    expect(db.raw.prepare("SELECT key FROM kv WHERE key LIKE 'alert:%' AND key NOT LIKE 'alert:x:day:%' AND key NOT LIKE '%:ibc'").all()).toEqual([]);
+    // the move's own claim, taken with the hour's, went back with it, and the hour's crossing part waits for the move
+    // part's choice (hourPick), so it claims nothing either
+    expect(db.raw.prepare("SELECT key FROM kv WHERE key LIKE 'alert:%' AND key NOT LIKE 'alert:x:day:%'").all()).toEqual([]);
     down = false;
     expect(await tick(db, at(9, 11))).toBe('posted');
     expect(s.x).toHaveLength(1);
@@ -467,6 +471,73 @@ describe('the hour\'s crossing', () => {
     expect(kv(db, 'alert:x:day:2026-10-29:ibc')).toBe('1');
   });
 
+  // merged stage 1 X review (2026-10-30): the crossing part read the ranking's first, so an hour led by a crossing
+  // posted the hour before gave its trade the move post and its own crossing no post at all
+  it('an hour led by a crossing posted the hour before: its trade is the move, and its own crossing is still posted', async () => {
+    const db = indexed();
+    // the crossing of 2,000,000 NAM: sent from Namada at 05:53 (its hour's move), received on Osmosis at 06:31
+    move(db, at(5, 53), { id: 'namada:SEQ3:4', chain: 'namada', kind: 'ibc_out', from_addr: NAMADA, to_addr: RECEIVER, amount_num: 2_000_000, pool_id: null, value_usd: 300, meta: { priceSource: 'spot', channel: 'channel-1', packetSequence: '9100' } });
+    move(db, at(6, 31), { kind: 'ibc_in', from_addr: NAMADA, to_addr: RECEIVER, amount_num: 2_000_000, pool_id: null, value_usd: 300, meta: { priceSource: 'spot', channel: 'channel-98451', packetSequence: '9100' } });
+    // the hour 06:00 to 07:00 also holds a sale of 1,500,000 NAM and a crossing of its own of 1,000,000
+    move(db, at(6, 40), { amount_num: 1_500_000, value_usd: 225 });
+    crossing(db, at(6, 45), 1_000_000);
+    const s = voices();
+    await tick(db, at(6, 10));
+    expect(s.x).toHaveLength(1);
+    expect(s.x[0]).toMatch(/^2,000,000 \$NAM bridged to Osmosis/);
+    expect(await tick(db, at(7, 10))).toBe('posted');
+    expect(s.x).toHaveLength(3);
+    // (a sale whose settle is not on record gives up its why line on X for room; the channel's carries it)
+    expect(s.x[1]).toMatch(/^1,500,000 \$NAM sold on Osmosis/);
+    expect(s.x[2]).toMatch(/^1,000,000 \$NAM bridged to Osmosis/);
+    expect(s.x[2]).toContain('Largest priced bridge crossing of the hour not posted already.');
+    expect(s.tg.map((m) => m.text.split('\n')[0])).toEqual([
+      '<i>Largest priced move of the hour ending 06:00 UTC, bot round trips and rewards claims left out</i>',
+      '<i>Largest priced move of the hour ending 07:00 UTC not posted already, bot round trips and rewards claims left out</i>',
+      '<i>Largest priced bridge crossing of the hour ending 07:00 UTC not posted already</i>',
+    ]);
+    // the hour 05:00 to 06:00, whose move was the crossing, claimed its crossing part with it
+    expect(kv(db, 'alert:x:hour:2026-10-29T05:ibc')).toBe('1');
+    expect(kv(db, 'alert:tg:ch:hour:2026-10-29T05:ibc')).toBe('1');
+  });
+
+  it('the crossing part waits for the move part\'s choice: X not taking the move holds the crossing back, then both post in order', async () => {
+    const db = indexed();
+    move(db, at(8, 5), { amount_num: 2_100_000, value_usd: 315 });
+    crossing(db, at(8, 20), 2_000_000);
+    let refusals = 1;
+    const s = voices((url) => (url === 'https://api.x.com/2/tweets' && refusals-- > 0 ? { status: 503, json: { title: 'Service Unavailable' } } : null));
+    const errors = vi.spyOn(console, 'error');
+    expect(await tick(db, at(9, 10))).toBe('again');
+    expect(s.x).toEqual([]);
+    expect(kv(db, 'alert:x:hour:2026-10-29T08')).toBeNull();
+    expect(kv(db, 'alert:x:hour:2026-10-29T08:ibc')).toBeNull();
+    // the wait is no failure: the crossing part answers 'skipped' and logs nothing
+    expect(await postHourCrossingOnX(xEnv(db), publicHour(db as any, at(9, 10), FLOORS), at(9, 10))).toBe('skipped');
+    expect(errors.mock.calls.filter((c) => /\(ibc\)/.test(String(c[0])))).toEqual([]);
+    // the channel, which took its move, went on to its crossing
+    expect(s.tg).toHaveLength(2);
+    expect(await tick(db, at(9, 11))).toBe('posted');
+    expect(s.x).toHaveLength(2);
+    expect(s.x[0]).toMatch(/^2,100,000 \$NAM sold on Osmosis/);
+    expect(s.x[1]).toMatch(/^2,000,000 \$NAM bridged to Osmosis/);
+    expect(s.x[1]).toContain('Largest priced bridge crossing of the hour.');
+    expect(s.tg).toHaveLength(2);
+  });
+
+  it('a crossing the move part could not post for its spent share is not posted as the hour\'s crossing either', async () => {
+    const db = indexed();
+    db.raw.prepare("INSERT INTO kv (key, value, updated_at) VALUES ('alert:x:day:2026-10-29:move', ?, 0)").run(String(X_SHARES.move));
+    crossing(db, at(8, 20), 2_000_000);
+    move(db, at(8, 5), { amount_num: 1_000_000, value_usd: 150 });
+    const s = voices();
+    expect(await tick(db, at(9, 10), false)).toBe('full');
+    expect(s.x).toEqual([]);
+    expect(kv(db, 'alert:x:hour:2026-10-29T08')).toBe('1');
+    expect(kv(db, 'alert:x:hour:2026-10-29T08:ibc')).toBe('1');
+    expect(kv(db, 'alert:x:day:2026-10-29:ibc')).toBeNull();
+  });
+
   it('the crossings\' share is their own: once spent the hour\'s crossing is passed over, and the moves still post', async () => {
     const db = indexed();
     for (let h = 0; h <= X_SHARES.ibc; h++) {
@@ -547,6 +618,47 @@ describe('the allowlist', () => {
     expect(plainOutsider('Airdrop claim: http://45.67.89.10/claim', 80)).toBe('Airdrop claim: 45[.]67[.]89[.]10/claim');
     expect(plainOutsider('45.67.89.10:8080/airdrop and 0x2d.0x43.0x59.0x0a/x', 80)).toBe('45[.]67[.]89[.]10:8080/airdrop and 0x2d[.]0x43[.]0x59[.]0x0a/x');
     expect(plainOutsider('Upgrade v1.2.3 to 1.2.4, 1.5 NAM each', 80)).toBe('Upgrade v1.2.3 to 1.2.4, 1.5 NAM each');
+  });
+
+  // merged stage 1 X review (2026-10-30): the four-number rule had the gaps xSafe had, and the signs went after the
+  // links were read, so taking one out could join two pieces into a link
+  it('a word holding a four-number host, as a browser reads one, has every dot broken; a sign taken out joins no link', () => {
+    // where the host starts, an empty hex part, a mark that shows nothing beside a dot, a blank Hangul filler
+    expect(plainOutsider('here...45.67.89.10 now and x.45.67.89.10', 80)).toBe('here[.][.][.]45[.]67[.]89[.]10 now and x[.]45[.]67[.]89[.]10');
+    expect(plainOutsider('45.0x.89.10/claim', 80)).toBe('45[.]0x[.]89[.]10/claim');
+    expect(plainOutsider('45.\uFE0F67.89.10 and 45\u034F.67.89.10', 80)).toBe('45[.]\uFE0F67[.]89[.]10 and 45\u034F[.]67[.]89[.]10');
+    expect(plainOutsider('\u316445.67.89.10', 80)).toBe('\u116045[.]67[.]89[.]10');
+    expect(plainOutsider('IP:45.67.89.10/claim, //45.67.89.10 and ４５．６７．８９．１０', 80)).toBe('IP:45[.]67[.]89[.]10/claim, 45[.]67[.]89[.]10 and 45[.]67[.]89[.]10');
+    // a dot that ends the word is the sentence's, and a "[.]" already there is not broken again
+    expect(plainOutsider('Claim at 45.67.89.10. Then x[.]1.2.3.4', 80)).toBe('Claim at 45[.]67[.]89[.]10. Then x[.]1[.]2[.]3[.]4');
+    // a slash or a tag's sign between two pieces goes before the links are read
+    expect(plainOutsider('claim./xyz and a.#co and 45.67.89./10', 80)).toBe('claim[.]xyz and a[.]co and 45[.]67[.]89[.]10');
+    // no host: a version, a sum, numbers a URL parser refuses in every start; five numbers start with a host
+    expect(plainOutsider('v1.2.3.4, 1.2.3.4.5, 1.500.000.000, 045.089.0.1', 80)).toBe('v1.2.3.4, 1[.]2[.]3[.]4[.]5, 1.500.000.000, 045.089.0.1');
+  });
+
+  // the adversarial review of these fixes (2026-10-30)
+  it('a word a cut would leave holding a host is broken whole; a hidden mark, an escape or a run of signs carries nothing through', () => {
+    // a word the URL parser refuses only for its last part, or for what follows the host, is cut to one later (cutText
+    // here, fits() on a proposal card's title), so it is broken as one
+    expect(plainOutsider('45.67.89.1000 and 45.67.89.10x and 45.67.89.10.5 and 45.67.89.10_', 120))
+      .toBe('45[.]67[.]89[.]1000 and 45[.]67[.]89[.]10x and 45[.]67[.]89[.]10[.]5 and 45[.]67[.]89[.]10_');
+    expect(plainOutsider('45.67.89.1000', 12)).toBe('45[.]67[.]8…');
+    // a mark that shows nothing between a dot and a name's label hides the dot from no one
+    expect(plainOutsider('namada-claim.\uFE0Fxyz and claim.\u034Fio', 80)).toBe('namada-claim[.]\uFE0Fxyz and claim[.]\u034Fio');
+    // signs are taken out until none is left; a tag may start with digits; an emoji's mark joins no sign to it
+    expect(plainOutsider('/#stop #/airdrop $/SCAM x./#tag', 80)).toBe('stop airdrop SCAM x[.]tag');
+    expect(plainOutsider('\u26A0\uFE0F#airdrop #2024airdrop #1 priority $100 $100k #12', 80)).toBe('\u26A0\uFE0Fairdrop 2024airdrop #1 priority $100 $100k #12');
+    // escapes a host parser reads as a dot or a host, and an IPv6 host's brackets
+    expect(plainOutsider('45%2E67%2E89%2E10 claim%2Exyz 45.%36%37.89.10 claim%E3%80%82xyz 50% off', 160))
+      .toBe('45[%]2E67[%]2E89[%]2E10 claim[%]2Exyz 45.[%]36[%]37.89.10 claim[%]E3[%]80[%]82xyz 50% off');
+    expect(plainOutsider('[2001:db8::1]:8080/x and [::ffff:45.67.89.10]', 80)).toBe('(2001:db8::1):8080/x and (::ffff:45[.]67[.]89[.]10)');
+    // the dots that end a word are the sentence's (NFKC makes "…" three dots)
+    expect(plainOutsider('v2 at 45.67.89.10... and 1.2.3.4…', 80)).toBe('v2 at 45[.]67[.]89[.]10... and 1[.]2[.]3[.]4...');
+    // a word of thousands of dots and numbers is read in a few milliseconds, never past what the post can show
+    const t0 = performance.now();
+    plainOutsider('999.'.repeat(3000), TEXT_MAX_TITLE);
+    expect(performance.now() - t0).toBeLessThan(500);
   });
 });
 
