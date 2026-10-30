@@ -1249,9 +1249,10 @@ export async function blindSpot(db: D1Database, asOf: number, replay: boolean): 
     turnstileNam7d,
     stickySharePct7d,
     pulseSeries,
-    // The pool's figures come from Namada records (and Osmosis records of crossings): both indexes matter.
-    coverage: cov.both,
-    coverageByChain: { osmosis: cov.osmosis, namada: cov.namada },
+    // The pool's figures come from Namada records (and Osmosis records of crossings): both indexes matter. The 30-day
+    // window reaches back before the stored Osmosis record is complete, and says so (shared/osmosis-gap.ts).
+    coverage: withOsmosisGap(cov.both, from30),
+    coverageByChain: { osmosis: withOsmosisGap(cov.osmosis, from30), namada: cov.namada },
   };
 }
 

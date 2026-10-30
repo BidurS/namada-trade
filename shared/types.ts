@@ -82,6 +82,12 @@ export interface FlowsResponse {
   /** the oldest move in the index for this chain filter ("The flow index starts on 3 Dec 2024"); on the head page and on a date jump (`?before=<unix ms>`), else absent */
   firstTs?: number | null;
   /**
+   * On a head page whose chain filter takes Osmosis moves and whose window reaches back before the stored Osmosis
+   * record is complete (shared/osmosis-gap.ts): the sentence that says the count is of an incomplete record. Absent
+   * otherwise.
+   */
+  totalNote?: string;
+  /**
    * On an empty head page: the newest move that matches every filter but the time window (`since`, `before`), of any
    * age, for "The last one was 2.3 days ago. Rewind to it." null when none is recorded; absent when not searched.
    */
@@ -833,6 +839,11 @@ export interface AddressReport {
   change7d: number | null;
   links: { address: string; chain: Chain; transfers: number; volume: number; lastSeen: number }[];
   totalFlowsCount?: number;
+  /**
+   * Why the count and the list may be short, beside them: an Osmosis address whose stored moves reach back before the
+   * stored Osmosis record is complete (shared/osmosis-gap.ts). Absent when no such gap is known.
+   */
+  flowsNote?: string;
   flows: Flow[];
   /**
    * Who the address moves NAM with, over `flows`: NAM only and each bridge crossing once (shared/flow-rules.ts

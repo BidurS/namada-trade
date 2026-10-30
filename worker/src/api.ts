@@ -10,7 +10,7 @@ import type {
 import { quoteNamTrade, priceSourceName } from './sources/sqs';
 import { PRICE_HOW_KEY, priceHowAt, storedPriceNote, storedPriceSource, type PriceHowLog } from './price-how';
 import { MINUTE_STALE_MS, NOT_READ, NOT_STORED, POOLS_SOURCE, POOLS_STALE_MS, PRICED_KEY, poolsTotal, readPoolsRow, readStoredCurve, routerCapNote, storedCurve, storedPoolsProv, storedTotalProv } from './pool-sizes';
-import { withOsmosisGap } from '../../shared/osmosis-gap';
+import { OSMOSIS_GAP_NOTE, OSMOSIS_GAP_UNTIL, osmosisGapCounts, reachesOsmosisGap, withOsmosisGap } from '../../shared/osmosis-gap';
 import { namBalance, namadaEpoch, delegationsAt, QUICK, type ReadOpts } from './sources/namada';
 import { fetchIntel } from './sources/intel';
 import { alertsOn, sendDiscordPreview, sendDiscordTestPost, testExample, testPostHeld, INVALID_WINDOW_MS, type TestPostAnswer, type WebhookPost } from './sources/discord';
@@ -866,6 +866,8 @@ app.get('/api/flows', async (c) => {
     const fr = await db.prepare(`SELECT MIN(t) t FROM (${chains.map((ch) => `SELECT ${FIRST_TS_SQL(ch)} t`).join(' UNION ALL ')})`).first<{ t: number | null }>().catch(() => null);
     res.firstTs = fr?.t ?? null;
   }
+  // A count that takes Osmosis moves from before the stored Osmosis record is complete says so (shared/osmosis-gap.ts).
+  if (head && res.total != null && f.chain !== 'namada' && reachesOsmosisGap(f.since ?? res.firstTs)) res.totalNote = osmosisGapCounts('These moves');
   // An empty head page: the newest move that matches every filter but the time window, of any age.
   if (head && page === 1 && !r.flows.length) {
     // A text search does not look further back than its window: no move holds text it cannot match; otherwise "none at
@@ -1027,6 +1029,15 @@ app.get('/api/address/:addr', async (c) => {
   ]);
   const flows = await withSettles(db, moves.flows);
   const totalFlowsRow = { c: moves.total ?? flows.length };
+  // An Osmosis address whose stored moves reach back before the stored Osmosis record is complete: its count and its
+  // list may be short, and say so (shared/osmosis-gap.ts). Seen in the moves read, else asked of the two address
+  // indexes (one seek each) when there are more moves than were read.
+  let gapped = chain === 'osmosis' && flows.some((f) => reachesOsmosisGap(f.ts));
+  if (chain === 'osmosis' && !gapped && totalFlowsRow.c > flows.length) {
+    const older = await db.prepare(`SELECT EXISTS (SELECT 1 FROM flows INDEXED BY flows_from WHERE from_addr = ?1 AND ts < ?2) OR EXISTS (SELECT 1 FROM flows INDEXED BY flows_to WHERE to_addr = ?1 AND ts < ?2) AS x`).bind(addr, OSMOSIS_GAP_UNTIL).first<{ x: number }>().catch(() => null);
+    // a read that failed says nothing either way: no sentence
+    gapped = !!older?.x;
+  }
 
   // 24 h / 7 d changes: the balance now (the live read, else the indexed one) minus the recorded chain read
   // at the start of each window; null when no reading covers it.
@@ -1038,6 +1049,7 @@ app.get('/api/address/:addr', async (c) => {
     change24h: ch?.d24 ?? null, change7d: ch?.d7 ?? null,
     links: (links.results || []).map((l: any) => ({ address: addr === l.osmo_addr ? l.namada_addr : l.osmo_addr, chain: (addr === l.osmo_addr ? 'namada' : 'osmosis') as any, transfers: l.transfers, volume: l.volume_num, lastSeen: l.last_seen })),
     totalFlowsCount: totalFlowsRow?.c ?? flows.length,
+    ...(gapped ? { flowsNote: osmosisGapCounts('This address\'s moves') } : {}),
     flows,
     // NAM only, each bridge crossing once (both chains record it): the same rule as the moves the sheet lists.
     counterparties: counterpartiesOf(flows, addr),
@@ -2089,7 +2101,10 @@ app.get('/api/metrics/history', async (c) => {
       if (older.length) history = [...older, ...history];
     }
   }
-  return c.json({ key, bucketMs: bucket, history });
+  // The executed price is made of stored Osmosis trades: a window reaching back before the stored Osmosis record is
+  // complete says so, as /api/series does for the same key (shared/osmosis-gap.ts).
+  const gap = key === 'price.swap_1h' && reachesOsmosisGap(from);
+  return c.json({ key, bucketMs: bucket, history, ...(gap ? { note: OSMOSIS_GAP_NOTE } : {}) });
 });
 
 app.route('/api/series', seriesApp); // the series and Trade-basics routes (worker/src/api-series.ts, screener-plan 2.12)

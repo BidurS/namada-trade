@@ -106,6 +106,8 @@ interface Loaded {
   asOf: number | null;
   last: { ts: number } | null | undefined;
   firstTs: number | null;
+  /** what the server said of the count (FlowsResponse.totalNote), kept with it */
+  totalNote: string | null;
   /** filters this server could not apply (the screen names them) */
   ignored: string[];
 }
@@ -171,6 +173,7 @@ export default function Transactions({
           p.total = r.total;
           p.exact = r.exact;
           p.countedAt = r.asOf ?? Date.now();
+          p.totalNote = r.totalNote ?? null;
           p.over = null;
         } else if (r.totalOver != null) {
           // the first page said "more than": the pages behind it say so too, never "counted only on the first page"
@@ -186,7 +189,7 @@ export default function Transactions({
         // an older server pages by number: more when its count says so; this one says it by `next`
         const more = r.cursorPaged ? r.next != null : page * size < (r.total ?? 0);
         // a position this server does not know is not a filter it ignored: it paged by number (always sent)
-        setData({ key, flows: r.flows, total, over, page, size, cursor: position, exact, more, asOf: r.asOf ?? null, last: r.last, firstTs: r.firstTs ?? p.firstTs, ignored: r.ignored.filter((k) => k !== 'before') });
+        setData({ key, flows: r.flows, total, over, page, size, cursor: position, exact, more, asOf: r.asOf ?? null, last: r.last, firstTs: r.firstTs ?? p.firstTs, totalNote: total != null ? p.totalNote : null, ignored: r.ignored.filter((k) => k !== 'before') });
       })
       .catch(() => {
         if (!ctl.signal.aborted) setError(page > 1 ? 'This page of moves could not be fetched from this site’s server.' : 'The list of moves could not be fetched from this site’s server.');
@@ -476,6 +479,8 @@ export default function Transactions({
                 {dated && before != null ? <>, before {fmtDayMonthYear(before)} (UTC)</> : rewound && at ? <>, at or before {fmtUtcLong(at)}</> : null}, newest first
                 {fresh.asOf != null && !rewound && !dated ? <> · <span className="act-at">read at {fmtUtcClock(fresh.asOf)}</span></> : null}
                 .
+                {/* the count takes Osmosis moves from before the stored Osmosis record is complete (shared/osmosis-gap.ts) */}
+                {fresh.totalNote ? <> {fresh.totalNote}</> : null}
                 {dated ? (
                   <>
                     {' '}

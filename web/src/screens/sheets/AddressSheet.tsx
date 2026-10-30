@@ -372,7 +372,7 @@ function Report({
           </div>
         ) : null}
 
-        <Moves moves={moves} loaded={flows.length} recorded={recorded} address={r.address} now={now} openAddress={openAddress} />
+        <Moves moves={moves} loaded={flows.length} recorded={recorded} note={r.flowsNote ?? null} address={r.address} now={now} openAddress={openAddress} />
 
         {last != null ? (
           <p className="sh-rw">
@@ -404,9 +404,10 @@ function Report({
 
 /**
  * The address's moves, newest first, each bridge crossing once. `moves`: the listed moves (crossings once);
- * `loaded`: the records they come from; `recorded`: every record of this address on file.
+ * `loaded`: the records they come from; `recorded`: every record of this address on file; `note`: why that record may
+ * be short (AddressReport flowsNote), said under the heading.
  */
-function Moves({ moves: flows, loaded, recorded, address, now, openAddress }: { moves: Flow[]; loaded: number; recorded: number; address: string; now: number; openAddress: (a: string) => void }) {
+function Moves({ moves: flows, loaded, recorded, note, address, now, openAddress }: { moves: Flow[]; loaded: number; recorded: number; note: string | null; address: string; now: number; openAddress: (a: string) => void }) {
   const [filter, setFilter] = useState<Filter>('all');
   const [n, setN] = useState(FIRST);
   const test = FILTERS.find((f) => f.value === filter)!.kinds;
@@ -421,6 +422,7 @@ function Moves({ moves: flows, loaded, recorded, address, now, openAddress }: { 
           {recorded > loaded ? `${fmtCount(recorded)} records, the newest ${fmtCount(loaded)} here` : fmtCount(flows.length)}
         </span>
       </h3>
+      {note ? <p className="sh-cap">{note}</p> : null}
       {twins > 0 ? (
         <p className="sh-cap">
           Each bridge crossing is listed once, by the chain it left: {twins === 1 ? 'one record' : `${fmtCount(twins)} records`} of the same crossing{twins === 1 ? '' : 's'} arriving on the other chain {twins === 1 ? 'is' : 'are'} left out.
