@@ -168,8 +168,12 @@ export interface IndexState {
   namadaHead: { height: number; at: number } | null;
   /** the LiveHub's Osmosis stream (kv osmosis.live), written about every minute while the LiveHub runs */
   osmosisLive: { connected: boolean; since: number | null; lastMsgAt: number | null; height: number | null; at: number } | null;
-  /** the last finished catch-up search of Osmosis (kv osmosis.cursor): it looked at the matching transactions up to `height` */
-  osmosisSweep: { height: number; at: number } | null;
+  /**
+   * the last finished catch-up search of Osmosis (kv osmosis.cursor): it looked at the matching transactions up to
+   * `height`. `note`: why the searches since have not finished (the cursor's error), and the short answers they did
+   * not take as the end of a query, from a node that may not hold the range (live-hub.ts OsmosisCursor `shallow`).
+   */
+  osmosisSweep: { height: number; at: number; note?: string } | null;
 }
 
 /** A Namada scanner that has not written its cursor for this long, or is this many blocks behind the head, is old. */
@@ -186,6 +190,12 @@ export const OSMOSIS_SWEEP_STALE_MS = 15 * 60000;
  * flows_chain_height (55,228 rows, on every overview, pressure and page render).
  */
 const LAST_MOVE_SQL = (chain: 'osmosis' | 'namada') => `(SELECT ts FROM flows INDEXED BY flows_ts WHERE ts <= ? AND chain = '${chain}' ORDER BY ts DESC LIMIT 1)`;
+
+/** IndexState osmosisSweep `note`: the cursor's error and its `shallow` note, each as the hub wrote it, at most 1,200 characters. */
+const sweepNote = (c: { error?: unknown; shallow?: { note?: unknown } }): { note?: string } => {
+  const note = [c.error, c.shallow?.note].filter((x): x is string => typeof x === 'string' && x.length > 0).join(' ').slice(0, 1200);
+  return note ? { note } : {};
+};
 
 export async function indexState(db: D1Database, asOf: number): Promise<IndexState> {
   const r = await db
@@ -207,7 +217,7 @@ export async function indexState(db: D1Database, asOf: number): Promise<IndexSta
     namadaCursor: Number.isFinite(ncH) && ncH > 0 && r?.nca ? { height: ncH, at: Number(r.nca) } : null,
     namadaHead: headH > 0 && r?.rca ? { height: headH, at: Number(r.rca) } : null,
     osmosisLive: live && r?.ola ? { connected: !!live.connected, since: live.since ?? null, lastMsgAt: live.lastMsgAt ?? null, height: live.height ?? null, at: Number(r.ola) } : null,
-    osmosisSweep: sweep && Number(sweep.height) > 0 && Number(sweep.at) > 0 ? { height: Number(sweep.height), at: Number(sweep.at) } : null,
+    osmosisSweep: sweep && Number(sweep.height) > 0 && Number(sweep.at) > 0 ? { height: Number(sweep.height), at: Number(sweep.at), ...sweepNote(sweep) } : null,
   };
 }
 

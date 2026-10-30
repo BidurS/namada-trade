@@ -103,8 +103,66 @@ export const OSMOSIS_SWEEP_MAX_BYTES = 24 * 1024 * 1024;
  * kv `osmosis.cursor`: every Osmosis transaction matching the queries up to `height` has been looked at. `skipped`:
  * the transactions a search could not read (each one alone past the cap on every node), newest last. `resume`: for a
  * search that did not finish, how far it read each query above `height`, so the next one goes on from there.
+ * `depth`: the fewest blocks a node answering a search's /status held behind its head (its latest height less its
+ * earliest_block_height), and when a node that shallow was last seen (nodeDepth). `shallow`: the short answers the
+ * last search did not take as the end of their query, because the range began below the blocks that depth reaches;
+ * dropped by the next search that finishes.
  */
-export interface OsmosisCursor { height: number; at: number; added?: number; error?: string; skipped?: { at: number; note: string }[]; resume?: Record<string, OsmosisResume> }
+export interface OsmosisCursor {
+  height: number; at: number; added?: number; error?: string; skipped?: { at: number; note: string }[]; resume?: Record<string, OsmosisResume>;
+  depth?: OsmosisDepth; shallow?: { at: number; note: string };
+}
+/**
+ * The shallowest node the searches have seen (OsmosisCursor `depth`): how many blocks it held behind its head, and
+ * when a node that shallow was last seen. `deeper`: once it has not been seen for OSMOSIS_DEPTH_KEEP_MS, the /status
+ * answers since then, all deeper (how many, and the fewest blocks among them), counted to OSMOSIS_DEPTH_RETIRE.
+ */
+export interface OsmosisDepth { blocks: number; at: number; deeper?: { blocks: number; n: number } }
+/**
+ * How long the shallowest depth seen stands on its own without a node that shallow seen again (OsmosisDepth).
+ * osmosis-rpc.publicnode.com answers each request from one of two backends: one held blocks from 73,431,644 (about 16
+ * hours), the other from 68,229,727 (2026-08-10), and its tx_search counted 123 and 3,913 swaps of pool 3005 from one
+ * request to the next (2026-10-29). A /status from the deep one says nothing of the one that answers the next read,
+ * so the search goes by the shallowest seen, which about half the searches' /status show. Past this time the kept
+ * depth still stands: only OSMOSIS_DEPTH_RETIRE deeper answers in a row retire it, never the first one after an
+ * outage, which is when the searches have the oldest range to read.
+ */
+export const OSMOSIS_DEPTH_KEEP_MS = 86_400_000;
+/**
+ * The /status answers in a row, each deeper than the kept depth and all after OSMOSIS_DEPTH_KEEP_MS, that retire it
+ * for the fewest blocks among them (the shallow backend gone, or grown past twice what was kept): with two backends
+ * taking turns at random, twelve answers in a row from the deep one while the shallow one still answers is one chance
+ * in 4,096. One a search, so twelve searches, an hour at OSMOSIS_SWEEP_EVERY_MS.
+ */
+export const OSMOSIS_DEPTH_RETIRE = 12;
+/**
+ * A /status depth of fewer blocks is not taken as a node's (nor is a kept one, from code before this rule): about an
+ * hour of Osmosis blocks (a block about every 0.86 s on 2026-10-29: heights 73,444,230 at 06:31 UTC and 73,489,118 at
+ * the 17:16 epoch block), against 350 between two searches. A backend that has just synced from a snapshot answers
+ * with a few hundred blocks; kept, it would hold every search's range below it and stop the cursor for as long as it
+ * stood, while such a node may only miss the minutes it has not yet synced.
+ */
+export const OSMOSIS_DEPTH_FLOOR = 4_000;
+/**
+ * The cursor's `depth` after a /status at `now` whose head is `head` and whose earliest_block_height is `earliest`:
+ * the fewer blocks of the kept and the new; a depth up to twice the kept one is the same backend seen again (it
+ * prunes in steps, or keeps growing from one earliest block) and keeps it current; a deeper one leaves it as it was,
+ * and once the kept one has not been seen for OSMOSIS_DEPTH_KEEP_MS, OSMOSIS_DEPTH_RETIRE of those in a row give way to
+ * the shallowest of them. An answer without an earliest height (or one above its head), or under OSMOSIS_DEPTH_FLOOR,
+ * says nothing, and the kept depth stays as it was.
+ */
+export function nodeDepth(kept: OsmosisDepth | undefined, head: number, earliest: unknown, now: number): OsmosisDepth | undefined {
+  const e = typeof earliest === 'string' && /^\d+$/.test(earliest) ? Number(earliest) : typeof earliest === 'number' ? earliest : NaN;
+  const seen = Number.isSafeInteger(e) && e > 0 && e <= head ? head - e : null;
+  const k = kept && Number.isSafeInteger(kept.blocks) && kept.blocks >= OSMOSIS_DEPTH_FLOOR && Number.isFinite(kept.at) ? kept : undefined;
+  if (seen == null || seen < OSMOSIS_DEPTH_FLOOR) return k;
+  if (!k || seen <= k.blocks) return { blocks: seen, at: now };
+  if (seen <= 2 * k.blocks) return { blocks: k.blocks, at: now };
+  if (now - k.at <= OSMOSIS_DEPTH_KEEP_MS) return k;
+  const d = k.deeper && Number.isSafeInteger(k.deeper.blocks) && Number.isSafeInteger(k.deeper.n) && k.deeper.n > 0
+    ? { blocks: Math.min(k.deeper.blocks, seen), n: k.deeper.n + 1 } : { blocks: seen, n: 1 };
+  return d.n >= OSMOSIS_DEPTH_RETIRE ? { blocks: d.blocks, at: now } : { blocks: k.blocks, at: k.at, deeper: d };
+}
 /**
  * Where a catch-up search that did not finish left one query. The search can only page from the newest transaction,
  * so a query with more than OSMOSIS_SWEEP_PAGES pages above the cursor (they came faster than the searches, or the
@@ -191,6 +249,40 @@ const OSMO_ROWLESS_MAX = 2000;
  */
 export const ALARM_LEASE_MS = 10 * 60_000;
 
+/**
+ * metrics `site.live_sockets`: the most sockets the hub held open at once in an hour (the live feed's readers, counted
+ * as one number: nothing of a socket is kept), labelled with the hour's start and written once, at the first alarm
+ * after the hour ends. `site.live_sockets.minutes`, beside it: how many minutes of the hour the count covered (60, or
+ * fewer when it began after the hour did: the first hour after a deploy that brought the count, or a count the
+ * object's storage could not give back). An hour with no row was not counted (no instance ran in it); it is never 0.
+ * No route serves them (api.ts HISTORY_KEYS says why): the owner reads them in D1.
+ */
+export const LIVE_SOCKETS_KEY = 'site.live_sockets';
+export const LIVE_SOCKETS_MINUTES_KEY = `${LIVE_SOCKETS_KEY}.minutes`;
+/** The hour's count so far, kept in the object's storage at most this often, so a restart (a deploy) goes on counting the hour. */
+export const SOCKET_MARK_SAVE_MS = 60_000;
+/** Hours ended whose row could not be written yet (D1 refused), kept for the next alarms: the newest this many. */
+export const SOCKET_MARKS_KEPT = 48;
+/** The object's storage key of the count (SocketMarks). */
+export const SOCKET_MARK_STORE = 'sockets.mark';
+/** One hour's count of open sockets: the hour's start, the most open at once, and from when in the hour it was counted. */
+export interface SocketMark { hour: number; max: number; from: number }
+interface SocketMarks { now: SocketMark | null; done: SocketMark[] }
+const HOUR_MS = 3_600_000;
+const isMark = (m: unknown): m is SocketMark => {
+  const x = m as SocketMark | null;
+  return !!x && Number.isInteger(x.hour) && x.hour % HOUR_MS === 0 && Number.isInteger(x.max) && x.max >= 0 && Number.isFinite(x.from) && x.from >= x.hour && x.from < x.hour + HOUR_MS;
+};
+/**
+ * The rows of an hour ended: the most sockets open at once and the minutes counted, each kept at the higher of the
+ * stored and the new value, so an hour written again (a restart before the storage took the write) never lowers it.
+ */
+export function liveSocketStmts(m: SocketMark) {
+  const sql = 'INSERT INTO metrics (ts,key,value) VALUES (?,?,?) ON CONFLICT(key, ts) DO UPDATE SET value = MAX(value, excluded.value)';
+  const minutes = Math.max(0, Math.min(60, Math.round((m.hour + HOUR_MS - m.from) / 60_000)));
+  return [{ sql, params: [m.hour, LIVE_SOCKETS_KEY, m.max] }, { sql, params: [m.hour, LIVE_SOCKETS_MINUTES_KEY, minutes] }];
+}
+
 export class LiveHub extends DurableObject<Env> {
   private sessions = new Set<WebSocket>();
   /** The client each socket came from (client-key.ts: an IPv4 address, an IPv6 /64 and /48; ws-admit.ts caps each). */
@@ -271,6 +363,20 @@ export class LiveHub extends DurableObject<Env> {
   /** The NAM quote new moves are priced at, as osmoCtx.priceUsd: null when none is fresh (worker/src/live-quote.ts). */
   private lastPriceUsd: number | null = null;
   private quote: HubQuote;
+  /**
+   * The pool addresses and the first quote (refreshContext), read once the constructor has returned. An Osmosis move
+   * parsed before the pool addresses are known would book a deposit to a pool as a plain transfer, so the stream's
+   * messages wait for it and the catch-up search starts only once it is read (or failed, as before); the sockets
+   * and the Namada scan never wait for it. `contextRead`: it has settled.
+   */
+  private context?: Promise<void>;
+  private contextRead = false;
+  /** The hour of open sockets being counted (metrics site.live_sockets), and the hours ended and not yet written. */
+  private socketMark: SocketMark | null = null;
+  private socketMarksDone: SocketMark[] = [];
+  /** What the object's storage last took of the count (SOCKET_MARK_STORE), and when. */
+  private socketMarkSaved: string | null = null;
+  private socketMarkSavedAt = 0;
   private osmoCtx: OsmoCtx = {
     poolAddrs: new Map(),
     priceUsd: null,
@@ -283,17 +389,22 @@ export class LiveHub extends DurableObject<Env> {
     registerSecrets(env.KEPLR_KEY);
     // the cron's own read (the price list, else the route's spot), with the source name and note that say which
     this.quote = new HubQuote(askQuoteService, storedQuoteReader(env.DB));
+    // Only the object's own storage inside: while it runs no socket is accepted and no alarm runs, and the pool
+    // addresses and the first quote come from the Osmosis router, which can answer slowly for a minute and more
+    // (own audit 2026-10-29, Low 14). They are read after it (context), and only Osmosis moves wait for them.
     this.ctx.blockConcurrencyWhile(async () => {
-      // Initialize pool mappings & price
-      await this.refreshContext();
       // Schedule first alarm for Namada polling
       const currentAlarm = await this.ctx.storage.getAlarm();
       if (!currentAlarm) {
         await this.ctx.storage.setAlarm(Date.now() + 2000);
       }
-      // Connect to Osmosis WS
-      this.ensureOsmosisWs();
+      await this.loadSocketMark();
     });
+    this.context = this.refreshContext()
+      .catch((e) => console.error('refreshContext error:', e))
+      .finally(() => { this.contextRead = true; });
+    // Connect to Osmosis WS (its messages wait for the context: handleOsmosisMessage)
+    this.ensureOsmosisWs();
   }
 
   /**
@@ -378,9 +489,11 @@ export class LiveHub extends DurableObject<Env> {
     console.log('Connected to Osmosis WebSocket');
 
     ws.addEventListener('message', async (event) => {
+      // the time it came, which a wait for the pool addresses does not move (handleOsmosisMessage)
+      const at = Date.now();
       try {
         const msg = JSON.parse(event.data as string);
-        await this.handleOsmosisMessage(msg);
+        await this.handleOsmosisMessage(msg, at);
       } catch (e) {
         console.error('Error handling Osmosis WS message:', e);
       }
@@ -420,10 +533,14 @@ export class LiveHub extends DurableObject<Env> {
     this.broadcastStatus();
   }
 
-  private async handleOsmosisMessage(msg: any) {
-    const norm = normFromWs(msg, Date.now());
+  /** One stream message, `at` the time it came: a move's time is when the stream gave it (normFromWs). */
+  private async handleOsmosisMessage(msg: any, at = Date.now()) {
+    // Read with the pool addresses: a message that comes before they are read waits for them (in order, as it came),
+    // and keeps the time it came, not the time the wait ended (the router can take a minute and more).
+    if (this.context && !this.contextRead) await this.context;
+    const norm = normFromWs(msg, at);
     if (!norm) return;
-    this.osmoLastMsgAt = Date.now();
+    this.osmoLastMsgAt = at;
 
     // Deduplicate multiple WS subscription matches for the same Osmosis tx hash. The hash is held while the
     // transaction is written (the other subscriptions' copies of it return here) and stays seen only once its rows
@@ -835,8 +952,12 @@ export class LiveHub extends DurableObject<Env> {
         this.lastLiveReport = t;
         await kvSet(this.env.DB, 'osmosis.live', { connected: !!this.osmoWs, since: this.osmoSince, lastMsgAt: this.osmoLastMsgAt, height: this.osmoHeight || null }).catch(() => {});
       }
-      // A search that would start after the deadline waits for the next alarm, still due.
-      if (!deadline.signal.aborted && (this.needSweep || t - this.lastSweep >= OSMOSIS_SWEEP_EVERY_MS)) {
+      // The hour's count of open sockets, and the hours ended written once each.
+      await this.noteSockets(t).catch((e) => console.error('live sockets: the hour\'s count was not written:', e));
+      // A search that would start after the deadline waits for the next alarm, still due; so does one before the pool
+      // addresses are read (the constructor's context), which would book a deposit to a pool as a transfer.
+      const contextIn = !this.context || this.contextRead;
+      if (!deadline.signal.aborted && contextIn && (this.needSweep || t - this.lastSweep >= OSMOSIS_SWEEP_EVERY_MS)) {
         this.lastSweep = t;
         this.needSweep = false;
         await this.sweepOsmosis(deadline.signal, alerts).catch((e) => console.error('Osmosis catch-up search:', e));
@@ -1151,7 +1272,9 @@ export class LiveHub extends DurableObject<Env> {
    * The pages it keeps transactions of share OSMOSIS_SWEEP_MAX_BYTES: a search that reaches it is not complete. A page
    * past the cap on every node is the same chain data on both: it is read again in pages of 10, and one of those past
    * it in pages of 1; a single transaction past it is skipped and named in the cursor (`skipped`), so the query still
-   * answers and the search can finish.
+   * answers and the search can finish. A short answer ends a query only when the nodes are known to hold the blocks it
+   * answers for (nodeDepth, the cursor's `depth`, from the search's one /status): the public node's shallow backend,
+   * after an outage longer than its history, answers short for want of the blocks, and the cursor never passes them.
    */
   private async sweepOsmosis(signal?: AbortSignal, alerts?: AlertBudget) {
     const prev = await kvGetJson<OsmosisCursor>(this.env.DB, 'osmosis.cursor');
@@ -1195,8 +1318,15 @@ export class LiveHub extends DurableObject<Env> {
       if (large === rpcs.length) throw overBudget ?? tooLarge;
       throw last ?? (tooLarge ? new Error(`only some nodes answered, past the cap: ${String(tooLarge)}`) : new Error('the catch-up search passed the alarm deadline'));
     };
-    const head = Number((await get('/status'))?.result?.sync_info?.latest_block_height) || 0;
+    const status = await get('/status');
+    const head = Number(status?.result?.sync_info?.latest_block_height) || 0;
     if (!head) throw new Error('no Osmosis head height');
+    // How far back the nodes answering this search are known to hold blocks (nodeDepth, from this /status and the
+    // ones before it: no other read is made for it). A query's short answer is the end of the query only when what it
+    // says is absent starts at or above `knownFrom` (walk); with no depth known, as before.
+    const depth = nodeDepth(prev?.depth, head, status?.result?.sync_info?.earliest_block_height, Date.now());
+    const knownFrom = depth ? head - depth.blocks : -Infinity;
+    const shallowNotes: string[] = [];
     // A stream transaction whose write failed is read again even below the cursor (handleOsmosisMessage).
     const retryGen = this.osmoRetryGen;
     const floor = Math.min(prev?.height ?? 0, this.osmoRetryFrom != null ? this.osmoRetryFrom - 1 : Infinity);
@@ -1271,6 +1401,17 @@ export class LiveHub extends DurableObject<Env> {
       return { n: txs.length, low: txs.length ? Math.min(...hs) : Infinity, high: txs.length ? Math.max(...hs) : -Infinity };
     };
     /**
+     * Whether a short answer `r` of query `q` is the end of the query: it says the query has nothing older from block
+     * `from` up, which a node can say only of blocks it holds. A node shallower than that (the public node's shallow
+     * backend after an outage of the searches longer than its 16 hours) answers short for want of the blocks, so its
+     * answer is not taken: the query is not done, the cursor stays, and the note says why (the cursor's `shallow`).
+     */
+    const ends = (q: string, r: { low: number }, from: number) => {
+      if (from >= knownFrom) return true;
+      shallowNotes.push(`query "${q}": the answer ended ${Number.isFinite(r.low) ? `at block ${r.low}` : 'with no transaction'}, and the nodes are known to hold blocks only from ${knownFrom}, above block ${from} where the range starts; it is asked again`);
+      return false;
+    };
+    /**
      * One query, newest first, at most OSMOSIS_SWEEP_PAGES pages: down to the floor or, with the place the last search
      * left (`old`), down to its top and then on from the page its last transaction should be on, counted from the
      * newest with what came since. That page is taken only when it holds that transaction or its newest transaction is
@@ -1278,9 +1419,10 @@ export class LiveHub extends DurableObject<Env> {
      * little lower); else the page before it is read. `rows`: the transactions read from the newest down and from the
      * page taken on. `done`: the query was read down to the floor. `old`: the place gone on from, whose transactions
      * lie between those read from the newest and those read from the page taken (null when it was not gone on from).
-     * `stand`: the answers did not reach the place, which stands as it was.
+     * `stand`: the answers did not reach the place, which stands as it was. `shallow`: a short answer was not taken as
+     * the end of the query (ends).
      */
-    const walk = async (q: string, old: OsmosisResume | null, rows: Map<string, Row>): Promise<{ done: boolean; old: OsmosisResume | null; stand?: boolean }> => {
+    const walk = async (q: string, old: OsmosisResume | null, rows: Map<string, Row>): Promise<{ done: boolean; old: OsmosisResume | null; stand?: boolean; shallow?: boolean }> => {
       const after = { height: null as number | null };
       let pages = 0, page = 0;
       const read = (p: number, into = rows) => { pages++; return search(q, p, 50, after, into); };
@@ -1292,9 +1434,14 @@ export class LiveHub extends DurableObject<Env> {
         const r = await read(++page);
         if (r.low <= floor) return { done: true, old: null };
         if (r.low <= stop) break;
-        // The end of the query: it is read down to the floor, or a node that does not have the place's transactions
-        // answered (the place stands for the next search).
-        if (r.n < 50) return old && old.n > 0 ? { done: false, old, stand: true } : { done: true, old: null };
+        // The end of the query: it is read down to the floor (below the place's top, the place covers it), or a node
+        // that does not have the place's transactions answered (the place stands for the next search), or one whose
+        // blocks may not reach back that far (ends).
+        if (r.n < 50) {
+          if (old && old.n > 0) return { done: false, old, stand: true };
+          if (ends(q, r, old && old.low <= floor ? old.top + 1 : floor + 1)) return { done: true, old: null };
+          return { done: false, old, stand: !!old, shallow: true };
+        }
       }
       if (!old || !old.last || old.low <= floor) return { done: true, old };
       const fromTop = page;
@@ -1314,7 +1461,7 @@ export class LiveHub extends DurableObject<Env> {
         }
         for (const [hash, x] of into) { rows.set(hash, x); if (hash === old.last || x.h < old.low) past = true; }
         if (r.low <= floor) return { done: true, old };
-        if (r.n < 50) return past ? { done: true, old } : { done: false, old, stand: true };
+        if (r.n < 50) return past && ends(q, r, floor + 1) ? { done: true, old } : { done: false, old, stand: true };
         page++;
       }
       // No page taken: the place does not fit what the nodes answer now, and only the pages from the newest count.
@@ -1333,7 +1480,7 @@ export class LiveHub extends DurableObject<Env> {
       return [...this.osmoRetryTx.values()].some((h) => h >= from && h <= o.top) ? null : o;
     };
     let complete = true;
-    const walks = new Map<string, { done: boolean; old: OsmosisResume | null; stand?: boolean; rows: Map<string, Row> } | null>();
+    const walks = new Map<string, { done: boolean; old: OsmosisResume | null; stand?: boolean; shallow?: boolean; rows: Map<string, Row> } | null>();
     for (const q of OSMOSIS_QUERIES) {
       const rows = new Map<string, Row>();
       try {
@@ -1439,6 +1586,9 @@ export class LiveHub extends DurableObject<Env> {
         if (!w) { if (carried) resume[q] = carried; continue; }
         const old = w.old;
         if (w.stand && old) { resume[q] = old; continue; }
+        // A short answer not taken (walk `shallow`) leaves no place of its own: the page after it is past what that node
+        // holds (an error), and the next search reads from the newest again, down to the cursor on a node that has it.
+        if (w.shallow) continue;
         const list = [...w.rows].map(([hash, x], i) => ({ hash, ...x, i }));
         const inRange = (x: { h: number }) => x.h > floor && x.h <= head;
         const oldAt = old?.last ? list.findIndex((x) => x.hash === old.last) : -1;
@@ -1456,8 +1606,10 @@ export class LiveHub extends DurableObject<Env> {
         // index may not give that block's transaction yet, and a place from this search's reads would take this head
         // as top over it. Its top stays below the block, so the next search reads the block from the newest.
         if (holds && old && ((cut && cut.h > old.top) || held > old.top)) { resume[q] = old; continue; }
-        // Read down to the floor: the next search reads it down to this head only (none read: it reads one page).
-        if (w.done && !cut) { if (list.some(inRange)) resume[q] = { top: head, low: floor, n: 0 }; continue; }
+        // Read down to the floor: the next search reads it down to this head only (none read: it reads one page, except
+        // while the range starts below what the nodes are known to hold, where that page may come from a node that
+        // cannot end the query: the place keeps what this search found, so each query has to be ended only once).
+        if (w.done && !cut) { if (list.some(inRange) || floor + 1 < knownFrom) resume[q] = { top: head, low: floor, n: 0 }; continue; }
         const aboveHead = list.filter((x) => x.h > head).length;
         const last = list.filter((x) => inRange(x) && (!cut || x.i < cut.i)).at(-1);
         // Nothing read before the cut: a place the walk went on from is kept only while it holds, since one that does
@@ -1468,11 +1620,17 @@ export class LiveHub extends DurableObject<Env> {
       }
     }
     const behind = Object.keys(resume).length > 0;
+    // The depth the nodes are known to hold, and the short answers not taken for it: kept until a search finishes
+    // (the cron's osmosis_index check carries them with the cursor's error, analytics.ts indexState).
+    for (const note of shallowNotes) console.warn(`Osmosis catch-up search: ${note}`);
+    const shallow = shallowNotes.length ? { at: now, note: shallowNotes.join('; ').slice(0, 1000) } : complete ? undefined : prev?.shallow;
+    const known = { ...(depth ? { depth } : {}), ...(shallow ? { shallow } : {}) };
     const next: OsmosisCursor = complete
-      ? { height: upTo, at: Date.now(), added, ...kept }
+      ? { height: upTo, at: Date.now(), added, ...kept, ...known }
       : {
-          height: prev?.height ?? 0, at: prev?.at ?? 0, added, ...kept,
-          error: behind ? 'The last catch-up search did not finish; the next one goes on from where it stopped.' : 'The last catch-up search did not finish; it is retried.',
+          height: prev?.height ?? 0, at: prev?.at ?? 0, added, ...kept, ...known,
+          error: shallowNotes.length ? 'The last catch-up search did not finish: a node answered from blocks that may not reach back to the cursor, and the next search asks again.'
+            : behind ? 'The last catch-up search did not finish; the next one goes on from where it stopped.' : 'The last catch-up search did not finish; it is retried.',
           ...(behind ? { resume } : {}),
         };
     if (complete || prev) await kvSet(this.env.DB, 'osmosis.cursor', next);
@@ -1485,8 +1643,84 @@ export class LiveHub extends DurableObject<Env> {
       try {
         ws.send(raw);
       } catch {
-        this.sessions.delete(ws);
+        this.dropSocket(ws);
       }
+    }
+  }
+
+  /** A socket leaves the hub: counted first, so an hour that ended since the last count still holds it. */
+  private dropSocket(ws: WebSocket) {
+    if (!this.sessions.has(ws)) return;
+    this.countSockets();
+    this.sessions.delete(ws);
+  }
+
+  /**
+   * The hour's count of open sockets (SocketMark), called after a socket is added, before one leaves, and at every
+   * alarm: nothing changed since the last call, so the sockets open now were open when an hour that began since then
+   * began. That hour is ended (kept for its row) and the new one starts from them, then the count is raised to the
+   * sockets open now. The first count of an instance with nothing stored for the hour starts now, not at the hour.
+   */
+  private countSockets(now = Date.now()) {
+    const hour = Math.floor(now / HOUR_MS) * HOUR_MS;
+    const n = this.sessions.size;
+    let m = this.socketMark;
+    if (!m) m = { hour, max: n, from: now };
+    else if (m.hour !== hour) {
+      this.socketMarksDone = [...(this.socketMarksDone ?? []), m].slice(-SOCKET_MARKS_KEPT);
+      m = { hour, max: n, from: hour };
+    }
+    if (n > m.max) m = { ...m, max: n };
+    this.socketMark = m;
+  }
+
+  /**
+   * The count as the object's storage kept it (SOCKET_MARK_STORE), read in the constructor: this hour's goes on (a
+   * restart, or a deploy, keeps the hour's count), an earlier hour's is ended and written by the next alarm. One that
+   * cannot be read starts a count now.
+   */
+  private async loadSocketMark() {
+    const now = Date.now();
+    const hour = Math.floor(now / HOUR_MS) * HOUR_MS;
+    let kept: SocketMarks | undefined;
+    try { kept = await this.ctx.storage.get<SocketMarks>(SOCKET_MARK_STORE); } catch (e) { console.error('live sockets: the stored count could not be read:', e); }
+    const done = Array.isArray(kept?.done) ? kept.done.filter(isMark) : [];
+    const m = isMark(kept?.now) ? kept.now : null;
+    if (m && m.hour === hour) this.socketMark = { ...m, max: Math.max(m.max, this.sessions.size) };
+    else {
+      if (m && m.hour < hour) done.push(m);
+      this.socketMark = { hour, max: this.sessions.size, from: now };
+    }
+    this.socketMarksDone = [...this.socketMarksDone, ...done].slice(-SOCKET_MARKS_KEPT);
+  }
+
+  /**
+   * At every alarm: the count (countSockets), each hour ended written to metrics in one batch (liveSocketStmts), and
+   * the count kept in the object's storage when it changed, at most every SOCKET_MARK_SAVE_MS and at once after a
+   * write. A write that fails keeps its hours for the next alarm.
+   */
+  private async noteSockets(now = Date.now()) {
+    this.countSockets(now);
+    let wrote = false;
+    const done = (this.socketMarksDone ??= []);
+    if (done.length) {
+      try {
+        await runBatch(this.env.DB, done.flatMap(liveSocketStmts));
+        this.socketMarksDone = this.socketMarksDone.filter((m) => !done.includes(m));
+        wrote = true;
+      } catch (e) {
+        console.error(`live sockets: ${done.length} hour(s) not written, tried again next alarm:`, e);
+      }
+    }
+    const v: SocketMarks = { now: this.socketMark, done: this.socketMarksDone };
+    const s = JSON.stringify(v);
+    if (s === this.socketMarkSaved || (!wrote && now - this.socketMarkSavedAt < SOCKET_MARK_SAVE_MS)) return;
+    try {
+      await this.ctx.storage.put(SOCKET_MARK_STORE, v);
+      this.socketMarkSaved = s;
+      this.socketMarkSavedAt = now;
+    } catch (e) {
+      console.error('live sockets: the count was not kept in storage:', e);
     }
   }
 
@@ -1518,6 +1752,7 @@ export class LiveHub extends DurableObject<Env> {
       server.accept();
       this.sessions.add(server);
       this.clients.set(server, who);
+      this.countSockets();
 
       // Send initial hello
       server.send(
@@ -1535,15 +1770,15 @@ export class LiveHub extends DurableObject<Env> {
         }
         // The feed is one way: nothing a client sends is read or relayed, and a client that sends anything else is
         // disconnected (so a stream of large frames cannot keep the hub busy).
-        this.sessions.delete(server);
+        this.dropSocket(server);
         try { server.close(1008, 'the feed is one way'); } catch {}
       });
 
       server.addEventListener('close', () => {
-        this.sessions.delete(server);
+        this.dropSocket(server);
       });
       server.addEventListener('error', () => {
-        this.sessions.delete(server);
+        this.dropSocket(server);
       });
 
       return new Response(null, { status: 101, webSocket: client });

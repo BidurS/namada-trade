@@ -1983,7 +1983,8 @@ export async function runCron(env: Env) {
       }
     }
 
-    // This site's own flow index: the Namada block scanner against the node head, the Osmosis stream and catch-up.
+    // This site's own flow index: the Namada block scanner against the node head, the Osmosis stream and catch-up
+    // (with why the catch-up search has not finished, when it has not: indexState's note).
     const ix = await indexState(env.DB, now).catch(() => null);
     if (ix) {
       const c = ix.namadaCursor;
@@ -1995,7 +1996,7 @@ export async function runCron(env: Env) {
       const streaming = !!l && l.connected && now - l.at <= OSMOSIS_LIVE_STALE_MS;
       const swept = !!sw && now - sw.at <= OSMOSIS_SWEEP_STALE_MS;
       checkStmts.push(stmt.check('osmosis_index', streaming && swept ? 'ok' : streaming || swept ? 'warn' : 'fail',
-        'This site\'s Osmosis flow index: live stream and catch-up search', { streaming, lastStreamReport: l?.at ?? null, sweptToHeight: sw?.height ?? null, sweptAt: sw?.at ?? null }, now));
+        'This site\'s Osmosis flow index: live stream and catch-up search', { streaming, lastStreamReport: l?.at ?? null, sweptToHeight: sw?.height ?? null, sweptAt: sw?.at ?? null, sweepNote: sw?.note ?? null }, now));
     }
     // How much of the last 24 h of Osmosis moves reached the site only through the catch-up search, not the live
     // stream: hourly (its last run read by key), one read of the day's rows by time (STREAM_SHARE_SQL). A read that
