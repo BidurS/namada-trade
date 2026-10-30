@@ -2,10 +2,11 @@
 // price and the shielded share, one SourceLine). Evidence: one <details> per question, open by
 // default so every answer is visible text (seo-requirements Must 3) and each can be folded
 // away; the H2 is the question and the answer's first sentence answers it. Where a figure makes
-// the answer concrete it sits under the text with its own source line.
-import type { ReactNode } from 'react';
+// the answer concrete it sits under the text with its own source line. The last question names the
+// site's own links (the footer links to it, #q-official), each name in the answer a link.
+import { useEffect, type ReactNode } from 'react';
 import type { ScreenProps } from '../../app/index';
-import { REWIND_WORDS, useOverlays, useReplay } from '../../app/index';
+import { REWIND_WORDS, useLocation, useOverlays, useReplay } from '../../app/index';
 import { BODY, SITE } from '../../../../shared/copy';
 import { Button, Icon, Num, derive, fmtPriceNode, type Stamp } from '../../ui';
 import { fmtNamRule, fmtPctRule, fmtPctSigned } from '../../lib/format';
@@ -21,7 +22,29 @@ const STATES: { status: 'fresh' | 'old' | 'none' | 'disagree'; word: string; tex
   { status: 'disagree', word: 'Sources disagree', text: 'Two sources give different values: a wavy underline, and both are in its source sheet.' },
 ];
 
-function Q({ id, h2, paras, children }: { id: string; h2: string; paras: string[]; children?: ReactNode }) {
+/** The site's own links, as the last answer names them (shared/copy.ts reads them from SITE). */
+const OFFICIAL: { text: string; href: string; out: boolean }[] = [
+  { text: new URL(SITE.origin).host, href: `${SITE.origin}/`, out: false },
+  { text: `@${new URL(SITE.x).pathname.slice(1)}`, href: SITE.x, out: true },
+  { text: `@${SITE.telegram.bot}`, href: `https://t.me/${SITE.telegram.bot}`, out: true },
+  { text: SITE.repo.replace(/^https:\/\//, ''), href: SITE.repo, out: true },
+];
+
+/** `text` with each of `links` it names, in their order, as a link; the words are the copy's, unchanged. */
+function withLinks(text: string, links: typeof OFFICIAL): ReactNode[] {
+  const out: ReactNode[] = [];
+  let rest = text;
+  for (const l of links) {
+    const at = rest.indexOf(l.text);
+    if (at < 0) continue;
+    out.push(rest.slice(0, at), <a key={l.href} href={l.href} {...(l.out ? { target: '_blank', rel: 'noopener noreferrer me' } : {})}>{l.text}</a>);
+    rest = rest.slice(at + l.text.length);
+  }
+  out.push(rest);
+  return out;
+}
+
+function Q({ id, h2, paras, children }: { id: string; h2: string; paras: ReactNode[]; children?: ReactNode }) {
   return (
     <details className="seo-q" open>
       <summary className="seo-q__s">
@@ -42,7 +65,21 @@ export function Faq({ route }: ScreenProps) {
   const { rewound } = useReplay();
   const { openSources } = useOverlays();
   const { o, loading } = useOv();
-  const [qPrice, qShielded, qAge, qData, qBuy, qNot, qWho] = copy.sections!;
+  const loc = useLocation();
+  // one name per section of the copy, in its order: each is drawn below as one question
+  const [qPrice, qShielded, qAge, qData, qBuy, qBook, qNot, qWho, qOfficial] = copy.sections!;
+
+  // #q-official (the footer's link) or another question: scroll there once the figures above it are drawn (the
+  // shell scrolls to the top on a new path)
+  useEffect(() => {
+    let id = '';
+    try { id = decodeURIComponent(loc.hash.slice(1)); } catch { return; }
+    if (!id || loading) return;
+    const el = document.getElementById(id);
+    if (!el) return;
+    const raf = requestAnimationFrame(() => el.scrollIntoView({ block: 'start' }));
+    return () => cancelAnimationFrame(raf);
+  }, [loc.hash, loading]);
 
   const priceP: Stamp | null = o ? o.price.usd.prov : null;
   const tradeP: Stamp | null = o ? o.price.swap1h.prov : null;
@@ -137,6 +174,10 @@ export function Faq({ route }: ScreenProps) {
             <GoLink to="/trade">What a purchase of a given size costs now</GoLink>
           </Q>
 
+          <Q id="q-book" h2={qBook.h2} paras={qBook.paras}>
+            <GoLink to="/depth">What rests at every price, pool by pool</GoLink>
+          </Q>
+
           <Q id="q-not" h2={qNot.h2} paras={qNot.paras}>
             <p className="seo-p">{SITE.privacy}</p>
           </Q>
@@ -144,6 +185,8 @@ export function Faq({ route }: ScreenProps) {
           <Q id="q-who" h2={qWho.h2} paras={qWho.paras}>
             <GoLink to="/guides">Guides to Namada, with their sources</GoLink>
           </Q>
+
+          <Q id="q-official" h2={qOfficial.h2} paras={[withLinks(qOfficial.paras[0], OFFICIAL), ...qOfficial.paras.slice(1)]} />
         </div>
         {rewound ? <Say>{REWIND_WORDS.bannerMore}</Say> : null}
         <Related paths={['/trade', '/shielded', '/staking', '/osmosis', '/learn/how-nam-trading-works', '/guides']} />

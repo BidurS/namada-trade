@@ -195,6 +195,8 @@
   .foot__brand b { color: var(--accent-text); font-weight: var(--w-bold); }
   .foot__snap { margin-top: var(--s-3); font: var(--t-12) / 16px var(--font-code); color: var(--c-ink-2); max-width: 42ch; }
   .foot__legal { font-size: var(--t-13); line-height: 20px; color: var(--c-ink-2); max-width: 60ch; display: grid; gap: var(--s-2); }
+  /* "Official links" after the line on what the site never does: a link in running text, in the links' ink */
+  .foot__legal a { color: var(--c-ink); text-underline-offset: 3px; }
   .foot__links { display: flex; flex-wrap: wrap; gap: 0 var(--s-5); }
   /* no min-width (it widened "API" and left uneven gaps); the ::after adds 11 px each side, so a short
      word still has a 44 px target, and 11 + 11 stays under the 24 px gap between neighbours */

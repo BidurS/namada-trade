@@ -4,7 +4,8 @@
 // carry everywhere else (shared/routes.ts labels: Questions, Guides, Staking, Holders, NAM on Osmosis, Depth, How NAM
 // trading works; EXPLAINER_ROUTES plus the depth page, seo-requirements "New pages": link from the footer).
 // Then "Source code": the public repository (owner decision 4, SITE.repo), and "X", the site's account (SITE.x),
-// each opening in a new tab.
+// each opening in a new tab. Under the disclaimer, one line against people who borrow the site's name: what it never
+// does (SITE.neverAsks) and a link to the questions page's answer that names its own links (/faq#q-official).
 import { ROUTES, SITE, type RouteId } from '../../../shared/routes';
 import { Mark, Wordmark } from '../ui/Wordmark';
 import { fmtAgo, fmtUtcLong } from '../lib/format';
@@ -59,6 +60,7 @@ export function Footer() {
             {flowsAt ? `; this site's own record of moves current as of ${fmtAgo(flowsAt, now)}.` : '.'}
           </p>
           <p>{SITE.disclaimer}</p>
+          <p>{SITE.neverAsks} <Link to="/faq#q-official">Official links</Link></p>
         </div>
         <ul className="foot__links">
           <li>

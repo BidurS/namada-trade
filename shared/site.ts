@@ -27,6 +27,13 @@ export const SITE = {
    */
   telegram: { bot: 'NamadaTrade_bot', channel: null as string | null },
   disclaimer: 'NamadaTrade reports public on-chain and exchange data. It is not investment advice and is not affiliated with Namada or the Anoma Foundation.',
+  /**
+   * What the site never does, said where people who borrow its name are met (plan Stage 1, identity basics): the
+   * footer's line beside its link to the official links, and the second paragraph of the questions page's
+   * "Which links are NamadaTrade's own?". Must stay true: the bot writes only to chats that linked themselves
+   * (worker/src/telegram-bot.ts), and the only signature asked for is the sign-in, which moves nothing.
+   */
+  neverAsks: 'NamadaTrade never sends a direct message first, never asks for a seed phrase and has no support staff.',
   /** Footer, first sentence; the view appends how current the flow records are. */
   provenance: 'Every number shows its source and age.',
   /** The data sources, in the words the footer uses. */

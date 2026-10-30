@@ -42,6 +42,11 @@ export const VALUE_WORDS = {
 import { SITE } from './site';
 export { SITE };
 
+/** The site's own links as the questions page writes them: namada.trade, namadatrade, github.com/BidurS/namada-trade. */
+const SITE_HOST = new URL(SITE.origin).host;
+const X_HANDLE = new URL(SITE.x).pathname.slice(1);
+const REPO_PATH = SITE.repo.replace(/^https:\/\//, '');
+
 export interface CopySection {
   /** An H2, written as the question it answers. */
   h2: string;
@@ -294,6 +299,14 @@ export const BODY: Record<string, PageCopy> = {
         h2: 'Is NamadaTrade run by the Namada team?',
         paras: [
           'No. NamadaTrade is an independent site. It is not run by or affiliated with the Anoma Foundation, which operates namada.net, with Heliax, or with any other team that builds Namada. It reads public data from Namada and Osmosis, and its guides cite Namada\'s own docs, specs, site, blog or code for each paragraph about the network.',
+        ],
+      },
+      {
+        // The footer links here (/faq#q-official). The links are read from SITE, so a handle changes in one place.
+        h2: 'Which links are NamadaTrade\'s own?',
+        paras: [
+          `NamadaTrade's own links are this site, ${SITE_HOST}, its X account @${X_HANDLE}, its Telegram bot @${SITE.telegram.bot} and its source code on GitHub, ${REPO_PATH}. A site, account or bot that uses the name anywhere else is not this site.`,
+          `${SITE.neverAsks} The only signature it asks for is Sign in, on ${SITE_HOST} itself: a short message that costs nothing and moves nothing. Someone who asks you to sign something to verify a wallet, or for a seed phrase, is not this site.`,
         ],
       },
     ],

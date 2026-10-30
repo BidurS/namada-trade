@@ -1,7 +1,7 @@
 // S8: the content pages (/staking, /osmosis, /learn/how-nam-trading-works, /faq) and the
 // not-found view. Layout checks run in every project of the G6 matrix; the rest run once (375).
 import fs from 'node:fs';
-import { BODY, NOT_FOUND } from '../../shared/copy';
+import { BODY, NOT_FOUND, SITE } from '../../shared/copy';
 import { ROUTES, TABS, routeByPath } from '../../shared/routes';
 import { REWIND_AT, animationsIn, apiUrls, expect, gotoRoute, isExempt, isLiveOnly, layoutAudit, onlyIn, test, trackRequests } from './helpers';
 
@@ -187,6 +187,25 @@ test.describe('once', () => {
     await qs.first().locator('summary').click();
     await expect(qs.first()).not.toHaveAttribute('open', '');
     await expect(qs.first().locator('.seo-answer')).toBeHidden();
+  });
+
+  test('official links: the footer\'s line leads to the FAQ answer, whose names are the site\'s own links', async ({ page }) => {
+    await gotoRoute(page, '/trade');
+    const foot = page.locator('footer.foot');
+    await expect(foot).toContainText(SITE.neverAsks);
+    await foot.getByRole('link', { name: 'Official links', exact: true }).click();
+    await expect(page).toHaveURL(/\/faq#q-official$/);
+    // the shell scrolls to the top on a new path; the page then brings the answer into view
+    await expect(page.locator('h2#q-official')).toBeInViewport({ timeout: 30_000 });
+    const answer = page.locator('details.seo-q', { has: page.locator('h2#q-official') }).locator('.seo-answer');
+    const links = await answer.locator('a').evaluateAll((as) => as.map((a) => [a.textContent, a.getAttribute('href'), a.getAttribute('target')]));
+    expect(links).toEqual([
+      ['namada.trade', 'https://namada.trade/', null],
+      ['@namadatrade', SITE.x, '_blank'],
+      [`@${SITE.telegram.bot}`, `https://t.me/${SITE.telegram.bot}`, '_blank'],
+      ['github.com/BidurS/namada-trade', SITE.repo, '_blank'],
+    ]);
+    await expect(answer).toHaveText(BODY.faq.sections!.at(-1)!.paras[0]);
   });
 
   test('rewound: every /api request carries at= (exempt list aside), no live-only or current-only call, and the pages say so', async ({ page, baseURL }) => {
