@@ -26,9 +26,10 @@ import { CHAIN_WORD, listWords, moveTitle, partiesOf } from '../../shared/flow-w
 import { bridgeDest } from '../../shared/kinds';
 import { fmtAddr, fmtUsdRule } from '../../shared/format';
 import { settleUsd } from '../../shared/settle';
-import { rowToFlow, settlePrices } from './analytics';
+import { rowToFlow, safeParseJson, settlePrices } from './analytics';
 import { NAM_AMOUNT, NOT_BOT } from './flows-query';
 import { isRealAddress } from './util';
+import { NAMADA } from './config';
 import { crossingOf, cutText, operatorMove, PROTOCOL_WORDS, TEXT_MAX } from './sources/discord';
 
 const HOUR = 3_600_000;
@@ -38,8 +39,9 @@ const HOUR = 3_600_000;
  */
 export const PUBLIC_POST_USD_MIN = 100;
 /**
- * An hour is read this long after it closed: past one catch-up search (live-hub.ts OSMOSIS_SWEEP_EVERY_MS, 5 min) and a
- * scan the live hub reads late (LATE_SCAN_MS, 5 min), so a move the live feed missed is in the hour it happened in.
+ * An hour is read no sooner than this after it closed: past one catch-up search (live-hub.ts OSMOSIS_SWEEP_EVERY_MS,
+ * 5 min) and a scan the live hub reads late (LATE_SCAN_MS, 5 min), so a move the live feed missed is in the hour it
+ * happened in; and only once the record is known to hold the hour whole (hourCovered), however much later that is.
  */
 export const HOUR_SETTLE_MS = 10 * 60_000;
 /**
@@ -172,12 +174,57 @@ export type HourPart = 'move' | 'ibc';
 /** One closed hour as the public posts take it: its bounds, its key in the claims ("2026-10-29T09"), and its moves, read once whoever asks first. */
 export interface PublicHour { start: number; end: number; key: string; moves: () => Promise<PublicMove[]> }
 
-/** The hour the posts are due for at `now`: the latest one closed at least HOUR_SETTLE_MS ago. */
+/** "14:00 UTC" */
+const utcWords = (ms: number) => `${new Date(ms).toISOString().slice(11, 16)} UTC`;
+
+/** The rows hourCovered reads: the Osmosis catch-up search's cursor, the Namada scan's, and the cron's last look at the Namada nodes. */
+export const HOUR_COVER_SQL = `SELECT (SELECT value FROM kv WHERE key = 'osmosis.cursor') oc, (SELECT value FROM kv WHERE key = 'namada.cursor') nc,
+       (SELECT detail FROM checks WHERE key = 'rpc_consensus') rc`;
+
+/**
+ * Why the stored moves may not hold every move of the hour ending `end` yet, in words, or null when they do. Osmosis:
+ * the catch-up search has looked at every transaction up to a block of `end` or later (kv osmosis.cursor `blockAt`,
+ * live-hub.ts OsmosisCursor). Namada: the scan has read every block below the lowest newest block a node gave, at the
+ * cron's last look at the nodes (checks rpc_consensus: each node's newest block and its time), whose time is `end` or
+ * later. The live feed misses moves the catch-up search finds later (17% of the Osmosis moves, scale plan), and the
+ * search or the scan can be held back far longer than HOUR_SETTLE_MS (the nodes out, the shallow backend): the hour
+ * waits, unclaimed, so a post never calls a move the largest of an hour the record does not hold whole. Throws when
+ * the rows cannot be read.
+ */
+export async function hourCovered(db: D1Database, end: number): Promise<string | null> {
+  const r = await db.prepare(HOUR_COVER_SQL).first<{ oc: string | null; nc: string | null; rc: string | null }>();
+  const why: string[] = [];
+  const osmoAt = Number(safeParseJson(r?.oc, null)?.blockAt);
+  if (!(Number.isFinite(osmoAt) && osmoAt >= end)) {
+    why.push(Number.isFinite(osmoAt) && osmoAt > 0 ? `the Osmosis catch-up search has read up to a block of ${utcWords(osmoAt)}` : 'the Osmosis catch-up search has not said how far it has read');
+  }
+  const statuses = safeParseJson(r?.rc, null)?.statuses;
+  const past = (Array.isArray(statuses) ? statuses : [])
+    .filter((s: any) => s && !s.error && s.network === NAMADA.chainId && !s.catchingUp && Number.isSafeInteger(Number(s.height)) && Number(s.height) > 0 && Number(s.time) >= end)
+    .map((s: any) => Number(s.height));
+  const cursor = Number(r?.nc);
+  if (!past.length) why.push(`no Namada node has been seen with a block of ${utcWords(end)} or later yet`);
+  else if (!(Number.isSafeInteger(cursor) && cursor >= Math.min(...past) - 1)) {
+    why.push(`the Namada scan has read up to block ${Number.isSafeInteger(cursor) && cursor > 0 ? cursor.toLocaleString('en-US') : 'none yet'}, below block ${Math.min(...past).toLocaleString('en-US')} of ${utcWords(end)} or later`);
+  }
+  return why.length ? `The hour ending ${utcWords(end)} is not read yet: ${why.join('; ')}.` : null;
+}
+
+/**
+ * The hour the posts are due for at `now`: the latest one closed at least HOUR_SETTLE_MS ago. Its moves are read only
+ * once the record holds it whole (hourCovered): before, the read throws, and both voices leave the hour unclaimed for
+ * a later tick (an hour the record never holds whole before the next one is due is not posted).
+ */
 export function publicHour(db: D1Database, now: number, floors: NamFloors): PublicHour {
   const end = Math.floor((now - HOUR_SETTLE_MS) / HOUR) * HOUR;
   const start = end - HOUR;
   let read: Promise<PublicMove[]> | null = null;
-  return { start, end, key: new Date(start).toISOString().slice(0, 13), moves: () => (read ??= hourMoves(db, start, end, floors)) };
+  const moves = async () => {
+    const why = await hourCovered(db, end);
+    if (why) throw new Error(why);
+    return hourMoves(db, start, end, floors);
+  };
+  return { start, end, key: new Date(start).toISOString().slice(0, 13), moves: () => (read ??= moves()) };
 }
 
 /** Whether a claim key is taken: one kv seek. A read that fails counts as taken, so nothing is posted on it this time. */

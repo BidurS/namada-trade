@@ -11,6 +11,7 @@ import { testD1, insert, type TestD1 } from './d1-sqlite';
 import { configureAlerts, govCard, moveCard, resetClaimMemory } from '../worker/src/sources/discord';
 import { cardText, cutX, govRecord, oauthHeader, postGovOnX, postHourOnX, postOnce, postRecapOnX, recapChart, repostNamada, recapText, xLength, xOn, xSafe, X_DAILY_MAX, X_MAX_AGE_MS, X_ON_KEY, X_RECAP_HOUR_UTC, X_SHARES } from '../worker/src/sources/x';
 import { publicHour } from '../worker/src/public-posts';
+import { readTo } from './hour-cover';
 import { rowToFlow } from '../worker/src/analytics';
 import type { Flow, GovernanceProposal } from '../shared/types';
 
@@ -393,6 +394,7 @@ describe('the kill switch (kv x.on)', () => {
     insert(db, 'flows', [{ id: 'osmosis:KS1:0', chain: 'osmosis', height: 1, ts: Date.UTC(2026, 9, 29, 8, 30), tx_hash: 'KS1', kind: 'sell', from_addr: SELLER, to_addr: null, amount_num: 1_000_000, pool_id: '3005', price_usd: 0.00015, value_usd: 150, meta: JSON.stringify({ priceSource: 'spot' }) }]);
     const repostEnv = env(db, { X_ACCESS_TOKEN: '2115675561741951125-abc' });
     const hourAt = (at: number) => publicHour(db as any, at, { osmosis: 10000, namada: 10000 });
+    readTo(db, Date.UTC(2026, 9, 30));
     t = Date.UTC(2026, 9, 29, 9, 20);
     expect(await postHourOnX(env(db), hourAt(t), t)).toBe('skipped');
     expect(await postGovOnX(env(db), proposal(7))).toBe('off');

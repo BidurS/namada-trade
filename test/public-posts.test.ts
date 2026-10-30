@@ -12,6 +12,7 @@ import { describe, it, expect, vi, afterEach, beforeEach } from 'vitest';
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { testD1, insert, type TestD1 } from './d1-sqlite';
+import { readTo } from './hour-cover';
 import { BANNED } from './banned-words';
 import { rowToFlow } from '../worker/src/analytics';
 import { configureAlerts, moveCard, resetClaimMemory } from '../worker/src/sources/discord';
@@ -19,7 +20,7 @@ import { hourText, postGovOnX, postHourCrossingOnX, postHourOnX, postRecapOnX, x
 import { forumMessage, hourMessage, sendTelegramForum, sendTelegramGov, sendTelegramHour, telegramRun } from '../worker/src/sources/telegram';
 import { saveSettings, defaultPrefs } from '../worker/src/settings';
 import {
-  hourMoves, plainOutsider, publicHour, publicMoveOf, HOUR_MOVES_SQL, HOUR_SETTLE_MS, PUBLIC_HOUR_READ, PUBLIC_POST_USD_MIN, type NamFloors,
+  hourCovered, hourMoves, plainOutsider, publicHour, publicMoveOf, HOUR_MOVES_SQL, HOUR_SETTLE_MS, PUBLIC_HOUR_READ, PUBLIC_POST_USD_MIN, type NamFloors,
 } from '../worker/src/public-posts';
 import type { Flow, ForumPost, GovernanceProposal } from '../shared/types';
 
@@ -39,6 +40,9 @@ let t = 0;
 const xEnv = (db: TestD1, extra: object = {}) => ({ DB: db, ...KEYS, ...extra }) as any;
 const tgEnv = (db: TestD1, extra: object = {}) => ({ DB: db, SETTINGS_KEY: KEY, TELEGRAM_BOT_TOKEN: TOKEN, TELEGRAM_CHANNEL: CHANNEL, ...extra }) as any;
 const kv = (db: TestD1, key: string) => (db.raw.prepare('SELECT value FROM kv WHERE key = ?').get(key) as { value: string } | undefined)?.value ?? null;
+
+/** A database whose record is read on both chains past every hour these tests post (hourCovered). */
+const indexed = () => { const db = testD1(); readTo(db, Date.UTC(2027, 0, 1)); return db; };
 
 /** A stored move: a sale on Osmosis by default; `meta` as an object. */
 let n = 0;
@@ -92,7 +96,7 @@ afterEach(() => { vi.unstubAllGlobals(); vi.restoreAllMocks(); });
 
 describe('the hour', () => {
   it('is the latest one closed HOUR_SETTLE_MS ago, keyed by its start', () => {
-    const db = testD1();
+    const db = indexed();
     expect(HOUR_SETTLE_MS).toBe(10 * 60_000);
     expect(publicHour(db as any, at(9, 9, 59, 999), FLOORS)).toMatchObject({ start: at(7), end: at(8), key: '2026-10-29T07' });
     expect(publicHour(db as any, at(9, 10), FLOORS)).toMatchObject({ start: at(8), end: at(9), key: '2026-10-29T08' });
@@ -100,7 +104,7 @@ describe('the hour', () => {
   });
 
   it('is read on one range of the flows_ts index, bounded by the hour and by PUBLIC_HOUR_READ', () => {
-    const db = testD1();
+    const db = indexed();
     const plan = (db.raw.prepare(`EXPLAIN QUERY PLAN ${HOUR_MOVES_SQL}`).all(at(8), at(9), 10000) as { detail: string }[]).map((r) => r.detail).join('\n');
     expect(plan).toMatch(/SEARCH f USING INDEX flows_ts \(ts>\? AND ts<\?\)/);
     expect(plan).not.toMatch(/SCAN f\b/);
@@ -109,9 +113,57 @@ describe('the hour', () => {
   });
 });
 
+describe('an hour the record does not hold whole yet (merged stage 1 review, 2026-10-29)', () => {
+  // The hour was read once at HH:10 and claimed, posted or quiet, whatever the indexes had read: a 60,000 NAM sell the
+  // stream missed at 08:58 and the catch-up search found at 09:13 was never posted, and a 12,000 NAM buy went out as
+  // the hour's largest. The hour now waits, unclaimed, until both indexes are past its end.
+  it('waits for the Osmosis catch-up search: nothing posted or claimed, then the move it found late is the one posted', async () => {
+    const db = testD1();
+    // the search's last finished read reached a block of 08:57; the Namada scan is past the hour
+    readTo(db, at(9, 9), { osmosis: at(8, 57) });
+    move(db, at(8, 20), { kind: 'buy', from_addr: null, to_addr: BUYER, amount_num: 12_000, price_usd: 0.01, value_usd: 120, meta: { priceSource: 'spot' } });
+    expect(await hourCovered(db as any, at(9))).toBe('The hour ending 09:00 UTC is not read yet: the Osmosis catch-up search has read up to a block of 08:57 UTC.');
+    const s = voices();
+    expect(await tick(db, at(9, 10))).toBe('failed');
+    expect(s.x).toEqual([]);
+    expect(s.tg).toEqual([]);
+    expect(kv(db, 'alert:x:hour:2026-10-29T08')).toBeNull();
+    expect(kv(db, 'alert:tg:ch:hour:2026-10-29T08')).toBeNull();
+    // the search finds the sell the stream missed and reads past 09:00
+    const late = move(db, at(8, 58), { amount_num: 60_000, price_usd: 0.01, value_usd: 600, meta: { priceSource: 'spot', via: 'catch-up search' } });
+    readTo(db, at(9, 14), { osmosis: at(9, 13) });
+    expect(await hourCovered(db as any, at(9))).toBeNull();
+    expect(await tick(db, at(9, 15))).toBe('posted');
+    expect(s.x).toHaveLength(1);
+    expect(s.x[0]).toMatch(/^60,000 \$NAM sold on Osmosis/);
+    expect(s.tg).toHaveLength(1);
+    expect(kv(db, `alert:x:flow:${late}`)).not.toBeNull();
+  });
+
+  it('waits for the Namada scan, and for a node seen past the hour; a cursor written by code before blockAt waits too', async () => {
+    const db = testD1();
+    readTo(db, at(9, 9), { namadaCursor: 8_399_000 });
+    expect(await hourCovered(db as any, at(9))).toBe('The hour ending 09:00 UTC is not read yet: the Namada scan has read up to block 8,399,000, below block 8,400,000 of 09:00 UTC or later.');
+    // the block below the node's newest is enough: every block before 09:00 is below that one
+    readTo(db, at(9, 9), { namadaCursor: 8_399_999 });
+    expect(await hourCovered(db as any, at(9))).toBeNull();
+    // the cron's last look at the nodes is from before the hour's end
+    readTo(db, at(8, 59));
+    expect(await hourCovered(db as any, at(9))).toBe('The hour ending 09:00 UTC is not read yet: the Osmosis catch-up search has read up to a block of 08:59 UTC; no Namada node has been seen with a block of 09:00 UTC or later yet.');
+    readTo(db, at(9, 9), { osmosis: null });
+    expect(await hourCovered(db as any, at(9))).toBe('The hour ending 09:00 UTC is not read yet: the Osmosis catch-up search has not said how far it has read.');
+    move(db, at(8, 20));
+    const s = voices();
+    expect(await tick(db, at(9, 10))).toBe('failed');
+    expect(s.x).toEqual([]);
+    expect(s.tg).toEqual([]);
+    expect(kv(db, 'alert:x:hour:2026-10-29T08')).toBeNull();
+  });
+});
+
 describe('choosing the hour\'s move', () => {
   it('takes the largest by dollars that clears both floors; bots, rewards, other coins, unpriced moves and the hour\'s edges never qualify', async () => {
-    const db = testD1();
+    const db = indexed();
     // a sale of 900,000 NAM settled at $120 (its stored quote would make it $450: the settle is what counts)
     move(db, at(8, 5), { amount_num: 900_000, price_usd: 0.0005, value_usd: 450, meta: { priceSource: 'spot', settle: { nam: -900_000, coins: { allUSDC: 120 } } } });
     // a crossing of 1,500,000 NAM to Osmosis at $0.00011: $165
@@ -147,7 +199,7 @@ describe('choosing the hour\'s move', () => {
   });
 
   it('a post too long for X gives up its why line first, then its text, never its title or its record', async () => {
-    const db = testD1();
+    const db = indexed();
     // a sale with no settle on record through five pools: the longest sentence a move's post makes
     move(db, at(8, 5), { amount_num: 1_000_000, pool_id: '3005,3368,3009,3402,1', meta: { priceSource: 'spot' } });
     const s = voices();
@@ -159,7 +211,7 @@ describe('choosing the hour\'s move', () => {
   });
 
   it('a trade counts at its settle: one that settled under another move\'s dollars gives way to it, whatever its quote', async () => {
-    const db = testD1();
+    const db = indexed();
     move(db, at(8, 5), { amount_num: 1_000_000, price_usd: 0.0002, value_usd: 200, meta: { priceSource: 'spot', settle: { nam: -1_000_000, coins: { allUSDC: 110 } } } });
     const transfer = move(db, at(8, 6), { kind: 'transfer', to_addr: BUYER, amount_num: 600_000, price_usd: 0.0003, value_usd: 180 });
     expect((await hourMoves(db as any, at(8), at(9), FLOORS))[0].id).toBe(transfer);
@@ -169,7 +221,7 @@ describe('choosing the hour\'s move', () => {
   });
 
   it('a settled sale says what it settled at, with its source', async () => {
-    const db = testD1();
+    const db = indexed();
     move(db, at(8, 5), { amount_num: 900_000, pool_id: '3005,3368,3009', meta: { priceSource: 'spot', settle: { nam: -900_000, coins: { allUSDC: 120 } } } });
     const s = voices();
     await tick(db, at(9, 10), false);
@@ -177,7 +229,7 @@ describe('choosing the hour\'s move', () => {
   });
 
   it('posts one move an hour, at most: the hour is claimed, and a later tick of the same hour posts nothing', async () => {
-    const db = testD1();
+    const db = indexed();
     move(db, at(8, 5));
     move(db, at(8, 6), { amount_num: 2_000_000, value_usd: 300 });
     const s = voices();
@@ -192,7 +244,7 @@ describe('choosing the hour\'s move', () => {
   });
 
   it('a quiet hour posts nothing and spends none of the day\'s moves; the hour is read once', async () => {
-    const db = testD1();
+    const db = indexed();
     move(db, at(8, 5), { amount_num: 50_000, value_usd: 7.5 });
     const s = voices();
     const claims = () => (db.raw.prepare("SELECT COUNT(*) n FROM kv WHERE key LIKE 'alert:%hour:2026-10-29T08%'").get() as { n: number }).n;
@@ -210,7 +262,7 @@ describe('choosing the hour\'s move', () => {
   });
 
   it('an hour whose moves cannot be read posts nothing and is asked again next tick', async () => {
-    const db = testD1();
+    const db = indexed();
     move(db, at(8, 5));
     const s = voices();
     const prepare = db.prepare.bind(db);
@@ -230,7 +282,7 @@ describe('choosing the hour\'s move', () => {
   });
 
   it('a settle quote that cannot be read is no settle not on record: the hour waits, and is posted at its settle once read', async () => {
-    const db = testD1();
+    const db = indexed();
     // a sale of 900,000 NAM paid in OSMO: its stored quote makes it $450, its settle (600 OSMO at $0.20) $120
     move(db, at(8, 5), { amount_num: 900_000, price_usd: 0.0005, value_usd: 450, meta: { priceSource: 'spot', settle: { nam: -900_000, coins: { OSMO: 600 } } } });
     await db.prepare('INSERT INTO metrics (key, ts, value) VALUES (?, ?, ?)').bind('price.osmo_usd', at(8, 4), 0.2).run();
@@ -251,7 +303,7 @@ describe('choosing the hour\'s move', () => {
   });
 
   it('X or Telegram not answering gives the hour back for the next tick', async () => {
-    const db = testD1();
+    const db = indexed();
     move(db, at(8, 5));
     let down = true;
     const s = voices((url) => (down ? { status: 503, json: { title: 'Service Unavailable', ok: false } } : null));
@@ -265,7 +317,7 @@ describe('choosing the hour\'s move', () => {
   });
 
   it('the moves never take the recap\'s place: past the moves\' share an hour is passed over, and the recap still posts', async () => {
-    const db = testD1();
+    const db = indexed();
     for (let h = 0; h <= X_SHARES.move; h++) move(db, at(h, 30));
     expect(X_SHARES.move).toBeGreaterThanOrEqual(8);
     const s = voices();
@@ -281,7 +333,7 @@ describe('choosing the hour\'s move', () => {
   });
 
   it('a crossing is posted once: its other record, an hour later, gives way to that hour\'s next move', async () => {
-    const db = testD1();
+    const db = indexed();
     // the crossing of 2026-10-29 (test/bridge-pair-sequence.test.ts): sent from Namada at 05:53, received at 06:31
     move(db, at(5, 53), { id: 'namada:SEQ:4', chain: 'namada', kind: 'ibc_out', from_addr: NAMADA, to_addr: RECEIVER, amount_num: 800_000, pool_id: null, price_usd: 0.00015, value_usd: 120, meta: { priceSource: 'spot', channel: 'channel-1', packetSequence: '8568' } });
     move(db, at(6, 31), { kind: 'ibc_in', from_addr: NAMADA, to_addr: RECEIVER, amount_num: 800_000, pool_id: null, price_usd: 0.00015, value_usd: 120, meta: { priceSource: 'spot', channel: 'channel-98451', packetSequence: '8568' } });
@@ -292,7 +344,7 @@ describe('choosing the hour\'s move', () => {
     expect(s.x).toHaveLength(1);
     expect(s.tg).toHaveLength(1);
     // with another move in that hour, it is that move
-    const db2 = testD1();
+    const db2 = indexed();
     resetClaimMemory();
     move(db2, at(5, 53), { id: 'namada:SEQ2:4', chain: 'namada', kind: 'ibc_out', from_addr: NAMADA, to_addr: RECEIVER, amount_num: 800_000, pool_id: null, price_usd: 0.00015, value_usd: 120, meta: { priceSource: 'spot', channel: 'channel-1', packetSequence: '9001' } });
     move(db2, at(6, 31), { kind: 'ibc_in', from_addr: NAMADA, to_addr: RECEIVER, amount_num: 800_000, pool_id: null, price_usd: 0.00015, value_usd: 120, meta: { priceSource: 'spot', channel: 'channel-98451', packetSequence: '9001' } });
@@ -311,7 +363,7 @@ describe('choosing the hour\'s move', () => {
   });
 
   it('a move the live posts carried before this selector is not posted again: the hour\'s next one is', async () => {
-    const db = testD1();
+    const db = indexed();
     const first = move(db, at(8, 5), { amount_num: 2_000_000, value_usd: 300 });
     move(db, at(8, 6));
     insert(db, 'kv', [{ key: `alert:x:flow:${first}`, value: '1', updated_at: at(8, 6) }, { key: `alert:tg:ch:flow:${first}`, value: '1', updated_at: at(8, 6) }]);
@@ -323,7 +375,7 @@ describe('choosing the hour\'s move', () => {
   });
 
   it('a voice that is not set up posts nothing: no X keys, no channel, or a Worker that sends no alerts', async () => {
-    const db = testD1();
+    const db = indexed();
     move(db, at(8, 5));
     const s = voices();
     const hour = publicHour(db as any, at(9, 10), FLOORS);
@@ -342,7 +394,7 @@ describe('the hour\'s crossing', () => {
     move(db, ts, { kind: 'ibc_in', from_addr: NAMADA, to_addr: RECEIVER, amount_num: nam, pool_id: null, value_usd: nam * 0.00015 });
 
   it('a crossing a larger trade outweighs is posted beside it; an hour a crossing leads posts no second one', async () => {
-    const db = testD1();
+    const db = indexed();
     // 08:00 to 09:00: a sale of 2,100,000 NAM ($315), a crossing of 2,000,000 ($300) and a smaller one
     move(db, at(8, 5), { amount_num: 2_100_000, value_usd: 315 });
     crossing(db, at(8, 20), 2_000_000);
@@ -378,7 +430,7 @@ describe('the hour\'s crossing', () => {
   });
 
   it('the crossings\' share is their own: once spent the hour\'s crossing is passed over, and the moves still post', async () => {
-    const db = testD1();
+    const db = indexed();
     for (let h = 0; h <= X_SHARES.ibc; h++) {
       move(db, at(h, 5), { amount_num: 2_100_000, value_usd: 315 });
       crossing(db, at(h, 20), 2_000_000);
@@ -403,7 +455,7 @@ describe('the hour\'s crossing', () => {
 describe('the allowlist', () => {
   const HOSTILE = 'Claim at namada-claim.xyz @admin https://t.me/scam';
   it('a move carrying a memo, a wallet\'s tag and a bridge receiver that is no address is posted with none of them', async () => {
-    const db = testD1();
+    const db = indexed();
     insert(db, 'labels', [{ address: NAMADA, chain: 'namada', label: HOSTILE, category: 'other', source: 'user', author: 'tnam1qauthor', updated_at: 1 }]);
     insert(db, 'labels', [{ address: RECEIVER, chain: 'osmosis', label: 'Official airdrop namada-claim.xyz', category: 'other', source: 'user', author: 'tnam1qauthor', updated_at: 1 }]);
     // a send from Osmosis to Namada whose receiver is text the sender chose, with a memo
@@ -487,7 +539,7 @@ describe('proposals on the public channel and X', () => {
   } as GovernanceProposal;
 
   it('the channel and X carry the title as plain words, no authors, abstract or discussion link; the subscribers\' card is as before', async () => {
-    const db = testD1();
+    const db = indexed();
     await saveSettings(db as any, KEY, { address: NAMADA, notifications: { ...defaultPrefs(), forumAndGov: true }, channels: { discord: { enabled: false, webhookUrl: null }, telegram: { enabled: true, chatId: 5550009, kind: 'private', title: null, linkedAt: 1 } }, createdAt: 1, updatedAt: 1 } as any);
     const s = voices();
     await sendTelegramGov(tgEnv(db), hostile, true, {}, telegramRun(10, 10_000));
@@ -512,7 +564,7 @@ describe('forum posts on Telegram', () => {
   });
 
   it('the channel and the subscribers get the title and category alone, as plain words, with a button built from the post\'s numbers', async () => {
-    const db = testD1();
+    const db = indexed();
     // a subscriber with forum posts on, linked to a Telegram chat
     const prefs = { ...defaultPrefs(), forumAndGov: true };
     await saveSettings(db as any, KEY, { address: NAMADA, notifications: prefs, channels: { discord: { enabled: false, webhookUrl: null }, telegram: { enabled: true, chatId: 5550009, kind: 'private', title: null, linkedAt: 1 } }, createdAt: 1, updatedAt: 1 } as any);

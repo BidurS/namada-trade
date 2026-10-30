@@ -78,7 +78,7 @@ describe('a public node that accepts requests and never answers, and a Keplr nod
     for (let i = 0; i < 400 && !done; i++) await vi.advanceTimersByTimeAsync(1000);
     await p;
     const firstNam = log.find((l) => OSMOSIS_QUERIES.some((q) => l.what === `"${q}"`));
-    return { firstNamAt: firstNam ? firstNam.at : null, publicAsked: log.filter((l) => l.who === 'public').length, posts: log.filter((l) => l.what === 'batch').length, cursor: cursorOf(db), at: Date.now() - t0 };
+    return { t0, firstNamAt: firstNam ? firstNam.at : null, publicAsked: log.filter((l) => l.who === 'public').length, posts: log.filter((l) => l.what === 'batch').length, cursor: cursorOf(db), at: Date.now() - t0 };
   }
 
   it('Keplr refuses batches: the NAM queries are read 25 s in, the public node is asked once, the probes go to Keplr one by one, and the search finishes', async () => {
@@ -88,7 +88,7 @@ describe('a public node that accepts requests and never answers, and a Keplr nod
     expect(r.publicAsked).toBe(1);
     // one batch refused, then none asked
     expect(r.posts).toBe(1);
-    expect(r.cursor).toMatchObject({ height: 1_000_400, pools: 26 });
+    expect(r.cursor).toMatchObject({ height: 1_000_400, pools: 26, blockAt: r.t0 });
     expect(r.cursor.error).toBeUndefined();
     expect(r.at).toBeLessThan(30_000);
   });
@@ -228,9 +228,11 @@ describe('more pool queries with something new than the pages allow', () => {
       for (const [a] of pools) byPool.set(a, [swap(a, head - 10), ...(byPool.get(a) ?? [])]);
       await hub.sweepOsmosis();
       const c = cursorOf(db);
-      // the stream's queries were read down to the cursor: it moves
+      // the stream's queries were read down to the cursor: it moves, with the time of the head's block (the public
+      // posts wait for it, public-posts.ts hourCovered)
       expect(c).toMatchObject({ height: head });
       expect(c.error).toBeUndefined();
+      expect(c.blockAt).toBeGreaterThan(Date.now() - 60_000);
       // two of the fourteen queries are left each time, kept with their floor; the next search starts with them
       expect(c.poolsFrom).toMatchObject({ height: CURSOR });
       expect(c.poolsFrom.note).toMatch(/2 not read: the search's 12 pages for them were spent/);

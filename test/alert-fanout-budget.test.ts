@@ -24,6 +24,8 @@ import { BALANCE_LISTING_SRC } from '../worker/src/holders';
 import type { ForumPost, GovernanceProposal } from '../shared/types';
 import { digestKey } from '../worker/src/digest/message';
 import { publicHour } from '../worker/src/public-posts';
+import { readTo } from './hour-cover';
+import { NAMADA } from '../worker/src/config';
 
 afterEach(() => { vi.useRealTimers(); vi.unstubAllGlobals(); });
 
@@ -285,6 +287,8 @@ describe('a cron tick', () => {
     const base = 884000, prop = 884900;
     const { db, env } = await seededTick('ch', 2, base, prop);
     insert(db, 'kv', [{ key: `alert:x:recap:${new Date().toISOString().slice(0, 10)}`, value: '1', updated_at: NOW }]);
+    // the Osmosis catch-up search read past the hour (public-posts.ts hourCovered), and the Namada scan to the head
+    readTo(db, Date.now() + 3_600_000, { namadaCursor: 8_343_400 });
     // the test above claimed this hour as quiet in the isolate's memory; this test's database is new, so is its isolate
     resetClaimMemory();
     // a move at each end of the hour the tick reads (the larger one posted), and a larger one in the hour not yet
@@ -299,6 +303,8 @@ describe('a cron tick', () => {
     const chain = globalThis.fetch;
     const tweets: string[] = [];
     vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      // the nodes name their chain, so the cron's look at them (checks rpc_consensus) shows a block past the hour
+      if (String(input).endsWith('/status')) return new Response(JSON.stringify({ result: { node_info: { network: NAMADA.chainId }, sync_info: { latest_block_height: '8343400', latest_block_time: new Date().toISOString(), catching_up: false, earliest_block_height: '1' } } }), { headers: { 'content-type': 'application/json' } });
       if (String(input) !== 'https://api.x.com/2/tweets') return chain(input, init);
       tweets.push(JSON.parse(String(init?.body)).text);
       return new Response(JSON.stringify({ data: { id: String(tweets.length), text: '' } }), { status: 201, headers: { 'content-type': 'application/json' } });

@@ -132,6 +132,10 @@ export const OSMOSIS_SWEEP_MAX_BYTES = 24 * 1024 * 1024;
  * dropped by the next search that finishes.
  * `pools`: the NAM pools whose addresses the search read (osmosisPoolQueries); 0 while the hub knows none (the router
  * not read yet), when a transaction that moves only a pool's other coin is not searched for.
+ * `blockAt`: the time of the block the cursor reached, from the /status of the search that moved it to that head (its
+ * latest_block_time); a cursor that stopped below the head keeps the one it had. Every Osmosis transaction of the
+ * queries up to it has been looked at: the public posts read an hour once it is past the hour's end
+ * (public-posts.ts hourCovered).
  * `poolsFrom`: while a search leaves a pool-address query not read down to the cursor (their pages spent, a read that
  * failed, an empty answer from an index that may not hold the range), the block those queries are read down to, below
  * `height`, the `at` of the cursor that had it, and why; their places are in `resume`. The cursor never waits on them.
@@ -141,7 +145,7 @@ export const OSMOSIS_SWEEP_MAX_BYTES = 24 * 1024 * 1024;
 export interface OsmosisCursor {
   height: number; at: number; added?: number; error?: string; skipped?: { at: number; note: string }[]; resume?: Record<string, OsmosisResume>;
   depth?: OsmosisDepth; shallow?: { at: number; note: string }; pools?: number;
-  poolsFrom?: { height: number; at: number; note: string }; poolsNext?: string;
+  blockAt?: number; poolsFrom?: { height: number; at: number; note: string }; poolsNext?: string;
 }
 /**
  * The shallowest node the searches have seen (OsmosisCursor `depth`): how many blocks it held behind its head, and
@@ -1478,6 +1482,8 @@ export class LiveHub extends DurableObject<Env> {
     // says is absent starts at or above `knownFrom` (walk); with no depth known, as before.
     const depth = nodeDepth(prev?.depth, head, status?.result?.sync_info?.earliest_block_height, Date.now());
     const knownFrom = depth ? head - depth.blocks : -Infinity;
+    // The head's own time, kept with a cursor moved to it (OsmosisCursor `blockAt`).
+    const headAt = Date.parse(status?.result?.sync_info?.latest_block_time ?? '');
     const shallowNotes: { q: string; note: string }[] = [];
     // A stream transaction whose write failed is read again even below the cursor (handleOsmosisMessage).
     const retryGen = this.osmoRetryGen;
@@ -1862,10 +1868,13 @@ export class LiveHub extends DurableObject<Env> {
       ? { height: poolFloor, at: pf && pf.height === poolFloor && Number.isFinite(pf.at) ? pf.at : prev?.at ?? 0, note: `Of the pool-address queries, ${poolNotes.length ? poolNotes.join('; ') : 'some were not read down to the block'}.`.slice(0, 1000) }
       : undefined;
     const ofPoolsLeft = { ...(poolsFrom ? { poolsFrom } : {}), ...(poolsNext ? { poolsNext } : {}) };
+    // The head's time goes with a cursor moved to the head; a cursor that stopped below it keeps the time it had.
+    const blockAt = complete && upTo === head && Number.isFinite(headAt) ? headAt : prev?.blockAt;
+    const timeOf = blockAt != null && Number.isFinite(blockAt) ? { blockAt } : {};
     const next: OsmosisCursor = complete
-      ? { height, at: Date.now(), added, ...kept, ...known, pools, ...ofPoolsLeft, ...(behind ? { resume } : {}) }
+      ? { height, at: Date.now(), added, ...kept, ...known, pools, ...timeOf, ...ofPoolsLeft, ...(behind ? { resume } : {}) }
       : {
-          height, at: prev?.at ?? 0, added, ...kept, ...known, pools, ...ofPoolsLeft,
+          height, at: prev?.at ?? 0, added, ...kept, ...known, pools, ...timeOf, ...ofPoolsLeft,
           error: namShallow.length ? 'The last catch-up search did not finish: a node answered from blocks that may not reach back to the cursor, and the next search asks again.'
             : behind ? 'The last catch-up search did not finish; the next one goes on from where it stopped.' : 'The last catch-up search did not finish; it is retried.',
           ...(behind ? { resume } : {}),
