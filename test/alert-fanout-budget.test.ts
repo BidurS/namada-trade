@@ -15,7 +15,7 @@ import { readFileSync } from 'node:fs';
 import { base64 } from '@scure/base';
 import { testD1, insert, type TestD1 } from './d1-sqlite';
 import {
-  configureAlerts, sendDiscordForumAlert, sendDiscordGovAlert, sendDiscordTestAlert, alertBudget, flushAlerts,
+  configureAlerts, sendDiscordForumAlert, sendDiscordGovAlert, sendDiscordTestAlert, alertBudget, flushAlerts, resetClaimMemory,
   RUN_ALERT_POSTS, RUN_ALERT_WINDOW_MS, RUN_ALERT_DEADLINE_MS, LIVE_ALERT_POSTS, FANOUT_DEADLINE_MS, WEBHOOK_TIMEOUT_MS, windowFor, type AlertBudget,
 } from '../worker/src/sources/discord';
 import { saveSettings, defaultPrefs, DELIVERABLE_MAX, type StoredSettings } from '../worker/src/settings';
@@ -23,6 +23,7 @@ import { runCron, FORUM_POSTS_HEALTH, TICK_LOCK_MS } from '../worker/src/cron';
 import { BALANCE_LISTING_SRC } from '../worker/src/holders';
 import type { ForumPost, GovernanceProposal } from '../shared/types';
 import { digestKey } from '../worker/src/digest/message';
+import { publicHour } from '../worker/src/public-posts';
 
 afterEach(() => { vi.useRealTimers(); vi.unstubAllGlobals(); });
 
@@ -274,6 +275,41 @@ describe('a cron tick', () => {
       expect(kv(db, `alert:forum:post:${id}`), 'the forum alert went to Discord').not.toBeNull();
       expect(kv(db, `alert:x:forum:post:${id}`), 'and not to X').toBeNull();
     }
+  });
+
+  it('with the X keys set posts the closed hour\'s largest move once (public-posts.ts), and a later tick of that hour nothing more', async () => {
+    // The clock is held at minute 30 of this run's hour (Date alone; it still moves on in real time), so the hour the
+    // tick reads is always the one before it, 30 minutes past its close: on the wall clock a move early in that hour
+    // was more than X_MAX_AGE_MS old from minute 01 to 09, and the hour the tick reads could change between two ticks.
+    vi.useFakeTimers({ now: Math.floor(NOW / 3_600_000) * 3_600_000 + 30 * 60_000, toFake: ['Date'], shouldAdvanceTime: true });
+    const base = 884000, prop = 884900;
+    const { db, env } = await seededTick('ch', 2, base, prop);
+    insert(db, 'kv', [{ key: `alert:x:recap:${new Date().toISOString().slice(0, 10)}`, value: '1', updated_at: NOW }]);
+    // the test above claimed this hour as quiet in the isolate's memory; this test's database is new, so is its isolate
+    resetClaimMemory();
+    // a move at each end of the hour the tick reads (the larger one posted), and a larger one in the hour not yet
+    // closed, never posted by this tick
+    const hour = publicHour(db as any, Date.now(), { osmosis: 10000, namada: 10000 });
+    expect(Date.now() - hour.end).toBeGreaterThanOrEqual(30 * 60_000);
+    const sale = (id: string, ts: number, nam: number) => ({ id, chain: 'osmosis', height: 1, ts, tx_hash: id, kind: 'sell', from_addr: 'osmo1nn62s9hm7ns4lwqsl70y49xx5tpe0ft45evpvh', to_addr: null, amount_num: nam, pool_id: '3005', price_usd: 0.00015, value_usd: nam * 0.00015, meta: JSON.stringify({ priceSource: 'spot' }) });
+    insert(db, 'flows', [
+      sale('osmosis:CH0:0', hour.start, 900_000), sale('osmosis:CH1:0', hour.end - 60_000, 1_000_000), sale('osmosis:CH2:0', hour.end + 60_000, 1_100_000),
+    ]);
+    network(base, 3, prop);
+    const chain = globalThis.fetch;
+    const tweets: string[] = [];
+    vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      if (String(input) !== 'https://api.x.com/2/tweets') return chain(input, init);
+      tweets.push(JSON.parse(String(init?.body)).text);
+      return new Response(JSON.stringify({ data: { id: String(tweets.length), text: '' } }), { status: 201, headers: { 'content-type': 'application/json' } });
+    }));
+    const xEnv = { ...env, X_API_KEY: 'ck', X_API_SECRET: 'cs', X_ACCESS_TOKEN: 'at', X_ACCESS_SECRET: 'as' };
+    await runCron(xEnv);
+    const moves = () => tweets.filter((t) => /\$NAM sold on Osmosis/.test(t));
+    expect(moves()).toHaveLength(1);
+    await runCron(xEnv);
+    expect(moves()).toHaveLength(1);
+    expect(moves()[0]).toMatch(/^1,000,000 \$NAM sold on Osmosis\n\nSold by osmo1nn62s…evpvh in pool 3005\./);
   });
 });
 

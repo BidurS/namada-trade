@@ -19,7 +19,6 @@ import { readStoredPools } from './pool-sizes';
 import { HubQuote, askQuoteService, storedQuoteReader } from './live-quote';
 import { priceRouteAt, stampPriceRoute } from './price-how';
 import { sendTelegramMove, telegramRun, TG_LIVE_MS, TG_LIVE_SENDS } from './sources/telegram';
-import { postMoveOnX } from './sources/x';
 import { alarmBudget, configureAlerts, fanoutBudget, flushAlerts, isNamWhale, noteNotSent, offeredForAlerts, sendDiscordWhaleAlert, sendsAlerts, spentOut, FANOUT_DEADLINE_MS, UsersUnreadError, WEBHOOK_TIMEOUT_MS, type AlertBudget, type PendingAlert } from './sources/discord';
 import { fetchJson, redact, registerSecrets, FETCH_TEXT_MAX_BYTES, ReadBudgetError, ResponseTooLargeError, type ReadBudget } from './util';
 import { watchCronStall, OPS_STALL_LOOK_MS } from './ops';
@@ -756,14 +755,14 @@ export class LiveHub extends DurableObject<Env> {
         offered.push(f);
       }
     }
-    // The same moves to Telegram, after Discord's, claimed apart and under their own share of the invocation's
-    // messages and time (sources/telegram.ts TgRun), never past the dispatch's deadline; it never throws.
+    // The same moves to Telegram's subscribers, after Discord's, claimed apart and under their own share of the
+    // invocation's messages and time (sources/telegram.ts TgRun), never past the dispatch's deadline; it never throws.
+    // The site's public voices (X, the public Telegram channel) take no move from here: the cron posts each closed
+    // hour's largest (public-posts.ts).
     if (offered.length) {
       const run = telegramRun(TG_LIVE_SENDS, TG_LIVE_MS, budget.deadline);
-      for (const f of offered) await sendTelegramMove(this.env, f, threshold, run);
+      for (const f of offered) await sendTelegramMove(this.env, f, run);
       if (run.skipped) console.warn(`telegram: ${run.skipped} messages not sent (the invocation's share was spent)`);
-      // and on X, the moves the site's own channel hears of (sources/x.ts: capped a day, fresh moves only)
-      for (const f of offered) await postMoveOnX(this.env, f, threshold);
     }
   }
 

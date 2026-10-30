@@ -134,9 +134,11 @@ export const MESSAGE_SOURCES: { file: string; names: Set<string> | null }[] = [
     names: new Set(['sideWords', 'crossingSide', 'PROTOCOL_WORDS', 'coinWords', 'settleField', 'worthWords', 'runClauses', 'moveCard', 'forumCard', 'govCard', 'settingsFields', 'CARD_WORDS', 'testBody', 'noticeBody', 'COLOUR', 'SENDER', 'FILES_REFUSED_NOTE']),
   },
   // the Telegram bot's own messages (the alerts themselves are the cards above)
-  { file: 'worker/src/sources/telegram.ts', names: new Set(['connectedMessage', 'testMessages', 'cardMessage', 'settingsButton']) },
-  { file: 'worker/src/telegram-bot.ts', names: new Set(['WORDS', 'settingsButton', 'status']) },
-  { file: 'worker/src/sources/x.ts', names: new Set(['recapText', 'cardText']) },
+  { file: 'worker/src/sources/telegram.ts', names: new Set(['connectedMessage', 'testMessages', 'cardMessage', 'settingsButton', 'forumMessage', 'hourMessage']) },
+  { file: 'worker/src/telegram-bot.ts', names: new Set(['WORDS', 'OFFICIAL', 'settingsButton', 'status']) },
+  { file: 'worker/src/sources/x.ts', names: new Set(['recapText', 'cardText', 'hourText']) },
+  // the public posts' move words (X and the public Telegram channel)
+  { file: 'worker/src/public-posts.ts', names: new Set(['sideWords', 'publicMoveOf', 'poolWords', 'publicWho', 'publicValue', 'publicWhy', 'publicRecord']) },
 ];
 
 /** Is this literal inside one of `names` (a function declaration or a top-level constant)? */

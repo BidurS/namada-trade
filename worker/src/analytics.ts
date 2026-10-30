@@ -1385,9 +1385,11 @@ type QuoteAsk = { i: number; sym: string; ts: number };
  * (the latest reading at or before the trade, at most QUOTE_MATCH_MS before it). null for a trade that is not a buy
  * or a sell, has no record, or has a coin with no price. One key seek per coin a trade needs quoted, 50 to a batch.
  * A trade with a seek in a batch that fails is null too: a quote that could not be read is not a coin with no price
- * at that minute (settleOf would leave its gas out and say so), so the trade keeps its recorded price instead.
+ * at that minute (settleOf would leave its gas out and say so), so the trade keeps its recorded price instead. With
+ * `strict`, a batch that fails throws instead, for a caller that must not read "could not be read" as "not on record"
+ * (public-posts.ts hourMoves: an hour is read once, and its post says which).
  */
-export async function settlePrices(db: D1Database, trades: readonly { kind: string; ts: number; meta?: Record<string, unknown> | null }[]): Promise<(Settle | null)[]> {
+export async function settlePrices(db: D1Database, trades: readonly { kind: string; ts: number; meta?: Record<string, unknown> | null }[], strict = false): Promise<(Settle | null)[]> {
   const recs = trades.map((t) => (t.kind === 'buy' || t.kind === 'sell' ? settleMetaOf(t.meta) : null));
   const asks: QuoteAsk[] = [];
   recs.forEach((s, i) => { if (s) for (const sym of quotesNeeded(s)) if (QUOTE_KEYS[sym]) asks.push({ i, sym, ts: trades[i].ts }); });
@@ -1395,7 +1397,7 @@ export async function settlePrices(db: D1Database, trades: readonly { kind: stri
   const unread = new Set<number>();
   for (let k = 0; k < asks.length; k += 50) {
     const part = asks.slice(k, k + 50);
-    const res = await db.batch(part.map((a) => quoteAt(db, QUOTE_KEYS[a.sym], a.ts))).catch(() => null);
+    const res = await db.batch(part.map((a) => quoteAt(db, QUOTE_KEYS[a.sym], a.ts))).catch((e) => { if (strict) throw e; return null; });
     if (!res) part.forEach((a) => unread.add(a.i));
     res?.forEach((r, j) => {
       const row = (r.results?.[0] ?? null) as { value: number } | null;

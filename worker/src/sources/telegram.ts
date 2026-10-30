@@ -1,10 +1,17 @@
 // Telegram delivery: the same alerts the Discord channels get, to each subscriber's own Telegram chat or group, and
-// the site's own alerts to its public channel (TELEGRAM_CHANNEL).
+// the site's own posts to its public channel (TELEGRAM_CHANNEL).
 //
 // A chat is linked only by the bot's handshake (worker/src/telegram-bot.ts); its rules, watchlist and quiet hours are
 // the row's own, the ones Discord uses, so a subscriber chooses once and every channel they turn on hears the same
-// moves. Each alert is the Discord card (sources/discord.ts moveCard, forumCard, govCard), fitted the same way and
-// written as Telegram's HTML: the title, the text, every figure with its source, and a button back to the site.
+// moves. Each move and proposal alert is the Discord card (sources/discord.ts moveCard, govCard), fitted the same way
+// and written as Telegram's HTML: the title, the text, every figure with its source, and a button back to the site. A
+// forum post is its topic's title and category only (forumMessage): no excerpt, no author, no link from the post.
+//
+// The public channel hears the moves the X account posts, from the same selector and allowlist (public-posts.ts: at
+// most one move a closed hour, its largest by dollars, and the hour's largest bridge crossing when its move is no
+// crossing; sendTelegramHour), never each move as it arrives, and the forum posts and proposals the subscribers hear:
+// a forum post as the subscribers get it, a proposal as X posts it (public-posts.ts publicProposal: its title as plain
+// words, none of its authors, abstract or discussion link).
 //
 // Kept simpler than the Discord dispatcher on purpose: Telegram's limits are the bot's, not a link's (about 30
 // messages a second, one a second to one chat: https://core.telegram.org/bots/faq), a chat is never made up (it
@@ -22,9 +29,10 @@ import { chatDigest, inQuietHours, moveChat, readTelegram, thresholdsOf, unlinkC
 import { kvSet } from '../db';
 import { readMoveContext, type MoveContext } from './discord-context';
 import {
-  alertsOn, claimDiscordAlert, claimEach, crossingOf, releaseClaims, fits, forumCard, govCard, moveCard, operatorMove, recordSkipped, settingsFields,
-  CARD_WORDS, type Card, type Embed, type GovContext, type TestExample,
+  alertsOn, claimDiscordAlert, claimEach, crossingOf, releaseClaims, fits, govCard, moveCard, recordSkipped, settingsFields, sitePage,
+  CARD_WORDS, TEXT_MAX, type Card, type Embed, type GovContext, type TestExample,
 } from './discord';
+import { claimTaken, hourPick, plainOutsider, publicProposal, publicRecord, publicTitle, publicValue, publicWho, publicWhy, type HourPart, type PublicHour, type PublicMove } from '../public-posts';
 
 export interface TelegramEnv { DB: D1Database; SETTINGS_KEY?: string; TELEGRAM_BOT_TOKEN?: string; TELEGRAM_CHANNEL?: string }
 
@@ -65,8 +73,10 @@ const attr = (s: string) => esc(s).replace(/"/g, '&quot;');
 /**
  * A character the card escaped for Discord (sources/discord.ts textSafe: `\*`, `\_`, `\<`…) is set aside as a private
  * character while the links and code spans are read, so text an outsider wrote can never open one, then shown as itself.
+ * A character of that private range the text already held (an outsider's) is replaced first, so unhide never turns it
+ * into the markup it stands for after the links were read (own audit 2026-10-29, Low 8).
  */
-const hide = (s: string) => s.replace(/\\([!-/:-@[-`{-~])/g, (_, c: string) => String.fromCharCode(0xe000 + c.charCodeAt(0)));
+const hide = (s: string) => s.replace(/[\uE000-\uE07F]/g, '\uFFFD').replace(/\\([!-/:-@[-`{-~])/g, (_, c: string) => String.fromCharCode(0xe000 + c.charCodeAt(0)));
 const unhide = (s: string) => s.replace(/[-]/g, (c) => String.fromCharCode(c.charCodeAt(0) - 0xe000));
 const text = (s: string) => esc(unhide(s));
 /** A Discord time stamp in words: the full UTC time, or for a relative one its age ("12 min ago"). */
@@ -303,21 +313,21 @@ function matchOf(u: StoredSettings, flow: Flow): Pick<MoveContext, 'rule' | 'wat
 }
 
 /**
- * One move's Telegram alerts: the public channel for a move the operator's Discord channel hears of (operatorMove),
- * and every subscriber whose rules or watchlist match it, outside their quiet hours, one message per chat. The two
- * parts are claimed apart (`alert:tg:ch:flow:<id>`, `alert:tg:flow:<id>`), so a failed read of the subscribers costs
- * them nothing (their part is not claimed, and the move offered again reaches them); a bridge crossing's two records
- * reach each chat once (a claim per chat and crossing, as Discord's). Nothing is claimed once the run's share is
- * spent. Never throws: a failure is logged, and Discord's alerts are not held by it.
+ * One move's Telegram alerts: every subscriber whose rules or watchlist match it, outside their quiet hours, one
+ * message per chat, claimed once (`alert:tg:flow:<id>`) after the subscribers are read, so a failed read costs them
+ * nothing (the move offered again reaches them); a bridge crossing's two records reach each chat once (a claim per chat
+ * and crossing, as Discord's). The public channel hears no move from here: it takes the hour's move (sendTelegramHour).
+ * Nothing is claimed once the run's share is spent. Never throws: a failure is logged, and Discord's alerts are not
+ * held by it.
  */
-export async function sendTelegramMove(env: TelegramEnv, flow: Flow, whaleNam = 10000, run: TgRun = telegramRun(TG_LIVE_SENDS, TG_LIVE_MS)): Promise<void> {
+export async function sendTelegramMove(env: TelegramEnv, flow: Flow, run: TgRun = telegramRun(TG_LIVE_SENDS, TG_LIVE_MS)): Promise<void> {
   if (!sendsTelegram(env) || !open(run)) return;
   try {
     const crossing = crossingOf(flow);
     const chatKey = (c: number | string) => (typeof c === 'number' && env.SETTINGS_KEY ? chatDigest(env.SETTINGS_KEY, c) : 'channel');
     const crossKey = (c: number | string) => `alert:tg:ibc:${crossing}:${chatKey(c)}`;
     let read: Awaited<ReturnType<typeof readMoveContext>> | null = null;
-    const card = async (why: Pick<MoveContext, 'rule' | 'watched' | 'whaleNam'>) => {
+    const card = async (why: Pick<MoveContext, 'rule' | 'watched'>) => {
       read ??= await readMoveContext(env.DB, flow);
       return cardMessage(moveCard(read.flow, { ...read.ctx, ...why }));
     };
@@ -329,12 +339,6 @@ export async function sendTelegramMove(env: TelegramEnv, flow: Flow, whaleNam = 
       return { send: want.filter((w) => won.has(crossKey(w.chat))), keys: [key, ...won] };
     };
 
-    // the public channel
-    if (env.TELEGRAM_CHANNEL && operatorMove(flow, whaleNam)) {
-      const { send, keys } = await claim(`alert:tg:ch:flow:${flow.id}`, [{ chat: env.TELEGRAM_CHANNEL }]);
-      if (send.length) await sendPart(env, [{ chat: env.TELEGRAM_CHANNEL, user: false, msg: await card({ whaleNam }) }], keys, `move ${flow.id} (channel)`, run);
-    }
-    // the subscribers
     const users = await telegramUsers(env);
     if (!users) return;
     const want: { chat: number; why: Pick<MoveContext, 'rule' | 'watched'> }[] = [];
@@ -360,15 +364,16 @@ export async function sendTelegramMove(env: TelegramEnv, flow: Flow, whaleNam = 
 
 /**
  * A forum post or proposal: the public channel and every forumAndGov subscriber outside quiet hours, each part claimed
- * once (`alert:tg:ch:<key>`, `alert:tg:<key>`).
+ * once (`alert:tg:ch:<key>`, `alert:tg:<key>`). `message(true)` is the channel's message, `message(false)` the
+ * subscribers'.
  */
-async function sendTelegramCard(env: TelegramEnv, card: Card, key: string, what: string, run: TgRun): Promise<void> {
+async function sendTelegramCard(env: TelegramEnv, message: (channel: boolean) => TgMessage, key: string, what: string, run: TgRun): Promise<void> {
   if (!sendsTelegram(env) || !open(run)) return;
   try {
-    const msg = cardMessage(card);
     if (env.TELEGRAM_CHANNEL && (await claimDiscordAlert(env.DB, [`alert:tg:ch:${key}`]))) {
-      await sendPart(env, [{ chat: env.TELEGRAM_CHANNEL, msg, user: false }], [`alert:tg:ch:${key}`], `${what} (channel)`, run);
+      await sendPart(env, [{ chat: env.TELEGRAM_CHANNEL, msg: message(true), user: false }], [`alert:tg:ch:${key}`], `${what} (channel)`, run);
     }
+    const msg = message(false);
     const users = await telegramUsers(env);
     if (!users) return;
     const targets: TgTarget[] = [];
@@ -387,9 +392,74 @@ async function sendTelegramCard(env: TelegramEnv, card: Card, key: string, what:
 }
 
 export const sendTelegramForum = (env: TelegramEnv, post: ForumPost, categoryName: string | null | undefined, run: TgRun) =>
-  sendTelegramCard(env, forumCard(post, categoryName), `forum:post:${post.id}`, `forum post ${post.id}`, run);
+  sendTelegramCard(env, () => forumMessage(post, categoryName), `forum:post:${post.id}`, `forum post ${post.id}`, run);
+/** A proposal: the subscribers get its card as Discord's do; the public channel gets what X posts (publicProposal). */
 export const sendTelegramGov = (env: TelegramEnv, prop: GovernanceProposal, isNew: boolean, g: GovContext, run: TgRun) =>
-  sendTelegramCard(env, govCard(prop, isNew, g), `gov:prop:${prop.id}:${prop.status}`, `proposal ${prop.id} ${prop.status}`, run);
+  sendTelegramCard(env, (channel) => cardMessage(govCard(channel ? publicProposal(prop) : prop, isNew, g)), `gov:prop:${prop.id}:${prop.status}`, `proposal ${prop.id} ${prop.status}`, run);
+
+const FORUM = 'https://forum.namada.net';
+/**
+ * A forum post as a Telegram message, for the public channel and the subscribers alike: the topic's category above,
+ * the topic's title (and the reply's number), the forum and the post's time below, and a button to the post on the
+ * forum, its address built from the post's numbers alone. Nothing else of the post: no excerpt, no author, no link it
+ * holds. The title and category are any forum account's words and the forum's, so they are written as plain words
+ * (public-posts.ts plainOutsider: no link, no bare domain, no mention) and escaped.
+ */
+export function forumMessage(post: ForumPost, categoryName?: string | null): TgMessage {
+  const n = Number(post.postNumber), topicId = Number(post.topicId);
+  const isNew = post.isNewTopic || n === 1;
+  const topic = plainOutsider(post.topicTitle, TEXT_MAX.title) || 'a topic with no title';
+  const category = categoryName ? plainOutsider(categoryName, TEXT_MAX.category) : '';
+  const at = Date.parse(post.createdAt);
+  const title = isNew ? `New topic: ${topic}` : Number.isSafeInteger(n) && n > 1 ? `Reply ${n} in: ${topic}` : `A reply in: ${topic}`;
+  const when = Number.isFinite(at) ? ` · ${fmtUtcLong(at)}` : '';
+  const url = Number.isSafeInteger(topicId) && topicId > 0 ? `${FORUM}/t/${topicId}${Number.isSafeInteger(n) && n > 1 ? `/${n}` : ''}` : FORUM;
+  return {
+    html: `<i>Forum · ${esc(category || 'forum.namada.net')}</i>\n\n<b>${esc(title)}</b>\n\n<i>NamadaTrade · forum.namada.net${esc(when)}</i>`,
+    button: { text: 'Read on forum.namada.net', url },
+  };
+}
+
+// ---------------------------------------------------------------- the public channel's hour
+
+/**
+ * The hour's move (or crossing: `part`) as a Telegram message (the X post's words, public-posts.ts): why it was chosen
+ * above, the title, who moved it and the dollars with their source, then the record and the move's time; the button
+ * opens the person's page on the site, or the site's moves.
+ */
+export function hourMessage(m: PublicMove, hour: Pick<PublicHour, 'end'>, passed = false, part: HourPart = 'move'): TgMessage {
+  return {
+    html: `<i>${esc(publicWhy(hour, passed, part))}</i>\n\n<b>${esc(publicTitle(m))}</b>\n\n${esc(publicWho(m))}. ${esc(publicValue(m))}\n\n<i>NamadaTrade · ${esc(publicRecord(m))} · ${esc(fmtUtcLong(m.ts))}</i>`,
+    button: { text: 'Open on NamadaTrade', url: m.person ? sitePage(m.person) : `${ORIGIN}/activity` },
+  };
+}
+
+/**
+ * The cron's tick: the closed hour's move and then its crossing (public-posts.ts publicHour and hourPick, the X
+ * account's) to the public channel, each once (`alert:tg:ch:hour:<hour>`, `alert:tg:ch:hour:<hour>:ibc`), under the
+ * run's share. A quiet part is claimed and sends nothing; an hour whose moves cannot be read, or whose message Telegram
+ * did not answer, is left for the next tick (sendPart gives its claims back). A move is sent once
+ * (`alert:tg:ibc:<crossing>:channel` or `alert:tg:ch:flow:<id>`, the keys the live channel posts used), so a
+ * crossing's other record gives way to its hour's next move. Never throws.
+ */
+export async function sendTelegramHour(env: TelegramEnv, hour: PublicHour, run: TgRun): Promise<void> {
+  if (!sendsTelegram(env) || !env.TELEGRAM_CHANNEL) return;
+  for (const part of ['move', 'ibc'] as const) {
+    try {
+      const key = `alert:tg:ch:hour:${hour.key}${part === 'ibc' ? ':ibc' : ''}`;
+      if ((await claimTaken(env.DB, key)) || !open(run)) continue;
+      const posted = (m: PublicMove) => (m.crossing ? `alert:tg:ibc:${m.crossing}:channel` : `alert:tg:ch:flow:${m.id}`);
+      const first = await hourPick(env.DB, await hour.moves(), part, posted);
+      const keys = [key, ...(first ? [posted(first.move)] : [])];
+      if (!(await claimDiscordAlert(env.DB, keys)) || !first) continue;
+      await sendPart(env, [{ chat: env.TELEGRAM_CHANNEL, user: false, msg: hourMessage(first.move, hour, first.passed, part) }], keys, `hour ${hour.key}: ${part === 'ibc' ? 'crossing' : 'move'} ${first.move.id} (channel)`, run);
+    } catch (e) {
+      // the hour's moves not read: its other part would read the same failure
+      console.error(`telegram: the hour ${hour.key} (${part}) not sent to the channel`, e);
+      return;
+    }
+  }
+}
 
 // ---------------------------------------------------------------- the bot's own messages
 

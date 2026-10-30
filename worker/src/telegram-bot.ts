@@ -88,9 +88,14 @@ async function takeCode(db: D1Database, secret: string, code: string, now: numbe
 
 const say = (html: string, button?: TgMessage['button']): TgMessage => ({ html, button });
 const settingsButton = { text: 'Open Settings', url: SETTINGS };
+/**
+ * The site's own places and how it reaches people (scale plan, Stage 1 identity basics), under the bot's first words
+ * and its help: an account that writes first, or asks for a seed phrase, is not the site's.
+ */
+export const OFFICIAL = `<b>Official links</b>: ${new URL(SITE.origin).host} and @${BOT}. NamadaTrade never messages you first, and never asks for a seed phrase or a private key.`;
 export const WORDS = {
-  hello: say(`<b>NamadaTrade alerts</b>\n\nThis bot sends you NamadaTrade's alerts on NAM: big moves, bridging, unstaking, the shielded pool, governance and the addresses you watch, by the rules you choose.\n\nTo connect, sign in at namada.trade, open Settings, and press <b>Connect Telegram</b>.`, settingsButton),
-  groupHello: say(`To send NamadaTrade alerts to this group, a group admin signs in at namada.trade, opens Settings, presses <b>Connect Telegram</b>, then <b>Add to a group</b>.`, settingsButton),
+  hello: say(`<b>NamadaTrade alerts</b>\n\nThis bot sends you NamadaTrade's alerts on NAM: big moves, bridging, unstaking, the shielded pool, governance and the addresses you watch, by the rules you choose.\n\nTo connect, sign in at namada.trade, open Settings, and press <b>Connect Telegram</b>.\n\n${OFFICIAL}`, settingsButton),
+  groupHello: say(`To send NamadaTrade alerts to this group, a group admin signs in at namada.trade, opens Settings, presses <b>Connect Telegram</b>, then <b>Add to a group</b>.\n\n${OFFICIAL}`, settingsButton),
   adminOnlyLink: say(`Only an admin of this group can connect it to NamadaTrade alerts. This link no longer works: a group admin makes a new one in Settings.`, settingsButton),
   moved: say(`NamadaTrade alerts for this wallet now go to another chat, connected in Settings. Send /status to see what still arrives here.`),
   unknown: say(`This connect link does not work: it was used already or is not one of ours. Make a new one in Settings.`, settingsButton),
@@ -103,7 +108,7 @@ export const WORDS = {
   notLinked: say(`This chat gets no NamadaTrade alerts. To connect it, press Connect in Settings.`, settingsButton),
   adminOnly: say(`Only an admin of this group can stop its alerts.`),
   busy: say(`This chat could not be connected just now. Make a new link in Settings and try again.`, settingsButton),
-  help: say(`<b>Commands</b>\n/status: which wallets' alerts arrive here\n/stop: stop all alerts here\n\nChoose which moves you hear of in Settings.`, settingsButton),
+  help: say(`<b>Commands</b>\n/status: which wallets' alerts arrive here\n/stop: stop all alerts here\n\nChoose which moves you hear of in Settings.\n\n${OFFICIAL}`, settingsButton),
 };
 
 /** The chat of an update as the bot uses it: its id, whether it is a group, and a group's name. */

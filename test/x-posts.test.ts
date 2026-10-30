@@ -1,18 +1,22 @@
-// Automatic X posts (worker/src/sources/x.ts): the site's own big moves, votes and a daily recap (no forum posts), each
-// posted once, at most X_DAILY_MAX a day, fresh moves only, within 280 of X's weighted characters, mentioning no one,
-// signed with OAuth 1.0a. Fetch is stubbed: nothing reaches X.
+// Automatic X posts (worker/src/sources/x.ts): the site's own moves (one a closed hour, and the hour's crossing:
+// test/public-posts.test.ts), votes and a daily recap (no forum posts), each posted once, each kind under its own share
+// of the day (the recap's share its own), within 280 of X's weighted characters, mentioning no one, signed with OAuth
+// 1.0a, and nothing at all while kv x.on is '0', with @namada's posts of that time never reposted after. Fetch is
+// stubbed: nothing reaches X.
 import { describe, it, expect, vi, afterEach, beforeEach } from 'vitest';
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { createHmac } from 'node:crypto';
-import { testD1, type TestD1 } from './d1-sqlite';
-import { configureAlerts, govCard, moveCard } from '../worker/src/sources/discord';
-import { cardText, cutX, govRecord, oauthHeader, postGovOnX, postMoveOnX, postOnce, postRecapOnX, recapChart, repostNamada, recapText, xLength, xSafe, X_DAILY_MAX, X_MAX_AGE_MS, X_RECAP_HOUR_UTC } from '../worker/src/sources/x';
+import { testD1, insert, type TestD1 } from './d1-sqlite';
+import { configureAlerts, govCard, moveCard, resetClaimMemory } from '../worker/src/sources/discord';
+import { cardText, cutX, govRecord, oauthHeader, postGovOnX, postHourOnX, postOnce, postRecapOnX, recapChart, repostNamada, recapText, xLength, xOn, xSafe, X_DAILY_MAX, X_MAX_AGE_MS, X_ON_KEY, X_RECAP_HOUR_UTC, X_SHARES } from '../worker/src/sources/x';
+import { publicHour } from '../worker/src/public-posts';
 import { rowToFlow } from '../worker/src/analytics';
 import type { Flow, GovernanceProposal } from '../shared/types';
 
 const KEYS = { X_API_KEY: 'ck', X_API_SECRET: 'cs', X_ACCESS_TOKEN: 'at', X_ACCESS_SECRET: 'as' };
 const env = (db: TestD1, extra: object = {}) => ({ DB: db, ...KEYS, ...extra }) as any;
+const kv = (db: TestD1, key: string) => (db.raw.prepare('SELECT value FROM kv WHERE key = ?').get(key) as { value: string } | undefined)?.value ?? null;
 let t = 0;
 
 function x(answer: (n: number) => { status: number; json: any } = (n) => ({ status: 201, json: { data: { id: String(n), text: '' } } })) {
@@ -30,11 +34,15 @@ function x(answer: (n: number) => { status: number; json: any } = (n) => ({ stat
 const prop = (title: string, discussionsUrl: string | null = null) => ({ id: 42, title, authors: null, abstract: null, type: 'default', status: 'votingPeriod', startEpoch: 1, endEpoch: 9, activationEpoch: 10, yayNam: 1_000_000, nayNam: 2_000, abstainNam: 0, discussionsUrl }) as GovernanceProposal;
 const whale = (n: number, extra: Partial<Flow> = {}): Flow =>
   ({ id: `osmosis:XW${n}:0`, chain: 'osmosis', height: 100 + n, ts: t - 60_000, txHash: `XW${n}`, kind: 'sell', from: 'osmo1sellerxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx', to: null, amount: 50_000, meta: null, ...extra }) as unknown as Flow;
+const proposal = (id: number, title = 'Raise the cap'): GovernanceProposal =>
+  ({ id, title, authors: null, abstract: null, type: 'default', status: 'voting', startEpoch: 1, endEpoch: 2, activationEpoch: 3, yayNam: 0, nayNam: 0, abstainNam: 0, discussionsUrl: null }) as GovernanceProposal;
 
 beforeEach(() => {
   t = Date.UTC(2026, 9, 29, 9);
   vi.spyOn(Date, 'now').mockImplementation(() => t);
   configureAlerts('k', true);
+  // each test's database is new, so are the isolate's claims: two tests post the same day's recap
+  resetClaimMemory();
 });
 afterEach(() => { vi.unstubAllGlobals(); vi.restoreAllMocks(); });
 
@@ -186,12 +194,12 @@ describe('the recap\'s picture', () => {
       return new Response(JSON.stringify({ data: { id: '1' } }), { status: 201 });
     }));
     const pic = async () => new Uint8Array([137, 80, 78, 71]);
-    expect(await postOnce(env(db), 'alert:x:p1', () => 'with picture', 'p1', pic)).toBe('posted');
+    expect(await postOnce(env(db), 'alert:x:p1', 'move', () => 'with picture', 'p1', pic)).toBe('posted');
     expect(bodies[0]).toEqual({ text: 'with picture', media: { media_ids: ['777'] } });
     uploadOk = false;
-    expect(await postOnce(env(db), 'alert:x:p2', () => 'text only', 'p2', pic)).toBe('posted');
+    expect(await postOnce(env(db), 'alert:x:p2', 'move', () => 'text only', 'p2', pic)).toBe('posted');
     expect(bodies[1]).toEqual({ text: 'text only' });
-    expect(await postOnce(env(db), 'alert:x:p3', () => 'drawing failed', 'p3', async () => { throw new Error('no rows'); })).toBe('posted');
+    expect(await postOnce(env(db), 'alert:x:p3', 'move', () => 'drawing failed', 'p3', async () => { throw new Error('no rows'); })).toBe('posted');
     expect(bodies[2]).toEqual({ text: 'drawing failed' });
     expect(uploads).toBe(2);
   });
@@ -206,18 +214,6 @@ describe('posting', () => {
     expect(h).toContain(`oauth_signature="${encodeURIComponent(sig)}"`);
     expect(h.startsWith('OAuth ')).toBe(true);
     expect(h).not.toContain('cs');
-  });
-
-  it('posts a big move once; a crossing\'s two records once; an old or small move never', async () => {
-    const db = testD1();
-    const s = x();
-    await postMoveOnX(env(db), whale(1));
-    await postMoveOnX(env(db), whale(1));
-    expect(s.posts).toHaveLength(1);
-    await postMoveOnX(env(db), whale(2, { ts: t - X_MAX_AGE_MS - 1 }));
-    await postMoveOnX(env(db), whale(3, { amount: 9_999 }));
-    await postMoveOnX(env(db), whale(4, { kind: 'rewards' } as any));
-    expect(s.posts).toHaveLength(1);
   });
 
   it('posts a proposal with its record in words and no link, once per status', async () => {
@@ -235,35 +231,48 @@ describe('posting', () => {
     const db = testD1();
     const s = x();
     configureAlerts('k', false);
-    await postMoveOnX(env(db), whale(5));
+    expect(await postGovOnX(env(db), proposal(5))).toBe('failed');
     configureAlerts('k', true);
-    await postMoveOnX(env(db, { X_ACCESS_SECRET: undefined }), whale(6));
+    expect(await postGovOnX(env(db, { X_ACCESS_SECRET: undefined }), proposal(6))).toBe('failed');
     expect(s.posts).toHaveLength(0);
   });
 
-  it('stops at the day\'s cap, and starts again the next day', async () => {
+  it('each kind stops at its share of the day, the recap\'s share is its own, and the shares start again the next day', async () => {
+    expect(X_SHARES.move + X_SHARES.ibc + X_SHARES.gov + X_SHARES.recap).toBe(X_DAILY_MAX);
+    expect(X_SHARES.recap).toBe(1);
     const db = testD1();
     const s = x();
-    for (let i = 0; i < X_DAILY_MAX + 3; i++) await postOnce(env(db), `alert:x:test:${i}`, () => `post ${i}`, `test ${i}`);
+    for (let i = 0; i < X_SHARES.move + 3; i++) await postOnce(env(db), `alert:x:test:${i}`, 'move', () => `move ${i}`, `test ${i}`);
+    expect(s.posts).toHaveLength(X_SHARES.move);
+    // the crossings' share is their own: the moves spent theirs, the crossings still post, to their own share
+    for (let i = 0; i < X_SHARES.ibc + 2; i++) await postOnce(env(db), `alert:x:ibc:test:${i}`, 'ibc', () => `crossing ${i}`, `crossing ${i}`);
+    expect(s.posts).toHaveLength(X_SHARES.move + X_SHARES.ibc);
+    for (let i = 0; i < X_SHARES.gov + 2; i++) await postOnce(env(db), `alert:x:gov:test:${i}`, 'gov', () => `gov ${i}`, `gov ${i}`);
+    expect(s.posts).toHaveLength(X_SHARES.move + X_SHARES.ibc + X_SHARES.gov);
+    // the moves, the crossings and the proposals spent theirs: the recap still has its place
+    t = Date.UTC(2026, 9, 29, X_RECAP_HOUR_UTC, 1);
+    await postRecapOnX(env(db), async () => ({ generatedAt: t, price: { usd: { value: 0.001 } } }), t, async () => null);
     expect(s.posts).toHaveLength(X_DAILY_MAX);
-    // a post the cap refused is not claimed: it can go tomorrow
+    expect(s.posts.at(-1)).toMatch(/^NAM today/);
+    expect(await postOnce(env(db), 'alert:x:recap:extra', 'recap', () => 'a second recap', 'extra')).toBe('full');
+    // a post a share refused is not claimed: it can go tomorrow
     t += 86_400_000;
-    expect(await postOnce(env(db), `alert:x:test:${X_DAILY_MAX}`, () => 'again', 'again')).toBe('posted');
+    expect(await postOnce(env(db), `alert:x:test:${X_SHARES.move}`, 'move', () => 'again', 'again')).toBe('posted');
   });
 
   it('X down or busy: the claim and the day\'s post are given back; a refusal keeps them', async () => {
     const db = testD1();
     let status = 503;
     const s = x(() => (status === 201 ? { status, json: { data: { id: '1' } } } : { status, json: { title: 'Service Unavailable' } }));
-    expect(await postOnce(env(db), 'alert:x:k1', () => 'one', 'one')).toBe('failed');
+    expect(await postOnce(env(db), 'alert:x:k1', 'move', () => 'one', 'one')).toBe('failed');
     status = 201;
-    expect(await postOnce(env(db), 'alert:x:k1', () => 'one', 'one')).toBe('posted');
+    expect(await postOnce(env(db), 'alert:x:k1', 'move', () => 'one', 'one')).toBe('posted');
     status = 403;
-    expect(await postOnce(env(db), 'alert:x:k2', () => 'two', 'two')).toBe('failed');
+    expect(await postOnce(env(db), 'alert:x:k2', 'move', () => 'two', 'two')).toBe('failed');
     status = 201;
-    expect(await postOnce(env(db), 'alert:x:k2', () => 'two', 'two')).toBe('claimed');
+    expect(await postOnce(env(db), 'alert:x:k2', 'move', () => 'two', 'two')).toBe('claimed');
     expect(s.posts).toEqual(['one', 'one', 'two']);
-    const used = await db.prepare('SELECT value FROM kv WHERE key = ?').bind('alert:x:day:2026-10-29').first<{ value: string }>();
+    const used = await db.prepare('SELECT value FROM kv WHERE key = ?').bind('alert:x:day:2026-10-29:move').first<{ value: string }>();
     expect(Number(used!.value)).toBe(2);
     const last = JSON.parse((await db.prepare("SELECT value FROM kv WHERE key = 'x.last'").first<{ value: string }>())!.value);
     expect(last).toMatchObject({ status: 403, ok: false });
@@ -346,5 +355,116 @@ describe('reposting @namada', () => {
       .join('&').replace(/%252C/, '%2C');
     const base = `GET&${encodeURIComponent('https://api.x.com/2/users/999/tweets')}&${encodeURIComponent(params)}`;
     expect(h).toContain(`oauth_signature="${encodeURIComponent(createHmac('sha1', 'cs&as').update(base).digest('base64'))}"`);
+  });
+});
+
+describe('the kill switch (kv x.on)', () => {
+  const SELLER = 'osmo1nn62s9hm7ns4lwqsl70y49xx5tpe0ft45evpvh';
+  /** Every call to X, by URL; X answers as it would, so a call that is made would post. */
+  function anyX() {
+    const calls: string[] = [];
+    vi.stubGlobal('fetch', vi.fn(async (u: string) => {
+      const url = String(u);
+      calls.push(url);
+      if (url.includes('/users/by/username/')) return new Response(JSON.stringify({ data: { id: '999' } }));
+      if (url.includes('/tweets?')) return new Response(JSON.stringify({ data: [{ id: '501' }], meta: { newest_id: '501' } }));
+      return new Response(JSON.stringify({ data: { id: '1', retweeted: true } }), { status: 201 });
+    }));
+    return calls;
+  }
+  const setOn = (db: TestD1, value: string) => insert(db, 'kv', [{ key: X_ON_KEY, value, updated_at: t }]);
+
+  it('reads on with no row or any value but 0, off at 0, and off when it cannot be read', async () => {
+    const db = testD1();
+    expect(await xOn(db as any)).toBe(true);
+    setOn(db, '1');
+    expect(await xOn(db as any)).toBe(true);
+    db.raw.prepare('UPDATE kv SET value = ? WHERE key = ?').run(' 0 ', X_ON_KEY);
+    expect(await xOn(db as any)).toBe(false);
+    const broken = { prepare: () => { throw new Error('D1 down'); } } as any;
+    expect(await xOn(broken)).toBe(false);
+  });
+
+  it('at 0 stops the hour\'s move, a proposal, the recap and the @namada reposts, claiming nothing; back on, each goes', async () => {
+    const db = testD1();
+    const calls = anyX();
+    setOn(db, '0');
+    // a move the hour would post: 1,000,000 NAM sold, worth $150, at 08:30 UTC
+    insert(db, 'flows', [{ id: 'osmosis:KS1:0', chain: 'osmosis', height: 1, ts: Date.UTC(2026, 9, 29, 8, 30), tx_hash: 'KS1', kind: 'sell', from_addr: SELLER, to_addr: null, amount_num: 1_000_000, pool_id: '3005', price_usd: 0.00015, value_usd: 150, meta: JSON.stringify({ priceSource: 'spot' }) }]);
+    const repostEnv = env(db, { X_ACCESS_TOKEN: '2115675561741951125-abc' });
+    const hourAt = (at: number) => publicHour(db as any, at, { osmosis: 10000, namada: 10000 });
+    t = Date.UTC(2026, 9, 29, 9, 20);
+    expect(await postHourOnX(env(db), hourAt(t), t)).toBe('skipped');
+    expect(await postGovOnX(env(db), proposal(7))).toBe('off');
+    t = Date.UTC(2026, 9, 29, X_RECAP_HOUR_UTC, 20);
+    await postRecapOnX(env(db), async () => ({ generatedAt: t }), t, async () => null);
+    expect(await repostNamada(repostEnv, t)).toBe(0);
+    expect(calls).toEqual([]);
+    expect(db.raw.prepare("SELECT key FROM kv WHERE key LIKE 'alert:x:%'").all()).toEqual([]);
+
+    db.raw.prepare('UPDATE kv SET value = ? WHERE key = ?').run('1', X_ON_KEY);
+    t = Date.UTC(2026, 9, 29, 9, 20);
+    expect(await postHourOnX(env(db), hourAt(t), t)).toBe('posted');
+    expect(await postGovOnX(env(db), proposal(7))).toBe('posted');
+    t = Date.UTC(2026, 9, 29, X_RECAP_HOUR_UTC, 20);
+    await postRecapOnX(env(db), async () => ({ generatedAt: t }), t, async () => null);
+    await repostNamada(repostEnv, Date.UTC(2026, 9, 29, X_RECAP_HOUR_UTC, 30));
+    expect(calls.filter((u) => u === 'https://api.x.com/2/tweets')).toHaveLength(3);
+    expect(calls.some((u) => u.includes('/users/by/username/namada'))).toBe(true);
+  });
+
+  it('what @namada posted while the switch was off is never reposted once it is back on; posts after it are', async () => {
+    const db = testD1();
+    const ENV = env(db, { X_ACCESS_TOKEN: '2115675561741951125-abc' });
+    let feed = ['105', '104'];
+    const calls: { url: string; id?: string }[] = [];
+    vi.stubGlobal('fetch', vi.fn(async (u: string, init?: RequestInit) => {
+      const url = String(u);
+      calls.push({ url, id: init?.body ? JSON.parse(String(init.body)).tweet_id : undefined });
+      if (url.includes('/users/by/username/namada')) return new Response(JSON.stringify({ data: { id: '999' } }));
+      if (url.includes('/users/999/tweets')) {
+        const since = new URL(url).searchParams.get('since_id');
+        const list = feed.filter((p) => !since || BigInt(p) > BigInt(since));
+        return new Response(JSON.stringify(list.length ? { data: list.map((id) => ({ id })), meta: { newest_id: list[0] } } : { meta: { result_count: 0 } }));
+      }
+      return new Response(JSON.stringify({ data: { retweeted: true } }), { status: 200 });
+    }));
+    const at = (h: number, min: number) => Date.UTC(2026, 9, 29, h, min);
+    const reposted = () => calls.filter((c) => c.url.endsWith('/retweets')).map((c) => c.id);
+    // on: the first look records where the posts stand
+    expect(await repostNamada(ENV, at(9, 0))).toBe(0);
+    expect(kv(db, 'x.repost.since')).toBe('105');
+    // @namada posts something the owner turns the switch off for, at a minute that is no look minute
+    feed = ['106', '105', '104'];
+    setOn(db, '0');
+    const asked = calls.length;
+    expect(await repostNamada(ENV, at(9, 3))).toBe(0);
+    expect(kv(db, 'x.repost.since')).toBeNull();
+    // hours later, more posts while off; then the switch is back on
+    feed = ['107', '106', '105', '104'];
+    expect(await repostNamada(ENV, at(11, 0))).toBe(0);
+    expect(calls.length, 'X is not asked while off').toBe(asked);
+    db.raw.prepare('UPDATE kv SET value = ? WHERE key = ?').run('1', X_ON_KEY);
+    // the first look back on only records where the posts stand: 106 and 107 are not reposted
+    expect(await repostNamada(ENV, at(11, 10))).toBe(0);
+    expect(kv(db, 'x.repost.since')).toBe('107');
+    feed = ['108', '107', '106', '105', '104'];
+    expect(await repostNamada(ENV, at(11, 20))).toBe(1);
+    expect(reposted()).toEqual(['108']);
+  });
+
+  it('a switch that cannot be read reposts nothing and keeps the cursor', async () => {
+    const db = testD1();
+    insert(db, 'kv', [{ key: 'x.repost.since', value: '105', updated_at: t }]);
+    const calls = anyX();
+    const prepare = db.prepare.bind(db);
+    const spy = vi.spyOn(db, 'prepare').mockImplementation((sql: string) => {
+      if (sql === 'SELECT value FROM kv WHERE key = ?') throw new Error('D1 down');
+      return prepare(sql);
+    });
+    expect(await repostNamada(env(db, { X_ACCESS_TOKEN: '2115675561741951125-abc' }), Date.UTC(2026, 9, 29, 9, 10))).toBe(0);
+    expect(calls).toEqual([]);
+    spy.mockRestore();
+    expect(kv(db, 'x.repost.since')).toBe('105');
   });
 });
