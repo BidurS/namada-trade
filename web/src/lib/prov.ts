@@ -167,6 +167,7 @@ export const CHECK_TITLES: Record<string, string> = {
   stake_within_staking_account: 'What is staked fits in the staking account',
   namada_index_lag: "This site's Namada records keep up with the chain",
   osmosis_index: "This site's Osmosis records are listening and caught up",
+  osmosis_stream_share: 'Osmosis moves reach this site as they happen',
   bridge_records_paired: 'Every bridge crossing is on record on both chains',
   // the depth module's four checks, titled where the module keeps its words (shared/depth.ts)
   ...DEPTH_CHECK_TITLES,
@@ -272,6 +273,14 @@ export function checkDetail(c: Check): string | null {
     }
     case 'osmosis_index':
       return typeof d.streaming === 'boolean' ? (d.streaming ? 'listening' : 'not listening') : null;
+    case 'osmosis_stream_share': {
+      // The share of the last 24 h of Osmosis moves that the five-minute catch-up found rather than the live stream
+      // (worker/src/cron.ts streamShareCheck); a day with no move has nothing to compare, never 0%.
+      if (d.noFlows === true) return 'No Osmosis move in the last 24 h to compare';
+      const n = detailNum(d.flows), late = detailNum(d.catchUp), pct = detailNum(d.sharePct);
+      if (n == null || late == null || pct == null) return null;
+      return `${fmtPctRule(pct, 1)} found late: ${fmtCount(late)} of ${plural(n, 'Osmosis move', 'Osmosis moves')} in the last 24 h were not heard live; the five-minute catch-up found them`;
+    }
     case 'depth_budget': {
       // The depth store's caps (worker/src/depth/budget.ts budgetCheckStmt): the rows written this month against the
       // cap, the database size the last statement reported, the archive puts; and the store's own reason when a cap

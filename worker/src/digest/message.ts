@@ -271,8 +271,9 @@ export interface OperatorFigures {
   /** `since` is when a source went not ok (the health log's flip); null when that is not on record, and the line then
    *  gives `asOf`, the row's last probe (source.health keeps one row a name, rewritten every tick) */
   health: Figure<{ ok: number; total: number; notOk: { name: string; since: number | null; asOf?: number; note: string }[] }>;
-  /** the health log's entries in the window, grouped; firstAt is the log's oldest entry (null when empty) */
-  healthLog: Figure<{ firstAt: number | null; flips: HealthFlip[] }>;
+  /** the health log's entries in the window, grouped; firstAt is the log's oldest entry (null when empty); `cut`, the
+   *  sources whose `n` older changes from `from` the log let go (it keeps `perName` a source), their record starting at `to` */
+  healthLog: Figure<{ firstAt: number | null; flips: HealthFlip[]; cut?: { name: string; n: number; from: number; to: number }[]; perName?: number }>;
   /** `since` is when the check's state began (the health log's flip); null when that is not on record, and the line
    *  then gives `asOf`, the last time the check ran */
   checks: Figure<{ ok: number; total: number; failing: { key: string; status: string; since: number | null; asOf?: number }[]; idle?: string[] }>;
@@ -1360,6 +1361,14 @@ export function operatorEmbed(ops: OperatorFigures, now: number, kind: DigestKin
           flips = ` Degraded during the day: ${shown.map((x) => x.to != null
             ? `${x.name}: not ok ${clock(x.from)}–${clock(x.to)} UTC (${ago(x.to - x.from)})`
             : `${x.name}: not ok since ${timeWords(x.from, now)} (still)`).join('; ')}${fl.length > shown.length ? `; and ${fl.length - shown.length} more` : ''}.`;
+        }
+        // a source that changed state more often than the log keeps a source: how many of its older changes are gone,
+        // so its episodes above are read as starting late, not as all there was
+        const cut = log.value.cut ?? [];
+        if (cut.length) {
+          const shownCut = cut.slice(0, OPERATOR_LISTED_MAX);
+          const keeps = log.value.perName != null ? `each source's newest ${int(log.value.perName)} changes` : "each source's newest changes only";
+          flips += ` Not kept: ${shownCut.map((c) => `${c.name}: ${plural(c.n, 'older change')} (${timeWords(c.from, now)} to ${timeWords(c.to, now)})`).join('; ')}${cut.length > shownCut.length ? `; and ${cut.length - shownCut.length} more` : ''}; the health log keeps ${keeps}.`;
         }
         const first = log.value.firstAt;
         if (first == null) flips += ` Faults that cleared before ${clock(now)}: no record (the health log starts with this deploy).`;

@@ -31,6 +31,16 @@ export const EXECUTED_COMPARE_MS = 6 * HOUR_MS;
 export const EXECUTED_SHOW_MS = DAY_MS;
 /** A check not run for this long is not counted as passing (api.ts CHECK_STALE_MS). */
 export const CHECK_STALE_MS = 15 * 60_000;
+/**
+ * How long a check's last run counts as current: CHECK_STALE_MS, or twice the cadence a check that runs less often
+ * states in its detail (`everyMs`: osmosis_stream_share runs hourly, cron.ts STREAM_SHARE_EVERY_MS), so it reads "no
+ * recent result" only once a run is missed. api.ts checkOf, the operator embed and the incidents (ops.ts) all judge
+ * a check by it.
+ */
+export const checkStaleMs = (everyMs: unknown): number => {
+  const e = Number(everyMs);
+  return everyMs != null && Number.isFinite(e) && e > 0 ? Math.max(CHECK_STALE_MS, 2 * e) : CHECK_STALE_MS;
+};
 /** A proposal's own discussion link is used when no longer than this (discord.ts GOV_LINK_MAX). */
 export const GOV_LINK_MAX = 512;
 

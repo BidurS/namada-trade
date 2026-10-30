@@ -136,6 +136,22 @@ export const tgSend = (token: string, chat: number | string, m: TgMessage) => tg
   ...(m.button ? { reply_markup: { inline_keyboard: [[{ text: m.button.text, url: m.button.url }]] } } : {}),
 });
 
+/**
+ * One message of plain text to the operator's own chat (the secret TELEGRAM_OWNER_CHAT; worker/src/ops.ts): the text
+ * as it is, escaped, with no button and no preview; a 429 is sent once more after a Retry-After of at most
+ * TG_TIMEOUT_MS. No subscriber's row is read or changed. True when Telegram took it.
+ */
+export async function sendTelegramOwner(token: string, chat: string, text: string): Promise<boolean> {
+  const m: TgMessage = { html: esc(text) };
+  let a = await tgSend(token, chat, m);
+  if (!a.ok && a.status === 429 && a.retryAfter && a.retryAfter * 1000 <= TG_TIMEOUT_MS) {
+    await sleep(a.retryAfter * 1000);
+    a = await tgSend(token, chat, m);
+  }
+  if (!a.ok) console.error(`telegram: the operator's message not taken (${a.status}${a.description ? `: ${a.description}` : ''})`);
+  return a.ok;
+}
+
 // ---------------------------------------------------------------- the subscribers
 
 /** Settings are read at most once per this long per database (a link or a change takes effect within it). */
