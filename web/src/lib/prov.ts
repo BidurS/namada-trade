@@ -298,8 +298,11 @@ export function checkDetail(c: Check): string | null {
       if (d.tooFew === true && min != null) {
         return `Too few to judge: ${plural(n, 'Osmosis move', 'Osmosis moves')} in the last 24 h, ${late === 0 ? 'none' : fmtCount(late)} found late; the share is judged from ${plural(min, 'move', 'moves')}`;
       }
-      if (late === 0) return `None found late: ${n === 1 ? 'the one Osmosis move' : `all ${plural(n, 'Osmosis move', 'Osmosis moves')}`} in the last 24 h ${n === 1 ? 'was' : 'were'} heard live`;
-      return `${lateShare(late, n, detailNum(d.okBelowPct))} found late: ${fmtCount(late)} of ${plural(n, 'Osmosis move', 'Osmosis moves')} in the last 24 h ${late === 1 ? 'was' : 'were'} not heard live; the five-minute catch-up found ${late === 1 ? 'it' : 'them'}`;
+      // the moves a history repair wrote, found by neither, are counted apart
+      const repaired = detailNum(d.repaired);
+      const plus = repaired != null && repaired > 0 ? `; ${plural(repaired, 'more move', 'more moves')} written by a history repair ${repaired === 1 ? 'is' : 'are'} not counted` : '';
+      if (late === 0) return `None found late: ${n === 1 ? 'the one Osmosis move' : `all ${plural(n, 'Osmosis move', 'Osmosis moves')}`} in the last 24 h ${n === 1 ? 'was' : 'were'} heard live${plus}`;
+      return `${lateShare(late, n, detailNum(d.okBelowPct))} found late: ${fmtCount(late)} of ${plural(n, 'Osmosis move', 'Osmosis moves')} in the last 24 h ${late === 1 ? 'was' : 'were'} not heard live; the five-minute catch-up found ${late === 1 ? 'it' : 'them'}${plus}`;
     }
     case 'depth_budget': {
       // The depth store's caps (worker/src/depth/budget.ts budgetCheckStmt): the rows written this month against the

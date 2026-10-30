@@ -70,10 +70,22 @@ describe('the stream-share check: math and status', () => {
   it('the read counts the Osmosis rows of the 24 h and those the catch-up search wrote, on flows_ts', () => {
     const db = testD1();
     day(db, T);
-    expect(db.raw.prepare(STREAM_SHARE_SQL).get(T - 24 * H, T)).toEqual({ n: 182, late: 31 });
+    expect(db.raw.prepare(STREAM_SHARE_SQL).get(T - 24 * H, T)).toEqual({ n: 182, late: 31, repaired: 0 });
     const plan = (db.raw.prepare(`EXPLAIN QUERY PLAN ${STREAM_SHARE_SQL}`).all(T - 24 * H, T) as { detail: string }[]).map((r) => r.detail).join(' | ');
     expect(plan).toMatch(/SEARCH flows USING INDEX flows_ts \(ts>\? AND ts<\?\)/);
-    expect(testD1().raw.prepare(STREAM_SHARE_SQL).get(T - 24 * H, T)).toEqual({ n: 0, late: 0 });
+    expect(testD1().raw.prepare(STREAM_SHARE_SQL).get(T - 24 * H, T)).toEqual({ n: 0, late: 0, repaired: 0 });
+  });
+
+  it('a move a history repair wrote (scripts/backfill-osmosis.ts) is neither the stream\'s nor the catch-up\'s: counted apart (merged stage 1 review)', () => {
+    const db = testD1();
+    day(db, T);
+    // 30 moves neither the stream nor the catch-up search found, written by a repair: before, they read as heard live
+    insert(db, 'flows', Array.from({ length: 30 }, (_, i) => flow(`R${i}`, T - 3 * H + i * MIN, 'osmosis', 'history repair')));
+    expect(db.raw.prepare(STREAM_SHARE_SQL).get(T - 24 * H, T)).toEqual({ n: 182, late: 31, repaired: 30 });
+    const d = JSON.parse(String(streamShareCheck(182, 31, T, 30).params[3]));
+    expect(d).toMatchObject({ flows: 182, catchUp: 31, repaired: 30 });
+    expect(checkDetail(c(d, 'warn'))).toMatch(/; 30 more moves written by a history repair are not counted$/);
+    expect(JSON.parse(String(streamShareCheck(182, 31, T).params[3])).repaired).toBeUndefined();
   });
 
   it('runs hourly: never run, or its last run an hour old', () => {

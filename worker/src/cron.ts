@@ -342,11 +342,15 @@ export const STREAM_SHARE_WINDOW_MS = 24 * 3600_000;
 /** Below this share of moves found by the catch-up search the check passes (scale plan, Stage 1 item 7). */
 export const STREAM_SHARE_OK_PCT = 5;
 /**
- * The Osmosis rows of a window by time (flows_ts), and how many of them the catch-up search wrote (meta.via
- * 'catch-up search', live-hub.ts sweepOsmosis): a row the stream wrote keeps its meta, as the search never rewrites a
- * stored transaction. Matched with LIKE, so no row's meta is parsed. One row a move, as the list shows.
+ * The Osmosis rows of a window by time (flows_ts) that the stream or the catch-up search wrote (`n`), how many of them
+ * the catch-up search wrote (`late`, meta.via 'catch-up search', live-hub.ts sweepOsmosis), and the rows a history
+ * repair wrote (`repaired`, meta.via 'history repair', scripts/backfill-osmosis.ts), which neither found: counted in
+ * neither, so they never read as moves the stream delivered. A row the stream wrote keeps its meta, as the search never
+ * rewrites a stored transaction. Matched with LIKE, so no row's meta is parsed. One row a move, as the list shows.
  */
-export const STREAM_SHARE_SQL = `SELECT COUNT(*) n, COALESCE(SUM(CASE WHEN meta LIKE '%"via":"catch-up search"%' THEN 1 ELSE 0 END), 0) late
+export const STREAM_SHARE_SQL = `SELECT COALESCE(SUM(CASE WHEN meta LIKE '%"via":"history repair"%' THEN 0 ELSE 1 END), 0) n,
+       COALESCE(SUM(CASE WHEN meta LIKE '%"via":"catch-up search"%' THEN 1 ELSE 0 END), 0) late,
+       COALESCE(SUM(CASE WHEN meta LIKE '%"via":"history repair"%' THEN 1 ELSE 0 END), 0) repaired
   FROM flows INDEXED BY flows_ts WHERE ts >= ? AND ts < ? AND chain = 'osmosis'`;
 /** Whether the stream-share check runs this tick: never run, or its last run is STREAM_SHARE_EVERY_MS old. */
 export const streamShareDue = (lastAt: number | null, now: number): boolean => lastAt == null || now - lastAt >= STREAM_SHARE_EVERY_MS;
@@ -361,7 +365,7 @@ export const STREAM_SHARE_MIN_FLOWS = Math.floor(100 / STREAM_SHARE_OK_PCT) + 1;
  * The detail says its cadence (`everyMs`), so the row reads "no recent result" only once an hourly run is missed
  * (digest/freshness.ts checkStaleMs).
  */
-export function streamShareCheck(n: number, late: number, now: number): Stmt {
+export function streamShareCheck(n: number, late: number, now: number, repaired = 0): Stmt {
   // judged on the share itself; the detail keeps two decimals, cut rather than rounded under the line, so a share that
   // passes is never written as the line (4.996% is 4.99, not 5)
   const share = n > 0 ? (late / n) * 100 : null;
@@ -371,6 +375,7 @@ export function streamShareCheck(n: number, late: number, now: number): Stmt {
   return stmt.check('osmosis_stream_share', status, 'Osmosis moves found by the catch-up search, not the live stream (24 h)', {
     flows: n, catchUp: late, sharePct: pct, okBelowPct: STREAM_SHARE_OK_PCT, minFlows: STREAM_SHARE_MIN_FLOWS, windowHours: STREAM_SHARE_WINDOW_MS / 3600_000,
     everyMs: STREAM_SHARE_EVERY_MS, from: now - STREAM_SHARE_WINDOW_MS, to: now, ...(pct == null ? { noFlows: true } : {}), ...(tooFew ? { tooFew: true } : {}),
+    ...(repaired > 0 ? { repaired } : {}),
   }, now);
 }
 
@@ -2032,8 +2037,8 @@ export async function runCron(env: Env) {
     if (!late()) {
       const lastShare = await env.DB.prepare(`SELECT checked_at FROM checks WHERE key = 'osmosis_stream_share'`).first<{ checked_at: number }>().then((r) => r?.checked_at ?? null, () => undefined);
       if (lastShare !== undefined && streamShareDue(lastShare, now)) {
-        const r = await env.DB.prepare(STREAM_SHARE_SQL).bind(now - STREAM_SHARE_WINDOW_MS, now).first<{ n: number | null; late: number | null }>().catch((e) => { console.error('stream share', e); return null; });
-        if (r) checkStmts.push(streamShareCheck(Number(r.n ?? 0), Number(r.late ?? 0), now));
+        const r = await env.DB.prepare(STREAM_SHARE_SQL).bind(now - STREAM_SHARE_WINDOW_MS, now).first<{ n: number | null; late: number | null; repaired: number | null }>().catch((e) => { console.error('stream share', e); return null; });
+        if (r) checkStmts.push(streamShareCheck(Number(r.n ?? 0), Number(r.late ?? 0), now, Number(r.repaired ?? 0)));
       }
     }
 
