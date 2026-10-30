@@ -442,7 +442,9 @@ export default function Holders({
   /** The count covers the rows the filters select (a server that ignored a size filter: only this page was checked). */
   const exact = !!fresh && fresh.exact && serverFiltered;
   /** Some holders match: a count above 0, or more than the server counts. */
-  const any = !!fresh && ((fresh.total ?? 0) > 0 || fresh.over != null);
+  const someMatch = !!fresh && ((fresh.total ?? 0) > 0 || fresh.over != null);
+  /** The rank this page starts from. */
+  const firstOnPage = (page - 1) * size + 1;
 
   // ---- column heads on the desktop table: Total, Spendable and Staked sort the list (the "Biggest by" choice)
   const sortHead = (v: HolderUrl['by'], word: string) => (
@@ -465,7 +467,7 @@ export default function Holders({
     : undefined;
 
   const csv =
-    fresh && any ? (
+    fresh && someMatch ? (
       <a className="link act-csv" href={holdersCsvHref({ chain: eff.chain, by, category, search })} download>
         <span>Download page data</span>
         {/* the export holds the biggest HOLDER_CSV_MAX of these holders (worker/src/api.ts /api/export/holders) */}
@@ -565,7 +567,7 @@ export default function Holders({
             onEmpty={focusSearch}
           />
         </div>
-        {any ? (
+        {someMatch ? (
           <PageTools
             className="act-tools"
             size={size}
@@ -635,6 +637,9 @@ export default function Holders({
                 'No Osmosis holder rows came back from this site’s server.'
               )}
             </EmptyState>
+          ) : fresh && fresh.total == null && fresh.over != null && page > 1 ? (
+            // not counted past `over`, so a page past the end is known only when it comes back empty
+            <EmptyState title="This page is past the end of the list.">More than {fmtCount(fresh.over)} holders match these filters, but fewer than the {fmtCount(firstOnPage)} this page starts from.</EmptyState>
           ) : eff.what && !serverFiltered ? (
             <EmptyState title="No holder on this page matches.">The filter looks only at the {fmtCount(loaded.length)} holders on this page.</EmptyState>
           ) : search && (eff.what || eff.min || eff.max || eff.chain !== HOLDER_DEFAULT.chain) ? (
