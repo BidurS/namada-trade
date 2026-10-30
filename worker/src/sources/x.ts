@@ -1,19 +1,20 @@
 // Posts on X (@ the owner's account), automatically: at most one move a closed UTC hour, the hour's largest by dollars
 // (public-posts.ts, the selector the public Telegram channel shares: from PUBLIC_POST_USD_MIN and the chain's whale
-// size, no bot round trips or rewards claims), new and changed governance proposals, and a daily recap at 13:00 UTC
-// with the daily digest's price chart (owner's choices, 2026-10-29). Forum topics and replies are not posted (owner,
-// 2026-10-29): any forum account writes them, links and bare domains included, and the post would carry them under
-// the site's name.
+// size, no bot round trips or rewards claims), and beside it the hour's largest bridge crossing when its move is no
+// crossing, new and changed governance proposals, and a daily recap at 13:00 UTC with the daily digest's price chart
+// (owner's choices, 2026-10-29). Forum topics and replies are not posted (owner, 2026-10-29): any forum account writes
+// them, links and bare domains included, and the post would carry them under the site's name.
 //
 // A move's post is built from the selector's allowlist of its fields (public-posts.ts PublicMove), so no memo, label,
 // tag or bridge receiver text reaches X. The one outsider text posted is a proposal's title, as plain words
-// (plainOutsider: no link, no bare domain, no mention).
+// (public-posts.ts publicProposal: no link, no bare domain, no mention, no tag; no author, abstract or link).
 //
 // X's API is paid per call (https://docs.x.com/x-api/getting-started/pricing: $0.015 a post, $0.20 a post with a
 // link, checked 2026-10-29), so only the recap carries a link; an alert names the move, its figures and their source
-// in words, and the profile links the site. Each kind of post has its own share of a UTC day (X_SHARES), so moves and
-// proposals never take the recap's place, and a move older than X_MAX_AGE_MS when it is offered is not posted: the
-// account reads as live. kv `x.on` = '0' stops every post, the recap and the @namada reposts included (xOn).
+// in words, and the profile links the site. Each kind of post has its own share of a UTC day (X_SHARES), so moves,
+// crossings and proposals never take one another's place or the recap's, and a move older than X_MAX_AGE_MS when it
+// is offered is not posted: the account reads as live. kv `x.on` = '0' stops every post, the recap and the @namada
+// reposts included (xSwitch), and @namada's posts made while it was off are never reposted.
 //
 // Each post is claimed once (`alert:x:` keys, swept with the other claims: auth.ts sweepAuth). An answer that is no
 // answer, a 5xx or a 429 gives the claim back, so the post is tried again; a refusal (401/403: the keys, 402: no
@@ -24,9 +25,9 @@
 import type { GovernanceProposal } from '../../../shared/types';
 import { SITE } from '../../../shared/site';
 import { kvSet } from '../db';
-import { alertsOn, claimDiscordAlert, fits, govCard, releaseClaims, TEXT_MAX, type Card, type GovContext } from './discord';
+import { alertsOn, claimDiscordAlert, fits, govCard, releaseClaims, type Card, type GovContext } from './discord';
 import { mdToPlain } from './telegram';
-import { claimTaken, firstUnposted, plainOutsider, publicRecord, publicTitle, publicValue, publicWho, publicWhy, type PublicHour, type PublicMove } from '../public-posts';
+import { claimTaken, hourPick, publicProposal, publicRecord, publicTitle, publicValue, publicWho, publicWhy, type HourPart, type PublicHour, type PublicMove } from '../public-posts';
 import { CHART_MINUTE_BOUND_MS, readChartRows, shapePriceChart, type ChartContext } from '../digest/charts/read';
 import { isNotRead, priceChart, toPng } from '../digest/charts/charts';
 
@@ -38,10 +39,11 @@ export const X_TIMEOUT_MS = 5000;
 /** The most posts a UTC day, the recap included: about $0.40 a day at most. */
 export const X_DAILY_MAX = 15;
 /**
- * Each kind of post's share of X_DAILY_MAX, counted apart (`alert:x:day:<date>:<kind>`): the moves (at most one an
- * hour, public-posts.ts), the proposals, and the recap's one, which no move or proposal can take.
+ * Each kind of post's share of X_DAILY_MAX, counted apart (`alert:x:day:<date>:<kind>`): the hours' moves (at most one
+ * an hour, public-posts.ts), the hours' bridge crossings (HourPart 'ibc': one an hour at most, when the hour's move is
+ * no crossing), the proposals, and the recap's one, which nothing else can take.
  */
-export const X_SHARES = { move: 11, gov: 3, recap: 1 } as const;
+export const X_SHARES = { move: 9, ibc: 2, gov: 3, recap: 1 } as const;
 export type XShare = keyof typeof X_SHARES;
 /** A move older than this when offered is not posted. */
 export const X_MAX_AGE_MS = 2 * 3_600_000;
@@ -57,17 +59,19 @@ export const postsOnX = (env: XEnv): boolean => alertsOn() && !!(env.X_API_KEY &
 export const X_ON_KEY = 'x.on';
 /**
  * The kill switch: kv `x.on` holding '0' stops every post on X, the moves, the proposals, the recap and the @namada
- * reposts; anything else, or no row, leaves posting on. A read that fails posts nothing this time, and claims nothing,
- * so the next tick asks again.
+ * reposts ('off'); anything else, or no row, leaves posting on ('on'). A read that fails ('unread') posts nothing this
+ * time, and claims nothing, so the next tick asks again.
  */
-export async function xOn(db: D1Database): Promise<boolean> {
+export async function xSwitch(db: D1Database): Promise<'on' | 'off' | 'unread'> {
   try {
     const r = await db.prepare('SELECT value FROM kv WHERE key = ?').bind(X_ON_KEY).first<{ value: string }>();
-    return r?.value == null || String(r.value).trim() !== '0';
+    return r?.value == null || String(r.value).trim() !== '0' ? 'on' : 'off';
   } catch {
-    return false;
+    return 'unread';
   }
 }
+/** Whether X may be posted to now: the kill switch read, and on (xSwitch). */
+export const xOn = async (db: D1Database): Promise<boolean> => (await xSwitch(db)) === 'on';
 
 // ---------------------------------------------------------------- the text
 
@@ -233,52 +237,54 @@ export async function postOnce(env: XEnv, key: string, share: XShare, text: () =
 }
 
 /**
- * The hour's move as a post: the title with the $NAM cashtag (X lists the post under the coin), who moved it and the
- * dollars with their source, why it was chosen, then the move's time (UTC: the post's own date is X's) and record, all
- * from the allowlisted fields (public-posts.ts PublicMove). The title and the tail are kept whole; the why line gives
- * way first, then the text.
+ * The hour's move (or crossing: `part`) as a post: the title with the $NAM cashtag (X lists the post under the coin),
+ * who moved it and the dollars with their source, why it was chosen, then the move's time (UTC: the post's own date is
+ * X's) and record, all from the allowlisted fields (public-posts.ts PublicMove). The title and the tail are kept
+ * whole; the why line gives way first, then the text.
  */
-export function hourText(m: PublicMove, passed = false): string {
+export function hourText(m: PublicMove, passed = false, part: HourPart = 'move'): string {
   const head = publicTitle(m).replace(/(^|\s)NAM\b/, '$1$$NAM');
   const body = `${publicWho(m)}. ${publicValue(m)}`;
   const tail = `${new Date(m.ts).toISOString().slice(11, 16)} UTC · ${publicRecord(m)}`;
-  const whole = [head, body, `${publicWhy(null, passed)}.`, tail].join('\n\n');
+  const whole = [head, body, `${publicWhy(null, passed, part)}.`, tail].join('\n\n');
   if (xLength(whole) <= X_MAX) return whole;
   const room = X_MAX - xLength(head) - xLength(tail) - 4;
   return cutX([head, room > 20 ? cutX(body, room) : '', tail].filter(Boolean).join('\n\n'));
 }
 
 /**
- * The cron's tick: the closed hour's move (public-posts.ts publicHour), once (`alert:x:hour:<hour>`), while fresh,
- * under the moves' share of the day. A quiet hour (no move qualifies) is claimed and posts nothing, as is an hour the
- * day's moves were spent before; an hour whose moves cannot be read is left for the next tick. A move is posted once
- * (`alert:x:ibc:<crossing>` or `alert:x:flow:<id>`, the keys the live posts used): a crossing's other record, in a
- * later hour, gives way to that hour's next move. Never throws.
+ * One part of the closed hour (public-posts.ts publicHour, hourPick), once (`alert:x:hour:<hour>`, the crossing's
+ * `alert:x:hour:<hour>:ibc`), while fresh, under that part's share of the day. A quiet part (nothing qualifies) is
+ * claimed and posts nothing, as is one whose share of the day was spent before; an hour whose moves cannot be read is
+ * left for the next tick. A move is posted once (`alert:x:ibc:<crossing>` or `alert:x:flow:<id>`, the keys the live
+ * posts used): a crossing's other record, in a later hour, gives way to that hour's next move. Never throws.
  */
-export async function postHourOnX(env: XEnv, hour: PublicHour, now = Date.now()): Promise<'posted' | 'quiet' | 'skipped' | 'claimed' | 'full' | 'off' | 'failed'> {
+async function postHourPart(env: XEnv, hour: PublicHour, part: HourPart, now: number): Promise<'posted' | 'quiet' | 'skipped' | 'claimed' | 'full' | 'off' | 'failed'> {
   if (!postsOnX(env)) return 'skipped';
   try {
-    const key = `alert:x:hour:${hour.key}`;
+    const key = `alert:x:hour:${hour.key}${part === 'ibc' ? ':ibc' : ''}`;
     if ((await claimTaken(env.DB, key)) || !(await xOn(env.DB))) return 'skipped';
     const posted = (m: PublicMove) => (m.crossing ? `alert:x:ibc:${m.crossing}` : `alert:x:flow:${m.id}`);
-    const first = await firstUnposted(env.DB, await hour.moves(), posted);
+    const first = await hourPick(env.DB, await hour.moves(), part, posted);
     if (!first || now - first.move.ts > X_MAX_AGE_MS) { await claimDiscordAlert(env.DB, [key]); return 'quiet'; }
     const pick = first.move;
-    const r = await postOnce(env, key, 'move', () => hourText(pick, first.passed), `hour ${hour.key}: move ${pick.id}`);
+    const r = await postOnce(env, key, part, () => hourText(pick, first.passed, part), `hour ${hour.key}: ${part === 'ibc' ? 'crossing' : 'move'} ${pick.id}`);
     if (r === 'full') await claimDiscordAlert(env.DB, [key]);
     if (r === 'posted') await claimDiscordAlert(env.DB, [posted(pick)]);
     return r;
   } catch (e) {
-    console.error(`x: the hour ${hour.key} not posted`, e);
+    console.error(`x: the hour ${hour.key} (${part}) not posted`, e);
     return 'failed';
   }
 }
+/** The cron's tick: the closed hour's move, its largest (postHourPart). */
+export const postHourOnX = (env: XEnv, hour: PublicHour, now = Date.now()) => postHourPart(env, hour, 'move', now);
+/** The cron's tick, after the move: the closed hour's largest bridge crossing, when its move is no crossing (postHourPart). */
+export const postHourCrossingOnX = (env: XEnv, hour: PublicHour, now = Date.now()) => postHourPart(env, hour, 'ibc', now);
 
-/** A proposal: its card's title (the proposal's own title as plain words: plainOutsider), its votes and its record. */
+/** A proposal: its card's title (the proposal's own title as plain words), its votes and its record (public-posts.ts publicProposal). */
 export const postGovOnX = (env: XEnv, prop: GovernanceProposal, isNew: boolean, g: GovContext = {}) =>
-  postOnce(env, `alert:x:gov:prop:${prop.id}:${prop.status}`, 'gov',
-    () => cardText(govCard({ ...prop, title: plainOutsider(prop.title, TEXT_MAX.title), authors: null, abstract: null, discussionsUrl: null }, isNew, g)),
-    `proposal ${prop.id} ${prop.status}`);
+  postOnce(env, `alert:x:gov:prop:${prop.id}:${prop.status}`, 'gov', () => cardText(govCard(publicProposal(prop), isNew, g)), `proposal ${prop.id} ${prop.status}`);
 
 // ---------------------------------------------------------------- the daily recap
 
@@ -359,14 +365,20 @@ async function xGet(env: XEnv, url: string): Promise<{ status: number; j: any }>
 export const ownId = (env: XEnv) => /^(\d+)-/.exec(env.X_ACCESS_TOKEN ?? '')?.[1] ?? null;
 
 /**
- * The cron's tick, every REPOST_EVERY_MIN minutes while the kill switch is on (xOn): reposts @namada's new posts (not
- * its replies or its own reposts), oldest first, each once (`alert:x:repost:<post id>`), at most REPOST_DAILY_MAX a
- * day. The first look only records
- * where its posts stand (kv `x.repost.since`), so nothing older than the feature is reposted; the account's id is
- * looked up once (kv `x.repost.id`). A repost X refuses as already made counts as made.
+ * The cron's tick, every REPOST_EVERY_MIN minutes while the kill switch is on (xSwitch): reposts @namada's new posts
+ * (not its replies or its own reposts), oldest first, each once (`alert:x:repost:<post id>`), at most REPOST_DAILY_MAX
+ * a day. The first look only records where its posts stand (kv `x.repost.since`), so nothing older than the feature is
+ * reposted; the account's id is looked up once (kv `x.repost.id`). A repost X refuses as already made counts as made.
+ *
+ * Each tick the switch reads off forgets where the posts stood (the cursor is deleted, and X is not asked), so the
+ * first look after it is back on is a first look again: what @namada posted while it was off (a post the switch was
+ * turned off for, say) is never reposted. A switch that cannot be read leaves the cursor as it is.
  */
 export async function repostNamada(env: XEnv, now = Date.now()): Promise<number> {
-  if (!postsOnX(env) || Math.floor(now / 60_000) % REPOST_EVERY_MIN !== 0 || !(await xOn(env.DB))) return 0;
+  if (!postsOnX(env)) return 0;
+  const on = await xSwitch(env.DB);
+  if (on === 'off') await env.DB.prepare("DELETE FROM kv WHERE key = 'x.repost.since'").run().catch((e) => console.error('x: the repost cursor not cleared', e));
+  if (on !== 'on' || Math.floor(now / 60_000) % REPOST_EVERY_MIN !== 0) return 0;
   const me = ownId(env);
   if (!me) return 0;
   let id = (await env.DB.prepare("SELECT value FROM kv WHERE key = 'x.repost.id'").first<{ value: string }>().catch(() => null))?.value;

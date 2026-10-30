@@ -1261,7 +1261,8 @@ const capFirst = (s: string) => s.charAt(0).toUpperCase() + s.slice(1);
 function sideWords(s: Party): string {
   const a = s.address;
   if (!a) return 'an account this record does not name';
-  if (PROTOCOL_WORDS[a]) return PROTOCOL_WORDS[a];
+  // its own keys only: a bridge receiver is text the sender chose ('constructor', '__proto__')
+  if (Object.hasOwn(PROTOCOL_WORDS, a)) return PROTOCOL_WORDS[a];
   if (!chainOf(a)) return `\`${plainMd(codeSafe(fmtAddr(a)))}\` (not an address)`;
   if (!s.label) return fmtAddr(a);
   const by = tagByline(s.source, s.author);

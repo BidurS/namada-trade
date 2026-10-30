@@ -1,25 +1,27 @@
 // The site's public posts (worker/src/public-posts.ts, sources/x.ts, sources/telegram.ts), scale plan Stage 1 item 3:
 // at most one move a closed UTC hour on X and on the public Telegram channel, the hour's largest by dollars (a trade
 // at its settle, else NAM times its stored price), read from the stored moves once the hour has settled, from $100
-// and the chain's whale size, never a bot round trip, a rewards claim or a move whose dollars are not known; a quiet
-// hour posts nothing; the moves never take the recap's place; a crossing is posted once across its two records; a post
-// is built from the allowlist of a move's fields, so a memo, a tag, a forum text or a bridge receiver that is no
-// address never reaches it; and a forum post reaches Telegram as its title and category alone, as plain words. Fetch
-// is stubbed: nothing reaches X or Telegram.
+// and the chain's whale size, never a bot round trip, a rewards claim or a move whose dollars are not known, and
+// beside it the hour's largest bridge crossing when the move is none, under its own share; a quiet hour posts
+// nothing; an hour whose moves or settle quotes cannot be read waits; the moves never take the recap's place; a
+// crossing is posted once across its two records; a post is built from the allowlist of a move's fields, so a memo, a
+// tag, a forum text or a bridge receiver that is no address (an object's own key names too) never reaches it; a forum
+// post reaches Telegram as its title and category alone, and a proposal reaches the channel as X posts it, as plain
+// words. Fetch is stubbed: nothing reaches X or Telegram.
 import { describe, it, expect, vi, afterEach, beforeEach } from 'vitest';
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { testD1, insert, type TestD1 } from './d1-sqlite';
 import { BANNED } from './banned-words';
 import { rowToFlow } from '../worker/src/analytics';
-import { configureAlerts, resetClaimMemory } from '../worker/src/sources/discord';
-import { hourText, postHourOnX, postRecapOnX, xLength, X_RECAP_HOUR_UTC, X_SHARES } from '../worker/src/sources/x';
-import { forumMessage, hourMessage, sendTelegramForum, sendTelegramHour, telegramRun } from '../worker/src/sources/telegram';
+import { configureAlerts, moveCard, resetClaimMemory } from '../worker/src/sources/discord';
+import { hourText, postGovOnX, postHourCrossingOnX, postHourOnX, postRecapOnX, xLength, X_RECAP_HOUR_UTC, X_SHARES } from '../worker/src/sources/x';
+import { forumMessage, hourMessage, sendTelegramForum, sendTelegramGov, sendTelegramHour, telegramRun } from '../worker/src/sources/telegram';
 import { saveSettings, defaultPrefs } from '../worker/src/settings';
 import {
   hourMoves, plainOutsider, publicHour, publicMoveOf, HOUR_MOVES_SQL, HOUR_SETTLE_MS, PUBLIC_HOUR_READ, PUBLIC_POST_USD_MIN, type NamFloors,
 } from '../worker/src/public-posts';
-import type { Flow, ForumPost } from '../shared/types';
+import type { Flow, ForumPost, GovernanceProposal } from '../shared/types';
 
 const KEYS = { X_API_KEY: 'ck', X_API_SECRET: 'cs', X_ACCESS_TOKEN: 'at', X_ACCESS_SECRET: 'as' };
 const KEY = 'DQ0NDQ0NDQ0NDQ0NDQ0NDQ0NDQ0NDQ0NDQ0NDQ0NDQ0=';
@@ -69,11 +71,12 @@ function voices(answer: (url: string) => { status: number; json: any } | null = 
   return { x, tg };
 }
 
-/** The tick's two posts for the hour due at `now`, as the cron makes them (cron.ts syncIntelAndAlerts). */
+/** The tick's posts for the hour due at `now`, as the cron makes them (cron.ts syncIntelAndAlerts): X's move part's answer. */
 async function tick(db: TestD1, now: number, tg = true) {
   t = now;
   const hour = publicHour(db as any, now, FLOORS);
   const r = await postHourOnX(xEnv(db), hour, now);
+  await postHourCrossingOnX(xEnv(db), hour, now);
   if (tg) await sendTelegramHour(tgEnv(db), hour, telegramRun(10, 10_000));
   return r;
 }
@@ -134,12 +137,12 @@ describe('choosing the hour\'s move', () => {
     expect(await tick(db, at(9, 10))).toBe('posted');
     expect(s.x).toHaveLength(1);
     expect(s.x[0]).toMatch(/^1,500,000 \$NAM bridged to Osmosis\n\nFrom tnam1qpjpp…472u3 to osmo1khrd2…vmz82\. Worth \$165\.00 at \$0\.000110 a NAM \(Osmosis quote\)\./);
-    expect(s.x[0]).toContain('\n\nLargest move of the hour, bot round trips and rewards claims left out.\n\n08:20 UTC · Osmosis record, block 73,444,002');
+    expect(s.x[0]).toContain('\n\nLargest priced move of the hour, bot round trips and rewards claims left out.\n\n08:20 UTC · Osmosis record, block 73,444,002');
     expect(xLength(s.x[0])).toBeLessThanOrEqual(280);
     // the public channel heard the same move, its hour named
     expect(s.tg).toHaveLength(1);
     expect(s.tg[0]).toMatchObject({ chat: CHANNEL, button: `https://namada.trade/activity?addr=${RECEIVER}` });
-    expect(s.tg[0].text).toMatch(/^<i>Largest move of the hour ending 09:00 UTC, bot round trips and rewards claims left out<\/i>\n\n<b>1,500,000 NAM bridged to Osmosis<\/b>\n\nFrom tnam1qpjpp…472u3 to osmo1khrd2…vmz82\. Worth \$165\.00/);
+    expect(s.tg[0].text).toMatch(/^<i>Largest priced move of the hour ending 09:00 UTC, bot round trips and rewards claims left out<\/i>\n\n<b>1,500,000 NAM bridged to Osmosis<\/b>\n\nFrom tnam1qpjpp…472u3 to osmo1khrd2…vmz82\. Worth \$165\.00/);
     expect(s.tg[0].text).toContain('<i>NamadaTrade · Osmosis record, block 73,444,002 · 29 Oct 2026, 08:20 UTC</i>');
   });
 
@@ -151,7 +154,7 @@ describe('choosing the hour\'s move', () => {
     await tick(db, at(9, 10), false);
     expect(xLength(s.x[0])).toBeLessThanOrEqual(280);
     expect(s.x[0]).toMatch(/^1,000,000 \$NAM sold on Osmosis\n\nSold by osmo1nn62s…evpvh in pools 3005, 3368, 3009 and 2 more\. What it settled at is not on record/);
-    expect(s.x[0]).not.toContain('Largest move');
+    expect(s.x[0]).not.toContain('Largest');
     expect(s.x[0]).toMatch(/\n\n08:05 UTC · Osmosis record, block [\d,]+$/);
   });
 
@@ -192,14 +195,15 @@ describe('choosing the hour\'s move', () => {
     const db = testD1();
     move(db, at(8, 5), { amount_num: 50_000, value_usd: 7.5 });
     const s = voices();
-    const claims = () => (db.raw.prepare("SELECT COUNT(*) n FROM kv WHERE key LIKE 'alert:%hour:2026-10-29T08'").get() as { n: number }).n;
+    const claims = () => (db.raw.prepare("SELECT COUNT(*) n FROM kv WHERE key LIKE 'alert:%hour:2026-10-29T08%'").get() as { n: number }).n;
     const prepared = db.queries;
     expect(await tick(db, at(9, 10))).toBe('quiet');
-    expect(claims()).toBe(2);
+    // each voice's move and crossing parts
+    expect(claims()).toBe(4);
     const once = db.queries - prepared;
     expect(await tick(db, at(9, 11))).toBe('skipped');
-    // the second tick reads the two claims and nothing of the hour's moves
-    expect(db.queries - prepared - once).toBeLessThanOrEqual(2);
+    // the second tick reads the four claims and nothing of the hour's moves
+    expect(db.queries - prepared - once).toBeLessThanOrEqual(4);
     expect(s.x).toEqual([]);
     expect(s.tg).toEqual([]);
     expect(kv(db, 'alert:x:day:2026-10-29:move')).toBeNull();
@@ -225,6 +229,27 @@ describe('choosing the hour\'s move', () => {
     expect(s.tg).toHaveLength(1);
   });
 
+  it('a settle quote that cannot be read is no settle not on record: the hour waits, and is posted at its settle once read', async () => {
+    const db = testD1();
+    // a sale of 900,000 NAM paid in OSMO: its stored quote makes it $450, its settle (600 OSMO at $0.20) $120
+    move(db, at(8, 5), { amount_num: 900_000, price_usd: 0.0005, value_usd: 450, meta: { priceSource: 'spot', settle: { nam: -900_000, coins: { OSMO: 600 } } } });
+    await db.prepare('INSERT INTO metrics (key, ts, value) VALUES (?, ?, ?)').bind('price.osmo_usd', at(8, 4), 0.2).run();
+    // a crossing of 1,100,000 NAM at $0.00015: $165
+    move(db, at(8, 20), { kind: 'ibc_in', from_addr: NAMADA, to_addr: RECEIVER, amount_num: 1_100_000, pool_id: null, value_usd: 165 });
+    const s = voices();
+    const spy = vi.spyOn(db, 'batch').mockRejectedValue(new Error('D1 down'));
+    expect(await tick(db, at(9, 10))).toBe('failed');
+    expect(s.x).toEqual([]);
+    expect(s.tg).toEqual([]);
+    expect(db.raw.prepare("SELECT key FROM kv WHERE key LIKE 'alert:%'").all()).toEqual([]);
+    spy.mockRestore();
+    // read, the sale is $120 and gives way to the crossing; the post never says the settle is not on record
+    expect(await tick(db, at(9, 11))).toBe('posted');
+    expect(s.x).toHaveLength(1);
+    expect(s.x[0]).toMatch(/^1,100,000 \$NAM bridged to Osmosis/);
+    expect(s.x.concat(s.tg.map((m) => m.text)).join('\n')).not.toContain('not on record');
+  });
+
   it('X or Telegram not answering gives the hour back for the next tick', async () => {
     const db = testD1();
     move(db, at(8, 5));
@@ -242,6 +267,7 @@ describe('choosing the hour\'s move', () => {
   it('the moves never take the recap\'s place: past the moves\' share an hour is passed over, and the recap still posts', async () => {
     const db = testD1();
     for (let h = 0; h <= X_SHARES.move; h++) move(db, at(h, 30));
+    expect(X_SHARES.move).toBeGreaterThanOrEqual(8);
     const s = voices();
     for (let h = 0; h < X_SHARES.move; h++) expect(await tick(db, at(h + 1, 10), false)).toBe('posted');
     expect(await tick(db, at(X_SHARES.move + 1, 10), false)).toBe('full');
@@ -276,10 +302,12 @@ describe('choosing the hour\'s move', () => {
     expect(await tick(db2, at(7, 10))).toBe('posted');
     expect(s2.x[1]).toMatch(/^700,000 \$NAM transferred on Osmosis/);
     // a larger move of the hour was posted already, and the post says it is the largest left
-    expect(s2.x[0]).toContain('Largest move of the hour, bot round trips');
-    expect(s2.x[1]).toContain('Largest move of the hour not posted already, bot round trips and rewards claims left out.');
+    expect(s2.x[0]).toContain('Largest priced move of the hour, bot round trips');
+    expect(s2.x[1]).toContain('Largest priced move of the hour not posted already, bot round trips and rewards claims left out.');
     expect(s2.tg[1].text).toContain('700,000 NAM transferred on Osmosis');
-    expect(s2.tg[1].text).toContain('<i>Largest move of the hour ending 07:00 UTC not posted already,');
+    expect(s2.tg[1].text).toContain('<i>Largest priced move of the hour ending 07:00 UTC not posted already,');
+    // the crossing led each hour, so neither hour gave a crossing post of its own
+    expect(s2.x).toHaveLength(2);
   });
 
   it('a move the live posts carried before this selector is not posted again: the hour\'s next one is', async () => {
@@ -309,6 +337,69 @@ describe('choosing the hour\'s move', () => {
   });
 });
 
+describe('the hour\'s crossing', () => {
+  const crossing = (db: TestD1, ts: number, nam: number) =>
+    move(db, ts, { kind: 'ibc_in', from_addr: NAMADA, to_addr: RECEIVER, amount_num: nam, pool_id: null, value_usd: nam * 0.00015 });
+
+  it('a crossing a larger trade outweighs is posted beside it; an hour a crossing leads posts no second one', async () => {
+    const db = testD1();
+    // 08:00 to 09:00: a sale of 2,100,000 NAM ($315), a crossing of 2,000,000 ($300) and a smaller one
+    move(db, at(8, 5), { amount_num: 2_100_000, value_usd: 315 });
+    crossing(db, at(8, 20), 2_000_000);
+    crossing(db, at(8, 25), 1_000_000);
+    // 09:00 to 10:00: a crossing leads, so it is the hour's move, and the hour's other crossing is not posted
+    crossing(db, at(9, 5), 3_000_000);
+    crossing(db, at(9, 6), 2_500_000);
+    move(db, at(9, 7), { amount_num: 1_000_000, value_usd: 150 });
+    const s = voices();
+    expect(await tick(db, at(9, 10))).toBe('posted');
+    expect(s.x).toHaveLength(2);
+    expect(s.x[0]).toMatch(/^2,100,000 \$NAM sold on Osmosis/);
+    expect(s.x[1]).toMatch(/^2,000,000 \$NAM bridged to Osmosis\n\nFrom tnam1qpjpp…472u3 to osmo1khrd2…vmz82\. Worth \$300\.00/);
+    expect(s.x[1]).toContain('\n\nLargest priced bridge crossing of the hour.\n\n08:20 UTC');
+    expect(s.tg.map((m) => m.text.split('\n')[0])).toEqual([
+      '<i>Largest priced move of the hour ending 09:00 UTC, bot round trips and rewards claims left out</i>',
+      '<i>Largest priced bridge crossing of the hour ending 09:00 UTC</i>',
+    ]);
+    expect(s.tg[1].text).toContain('<b>2,000,000 NAM bridged to Osmosis</b>');
+    expect(kv(db, 'alert:x:day:2026-10-29:move')).toBe('1');
+    expect(kv(db, 'alert:x:day:2026-10-29:ibc')).toBe('1');
+    // a later tick of that hour posts nothing more
+    await tick(db, at(9, 30));
+    expect(s.x).toHaveLength(2);
+    expect(s.tg).toHaveLength(2);
+    // the next hour: its crossing of 3,000,000 NAM is its move, and nothing else is posted
+    await tick(db, at(10, 10));
+    expect(s.x).toHaveLength(3);
+    expect(s.x[2]).toMatch(/^3,000,000 \$NAM bridged to Osmosis/);
+    expect(s.tg).toHaveLength(3);
+    expect(kv(db, 'alert:x:hour:2026-10-29T09:ibc')).toBe('1');
+    expect(kv(db, 'alert:x:day:2026-10-29:ibc')).toBe('1');
+  });
+
+  it('the crossings\' share is their own: once spent the hour\'s crossing is passed over, and the moves still post', async () => {
+    const db = testD1();
+    for (let h = 0; h <= X_SHARES.ibc; h++) {
+      move(db, at(h, 5), { amount_num: 2_100_000, value_usd: 315 });
+      crossing(db, at(h, 20), 2_000_000);
+    }
+    const s = voices();
+    for (let h = 0; h < X_SHARES.ibc; h++) {
+      t = at(h + 1, 10);
+      const hour = publicHour(db as any, t, FLOORS);
+      expect(await postHourOnX(xEnv(db), hour, t)).toBe('posted');
+      expect(await postHourCrossingOnX(xEnv(db), hour, t)).toBe('posted');
+    }
+    t = at(X_SHARES.ibc + 1, 10);
+    const hour = publicHour(db as any, t, FLOORS);
+    expect(await postHourOnX(xEnv(db), hour, t)).toBe('posted');
+    expect(await postHourCrossingOnX(xEnv(db), hour, t)).toBe('full');
+    expect(await postHourCrossingOnX(xEnv(db), hour, t + 60_000)).toBe('skipped');
+    expect(s.x.filter((p) => /bridged/.test(p))).toHaveLength(X_SHARES.ibc);
+    expect(s.x.filter((p) => /sold/.test(p))).toHaveLength(X_SHARES.ibc + 1);
+  });
+});
+
 describe('the allowlist', () => {
   const HOSTILE = 'Claim at namada-claim.xyz @admin https://t.me/scam';
   it('a move carrying a memo, a wallet\'s tag and a bridge receiver that is no address is posted with none of them', async () => {
@@ -335,6 +426,18 @@ describe('the allowlist', () => {
     expect(s.tg[0].button).toBe('https://namada.trade/activity');
   });
 
+  it('a bridge receiver named as one of an object\'s own keys reads as text that is not an address, on the public posts and the cards', () => {
+    for (const to of ['constructor', '__proto__', 'toString', 'hasOwnProperty', 'valueOf']) {
+      const f = rowToFlow({ id: 'osmosis:PROTO:0', chain: 'osmosis', height: 1, ts: at(8, 5), tx_hash: 'PROTO', kind: 'ibc_out', from_addr: RECEIVER, to_addr: to, amount_num: 2_000_000, pool_id: null, price_usd: 0.00015, value_usd: 300, meta: JSON.stringify({ priceSource: 'spot' }) } as any);
+      const m = publicMoveOf(f, FLOORS)!;
+      expect(m.other, to).toBe('text that is not an address');
+      const card = moveCard(f, { whaleNam: 10000 });
+      for (const text of [hourText(m), hourMessage(m, { end: at(9) }).html, card.embed.description ?? '', ...card.parts.map((p) => p.text)]) {
+        expect(text, to).not.toMatch(/native code|\[object|function/);
+      }
+    }
+  });
+
   it('outsider text a post must carry is plain words: no link, no bare domain, no mention, no hidden character', () => {
     expect(plainOutsider('Airdrop at https://namada-claim.xyz/claim and t.me/scam, ask @admin or ＠mod', 250))
       .toBe('Airdrop at namada-claim[.]xyz/claim and t[.]me/scam, ask (at)admin or (at)mod');
@@ -344,6 +447,11 @@ describe('the allowlist', () => {
     expect(plainOutsider('Upgrade to v1.2, 0.5 NAM', 50)).toBe('Upgrade to v1.2, 0.5 NAM');
     expect(plainOutsider('x'.repeat(30) + '😀'.repeat(10), 32)).toBe('x'.repeat(30) + '…');
     expect(plainOutsider(null, 10)).toBe('');
+    // a dot after a combining mark NFKC cannot compose, or after any other character that is no space, is broken too
+    expect(plainOutsider('claimq\u0301.com and evil\u0300.xyz, ©.io', 80)).toBe('claimq\u0301[.]com and evil\u0300[.]xyz, ©[.]io');
+    // no command, hashtag or cashtag; a slash inside a word, a sum and a number stay
+    expect(plainOutsider('/stop now #airdrop $SCAM (#join) ＃free /1_x', 80)).toBe('stop now airdrop SCAM (join) free 1_x');
+    expect(plainOutsider('Yes and/or no: 1/2 of $100 to proposal #12', 80)).toBe('Yes and/or no: 1/2 of $100 to proposal #12');
   });
 });
 
@@ -367,6 +475,31 @@ describe('the words', () => {
       expect(xLength(hourText(m)), k).toBeLessThanOrEqual(280);
     }
     expect(kinds.size).toBeGreaterThanOrEqual(10);
+  });
+});
+
+describe('proposals on the public channel and X', () => {
+  const hostile: GovernanceProposal = {
+    id: 41, title: 'Claim at namada-claim.xyz, ask @admin $SCAM', authors: 'Mallory @admin', abstract: 'Read https://namada-claim.xyz/airdrop first',
+    type: 'default', status: 'voting', startEpoch: 1, endEpoch: 2, activationEpoch: 3, yayNam: 0, nayNam: 0, abstainNam: 0,
+    // the own audit's Low 5 break-out of the discussion link's masked link
+    discussionsUrl: 'https://forum.namada.net/t/1)[Votes_on_NamadaTrade](https://evil.example',
+  } as GovernanceProposal;
+
+  it('the channel gets what X posts: the title as plain words, no authors, abstract or discussion link; the subscribers\' card is as before', async () => {
+    const db = testD1();
+    await saveSettings(db as any, KEY, { address: NAMADA, notifications: { ...defaultPrefs(), forumAndGov: true }, channels: { discord: { enabled: false, webhookUrl: null }, telegram: { enabled: true, chatId: 5550009, kind: 'private', title: null, linkedAt: 1 } }, createdAt: 1, updatedAt: 1 } as any);
+    const s = voices();
+    await sendTelegramGov(tgEnv(db), hostile, true, {}, telegramRun(10, 10_000));
+    await postGovOnX(xEnv(db), hostile, true);
+    const channel = s.tg.find((m) => m.chat === CHANNEL)!.text;
+    const user = s.tg.find((m) => (m.chat as unknown) === 5550009)!.text;
+    expect(channel).toContain('Claim at namada-claim[.]xyz, ask (at)admin SCAM');
+    expect(s.x[0]).toContain('Claim at namada-claim[.]xyz, ask (at)admin SCAM');
+    for (const p of [channel, s.x[0]]) expect(p).not.toMatch(/evil|Votes_on|namada-claim\.xyz|@admin|\$SCAM|Mallory|Read |airdrop/);
+    expect(channel).toContain('https://namada.valopers.com/proposals/41');
+    // the subscribers chose proposal alerts: theirs is the card Discord's subscribers get, unchanged by this
+    expect(user).toContain('Mallory');
   });
 });
 

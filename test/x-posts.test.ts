@@ -1,7 +1,8 @@
-// Automatic X posts (worker/src/sources/x.ts): the site's own moves (one a closed hour: test/public-posts.test.ts),
-// votes and a daily recap (no forum posts), each posted once, each kind under its own share of the day (the recap's
-// share its own), within 280 of X's weighted characters, mentioning no one, signed with OAuth 1.0a, and nothing at all
-// while kv x.on is '0'. Fetch is stubbed: nothing reaches X.
+// Automatic X posts (worker/src/sources/x.ts): the site's own moves (one a closed hour, and the hour's crossing:
+// test/public-posts.test.ts), votes and a daily recap (no forum posts), each posted once, each kind under its own share
+// of the day (the recap's share its own), within 280 of X's weighted characters, mentioning no one, signed with OAuth
+// 1.0a, and nothing at all while kv x.on is '0', with @namada's posts of that time never reposted after. Fetch is
+// stubbed: nothing reaches X.
 import { describe, it, expect, vi, afterEach, beforeEach } from 'vitest';
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
@@ -15,6 +16,7 @@ import type { Flow, GovernanceProposal } from '../shared/types';
 
 const KEYS = { X_API_KEY: 'ck', X_API_SECRET: 'cs', X_ACCESS_TOKEN: 'at', X_ACCESS_SECRET: 'as' };
 const env = (db: TestD1, extra: object = {}) => ({ DB: db, ...KEYS, ...extra }) as any;
+const kv = (db: TestD1, key: string) => (db.raw.prepare('SELECT value FROM kv WHERE key = ?').get(key) as { value: string } | undefined)?.value ?? null;
 let t = 0;
 
 function x(answer: (n: number) => { status: number; json: any } = (n) => ({ status: 201, json: { data: { id: String(n), text: '' } } })) {
@@ -137,15 +139,18 @@ describe('posting', () => {
   });
 
   it('each kind stops at its share of the day, the recap\'s share is its own, and the shares start again the next day', async () => {
-    expect(X_SHARES.move + X_SHARES.gov + X_SHARES.recap).toBe(X_DAILY_MAX);
+    expect(X_SHARES.move + X_SHARES.ibc + X_SHARES.gov + X_SHARES.recap).toBe(X_DAILY_MAX);
     expect(X_SHARES.recap).toBe(1);
     const db = testD1();
     const s = x();
     for (let i = 0; i < X_SHARES.move + 3; i++) await postOnce(env(db), `alert:x:test:${i}`, 'move', () => `move ${i}`, `test ${i}`);
     expect(s.posts).toHaveLength(X_SHARES.move);
+    // the crossings' share is their own: the moves spent theirs, the crossings still post, to their own share
+    for (let i = 0; i < X_SHARES.ibc + 2; i++) await postOnce(env(db), `alert:x:ibc:test:${i}`, 'ibc', () => `crossing ${i}`, `crossing ${i}`);
+    expect(s.posts).toHaveLength(X_SHARES.move + X_SHARES.ibc);
     for (let i = 0; i < X_SHARES.gov + 2; i++) await postOnce(env(db), `alert:x:gov:test:${i}`, 'gov', () => `gov ${i}`, `gov ${i}`);
-    expect(s.posts).toHaveLength(X_SHARES.move + X_SHARES.gov);
-    // the moves and the proposals spent theirs: the recap still has its place
+    expect(s.posts).toHaveLength(X_SHARES.move + X_SHARES.ibc + X_SHARES.gov);
+    // the moves, the crossings and the proposals spent theirs: the recap still has its place
     t = Date.UTC(2026, 9, 29, X_RECAP_HOUR_UTC, 1);
     await postRecapOnX(env(db), async () => ({ generatedAt: t, price: { usd: { value: 0.001 } } }), t, async () => null);
     expect(s.posts).toHaveLength(X_DAILY_MAX);
@@ -307,5 +312,60 @@ describe('the kill switch (kv x.on)', () => {
     await repostNamada(repostEnv, Date.UTC(2026, 9, 29, X_RECAP_HOUR_UTC, 30));
     expect(calls.filter((u) => u === 'https://api.x.com/2/tweets')).toHaveLength(3);
     expect(calls.some((u) => u.includes('/users/by/username/namada'))).toBe(true);
+  });
+
+  it('what @namada posted while the switch was off is never reposted once it is back on; posts after it are', async () => {
+    const db = testD1();
+    const ENV = env(db, { X_ACCESS_TOKEN: '2115675561741951125-abc' });
+    let feed = ['105', '104'];
+    const calls: { url: string; id?: string }[] = [];
+    vi.stubGlobal('fetch', vi.fn(async (u: string, init?: RequestInit) => {
+      const url = String(u);
+      calls.push({ url, id: init?.body ? JSON.parse(String(init.body)).tweet_id : undefined });
+      if (url.includes('/users/by/username/namada')) return new Response(JSON.stringify({ data: { id: '999' } }));
+      if (url.includes('/users/999/tweets')) {
+        const since = new URL(url).searchParams.get('since_id');
+        const list = feed.filter((p) => !since || BigInt(p) > BigInt(since));
+        return new Response(JSON.stringify(list.length ? { data: list.map((id) => ({ id })), meta: { newest_id: list[0] } } : { meta: { result_count: 0 } }));
+      }
+      return new Response(JSON.stringify({ data: { retweeted: true } }), { status: 200 });
+    }));
+    const at = (h: number, min: number) => Date.UTC(2026, 9, 29, h, min);
+    const reposted = () => calls.filter((c) => c.url.endsWith('/retweets')).map((c) => c.id);
+    // on: the first look records where the posts stand
+    expect(await repostNamada(ENV, at(9, 0))).toBe(0);
+    expect(kv(db, 'x.repost.since')).toBe('105');
+    // @namada posts something the owner turns the switch off for, at a minute that is no look minute
+    feed = ['106', '105', '104'];
+    setOn(db, '0');
+    const asked = calls.length;
+    expect(await repostNamada(ENV, at(9, 3))).toBe(0);
+    expect(kv(db, 'x.repost.since')).toBeNull();
+    // hours later, more posts while off; then the switch is back on
+    feed = ['107', '106', '105', '104'];
+    expect(await repostNamada(ENV, at(11, 0))).toBe(0);
+    expect(calls.length, 'X is not asked while off').toBe(asked);
+    db.raw.prepare('UPDATE kv SET value = ? WHERE key = ?').run('1', X_ON_KEY);
+    // the first look back on only records where the posts stand: 106 and 107 are not reposted
+    expect(await repostNamada(ENV, at(11, 10))).toBe(0);
+    expect(kv(db, 'x.repost.since')).toBe('107');
+    feed = ['108', '107', '106', '105', '104'];
+    expect(await repostNamada(ENV, at(11, 20))).toBe(1);
+    expect(reposted()).toEqual(['108']);
+  });
+
+  it('a switch that cannot be read reposts nothing and keeps the cursor', async () => {
+    const db = testD1();
+    insert(db, 'kv', [{ key: 'x.repost.since', value: '105', updated_at: t }]);
+    const calls = anyX();
+    const prepare = db.prepare.bind(db);
+    const spy = vi.spyOn(db, 'prepare').mockImplementation((sql: string) => {
+      if (sql === 'SELECT value FROM kv WHERE key = ?') throw new Error('D1 down');
+      return prepare(sql);
+    });
+    expect(await repostNamada(env(db, { X_ACCESS_TOKEN: '2115675561741951125-abc' }), Date.UTC(2026, 9, 29, 9, 10))).toBe(0);
+    expect(calls).toEqual([]);
+    spy.mockRestore();
+    expect(kv(db, 'x.repost.since')).toBe('105');
   });
 });

@@ -3,7 +3,10 @@
 // 2026-10-29): each closed UTC hour gives at most one move, the hour's largest by dollars, read from the stored moves
 // once HOUR_SETTLE_MS have passed since the hour closed, so the post is the hour's largest and never the first move to
 // arrive (the live path posted every move of 10,000 NAM and up until the day's posts were spent: on 29 Oct by 19:30
-// UTC, before the evening's moves, and a run of them could crowd out the 13:00 UTC recap).
+// UTC, before the evening's moves, and a run of them could crowd out the 13:00 UTC recap). Beside it each hour may
+// give its largest bridge crossing (HourPart 'ibc'), under its own small share of X's day (sources/x.ts X_SHARES), when
+// the hour's largest move is no crossing: so a crossing a larger trade outweighs is still heard of, and an hour posts a
+// crossing once at most.
 //
 // A move qualifies when the site's own channel hears of it (sources/discord.ts operatorMove: NAM, at or above the
 // chain's whale size, no bot round trip, no rewards claim) and its dollars are known and at least PUBLIC_POST_USD_MIN:
@@ -16,7 +19,7 @@
 // block. Nothing an outsider wrote reaches it: no memo, no label or tag, no forum text, no bridge receiver that is not
 // an address. The other public posts must carry some outsider text (a proposal's title, a forum topic's title and its
 // category); plainOutsider keeps it to plain words: no link, no bare domain, no mention, no hidden character.
-import type { Chain, Flow, FlowKind } from '../../shared/types';
+import type { Chain, Flow, FlowKind, GovernanceProposal } from '../../shared/types';
 import { INTERNAL_ADDRESSES, isInternal } from '../../shared/alerts';
 import { isIbcRefund, priceAtOf, priceHowOf, priceRouteOf, priceSourceWords, type PriceHow } from '../../shared/flow-rules';
 import { CHAIN_WORD, listWords, moveTitle, partiesOf } from '../../shared/flow-words';
@@ -26,7 +29,7 @@ import { settleUsd } from '../../shared/settle';
 import { rowToFlow, settlePrices } from './analytics';
 import { NAM_AMOUNT, NOT_BOT } from './flows-query';
 import { isRealAddress } from './util';
-import { crossingOf, cutText, operatorMove, PROTOCOL_WORDS } from './sources/discord';
+import { crossingOf, cutText, operatorMove, PROTOCOL_WORDS, TEXT_MAX } from './sources/discord';
 
 const HOUR = 3_600_000;
 /**
@@ -71,6 +74,8 @@ export interface PublicMove {
   kind: FlowKind;
   chain: Chain;
   nam: number;
+  /** a crossing between the chains, either way (shared/kinds.ts bridgeDest): the hour's crossing part takes these alone */
+  bridge: boolean;
   /** a crossing to Namada into the shielded pool (the title says so) */
   intoShielded: boolean;
   /** a bridge refund (the title says so) */
@@ -94,7 +99,8 @@ export interface PublicMove {
 function sideWords(a: string | null | undefined, bridgeEnd?: string): string {
   if (!a) return 'an account this record does not name';
   if (bridgeEnd && (a === INTERNAL_ADDRESSES.ibc || a === INTERNAL_ADDRESSES.osmoTransfer)) return bridgeEnd;
-  if (PROTOCOL_WORDS[a]) return PROTOCOL_WORDS[a];
+  // its own keys only: a receiver is text the sender chose, and 'constructor' or '__proto__' must not read the object's
+  if (Object.hasOwn(PROTOCOL_WORDS, a)) return PROTOCOL_WORDS[a];
   return isRealAddress(a) ? fmtAddr(a) : 'text that is not an address';
 }
 
@@ -127,7 +133,7 @@ export function publicMoveOf(f: Flow, floors: NamFloors, settle: Flow['settle'] 
   const [first, second] = crossing || f.kind === 'transfer' || f.kind === 'pos_balance' ? [f.from, f.to] : [party.address, other.address];
   const pools = (f.poolId ?? '').split(',').map((x) => x.trim()).filter((x) => /^\d{1,10}$/.test(x));
   return {
-    id: f.id, crossing: crossingOf(f), kind: f.kind, chain: f.chain, nam: f.amount,
+    id: f.id, crossing: crossingOf(f), kind: f.kind, chain: f.chain, nam: f.amount, bridge: crossing,
     intoShielded: dest === 'namada' && f.to === INTERNAL_ADDRESSES.masp,
     refund: isIbcRefund(f),
     pools,
@@ -144,16 +150,24 @@ const byDollars = (a: PublicMove, b: PublicMove) => b.usd - a.usd || a.ts - b.ts
 /**
  * The hour [start, end)'s qualifying moves, the largest by dollars first: the PUBLIC_HOUR_READ largest by NAM, each
  * trade priced at its settle (analytics.ts settlePrices, one quote seek per coin that needs one). Throws when the
- * moves cannot be read: a read that failed is not a quiet hour.
+ * moves, or the quotes a settle needs, cannot be read: a read that failed is not a quiet hour, and a trade whose settle
+ * could not be read is not one with no settle on record (it would rank at its stored quote, and its post would say
+ * the settle is not on record), so the hour waits for a tick that reads it.
  */
 export async function hourMoves(db: D1Database, start: number, end: number, floors: NamFloors): Promise<PublicMove[]> {
   const rows = (await db.prepare(HOUR_MOVES_SQL).bind(start, end, Math.min(floors.osmosis, floors.namada)).all()).results ?? [];
   const flows = rows.map(rowToFlow);
   const trades = flows.filter((f) => f.kind === 'buy' || f.kind === 'sell');
-  const settles = trades.length ? await settlePrices(db, trades).catch(() => trades.map(() => null)) : [];
+  const settles = trades.length ? await settlePrices(db, trades, true) : [];
   const settleOf = new Map(trades.map((f, i) => [f.id, settles[i] ?? null]));
   return flows.map((f) => publicMoveOf(f, floors, settleOf.get(f.id) ?? null)).filter((m): m is PublicMove => m != null).sort(byDollars);
 }
+
+/**
+ * The two posts an hour may give: its move (the largest of all its moves) and its crossing (the largest of its bridge
+ * crossings, when the hour's largest move is no crossing), each claimed and counted apart.
+ */
+export type HourPart = 'move' | 'ibc';
 
 /** One closed hour as the public posts take it: its bounds, its key in the claims ("2026-10-29T09"), and its moves, read once whoever asks first. */
 export interface PublicHour { start: number; end: number; key: string; moves: () => Promise<PublicMove[]> }
@@ -184,6 +198,17 @@ export async function claimTaken(db: D1Database, key: string): Promise<boolean> 
 export async function firstUnposted(db: D1Database, moves: PublicMove[], postedKey: (m: PublicMove) => string): Promise<{ move: PublicMove; passed: boolean } | null> {
   for (const [i, m] of moves.entries()) if (!(await claimTaken(db, postedKey(m)))) return { move: m, passed: i > 0 };
   return null;
+}
+
+/**
+ * The move a voice posts for one part of the hour (HourPart), as firstUnposted gives it: for 'move' any of the hour's
+ * moves; for 'ibc' its crossings alone, and none when the hour's largest move is a crossing (that hour's move part
+ * carries it, so a crossing is posted once an hour at most), a rule read from the ranking alone, the same at every tick.
+ */
+export async function hourPick(db: D1Database, moves: PublicMove[], part: HourPart, postedKey: (m: PublicMove) => string): Promise<{ move: PublicMove; passed: boolean } | null> {
+  if (part === 'move') return firstUnposted(db, moves, postedKey);
+  if (!moves.length || moves[0].bridge) return null;
+  return firstUnposted(db, moves.filter((m) => m.bridge), postedKey);
 }
 
 // ---------------------------------------------------------------- the words
@@ -224,11 +249,12 @@ export function publicValue(m: PublicMove): string {
 
 /**
  * Why the move is posted: it is the largest of its hour (named when `h` is given; a post that gives the move's time
- * leaves it out for room), and what the choice leaves out. `passed`: a larger move of the hour was posted already (a
- * crossing's other record, an hour before), so this is the largest left.
+ * leaves it out for room) of the priced ones (a move whose dollars are not known is never ranked, so it is never said
+ * to be smaller), and what the choice leaves out. `passed`: a larger one of the hour was posted already (a crossing's
+ * other record, an hour before), so this is the largest left. `part` 'ibc': the largest of the hour's bridge crossings.
  */
-export const publicWhy = (h: Pick<PublicHour, 'end'> | null, passed = false) =>
-  `Largest move of the hour${h ? ` ending ${new Date(h.end).toISOString().slice(11, 16)} UTC` : ''}${passed ? ' not posted already' : ''}, bot round trips and rewards claims left out`;
+export const publicWhy = (h: Pick<PublicHour, 'end'> | null, passed = false, part: HourPart = 'move') =>
+  `Largest priced ${part === 'ibc' ? 'bridge crossing' : 'move'} of the hour${h ? ` ending ${new Date(h.end).toISOString().slice(11, 16)} UTC` : ''}${passed ? ' not posted already' : ''}${part === 'ibc' ? '' : ', bot round trips and rewards claims left out'}`;
 
 /** The record it comes from ("Osmosis record, block 73,444,230"). */
 export const publicRecord = (m: PublicMove) =>
@@ -243,8 +269,12 @@ export const publicRecord = (m: PublicMove) =>
  *   dot, as domain names read it;
  * - no control, format, private-use or lone surrogate character (the private range is the one sources/telegram.ts
  *   hide uses for escapes);
- * - no link: a scheme is dropped, and every dot that would make a domain is written "[.]" ("namada-claim[.]xyz");
+ * - no link: a scheme is dropped, and every dot between a character that is not a space and a letter is written
+ *   "[.]" ("namada-claim[.]xyz"), whatever that character is (a combining mark NFKC cannot compose ends a label too);
  * - no mention: an @ is "(at)";
+ * - no command, hashtag or cashtag: a # or $ that starts a word before a letter, and a / that starts one before a
+ *   letter, digit or _, is dropped ("/stop", "#airdrop", "$SCAM" read "stop", "airdrop", "SCAM"; "and/or", "1/2",
+ *   "$100" and "#12" stay), so a group's members tap no command and X files the post under no outsider's tag or coin;
  * - one line.
  */
 export function plainOutsider(s: unknown, max: number): string {
@@ -252,9 +282,18 @@ export function plainOutsider(s: unknown, max: number): string {
     .replace(/[\p{Cc}\p{Cf}\p{Co}\p{Cs}]/gu, ' ')
     .replace(/\u3002/g, '.')
     .replace(/\b[a-z][a-z0-9+.-]*:\/\/+/gi, '')
-    .replace(/(?<=[\p{L}\p{N}_-])\.(?=\p{L})/gu, '[.]')
+    .replace(/(?<=\S)\.(?=\p{L})/gu, '[.]')
     .replace(/@/g, '(at)')
+    .replace(/(?<![\p{L}\p{M}\p{N}_])(?:[#$]+(?=\p{L})|\/+(?=[\p{L}\p{N}_]))/gu, '')
     .replace(/\s+/g, ' ')
     .trim();
   return cutText(t, max);
 }
+
+/**
+ * A proposal as the public voices post it (the X account, the public Telegram channel): its title as plain words
+ * (plainOutsider), and none of its authors, abstract or discussion link, which its author writes; the rest is the
+ * chain's (its id, type, status, epochs and votes), and the card's links are the site's own.
+ */
+export const publicProposal = (p: GovernanceProposal): GovernanceProposal =>
+  ({ ...p, title: plainOutsider(p.title, TEXT_MAX.title), authors: null, abstract: null, discussionsUrl: null });

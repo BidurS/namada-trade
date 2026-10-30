@@ -8,7 +8,7 @@ import { QUOTE_KEYS } from '../../shared/settle';
 import { namBalance, namTotalSupply, namTotalStake, namadaEpoch, namadaStatusAll, delegationsAt, answeringRpcs, listingHeads, QUICK, RpcBreaker, allNamBalances, allBonds, ListingTooLargeError, LISTING_MAX_VALUE_BYTES, type BalanceListing, type BondListing, type ReadOpts, type Rpc } from './sources/namada';
 import { fetchIntelChecked } from './sources/intel';
 import { sendTelegramForum, sendTelegramGov, sendTelegramHour, telegramRun, TG_CRON_MS, TG_CRON_SENDS } from './sources/telegram';
-import { postGovOnX, postHourOnX, postRecapOnX, repostNamada } from './sources/x';
+import { postGovOnX, postHourCrossingOnX, postHourOnX, postRecapOnX, repostNamada } from './sources/x';
 import { namFloors, publicHour } from './public-posts';
 import { sendDiscordForumAlert, sendDiscordGovAlert, sendsAlerts, alertBudget, flushAlerts, sweepNoticeChannels, RUN_ALERT_POSTS, RUN_ALERT_WINDOW_MS, type GovContext } from './sources/discord';
 import { NAM, NAMADA, OSMOSIS } from './config';
@@ -232,10 +232,11 @@ async function syncIntelAndAlerts(env: Env, health: SourceHealth[]) {
       return r.json();
     });
     // The closed hour's move on X and on the public Telegram channel (public-posts.ts: its largest by dollars, from
-    // HOUR_SETTLE_MS past the close), each once; the hour's moves are read once, and only while one of them still
-    // has the hour to post.
+    // HOUR_SETTLE_MS past the close), and its largest bridge crossing when the move is none, each once; the hour's
+    // moves are read once, and only while one of them still has the hour to post.
     const hour = publicHour(env.DB, Date.now(), namFloors(env));
     await postHourOnX(env, hour);
+    await postHourCrossingOnX(env, hour);
     await sendTelegramHour(env, hour, tgRun);
   } catch (err) {
     console.error('syncIntelAndAlerts error:', err);
