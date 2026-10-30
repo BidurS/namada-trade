@@ -25,7 +25,7 @@ import { useListKeys, type ListKey } from '../../app/keys';
 import { kindInfo, type TagKind } from '../../lib/kinds';
 import { applyFlowRules, isBot } from '../../lib/flows';
 import { fmtAge, fmtCount, fmtDayMonthYear, fmtUtcClock, fmtUtcLong } from '../../lib/format';
-import type { ParsedKind } from '../../../../shared/search-grammar';
+import { isWholeAddress, type ParsedKind } from '../../../../shared/search-grammar';
 import { ActivityBar, FilterPanel, FilterSet, KeysHint, ListSearch, useRovingRows } from './parts';
 import { SEARCH_HINT, SEARCH_PLACEHOLDER } from './words';
 import { FLOW_CSV_MAX as CSV_MAX, PAGE_SIZES, firstVisibleRow, focusFirstRow, focusRow, pageCount, pageOfRank, revealRow } from './paging';
@@ -171,16 +171,22 @@ export default function Transactions({
           p.total = r.total;
           p.exact = r.exact;
           p.countedAt = r.asOf ?? Date.now();
+          p.over = null;
+        } else if (r.totalOver != null) {
+          // the first page said "more than": the pages behind it say so too, never "counted only on the first page"
+          p.total = null;
+          p.over = r.totalOver;
         }
         if (position) p.cursors.set(page, position);
         if (r.cursorPaged && r.next) p.cursors.set(page + 1, r.next);
         if (r.firstTs !== undefined) p.firstTs = r.firstTs;
         const total = r.total ?? p.total;
+        const over = r.totalOver ?? (total == null ? p.over : null);
         const exact = r.total != null ? r.exact : p.exact && r.exact;
         // an older server pages by number: more when its count says so; this one says it by `next`
         const more = r.cursorPaged ? r.next != null : page * size < (r.total ?? 0);
         // a position this server does not know is not a filter it ignored: it paged by number (always sent)
-        setData({ key, flows: r.flows, total, over: r.totalOver ?? null, page, size, cursor: position, exact, more, asOf: r.asOf ?? null, last: r.last, firstTs: r.firstTs ?? p.firstTs, ignored: r.ignored.filter((k) => k !== 'before') });
+        setData({ key, flows: r.flows, total, over, page, size, cursor: position, exact, more, asOf: r.asOf ?? null, last: r.last, firstTs: r.firstTs ?? p.firstTs, ignored: r.ignored.filter((k) => k !== 'before') });
       })
       .catch(() => {
         if (!ctl.signal.aborted) setError(page > 1 ? 'This page of moves could not be fetched from this site’s server.' : 'The list of moves could not be fetched from this site’s server.');
@@ -391,7 +397,8 @@ export default function Transactions({
     ) : null;
   const empty = !!fresh && !busy && rows.length === 0;
   /** Behind a position the server does not count; a count seen this visit is kept, else the pages are "of —". */
-  const unknownWhy = fresh && fresh.over != null ? `The number of pages is not known: more than ${fmtCount(fresh.over)} moves match this address start, and this site’s server does not count past that. Type the whole address to count its moves.` : fresh && fresh.total == null && applied.search ? 'The number of pages is not known: a search by text is not counted, so only the next page is offered.' : fresh && fresh.total == null ? 'The number of pages is not known: this site’s server counts the moves only on the first page of a list, and this page was opened from its own link. Open the first page to count them.' : 'The number of pages is not known: this site’s server did not count the moves these filters select, so only the next page is offered.';
+  // `over`: an address start past FEW_ROWS, or any other count past the server's bound (worker/src/flows-query.ts COUNT_MAX)
+  const unknownWhy = fresh && fresh.over != null && applied.addr && !isWholeAddress(applied.addr) ? `The number of pages is not known: more than ${fmtCount(fresh.over)} moves match this address start, and this site’s server does not count past that. Type the whole address to count its moves.` : fresh && fresh.over != null ? `The number of pages is not known: more than ${fmtCount(fresh.over)} moves match these filters, and this site’s server does not count past that.` : fresh && fresh.total == null && applied.search ? 'The number of pages is not known: a search by text is not counted, so only the next page is offered.' : fresh && fresh.total == null ? 'The number of pages is not known: this site’s server counts the moves only on the first page of a list, and this page was opened from its own link. Open the first page to count them.' : 'The number of pages is not known: this site’s server did not count the moves these filters select, so only the next page is offered.';
   const pager = (where: 'head' | 'foot') =>
     fresh ? (
       <Pager

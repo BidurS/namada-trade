@@ -21,6 +21,7 @@ import { toNam, chainOf, publicNote } from './util';
 import { OSMOSIS, INTERNAL_LABELS } from './config';
 import {
   flowsFilterFromQuery, flowsFilterError, flowsMode, flowsPageSql, flowsRowsSql, flowsCountSql, flowsLastSql, flowOrder, afterPosition,
+  storedCountSql, storedTotal, COUNT_MAX, type StoredCountRow,
   FEW_ROWS, FIRST_TS_SQL, HASH_COLUMNS, searchCanMatch, scanFloorSql, type FlowsFilter,
 } from './flows-query';
 import {
@@ -695,6 +696,9 @@ app.get('/api/holders', async (c) => {
 // `?before=`; `?before=<unix ms>` jumps to a date. The count (`total`) is taken on the head page only (no `before`),
 // and not at all with `count=none` (Home's latest moves and the live feed's first rows show rows, not a count);
 // behind a cursor it is null (the head page said it). `?page=` still pages by offset for links made before (W1).
+// The count is the stored counts' (migration 0017) when the filters are their columns (chain, kind, each crossing once,
+// bot trades left out, a size the list offers): exact, with the moves since their mark counted live. Any other count
+// reads at most COUNT_MAX + 1 moves and says "more than COUNT_MAX" past it (`totalOver`), never the bound as a count.
 // `search=` (address or record contains the text, no index serves it): text no address or record can hold answers an
 // empty page at once; any other text reads at most SEARCH_SCAN moves a request, is never counted by a second walk,
 // and pages by cursor only (`page=` past the first without `before` is refused).
@@ -702,11 +706,19 @@ const flowSelectOf = (hint: string) => flowSelect(hint);
 interface FlowsRead { flows: Flow[]; total: number | null; next: string | null; rows: number; over?: number }
 
 /**
+ * When the stored counts do not answer a count, how it is taken: 'all', every count exactly (the address report, whose
+ * one count is of one whole address, under HEAVY_LIMITER); 'stored', exactly for the lists the stored counts answer
+ * while they are being written again (a live read: as before, for the minute until the next tick), at most COUNT_MAX + 1
+ * moves for any other; 'none', at most COUNT_MAX + 1 moves for every count (a rewound read: each time its own key).
+ */
+type CountExact = 'all' | 'stored' | 'none';
+
+/**
  * `countWide`: count an address start that matches more than FEW_ROWS moves too (the export, under HEAVY_LIMITER).
  * The list does not: that count reads every stored move on flows_ts (56,402 rows for the MASP's start on 2026-10-22),
  * so its head page says "more than FEW_ROWS" (`over`), which the rows read here already show.
  */
-async function readFlows(db: D1Database, f: FlowsFilter, before: BeforeParam | null, limit: number, offset: number, count: boolean, scan = false, countWide = false): Promise<FlowsRead> {
+async function readFlows(db: D1Database, f: FlowsFilter, before: BeforeParam | null, limit: number, offset: number, count: boolean, scan = false, countWide = false, exact: CountExact = 'none'): Promise<FlowsRead> {
   // text no address or record can hold selects nothing: no walk
   if (f.search && !searchCanMatch(f.search)) return { flows: [], total: count ? 0 : null, next: null, rows: 0 };
   let mode = flowsMode(f);
@@ -735,26 +747,51 @@ async function readFlows(db: D1Database, f: FlowsFilter, before: BeforeParam | n
   const floor = ends.length === 2 ? ends[0] : null;
   const pageQ = flowsPageSql(flowSelectOf, f, mode, before, limit + 1, offset, floor);
   // a text search is never counted by a second walk: its count is the page's own rows when the walk read every match
-  const countQ = count && !text && (!wide || countWide) ? flowsCountSql(f, mode) : null;
-  const [rowsRes, countRes] = await Promise.all([
+  const counting = count && !text && (!wide || countWide);
+  // the stored counts, when the filters are their columns; else a count of the moves, bounded unless `exact` says
+  const storedQ = counting && !wide ? storedCountSql(f) : null;
+  const firstQ = counting && !storedQ ? flowsCountSql(f, mode, exact === 'all' ? 0 : COUNT_MAX) : null;
+  const [rowsRes, storedRes, firstRes] = await Promise.all([
     db.prepare(pageQ.sql).bind(...pageQ.params).all<any>(),
-    countQ ? db.prepare(countQ.sql).bind(...countQ.params).first<{ total: number }>() : Promise.resolve(null),
+    // a store not there yet (the migration not applied) is a count to take, never an error
+    storedQ ? db.prepare(storedQ.sql).bind(...storedQ.params).first<StoredCountRow>().catch(() => null) : Promise.resolve(null),
+    firstQ ? db.prepare(firstQ.sql).bind(...firstQ.params).first<{ total: number }>() : Promise.resolve(null),
   ]);
+  let total: number | null = null;
+  let over: number | undefined;
+  if (counting) {
+    // `capped`: the count read at most COUNT_MAX + 1 moves, so a count past COUNT_MAX is "more than", not a count
+    let n: number;
+    let capped = false;
+    const fromStore = storedQ ? storedTotal(storedRes, f.asOf) : null;
+    if (firstQ) {
+      n = Number(firstRes?.total ?? 0);
+      capped = exact !== 'all';
+    } else if (fromStore != null) n = fromStore;
+    else {
+      // the stored counts could not say it (being written again, or more than COUNT_MAX moves since the mark)
+      capped = exact === 'none';
+      const q = flowsCountSql(f, mode, capped ? COUNT_MAX : 0);
+      n = Number((await db.prepare(q.sql).bind(...q.params).first<{ total: number }>())?.total ?? 0);
+    }
+    if (capped && n > COUNT_MAX) over = COUNT_MAX;
+    else total = n;
+  }
   const got = rowsRes.results || [];
   const shown = got.slice(0, limit);
   const last = shown[shown.length - 1];
   const full = got.length > limit;
   return {
     flows: shown.map(rowToFlow), rows: got.length,
-    ...(count && wide && !countQ ? { over: FEW_ROWS } : {}),
-    total: countQ ? Number(countRes?.total ?? 0) : count && text && !full && !floor ? offset + got.length : null,
+    ...(over != null ? { over } : count && wide && !counting ? { over: FEW_ROWS } : {}),
+    total: counting ? total : count && text && !full && !floor ? offset + got.length : null,
     next: last && full ? encodeFlowCursor({ ts: last.ts, height: last.height, id: last.id }) : floor ? encodeFlowCursor(floor) : null,
   };
 }
 
 app.get('/api/flows', async (c) => {
   const db = c.env.DB;
-  const { asOf } = asOfParam(c);
+  const { asOf, replay } = asOfParam(c);
   const page = pageParam(c);
   if (page instanceof Response) return page;
   const limit = clampLimit(c.req.query('limit'));
@@ -770,7 +807,7 @@ app.get('/api/flows', async (c) => {
   const count = head && countQ !== 'none';
   // A text search pages by cursor only: an offset counts matches, and a window can end before it is reached.
   if (f.search && head && page > 1) return c.json({ error: 'A search by text is paged with before=<next>, not page=.' }, 400);
-  const r = await readFlows(db, f, before, limit, head ? (page - 1) * limit : 0, count, true);
+  const r = await readFlows(db, f, before, limit, head ? (page - 1) * limit : 0, count, true, false, replay ? 'none' : 'stored');
   await withSettles(db, r.flows);
   const res: FlowsResponse = { total: r.total, ...(r.over != null ? { totalOver: r.over } : {}), page: head ? page : 1, limit, flows: r.flows, next: r.next, asOf };
   // The oldest move for this chain filter (for "The flow index starts on …"), on the head page and on a date jump.
@@ -929,7 +966,7 @@ app.get('/api/address/:addr', async (c) => {
   const [links, moves] = await Promise.all([
     db.prepare(`SELECT osmo_addr, namada_addr, transfers, volume_num, last_seen FROM address_links WHERE osmo_addr = ? OR namada_addr = ? ORDER BY volume_num DESC`).bind(addr, addr).all<any>(),
     isWholeAddress(addr)
-      ? readFlows(db, { asOf: now, addr }, null, 300, 0, true)
+      ? readFlows(db, { asOf: now, addr }, null, 300, 0, true, false, false, 'all')
       : Promise.all([
           db.prepare(`SELECT COUNT(*) c FROM flows f WHERE (f.from_addr = ? OR f.to_addr = ?) AND ${NOT_TWIN}`).bind(addr, addr).first<{ c: number }>().catch(() => ({ c: 0 })),
           db.prepare(`${FLOW_SELECT} WHERE (f.from_addr = ? OR f.to_addr = ?) AND ${NOT_TWIN} ORDER BY f.ts DESC, f.height DESC LIMIT 300`).bind(addr, addr).all<any>(),
@@ -1830,16 +1867,17 @@ app.get('/api/export/holders', async (c) => {
 // file has fewer, X-Truncated is true and the file name says "newest-N-of-M".
 app.get('/api/export/flows', async (c) => {
   const db = c.env.DB;
-  const { asOf } = asOfParam(c);
+  const { asOf, replay } = asOfParam(c);
   const format = (c.req.query('format') || 'csv').toLowerCase();
   if (format !== 'csv' && format !== 'json') return c.json({ error: 'format must be csv or json' }, 400);
   const limit = Math.min(FLOW_EXPORT_MAX, Math.max(100, parseInt(c.req.query('limit') || String(FLOW_EXPORT_MAX), 10) || FLOW_EXPORT_MAX));
   const bad = flowsFilterError((k) => c.req.query(k));
   if (bad) return c.json({ error: bad }, 400);
   // The same rows and order as the moves list's head page (readFlows: the index its filters walk), newest first.
-  const r = await readFlows(db, flowsFilterFromQuery((k) => c.req.query(k), asOf), null, limit, 0, true, false, true);
+  const r = await readFlows(db, flowsFilterFromQuery((k) => c.req.query(k), asOf), null, limit, 0, true, false, true, replay ? 'none' : 'stored');
   const flows = r.flows;
-  // null: a text search, not counted (one walk); `next` then says whether more match than the file holds
+  // null: a text search, not counted (one walk), or more than COUNT_MAX match a filter the stored counts do not
+  // answer; `next` then says whether more match than the file holds
   const matching = r.total;
   const cut = matching != null ? flows.length < matching : r.next != null;
   await withSettles(db, flows);

@@ -88,7 +88,8 @@ export interface FlowsResponse {
   last?: { id: string; ts: number; chain: Chain } | null;
   /**
    * On a head page whose address start (`addr`, not a whole address) matches more than this many moves
-   * (worker/src/flows-query.ts FEW_ROWS): `total` is null and the moves are not counted further. Absent otherwise.
+   * (worker/src/flows-query.ts FEW_ROWS), or whose filters the stored counts do not answer and that match more than
+   * COUNT_MAX (10,000): `total` is null and the moves are not counted further. Absent otherwise.
    */
   totalOver?: number;
 }

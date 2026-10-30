@@ -30,6 +30,7 @@ import {
 import * as series from './series';
 import { prepareDigests, sendDigests, type DigestRun } from './digest/deliver';
 import { DIGEST_HEALTH_LOG_KV } from './digest/operator';
+import { refreshFlowCounts } from './flow-counts';
 
 const INDEXER = 'https://indexer.namada.net/api/v1';
 /** kv key of the IBC packets stuck in the escrow (ibc-stuck.ts). */
@@ -2108,6 +2109,11 @@ export async function runCron(env: Env) {
       }
 
     }
+
+    // 6c. The moves list's stored counts (flow-counts.ts, migration 0017): written whole when the triggers marked them
+    //     dirty, moved on by the hour behind them otherwise. Not written: the list counts the moves itself until a
+    //     later tick writes them.
+    if (!late()) await refreshFlowCounts(env.DB, now).catch((e) => console.error('flow counts', e));
 
     // Balance readings older than any window still asked for (hourly).
 
