@@ -8,8 +8,8 @@
  *   npx tsx scripts/backfill-osmosis.ts --dry-run --from <height|YYYY-MM-DD> --to <height|YYYY-MM-DD> [--pools 3005,3008]
  *     # prints the report; writes no SQL
  *   npx tsx scripts/backfill-osmosis.ts --from <height|date> --to <height|date> [--pools ...] [--mark 2026-10-30]
- *     # scripts/out/repair/osmosis-history-NNNN.sql, osmosis-history.tsv (each transaction written) and
- *     # osmosis-history.txt (the report)
+ *     # scripts/out/repair/osmosis-history-NNNN.sql (an earlier run's are removed first), osmosis-history.tsv (each
+ *     # transaction written) and osmosis-history.txt (the report)
  *   [--fresh]  # read the chain again from the start, not from the progress a stopped run of the same range kept
  *
  * A date is the first block at or after 00:00 UTC that day; --to <date> ends just before it, so
@@ -59,7 +59,7 @@
  * Holders and pool labels are no longer written here: the cron keeps both (cron.ts, the Keplr holder list and the
  * router's pools each tick).
  */
-import { appendFileSync, existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { appendFileSync, existsSync, mkdirSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { normFromTxSearch, osmoAssets, parseOsmosisTx, poolLegsOf, type OsmoCtx, type PoolLeg } from '../worker/src/parse/osmosis';
@@ -461,6 +461,8 @@ async function main() {
       tsv.push(`${m.s.hash}\t${m.s.height}\t${iso(ts)}\t${m.verdict === 'legs' ? 'pool legs' : m.verdict}\t${r.flows}\t${r.moves}\t${r.legs}`);
     }
   }
+  // the numbered files of an earlier run go first, so none of them is applied with this run's
+  for (const f of readdirSync(OUT)) if (/^osmosis-history-\d{4}\.sql$/.test(f)) rmSync(join(OUT, f));
   const files: string[] = [];
   for (const part of packFiles(units)) {
     const f = join(OUT, `osmosis-history-${String(files.length).padStart(4, '0')}.sql`);
