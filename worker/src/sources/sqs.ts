@@ -583,7 +583,7 @@ export async function buildCurve(spot: CurveSpot, signal?: AbortSignal): Promise
   const annotated = annotateSlippageCurve(curve, spotUsd);
   return {
     spotUsd,
-    poolsCount: 0,
+    poolsCount: null,
     totalLiquidityUsd: null,
     refPoolLiquidityUsd: null,
     maxSafeClip1PctNam: c1?.nam ?? null,

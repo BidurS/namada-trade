@@ -248,6 +248,12 @@ describe('the stored size table', () => {
     expect(await storeCurve(db, { now: later + MIN, curve: null, complete: false, sizes: CURVE_TIERS, pools, why: 'the NAM price was not read' }))
       .toEqual({ name: CURVE_HEALTH_NAME, ok: false, at: later + MIN, note: 'Not built this tick: the NAM price was not read. The stored table stands, with its own time.' });
     expect(stored()!.updated_at).toBe(later);
+    // a tick whose pool list did not answer while the quotes did: its pool figures are not known, never "0 pools"
+    // (merged stage 1 review)
+    const next = later + 5 * MIN;
+    await storeCurve(db, { now: next, curve: table(next), complete: true, sizes: CURVE_TIERS, pools: [] });
+    expect(JSON.parse(stored()!.value)).toMatchObject({ poolsCount: null, totalLiquidityUsd: null, refPoolLiquidityUsd: null });
+    expect(storedCurve(null, next).poolsCount).toBeNull();
   });
 
   it('a table in which no size was quoted on both sides is never written, however old the stored one is', async () => {
@@ -297,7 +303,7 @@ describe('the size table the cron builds', () => {
     expect(seen.calls).toBeLessThanOrEqual(CURVE_CALLS_MAX);
     expect(seen.urls.every((u) => u.startsWith(`${OSMOSIS.sqs}/router/quote?`))).toBe(true);
     // the pool figures are set when the cron stores it, from the sized pools
-    expect(c).toMatchObject({ poolsCount: 0, totalLiquidityUsd: null, refPoolLiquidityUsd: null });
+    expect(c).toMatchObject({ poolsCount: null, totalLiquidityUsd: null, refPoolLiquidityUsd: null });
   });
 
   it('a size not reached before the phase ends is not listed, never estimated; with no price nothing is asked', async () => {

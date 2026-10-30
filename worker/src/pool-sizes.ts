@@ -310,7 +310,7 @@ export function storedPoolsStmts(row: StoredPools, now: number): Stmt[] {
 export function storedCurve(row: QuoteCurveResponse | null, now: number): QuoteCurveResponse {
   if (!row || !Array.isArray(row.curve)) {
     return {
-      spotUsd: null, poolsCount: 0, totalLiquidityUsd: null, refPoolLiquidityUsd: null, maxSafeClip1PctNam: null, maxSafeClip3PctNam: null,
+      spotUsd: null, poolsCount: null, totalLiquidityUsd: null, refPoolLiquidityUsd: null, maxSafeClip1PctNam: null, maxSafeClip3PctNam: null,
       safeClip1Pct: null, safeClip3Pct: null, liquidityCliffNam: null, cliffNote: null, curve: [],
       prov: { source: 'Osmosis SQS', at: null, status: 'missing', note: 'The size table has not been built yet: the site builds it once a minute.' },
     };
@@ -325,8 +325,12 @@ export function storedCurve(row: QuoteCurveResponse | null, now: number): QuoteC
 /** The stored size table (kv quote.curve), or null. */
 export const readStoredCurve = (db: D1Database): Promise<QuoteCurveResponse | null> => kvGetJson<QuoteCurveResponse>(db, CURVE_KEY).catch(() => null);
 
-/** The size table's pool figures from the tick's sized pools (the router's own answer gave liquidity_cap). */
+/**
+ * The size table's pool figures from the tick's sized pools (the router's own answer gave liquidity_cap). A tick whose
+ * pool list did not answer has none: its figures are not known (null), never "0 pools".
+ */
 export function curveWithPools(c: QuoteCurveResponse, pools: PoolInfo[]): QuoteCurveResponse {
+  if (!pools.length) return { ...c, poolsCount: null, totalLiquidityUsd: null, refPoolLiquidityUsd: null };
   const t = poolsTotal(pools);
   const ref = pools.find((p) => p.id === OSMOSIS.refPoolId);
   return { ...c, poolsCount: pools.length, totalLiquidityUsd: t.usd, refPoolLiquidityUsd: ref && fin(ref.liquidityUsd) ? ref.liquidityUsd : null };

@@ -970,7 +970,8 @@ export interface SafeClipInfo {
 
 export interface QuoteCurveResponse {
   spotUsd: number | null;
-  poolsCount: number;
+  /** the NAM pools in the tick's pool list (worker/src/pool-sizes.ts curveWithPools); null when that list was not read, never 0 for it */
+  poolsCount: number | null;
   /** the pools' size from their reserves (worker/src/pool-sizes.ts), the priced pools only; null when none is priced */
   totalLiquidityUsd: number | null;
   refPoolLiquidityUsd: number | null;
