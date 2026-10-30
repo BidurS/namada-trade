@@ -7,11 +7,12 @@ import { createElement, type ComponentType } from 'react';
 import { renderToStaticMarkup } from 'react-dom/server';
 import type { Overview, PairRow, PoolInfo, Provenance } from '../shared/types';
 import { depthOf, reservesOf, splitPools, pairName } from '../web/src/screens/trade/model';
-import { counterName, pricedTotal, restOf, totalNotKnownWords } from '../shared/pool-sides';
+import { biggestShare, counterName, pricedTotal, restOf, totalNotKnownWords } from '../shared/pool-sides';
 import { notPricedWords, NO_NAM_PRICE } from '../worker/src/pool-sizes';
 
 let PairsList: ComponentType<any>;
 let Head: ComponentType<any>;
+let Pools: ComponentType<any>;
 beforeAll(async () => {
   const g = globalThis as any;
   const noop = () => {};
@@ -24,6 +25,7 @@ beforeAll(async () => {
   g.localStorage ??= { getItem: () => null, setItem: noop, removeItem: noop };
   ({ PairsList } = await import('../web/src/ui/PairsList'));
   ({ Head } = await import('../web/src/screens/trade/Head'));
+  ({ Pools } = await import('../web/src/screens/trade/Pools'));
 });
 const text = (html: string) => html.replace(/<[^>]+>/g, ' ').replace(/&#x27;|&#39;/g, "'").replace(/&amp;/g, '&').replace(/\s+/g, ' ');
 
@@ -141,5 +143,46 @@ describe('the pools list: sizes from the reserves, both reserves beside them', (
     expect(m.usd).toBe(2);
     expect(m.stamp.status).toBe('live');
     expect(m.stamp.note).toBe('The pools not priced hold 3% of the NAM in the pools.');
+  });
+});
+
+describe('merged stage 1 review (2026-10-29): the lead and the summed line', () => {
+  // 3008 holding NAM and no USDC, as on 21 Oct, the largest pool: its row comes after the two-sided ones, and the lead
+  // took "the biggest" from the first two-sided row (3005, 43.7%) while 3008 held 49.7%.
+  const list = [
+    pool('3005', 'USDC', 751_550, 187.5, 841, 187.5),
+    pool('3008', 'USDC', 1_100_000, 0, 957, 0),
+    pool('3368', 'OSMO', 100_000, 300, 126, 39),
+  ];
+  const prov: Provenance = { source: 'Osmosis pool reserves (pool list)', at: T, status: 'live' };
+  const loaded = <T,>(data: T) => ({ data, error: null, loading: false, fetchedAt: T, failedAt: null, unserved: false, retry: () => {} });
+  const render = (pairs: unknown) => text(renderToStaticMarkup(createElement(Pools, { rewound: false, pools: { data: { pools: list, prov }, error: null, loading: false }, pairs, depth: null, overview: null })));
+
+  it('the biggest pool\'s share is the largest priced pool of all, a one-sided one included, in both bodies', () => {
+    expect(biggestShare(list, pricedTotal(list).usd)).toBeCloseTo((957 / 1_924) * 100, 9);
+    expect(biggestShare(list, null)).toBeNull();
+    expect(biggestShare([pool('1', 'USDC', 5, 1, null)], 10)).toBeNull();
+    const stored = render(null);
+    expect(stored).toContain('3 pools hold $1,924 . The biggest holds 49.7% of it.');
+    const pairs = { source: 'Osmosis pool reserves', at: T, status: 'live' } as Provenance;
+    const body = render(loaded({ pairs: list.map(pair), prov: pairs, osmosisProv: pairs, osmosisTotals: { volume24hUsd: null } }));
+    expect(body).toContain('3 pools hold $1,924 . The biggest holds 49.7% of it.');
+  });
+
+  it('the stored list\'s total that is not known says why, as the pairs body does', () => {
+    const few = [pool('3005', 'USDC', 751_550, 187.5, null), pool('3008', 'USDC', 810_665, 174.7, null), pool('3010', 'USDC', 0, 0.000661, 0.000661, 0.000661)];
+    const html = text(renderToStaticMarkup(createElement(Pools, { rewound: false, pools: { data: { pools: few, prov }, error: null, loading: false }, pairs: null, depth: null, overview: null })));
+    expect(html).toContain(totalNotKnownWords(pricedTotal(few)));
+    expect(html).not.toContain('no value recorded');
+  });
+
+  it('a summed line none of whose pools is priced reads so, never "$0 together, none above $0"', () => {
+    const rest = [pool('4001', 'OSMO', 10, 1, null), pool('4002', 'OSMO', 20, 1, null)];
+    expect(restOf(rest)).toEqual({ usd: null, max: null, notPriced: 2 });
+    const html = text(renderToStaticMarkup(createElement(PairsList, {
+      pairs: [pair(list[0])], oneSided: [], rest: rest.map(pair), totalUsd: 841, pairName: (p: PairRow) => p.pair, label: 'Pools that trade NAM',
+    })));
+    expect(html).toContain('2 more pools none of them priced, so not counted');
+    expect(html).not.toMatch(/\$0(\.00)? together/);
   });
 });

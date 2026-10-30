@@ -76,10 +76,24 @@ export function namLeftOutWords(t: PricedTotal): string {
   return t.notPriced && t.namLeftOut != null && t.namLeftOut > 0 ? `The pools not priced hold ${shareWords(t.namLeftOut)} of the NAM in the pools.` : '';
 }
 
-/** The pools of a summed line: their priced total, the largest priced one, and how many of them are not priced (no size, counted in no total). */
-export function restOf(rest: { liquidityUsd: number | null }[]): { usd: number; max: number; notPriced: number } {
+/**
+ * The pools of a summed line: their priced total, the largest priced one, and how many of them are not priced (no size,
+ * counted in no total). `usd` and `max` are null when none of them is priced: not known, never "$0 together".
+ */
+export function restOf(rest: { liquidityUsd: number | null }[]): { usd: number | null; max: number | null; notPriced: number } {
   const priced = rest.map((p) => p.liquidityUsd).filter((v): v is number => v != null && Number.isFinite(v));
+  if (!priced.length) return { usd: null, max: null, notPriced: rest.length };
   return { usd: priced.reduce((a, v) => a + v, 0), max: priced.reduce((a, v) => Math.max(a, v), 0), notPriced: rest.length - priced.length };
+}
+
+/**
+ * The share (0 to 100) of the pools' money `total` (pricedTotal) held by the largest priced pool among `pools`, a pool
+ * with one side empty included (its size counts in the total like any other's): "the biggest holds N% of it". null
+ * without a total or a priced pool.
+ */
+export function biggestShare(pools: { liquidityUsd: number | null | undefined }[], total: number | null): number | null {
+  const sizes = pools.map((p) => p.liquidityUsd).filter((v): v is number => v != null && Number.isFinite(v));
+  return total != null && total > 0 && sizes.length ? (Math.max(...sizes) / total) * 100 : null;
 }
 
 /**

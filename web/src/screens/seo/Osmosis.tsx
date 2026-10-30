@@ -144,7 +144,7 @@ export function Osmosis({ route }: ScreenProps) {
                 </PoolRestRow>
               )}
               {rest.length ? (
-                <PoolRestRow end={<><Num v={restSum.usd} fmt={fmtUsdWhole} /> together, none above <Num v={restSum.max} fmt={fmtUsdWhole} />{restSum.notPriced ? <>; <Num v={restSum.notPriced} fmt={fmtCount} /> of them not priced, so not counted</> : null}</>}>
+                <PoolRestRow end={restSum.usd == null ? <>none of them priced, so not counted</> : <><Num v={restSum.usd} fmt={fmtUsdWhole} /> together, none above <Num v={restSum.max} fmt={fmtUsdWhole} />{restSum.notPriced ? <>; <Num v={restSum.notPriced} fmt={fmtCount} /> of them not priced, so not counted</> : null}</>}>
                   <Num as="b" v={rest.length} fmt={fmtCount} /> more {rest.length === 1 ? 'pool' : 'pools'}
                 </PoolRestRow>
               ) : null}

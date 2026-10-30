@@ -16,7 +16,7 @@ import { Inside, PairsList } from '../../ui/PairsList';
 import { NBSP, fmtAgo, fmtCount, fmtNamRule, fmtPctRule, fmtUsdWhole } from '../../lib/format';
 import type { Depth } from './model';
 import { counterName, pairName, restOf, splitPools } from './model';
-import { oneSidedWords, poolSides, pricedTotal, totalNotKnownWords } from '../../../../shared/pool-sides';
+import { biggestShare, oneSidedWords, poolSides, pricedTotal, totalNotKnownWords } from '../../../../shared/pool-sides';
 import type { HistoryLoad } from './data';
 import { DepthLine } from '../depth/Line';
 import { SITE_SYMBOL } from '../../../../shared/depth';
@@ -45,7 +45,8 @@ function PairsBody({ r, osmosisLine }: { r: PairsResponse; osmosisLine: ReactNod
   const hereStamp: Stamp | null = hereProv ? { ...hereProv, plain: 'Flow index' } : null;
   const hereTotal = r.pairs.reduce((a, p) => a + (p.here24h.value?.trades ?? 0), 0);
   const anyHere = r.pairs.some((p) => p.here24h.value);
-  const share = shown[0] && total != null && total > 0 && shown[0].liquidityUsd != null ? (shown[0].liquidityUsd / total) * 100 : null;
+  // the largest priced pool of all, a one-sided one included (its row comes after the two-sided ones)
+  const share = biggestShare(r.pairs, total);
   const items: ScopeItem[] = [
     { label: 'Pool depth, the coins inside and fee', p: stamp },
     { label: 'Dollars traded per pool (Osmosis pair summary)', p: osmoStamp },
@@ -100,10 +101,12 @@ export function Pools({ rewound, pools, pairs, depth, overview }: PoolsProps) {
     body = <PairsBody r={pairs.data} osmosisLine={osmosisLine} />;
   } else if (list.length) {
     const { shown, rest, oneSided } = splitPools(list);
-    const total = pricedTotal(list).usd;
+    const sum = pricedTotal(list);
+    const total = sum.usd;
     const top = Math.max(0, ...[...shown, ...oneSided].map((p) => (p.liquidityUsd != null && Number.isFinite(p.liquidityUsd) ? p.liquidityUsd : 0)));
     const restSum = restOf(rest);
     const stamp: Stamp = { ...pools.data!.prov, plain: 'Osmosis pools' };
+    const totalStamp: Stamp | undefined = total == null ? { ...stamp, status: 'missing', note: totalNotKnownWords(sum) } : undefined;
     const share = (p: PoolInfo) => (total != null && total > 0 && p.liquidityUsd != null ? (p.liquidityUsd / total) * 100 : null);
     const size = (p: PoolInfo) => (p.liquidityUsd != null ? <Num v={p.liquidityUsd} fmt={fmtUsdWhole} showReason={false} /> : <Num v={null} prov={p.sizeProv ? { ...p.sizeProv, status: 'missing' } : null} />);
     body = (
@@ -113,8 +116,8 @@ export function Pools({ rewound, pools, pairs, depth, overview }: PoolsProps) {
         oldSentence={<>The pool list did not answer just now. These figures are its last answer, from {fmtAgo(stamp.at, now)}, so they are shown dimmed.</>}
       >
         <p className="lead">
-          <Num as="b" v={list.length} fmt={fmtCount} /> pools hold <Num as="b" v={total} fmt={fmtUsdWhole} />. The biggest holds{' '}
-          <Num as="b" v={share(shown[0])} fmt={(n) => fmtPctRule(n, 1)} showReason={false} /> of it.
+          <Num as="b" v={list.length} fmt={fmtCount} /> pools hold <Num as="b" v={total} prov={totalStamp} fmt={fmtUsdWhole} />. The biggest holds{' '}
+          <Num as="b" v={biggestShare(list, total)} fmt={(n) => fmtPctRule(n, 1)} showReason={false} /> of it.
         </p>
         {osmosisLine}
         {volumeLine}
@@ -147,7 +150,7 @@ export function Pools({ rewound, pools, pairs, depth, overview }: PoolsProps) {
             );
           })}
           {rest.length ? (
-            <PoolRestRow end={<><Num v={restSum.usd} fmt={fmtUsdWhole} /> together, none above <Num v={restSum.max} fmt={fmtUsdWhole} />{restSum.notPriced ? <>; <Num v={restSum.notPriced} fmt={fmtCount} /> of them not priced, so not counted</> : null}</>}>
+            <PoolRestRow end={restSum.usd == null ? <>none of them priced, so not counted</> : <><Num v={restSum.usd} fmt={fmtUsdWhole} /> together, none above <Num v={restSum.max} fmt={fmtUsdWhole} />{restSum.notPriced ? <>; <Num v={restSum.notPriced} fmt={fmtCount} /> of them not priced, so not counted</> : null}</>}>
               <Num as="b" v={rest.length} fmt={fmtCount} /> more {rest.length === 1 ? 'pool' : 'pools'}
             </PoolRestRow>
           ) : null}

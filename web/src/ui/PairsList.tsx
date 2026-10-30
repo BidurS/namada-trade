@@ -142,8 +142,12 @@ export function PairsList({ pairs, rest, oneSided = [], totalUsd, pairName, labe
               <b data-num="">{fmtCount(rest.length)}</b> more {rest.length === 1 ? 'pool' : 'pools'}
             </span>
             <span role="cell" className="r">
-              <span data-num="">{fmtUsdWhole(restUsd)}</span> together, none above <span data-num="">{fmtUsdWhole(restMax)}</span>
-              {restUnpriced > 0 ? <>; <span data-num="">{fmtCount(restUnpriced)}</span> of them not priced, so not counted</> : null}
+              {restUsd == null || restMax == null ? <>none of them priced, so not counted</> : (
+                <>
+                  <span data-num="">{fmtUsdWhole(restUsd)}</span> together, none above <span data-num="">{fmtUsdWhole(restMax)}</span>
+                  {restUnpriced > 0 ? <>; <span data-num="">{fmtCount(restUnpriced)}</span> of them not priced, so not counted</> : null}
+                </>
+              )}
               {restTrades > 0 ? <>, <span data-num="">{fmtCount(restTrades)}</span> {restTrades === 1 ? 'trade' : 'trades'} here in 24 h</> : null}
             </span>
           </div>
