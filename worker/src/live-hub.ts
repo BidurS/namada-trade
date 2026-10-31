@@ -116,12 +116,15 @@ export const OSMOSIS_SWEEP_EVERY_MS = 5 * 60_000;
  */
 export const OSMOSIS_DEAF_GRACE_MS = 2 * 60_000;
 /**
- * How often the hub sends the Osmosis node a request on its socket. Measured on 2026-10-31 (kv osmosis.live, after the
- * close record was added): with nothing sent after the subscriptions, the endpoint cut the socket after about 29 s open,
- * code 1006, "WebSocket disconnected without sending Close frame", twice in three minutes, and each reconnect left a
- * gap the catch-up search had to fill. CometBFT answers `health` with an empty result, which the hub reads as no move.
+ * How long after the Osmosis node cuts the socket the hub opens a new one. On 2026-10-31 the endpoint cut every open
+ * socket at the same instant every one to two minutes (00:47:48.4 and 00:48:55.4 UTC for two test sockets opened 25 s
+ * apart, and the hub's own, code 1006 with no close frame), whatever the socket sent: a request every 15 s made no
+ * difference. The hub cannot stop the cuts, only shorten the gap each leaves, which the catch-up search fills: at a
+ * cut a minute or two, the 5 s it waited before was several percent of the day, the size of the stream-share check
+ * (6 to 8%). A socket that fails to open is still retried after 5 s (ensureOsmosisWs), so a node that is down is not
+ * asked once a second.
  */
-export const OSMOSIS_KEEPALIVE_MS = 15_000;
+export const OSMOSIS_RECONNECT_MS = 1_000;
 /** The move's time when the open socket (open since `since`) should have delivered it and did not; null otherwise. */
 export const osmoDeafAt = (since: number | null, open: boolean, ts: number, now: number): number | null =>
   open && since != null && ts - since >= OSMOSIS_DEAF_GRACE_MS && now - ts >= OSMOSIS_DEAF_GRACE_MS ? ts : null;
@@ -591,13 +594,7 @@ export class LiveHub extends DurableObject<Env> {
     });
 
     const openedAt = Date.now();
-    // the keepalive (OSMOSIS_KEEPALIVE_MS): a send that throws means the socket is going, which its close handles
-    const keepalive = setInterval(() => {
-      if (this.osmoWs !== ws) { clearInterval(keepalive); return; }
-      try { ws.send(JSON.stringify({ jsonrpc: '2.0', method: 'health', id: 'keepalive', params: {} })); } catch {}
-    }, OSMOSIS_KEEPALIVE_MS);
     ws.addEventListener('close', (ev: CloseEvent) => {
-      clearInterval(keepalive);
       // a socket the hub already let go (dropOsmosisWs) closing late: the new one is not touched
       if (this.osmoWs !== ws) return;
       // Why it closed, kept with the drops (kv osmosis.live): on 2026-10-30 the hub opened a new socket about once a
@@ -610,8 +607,8 @@ export class LiveHub extends DurableObject<Env> {
       this.isConnectingOsmo = false;
       this.osmoSince = null;
       this.needSweep = true;
-      // Reconnect in 5 seconds
-      setTimeout(() => this.ensureOsmosisWs(), 5000);
+      // the node cut it: a new socket after OSMOSIS_RECONNECT_MS
+      setTimeout(() => this.ensureOsmosisWs(), OSMOSIS_RECONNECT_MS);
     });
 
     ws.addEventListener('error', (err) => {
@@ -642,7 +639,7 @@ export class LiveHub extends DurableObject<Env> {
   /**
    * Lets go of an Osmosis socket the hub found deaf or cancelled: it is no longer the hub's socket from this moment
    * (so a runtime that fires `close` only once the node answers, or never, cannot hold the reconnect), the next alarm's
-   * catch-up search reads the gap, and a new socket opens in 5 s.
+   * catch-up search reads the gap, and a new socket opens after OSMOSIS_RECONNECT_MS.
    */
   private dropOsmosisWs(ws: WebSocket) {
     if (this.osmoWs !== ws) return;
@@ -650,7 +647,7 @@ export class LiveHub extends DurableObject<Env> {
     this.osmoSince = null;
     this.needSweep = true;
     try { ws.close(); } catch {}
-    setTimeout(() => this.ensureOsmosisWs(), 5000);
+    setTimeout(() => this.ensureOsmosisWs(), OSMOSIS_RECONNECT_MS);
   }
 
   /** One stream message, `at` the time it came: a move's time is when the stream gave it (normFromWs). */
