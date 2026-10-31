@@ -178,12 +178,26 @@ export async function readEstimate(req: Requests, cfg: DepthConfig, poolId: stri
 }
 
 /** The pair's taker fee (plan 1.2, kept an hour in kv depth.params). */
-export async function readTakerFee(req: Requests, cfg: DepthConfig, counterDenom: string): Promise<Read<number>> {
-  const url = `${cfg.hosts.rest}/osmosis/poolmanager/v1beta1/trading_pair_takerfee?denom_0=${enc(cfg.base.denom)}&denom_1=${enc(counterDenom)}`;
-  const r = await readJson<{ taker_fee?: string }>(req, 'taker fee', url);
-  if (!isOk(r)) return r;
-  const fee = Number(r.value.taker_fee);
-  return Number.isFinite(fee) && fee >= 0 && fee < 1 ? { ...r, value: fee } : { error: 'no taker_fee', url: r.url, at: r.at, ms: r.ms, status: r.status };
+/**
+ * A pair's taker fee, each way: the chain's fee depends on the coin put in (trading_pair_takerfee's denom_0). Read on
+ * 2026-10-31 on two nodes: NAM in for OSMO 0.002, OSMO in for NAM 0.008 (a buy through 3368 or 3402 paid 0.8% of its
+ * OSMO, the chain's own transfers to the taker-fee collector), NAM against Noble USDC 0.001 both ways. `sell` is NAM in
+ * (the bid side), `buy` the counter coin in (the ask side). Two requests; a failed selling read is the read's error, a
+ * failed buying read leaves `buy` null with its error, so the selling fee is kept.
+ */
+export async function readTakerFee(req: Requests, cfg: DepthConfig, counterDenom: string): Promise<Read<{ sell: number; buy: number | null; urlBuy: string; buyError?: string }>> {
+  const one = async (d0: string, d1: string, what: string) => {
+    const url = `${cfg.hosts.rest}/osmosis/poolmanager/v1beta1/trading_pair_takerfee?denom_0=${enc(d0)}&denom_1=${enc(d1)}`;
+    const r = await readJson<{ taker_fee?: string }>(req, what, url);
+    if (!isOk(r)) return r;
+    const fee = Number(r.value.taker_fee);
+    return Number.isFinite(fee) && fee >= 0 && fee < 1 ? { ...r, value: fee } : ({ error: 'no taker_fee', url: r.url, at: r.at, ms: r.ms, status: r.status } as ReadErr);
+  };
+  const sell = await one(cfg.base.denom, counterDenom, 'taker fee, selling');
+  if (!isOk(sell)) return sell;
+  const buy = await one(counterDenom, cfg.base.denom, 'taker fee, buying');
+  if (!isOk(buy)) return { ...sell, value: { sell: sell.value, buy: null, urlBuy: buy.url, buyError: buy.error } };
+  return { ...sell, value: { sell: sell.value, buy: buy.value, urlBuy: buy.url } };
 }
 
 // ---------------------------------------------------------------------------------------------------- the quote service

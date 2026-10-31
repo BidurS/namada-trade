@@ -165,7 +165,10 @@ export interface DepthPool {
   counterUsdHow: string;
   spotUsd: number | null;
   spread: number;
+  /** The pair's taker fee with NAM put in (selling). */
   taker: number | null;
+  /** With the counter coin put in (buying NAM): the chain sets it apart (0.8% for OSMO, 2026-10-31); null while not read. */
+  takerBuy?: number | null;
   sides: 'both' | 'nam' | 'coin' | 'empty' | 'unknown';
   /** Whole coins; the counter is null when its decimals are not known. */
   nam: number;
@@ -643,7 +646,8 @@ export const distFromPrice = (pct: string) => `${pct} from the price`;
 export const LADDER_TABLE_LABEL = 'Every level, both sides, every pool together';
 export const SOURCE_EVERY_LEVEL = 'Every level';
 export const LABEL_LEVEL_WIDTH = 'Level width';
-export const takerOnEvery = (pct: string) => `plus the ${pct} taker fee on every swap`;
+/** The taker fee in words: the reference pool's, and that other pairs set their own, buying apart from selling (Osmosis's fee depends on the coin put in: OSMO in for NAM 0.8%, NAM in for OSMO 0.2%, read 2026-10-31). */
+export const takerOnEvery = (pct: string, pool: string) => `plus the chain’s taker fee, ${pct} through ${pool}; other pairs charge their own, buying apart from selling`;
 export const sellDownWords = (price: string, usd: string) => `selling down to ${price} fetches ${usd} in all`;
 export const buyUpWords = (price: string, usd: string) => `buying up to ${price} costs ${usd} in all`;
 export const markedBand = (nam: string, symbol: string) => `the last ${nam} ${symbol} of the picked size fills here`;
@@ -938,7 +942,7 @@ export const DEPTH_PAGE_WORDS: readonly string[] = [
   ladderLead('NAM'), ladderShared(['pool 3005', 'pool 3368', 'pool 3402'], 6), ladderShared(['pool 3005', 'pool 3368', 'pool 3402'], 0), ladderShared(['pool 3005'], 0), bandHead('NAM'), bandWidthLabel('1%'), refRowWords('3005', '0.0010199'), bestWords('bid', '100', 'NAM', '0.0010168', 'pool 3005'), bestWords('ask', '100', 'NAM', '0.0009886', 'pool 3009'), spreadWords('−2.77%'), crossedWords('100', 'NAM', '2.77%', 'pool 3009', 'pool 3005'),
   foldFar('ask', 1171, '50%', '198.57', '1,322,018 NAM'), foldFar('bid', 12, '50%', '0.0000001', '$12.40'), foldMid('ask', 31, '10%', '50%', '371,945 NAM'), foldMid('bid', 4, '10%', '50%', '$95.10'), hideFold('ask', 'above +50%'),
   foldFarHead('ask', 1171, '50%'), foldFarTail('bid', '0.0000001', '$12.40'), foldMidHead('bid', 4, '10%', '50%'), foldMidTail('371,945 NAM'), foldFarHead('bid', 12, '50%'), foldFarTail('ask', '198.57', '1,322,018 NAM'), foldMidHead('ask', 31, '10%', '50%'),
-  poolFeeChip('pool 3005', '0.2%'), bookChip('order book 3008'), rangesWords(1), rangesWords(3), ordersWords(1), ordersWords(2), takerOnEvery('0.1%'), sellDownWords('0.0010098', '$1.41'), buyUpWords('0.0010301', '$2.12'), markedBand('10,000', 'NAM'),
+  poolFeeChip('pool 3005', '0.2%'), bookChip('order book 3008'), rangesWords(1), rangesWords(3), ordersWords(1), ordersWords(2), takerOnEvery('0.1%', 'pool 3005'), sellDownWords('0.0010098', '$1.41'), buyUpWords('0.0010301', '$2.12'), markedBand('10,000', 'NAM'),
   curveLead('NAM'), axisPrice('NAM', true), axisPrice('NAM', false), keyBids('NAM'), keyAsks('NAM'), keyTrades(7), keyRef('3005'), sizeMark('10k', '$9.92'), tradesInView(387, 389, 7), tradesNone(7), tradesCut(300, 7),
   readoutWords('bid', '$9.92', '10,000', 'NAM'), readoutWords('ask', '$10.37', '10,000', 'NAM'), readoutPools(['pool 3005', 'pool 3368', 'pool 3015'], 10), readoutPools(['pool 3005'], 0), updatedAgo('12 s ago'), readingOf('02:56 UTC'), rewindMinute('02:56 UTC'),
   sellQuotable('10,000', 'NAM', '$9.92'), bidQuotable('$26.43', '10%'), sellQuotableLead('10,000', 'NAM'), bidQuotableTail('10%'), factAskUsdWithin('10%'),

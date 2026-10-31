@@ -78,8 +78,8 @@ export const counterDenoms = (pools: ListedPool[]): string[] => [...new Set(pool
 
 /** What the quote service's metadata says of a coin. */
 export interface TokenMeta { symbol: string; decimals: number }
-/** A pair's taker fee as read from the chain, with its time. */
-export interface TakerFee { fee: number; at: number; url: string }
+/** A pair's taker fee as read from the chain, with its time: `fee` with NAM put in (selling), `feeBuy` with the counter coin put in (buying), absent in a reading stored before 2026-10-31 (read.ts readTakerFee). */
+export interface TakerFee { fee: number; feeBuy?: number; at: number; url: string; urlBuy?: string; /** When the buying read last failed (it is tried again TAKER_BUY_RETRY_MS later). */ buyTriedAt?: number }
 
 /** Everything the aggregate needs to know of a counter coin, and the words for how its price was found. */
 export interface CounterInfo {
@@ -92,6 +92,8 @@ export interface CounterInfo {
   /** When the price was read (the price list's read time), or null for a coin worth a dollar by construction. */
   usdAt: number | null;
   taker: number | null;
+  /** The fee buying NAM with the coin (the ask side); null while only the selling fee is known. */
+  takerBuy: number | null;
   takerAt: number | null;
   /** Why the coin's pools are unpriced, or null when the coin is priced. */
   why: string | null;
@@ -113,8 +115,10 @@ export function counterInfo(cfg: DepthConfig, denom: string, priceList: { value:
     const v = Number(priceList.value?.[denom]?.[cfg.priceListQuote]);
     if (Number.isFinite(v) && v > 0) { usd = v; usdAt = priceList.at; how = counterUsdHow(symbol, v, fmtClock(priceList.at)); }
   }
+  // a reading stored before the buying fee was read (2026-10-31) keeps the coin priced, its ask side at the selling fee
+  // until the next minutes read both ways (index.ts reads those first), rather than leaving its pools out
   const why = usd == null ? UNPRICED_NO_PRICE : decimals == null ? UNPRICED_NO_META : taker == null ? UNPRICED_NO_TAKER : null;
-  return { denom, symbol, decimals, usd, how, usdAt, taker: taker?.fee ?? null, takerAt: taker?.at ?? null, why };
+  return { denom, symbol, decimals, usd, how, usdAt, taker: taker?.fee ?? null, takerBuy: taker?.feeBuy ?? null, takerAt: taker?.at ?? null, why };
 }
 
 export interface LiveSet {

@@ -222,7 +222,7 @@ export function parseOsmosisTx(tx: NormTx, ctx: OsmoCtx): OsmoParsed {
   // ---- 2. Swaps ----
   // One leg per NAM-moving token_swapped event: which way the NAM went, through which pool, against what, in which
   // message and for which swapper.
-  type Leg = { pool: string; side: 'sell' | 'buy'; nam: number; counter: ReturnType<typeof counterOf>; msg: string; sender: string | null };
+  type Leg = { pool: string; side: 'sell' | 'buy'; nam: number; counter: ReturnType<typeof counterOf>; msg: string; sender: string | null; gross?: number };
   const legs: Leg[] = [];
   // The NAM bank legs that are a swap's own (they are the swap, not transfers), and the messages that swapped NAM.
   // Each token_swapped event comes after the pool's bank legs of its hop (the poolmanager, test/fixtures/osmo_swap.json):
@@ -254,8 +254,10 @@ export function parseOsmosisTx(tx: NormTx, ctx: OsmoCtx): OsmoParsed {
     prevSwap.set(m, i);
     const inBase = namBase(a.tokens_in), outBase = namBase(a.tokens_out);
     const sender = a.sender || null;
-    if (inBase > 0n) legs.push({ pool: a.pool_id, side: 'sell', nam: namFromCoins(a.tokens_in), counter: counterOf(a.tokens_out, ctx), msg: m, sender });
-    if (outBase > 0n) legs.push({ pool: a.pool_id, side: 'buy', nam: namFromCoins(a.tokens_out), counter: counterOf(a.tokens_in, ctx), msg: m, sender });
+    const sellLeg = inBase > 0n ? { pool: a.pool_id, side: 'sell' as const, nam: namFromCoins(a.tokens_in), counter: counterOf(a.tokens_out, ctx), msg: m, sender } : null;
+    const buyLeg = outBase > 0n ? { pool: a.pool_id, side: 'buy' as const, nam: namFromCoins(a.tokens_out), counter: counterOf(a.tokens_in, ctx), msg: m, sender } as Leg : null;
+    if (sellLeg) legs.push(sellLeg as Leg);
+    if (buyLeg) legs.push(buyLeg);
     if (inBase === 0n && outBase === 0n) return;
     swapMsgs.add(m);
     const w = transfers.filter((t) => t.msg === m && t.ev > from && t.ev < i);
@@ -265,10 +267,32 @@ export function parseOsmosisTx(tx: NormTx, ctx: OsmoCtx): OsmoParsed {
       if (k < 0) unmatchedMsgs.add(m);
       else {
         own(w[k], false);
+        let gross = inBase;
         const spread = w[k + 1];
-        if (spread && spread.base > 0n && spread.from === w[k].from && spread.to !== w[k].to) own(spread, false);
+        if (spread && spread.base > 0n && spread.from === w[k].from && spread.to !== w[k].to) { own(spread, false); gross += spread.base; }
         // exact-in: the leg just before the pool's; exact-out: this message's first leg after the event
-        for (const fee of [w[k - 1], transfers.find((t) => t.msg === m && t.ev > i)]) if (isFee(fee, w[k].from)) own(fee, false);
+        for (const fee of [w[k - 1], transfers.find((t) => t.msg === m && t.ev > i)]) if (isFee(fee, w[k].from)) { own(fee, false); gross += fee.base; break; }
+        // what the trader put into the hop, both fees in (the depth check compares the depth's own fees with it)
+        (sellLeg as Leg).gross = Number(gross) / 10 ** NAM.decimals;
+      }
+    }
+    // A buy hop's counter coin, the same way: tokens_in into the pool, then a concentrated pool's spread to its spread
+    // account, and the taker fee in that coin to the collector (before the pool's leg exact-in, after the event exact-out);
+    // their sum is what the trader put into the hop (2026-10-31: 4,033 + 4,020,735 + 8,057 = 4,032,825 USDC into 3005).
+    if (buyLeg) {
+      const c = parseCoins(a.tokens_in).find((x) => x.denom !== NAM.osmoDenom);
+      const a2 = c ? ctx.assets.get(c.denom) : null;
+      if (c && a2) {
+        const amt = BigInt(c.amount);
+        const coinOf = (t: (typeof w)[number] | undefined) => (t ? parseCoins(t.coins).filter((x) => x.denom === c.denom).reduce((s2, x) => s2 + BigInt(x.amount), 0n) : 0n);
+        const k = lastIn((t) => coinOf(t) === amt && (!a.sender || t.from === a.sender) && ctx.poolAddrs.get(t.to) === a.pool_id);
+        if (k >= 0) {
+          let gross = amt;
+          const spread = w[k + 1];
+          if (spread && coinOf(spread) > 0n && spread.from === w[k].from && spread.to !== w[k].to && spread.to !== OSMOSIS.takerFeeCollector) gross += coinOf(spread);
+          for (const fee of [w[k - 1], transfers.find((t) => t.msg === m && t.ev > i)]) if (fee && fee.from === w[k].from && fee.to === OSMOSIS.takerFeeCollector && coinOf(fee) > 0n) { gross += coinOf(fee); break; }
+          buyLeg.gross = Number(gross) / 10 ** a2.decimals;
+        }
       }
     }
     if (outBase > 0n) {
@@ -438,7 +462,10 @@ export function parseOsmosisTx(tx: NormTx, ctx: OsmoCtx): OsmoParsed {
       poolId: [...pools].join(','),
       priceUsd,
       valueUsd: priceUsd != null ? priceUsd * amount : null,
-      meta: { ...(isArb ? { arb: true, namSold, namBought } : { trader }), ...(postHandler ? { postHandler: true } : {}), ...(own == null && priceUsd != null ? { priceSource: 'spot' } : {}), ...(settle ? { settle } : {}) },
+      // each NAM leg of the trade's own side: its pool, its NAM and the coin it took or gave there (the chain's tokens_in
+      // or tokens_out, net of the hop's fees), so the depth check compares the trade at the NAM pools themselves and not
+      // after the hops before or after them (a buy paid in OSMO paid the OSMO hop's taker fee before reaching pool 3005)
+      meta: { ...(isArb ? { arb: true, namSold, namBought } : { trader, legs: mine.map((l) => ({ pool: l.pool, nam: l.nam, ...(l.counter ? { coin: l.counter.symbol, amount: l.counter.amount } : {}), ...(l.gross != null ? { gross: l.gross } : {}) })) }), ...(postHandler ? { postHandler: true } : {}), ...(own == null && priceUsd != null ? { priceSource: 'spot' } : {}), ...(settle ? { settle } : {}) },
     });
   };
   // The signer's row is its messages' trader's when they all have the same one.

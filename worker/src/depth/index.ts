@@ -27,7 +27,7 @@ import {
 import { fmtAddr } from '../../../shared/format';
 import { NAM_DEPTH, type DepthConfig } from './config';
 import {
-  aggregate, aggregateOfCurves, balancerModel, buildGrid, clModel, clSellExact, executeBuy, executeBuyUsd, executeSell, heatAt, levelsOf, offsetsAt, orderbookModel, packF32,
+  aggregate, aggregateOfCurves, balancerModel, buildGrid, clModel, clSellExact, executeBuy, executeBuyUsd, executeSell, feeFactor, heatAt, levelsOf, offsetsAt, orderbookModel, packF32,
   decString, rangesFromTicks, stableswapModel, thinIndices, tickToPrice, touchAt, usdPerRaw, withinAt, type Aggregate, type BookAsk, type BookBid, type ClPoolState, type ClRange, type PoolModel, type PricedPool, type WeightedAsset,
 } from './model';
 import { decToScaled, decodePool, decodeTickInfos, poolQuery, tickSubspaceQuery, type AbciQuery, type ClPoolWire } from './proto';
@@ -105,6 +105,8 @@ export interface StoredPoolState {
   counterUsd: number;
   counterDecimals: number;
   taker: number;
+  /** The taker fee buying NAM with the counter coin (absent in a state stored before 2026-10-31: the selling fee then stands in). */
+  takerBuy?: number;
   spread: number;
   at: number;
   height: number | null;
@@ -135,6 +137,14 @@ export interface Realised {
   route: string[];
   /** The stored minute the walk used. */
   minute: number;
+  /**
+   * What the trade was compared at: 'pools', the coins at the NAM pools themselves (meta.legs, or the row's own coin for
+   * a trade through one pool). A kept row without it was compared at the trader's own coins, after the hops outside the
+   * NAM pools, and is computed again (2026-10-31).
+   */
+  basis?: 'pools';
+  /** A leg's gross was rebuilt from the depth's own fees (no gross on the stored leg), so this comparison tests the curve and not the fees. */
+  feesRebuilt?: true;
 }
 
 /** The pool's model from its stored state. */
@@ -150,7 +160,7 @@ export function modelOfState(cfg: DepthConfig, s: StoredPoolState): PoolModel | 
 /** A stored state as a priced pool for the aggregate (the realised check and the quote route rebuild the minute from these). */
 export const pricedOfState = (cfg: DepthConfig, s: StoredPoolState): PricedPool | null => {
   const model = modelOfState(cfg, s);
-  return model ? { id: s.id, type: s.type, model, counterUsd: s.counterUsd, counterDecimals: s.counterDecimals, taker: s.taker } : null;
+  return model ? { id: s.id, type: s.type, model, counterUsd: s.counterUsd, counterDecimals: s.counterDecimals, taker: s.taker, ...(s.takerBuy != null ? { takerBuy: s.takerBuy } : {}) } : null;
 };
 
 const pct = (a: number, b: number) => (b === 0 ? NaN : (a / b - 1) * 100);
@@ -180,19 +190,57 @@ interface PoolBuild {
 }
 
 // ---------------------------------------------------------------------------------------------------- the realised check
-export interface SwapLike { id: string; ts: number; kind: string; pool_id: string | null; meta: string | null }
+export interface SwapLike { id: string; ts: number; kind: string; pool_id: string | null; counter_denom?: string | null; counter_amount?: number | null; meta: string | null }
+
+/** One NAM leg of a stored swap (meta.legs, worker/src/parse/osmosis.ts): its pool, its NAM, and the coin it took (a buy) or gave (a sale) there, net of the hop's fees. */
+interface StoredLeg { pool: string; nam: number; coin?: string; amount?: number; gross?: number }
+const legsOf = (meta: Record<string, unknown> | null): StoredLeg[] | null => {
+  const l = meta?.legs;
+  if (!Array.isArray(l) || !l.length) return null;
+  const ok = l.every((x) => x && typeof x === 'object' && typeof (x as StoredLeg).pool === 'string' && typeof (x as StoredLeg).nam === 'number');
+  return ok ? (l as StoredLeg[]) : null;
+};
+/** The middle of the absolute differences (the mean of the two middle ones for an even count). */
+const medianAbs = (xs: number[]): number => { const a = xs.map(Math.abs).sort((x, y) => x - y); const m = a.length >> 1; return a.length % 2 ? a[m] : (a[m - 1] + a[m]) / 2; };
 
 /**
- * Check 3: each stored swap of the window whose route is pools only, walked on the newest stored states read before it
- * (the gross coins from meta.settle: for a sale the base coins the trader gave, verify.txt C1), against the trader's own
- * settle. A trade with a book leg, no settle record, a coin with no rate in its own transaction or no stored state
- * before it is left out with the reason.
+ * A leg's gross input, from the chain's own amount on its swap event: a concentrated pool's tokens_in is net of the
+ * taker fee and of the spread it pays to the pool's spread account; a weighted or stable pool's keeps its swap fee in
+ * the pool and is net of the taker fee alone (pool 3402 on 2026-10-31: 1,000,000 uosmo in, 8,000 to the taker-fee
+ * collector, 992,000 the event's tokens_in). `taker` is the fee for the coin put in.
+ */
+/** The fewest trades on one side whose middle may fail the realised check (fewer are a warning at most). */
+export const EXECUTED_SIDE_MIN = 5;
+/** How long after a failed buying taker-fee read the coin's reading waits before it is tried again (the selling fee stands meanwhile). */
+export const TAKER_BUY_RETRY_MS = 10 * 60_000;
+export const grossOfLeg = (pp: PricedPool, amount: number, taker: number): number => amount / ((pp.type === 'concentrated' ? 1 - pp.model.spread : 1) * (1 - taker));
+
+/**
+ * Check 3: each stored swap of the window whose route is pools only, each of its NAM legs walked alone in its own pool
+ * on the newest stored state read before it, against what that leg took or gave there (meta.legs: the pool, the NAM
+ * and the counter coin of each leg, the chain's own amounts, net of the hop's fees; worker/src/parse/osmosis.ts). A
+ * buy leg's coin put back to what the trader put into the pool (grossOfLeg, at the buying taker fee) buys the depth's
+ * NAM, compared with the leg's NAM; a sale leg's NAM put back the same way (the selling taker fee) fetches the depth's
+ * coin, compared with the leg's coin. Coins are valued at the stored minute's price of the pool's own counter coin,
+ * the price the depth used, so the comparison is of the pools' curves and fees and of nothing outside them.
+ *
+ * Until 2026-10-31 the trade was compared whole at the trader's own coins (meta.settle): a trader who paid or was paid
+ * in another coin through another pool paid that hop's fees too (a buy of 5,316 NAM paid 78.7 OSMO, 0.6296 of it the
+ * route's taker fee, before 4.032825 USDC reached pool 3005), so every such buy read about 0.8% short of the depth and a
+ * route of several hops up to 3%, and a split route was compared with the depth's best split, which no router beats.
+ * A row with no legs (written before 2026-10-31), a book leg or no stored state before it is left out, with the reason.
+ *
+ * The verdict is on the middle of each side's recent comparisons (buys and sells apart, so a bias on every buy cannot
+ * hide behind the sells): 'ok' while both middles are within executedOkPct, 'warn' while they are within
+ * executedWarnPct or when some trades are past it, 'fail' when a side's middle is past executedWarnPct over at least EXECUTED_SIDE_MIN trades. One trade the
+ * depth cannot follow is a warning, which opens no incident, and not a failure that lasts until 20 newer trades push
+ * it out.
  */
 export function executedCheck(cfg: DepthConfig, swaps: SwapLike[], states: DepthStates[], kept: Realised[], now: number): { stmt: Stmt; kept: Realised[]; excluded: { id: string; why: string }[] } {
   const sorted = [...states].filter((s) => s && Array.isArray(s.pools)).sort((a, b) => a.at - b.at);
-  const have = new Map(kept.map((r) => [r.id, r]));
+  // a kept comparison made before 2026-10-31 (at the trader's own coins, no basis) is dropped
+  const have = new Map(kept.filter((r) => r.basis === 'pools').map((r) => [r.id, r]));
   const excluded: { id: string; why: string }[] = [];
-  const rate = (symbol: string, rates: Record<string, number> | undefined): number | null => (SETTLE_STABLES.includes(symbol) ? 1 : rates && rates[symbol] > 0 ? rates[symbol] : null);
   for (const s of swaps) {
     if (have.has(s.id)) continue;
     if (s.kind !== 'buy' && s.kind !== 'sell') continue;
@@ -201,55 +249,57 @@ export function executedCheck(cfg: DepthConfig, swaps: SwapLike[], states: Depth
     if (route.some((id) => cfg.bookPoolIds.includes(id))) { excluded.push({ id: s.id, why: BOOK_LEG_LEFT_OUT }); continue; }
     let meta: Record<string, unknown> | null = null;
     try { meta = s.meta ? JSON.parse(s.meta) : null; } catch { meta = null; }
-    const settle = settleMetaOf(meta);
-    if (!settle) { excluded.push({ id: s.id, why: 'no settle record on the stored row' }); continue; }
+    const legs = legsOf(meta);
+    if (!legs) { excluded.push({ id: s.id, why: 'its legs at the pools are not stored (a row written before 2026-10-31)' }); continue; }
     const st = [...sorted].reverse().find((x) => x.at <= s.ts);
     if (!st) { excluded.push({ id: s.id, why: 'no stored state read before the trade' }); continue; }
-    const pools: PricedPool[] = [];
-    let missing: string | null = null;
-    for (const id of route) {
-      const ps = st.pools.find((p) => p.id === id);
+    // two legs in one pool (two hops or two messages through it) are one walk of that pool, their amounts summed
+    const byPool = new Map<string, StoredLeg>();
+    for (const l of legs) {
+      const had = byPool.get(l.pool);
+      byPool.set(l.pool, had ? { pool: l.pool, nam: had.nam + l.nam, coin: had.coin, amount: Number(had.amount ?? 0) + Number(l.amount ?? 0), ...(had.gross != null && l.gross != null ? { gross: had.gross + l.gross } : {}) } : { ...l });
+    }
+    let predicted = 0, actual = 0, nam = 0, why: string | null = null, fromChain = true;
+    for (const l of byPool.values()) {
+      const ps = st.pools.find((p) => p.id === l.pool);
       const pp = ps ? pricedOfState(cfg, ps) : null;
-      if (!pp) { missing = id; break; }
-      pools.push(pp);
+      if (!pp) { why = `pool ${l.pool} is not in the stored minute`; break; }
+      if (!(Number(l.amount) > 0) || !(l.nam > 0)) { why = `its leg in pool ${l.pool} has no amount`; break; }
+      const agg = aggregate([pp], buildGrid(st.ref.usd), cfg.base.decimals);
+      // the leg's gross as the chain charged it (meta.legs gross: the hop's own taker-fee and spread transfers), so the
+      // depth's fees are tested as well as its curve; rebuilt from the depth's own fees only for a leg without one
+      if (l.gross == null) fromChain = false;
+      if (s.kind === 'buy') {
+        const gross = (l.gross ?? grossOfLeg(pp, Number(l.amount), pp.takerBuy ?? pp.taker)) * pp.counterUsd;
+        const fill = executeBuyUsd(agg, [pp], gross);
+        if (!fill.complete) { why = `the stored state of pool ${l.pool} could not fill its leg`; break; }
+        predicted += fill.nam; actual += l.nam; nam += l.nam;
+      } else {
+        const gross = l.gross ?? grossOfLeg(pp, l.nam, pp.taker);
+        const fill = executeSell(agg, [pp], gross);
+        if (!fill.complete) { why = `the stored state of pool ${l.pool} could not fill its leg`; break; }
+        predicted += fill.usd; actual += Number(l.amount) * pp.counterUsd; nam += gross;
+      }
     }
-    if (missing) { excluded.push({ id: s.id, why: `pool ${missing} is not in the stored minute` }); continue; }
-    let usd = 0, noRate: string | null = null;
-    for (const [symbol, amount] of Object.entries(settle.coins)) {
-      if (!amount) continue;
-      if (s.kind === 'sell' ? amount < 0 : amount > 0) continue; // the coin paid on a sale, got on a buy: the backrun's leftovers, not the trade
-      const r = rate(symbol, settle.rates);
-      if (r == null) { noRate = symbol; break; }
-      usd += Math.abs(amount) * r;
-    }
-    if (noRate) { excluded.push({ id: s.id, why: `no rate for ${noRate} in the trade’s own transaction` }); continue; }
-    const agg = aggregate(pools, buildGrid(st.ref.usd), cfg.base.decimals);
-    let row: Realised | null = null;
-    // the settle record's base-coin field is named after this site's coin by the shared helper (shared/settle.ts); it is the trader's gross base coins
-    if (s.kind === 'sell') {
-      const gross = -settle.nam;
-      if (!(gross > 0) || !(usd > 0)) { excluded.push({ id: s.id, why: 'the settle record has no coins out' }); continue; }
-      const fill = executeSell(agg, pools, gross);
-      if (!fill.complete) { excluded.push({ id: s.id, why: 'the stored state could not fill the size' }); continue; }
-      row = { id: s.id, kind: 'sell', at: s.ts, nam: gross, predicted: fill.usd, settle: usd, diffPct: pct(fill.usd, usd), route, minute: st.minute };
-    } else {
-      const got = settle.nam;
-      if (!(got > 0) || !(usd > 0)) { excluded.push({ id: s.id, why: 'the settle record has no coins in' }); continue; }
-      const fill = executeBuyUsd(agg, pools, usd);
-      if (!fill.complete) { excluded.push({ id: s.id, why: 'the stored state could not fill the size' }); continue; }
-      row = { id: s.id, kind: 'buy', at: s.ts, nam: got, predicted: fill.nam, settle: got, diffPct: pct(fill.nam, got), route, minute: st.minute };
-    }
+    if (why) { excluded.push({ id: s.id, why }); continue; }
+    const row: Realised = { id: s.id, kind: s.kind, at: s.ts, nam, predicted, settle: actual, diffPct: pct(predicted, actual), route, minute: st.minute, basis: 'pools', ...(fromChain ? {} : { feesRebuilt: true }) };
     if (!Number.isFinite(row.diffPct)) { excluded.push({ id: s.id, why: 'the comparison is not a number' }); continue; }
     have.set(s.id, row);
   }
   const all = [...have.values()].sort((a, b) => b.at - a.at).slice(0, cfg.checks.realisedKeep);
   const recent = all.filter((r) => r.at >= now - cfg.checks.executedIdleMs).slice(0, cfg.checks.executedKeep);
   const worst = recent.length ? Math.max(...recent.map((r) => Math.abs(r.diffPct))) : null;
-  const status = worst == null ? 'idle' : worst <= cfg.checks.executedOkPct ? 'ok' : worst <= cfg.checks.executedWarnPct ? 'warn' : 'fail';
+  // a side's middle fails the check only from EXECUTED_SIDE_MIN trades on that side: one or two are a warning, as one trade is
+  const sideMid = (k: 'buy' | 'sell') => { const xs = recent.filter((r) => r.kind === k).map((r) => r.diffPct); return xs.length ? { mid: medianAbs(xs), n: xs.length } : null; };
+  const sides = { buy: sideMid('buy'), sell: sideMid('sell') };
+  const middles = { buy: sides.buy?.mid ?? null, sell: sides.sell?.mid ?? null };
+  const middle = Math.max(middles.buy ?? -1, middles.sell ?? -1);
+  const failing = [sides.buy, sides.sell].some((x) => x && x.n >= EXECUTED_SIDE_MIN && x.mid > cfg.checks.executedWarnPct);
+  const status = !recent.length ? 'idle' : failing ? 'fail' : middle > cfg.checks.executedOkPct || worst! > cfg.checks.executedWarnPct ? 'warn' : 'ok';
   const detail = {
-    n: recent.length, within1pct: recent.filter((r) => Math.abs(r.diffPct) <= cfg.checks.executedOkPct).length, worstPct: worst, okPct: cfg.checks.executedOkPct, warnPct: cfg.checks.executedWarnPct,
+    n: recent.length, within1pct: recent.filter((r) => Math.abs(r.diffPct) <= cfg.checks.executedOkPct).length, medianPct: recent.length ? middle : null, medianBuyPct: middles.buy, medianSellPct: middles.sell, worstPct: worst, okPct: cfg.checks.executedOkPct, warnPct: cfg.checks.executedWarnPct,
     lastAt: recent[0]?.at ?? null, windowMs: cfg.checks.executedWindowMs, trades: recent, leftOut: excluded.slice(0, 20),
-    note: status === 'idle' ? 'no trade the check could walk in the last day' : 'one pool is known to fill a tenth of a percent better than its tick map says, one way only (the research replay of 28 Oct 2026); that is inside the tolerance',
+    note: !recent.length ? 'no trade the check could walk in the last day' : 'each leg walked alone in its own pool at the chain’s own amounts, judged on the middle of buys and of sells apart (from 2026-10-31); one pool is known to fill a tenth of a percent better than its tick map says, one way only (the research replay of 28 Oct 2026); that is inside the tolerance',
   };
   return { stmt: stmt.check('depth_vs_executed', status, DEPTH_CHECK_TITLES.depth_vs_executed, detail, now), kept: all, excluded };
 }
@@ -324,8 +374,13 @@ export async function minute(env: Env, now: number, ctx: MinuteCtx): Promise<Min
   // 2. the counter coins: metadata (once a day), the price list (every minute), taker fees (a few a minute, kept an hour)
   const needMeta = denoms.filter((d) => !cfg.quoteCoins[d] && (!params.tokens[d] || params.tokensAt == null || now - params.tokensAt > cfg.read.metaMaxAgeMs));
   const needPrice = denoms.filter((d) => !cfg.quoteCoins[d]?.usdFixed);
-  const takerAge = (d: string) => (params.taker[d] ? now - params.taker[d].at : Infinity);
-  const needTaker = denoms.filter((d) => takerAge(d) > cfg.read.takerMaxAgeMs).sort((a, b) => takerAge(b) - takerAge(a)).slice(0, cfg.read.takerReadsPerMinute);
+  // a reading without the buying fee (stored before 2026-10-31) is due now, unless its buying read failed in the last
+  // TAKER_BUY_RETRY_MS; each reading is two requests, one each way
+  const takerAge = (d: string) => { const t = params.taker[d]; if (!t) return Infinity; if (t.feeBuy != null) return now - t.at; return t.buyTriedAt != null && now - t.buyTriedAt < TAKER_BUY_RETRY_MS ? 0 : Infinity; };
+  // the reference pool's coin first while it has no reading at all: without its fee the minute writes no depth row
+  const refCoin = listed.find((p) => p.id === cfg.refPoolId)?.counterDenom ?? null;
+  const first = (d: string) => Number(d === refCoin && !params.taker[d]);
+  const needTaker = denoms.filter((d) => takerAge(d) > cfg.read.takerMaxAgeMs).sort((a, b) => first(b) - first(a) || takerAge(b) - takerAge(a)).slice(0, Math.max(1, Math.floor(cfg.read.takerReadsPerMinute / 2)));
   const [metaRead, priceRead, takerReads] = await Promise.all([
     needMeta.length ? readTokenMeta(req, cfg, needMeta) : Promise.resolve(null),
     needPrice.length ? readPriceList(req, cfg, needPrice) : Promise.resolve(null),
@@ -335,7 +390,10 @@ export async function minute(env: Env, now: number, ctx: MinuteCtx): Promise<Min
     for (const [d, m] of Object.entries(metaRead.value ?? {})) if (m && typeof m.decimals === 'number' && Number.isFinite(m.decimals)) params.tokens[d] = { symbol: String(m.symbol ?? d), decimals: m.decimals };
     params.tokensAt = metaRead.at; params.tokensUrl = metaRead.url; paramsChanged = true;
   }
-  for (const [d, r] of takerReads) if (isOk(r)) { params.taker[d] = { fee: r.value, at: r.at, url: r.url }; paramsChanged = true; }
+  for (const [d, r] of takerReads) if (isOk(r)) {
+    params.taker[d] = r.value.buy != null ? { fee: r.value.sell, feeBuy: r.value.buy, at: r.at, url: r.url, urlBuy: r.value.urlBuy } : { fee: r.value.sell, at: r.at, url: r.url, urlBuy: r.value.urlBuy, buyTriedAt: r.at };
+    paramsChanged = true;
+  }
   const priceList = priceRead && isOk(priceRead) ? { value: priceRead.value, at: priceRead.at } : null;
   const counters: Record<string, CounterInfo> = {};
   for (const d of denoms) counters[d] = counterInfo(cfg, d, priceList, params.tokens[d] ?? null, params.taker[d] ?? null);
@@ -364,7 +422,7 @@ export async function minute(env: Env, now: number, ctx: MinuteCtx): Promise<Min
   for (const p of set.live) {
     const info = counters[p.counterDenom!];
     const b: PoolBuild = { listed: p, info, model: null, read: { error: 'not read', at: now }, height: null, at: listAt, error: null, state: null };
-    const base = { id: p.id, type: p.type, counterDenom: p.counterDenom!, counterUsd: info.usd!, counterDecimals: info.decimals!, taker: info.taker!, spread: p.spread };
+    const base = { id: p.id, type: p.type, counterDenom: p.counterDenom!, counterUsd: info.usd!, counterDecimals: info.decimals!, taker: info.taker!, ...(info.takerBuy != null ? { takerBuy: info.takerBuy } : {}), spread: p.spread };
     try {
       if (p.type === 'concentrated') {
         const i = clPools.indexOf(p) * 2;
@@ -416,7 +474,7 @@ export async function minute(env: Env, now: number, ctx: MinuteCtx): Promise<Min
         const m = clModel(r.pool.value, r.ranges.value, cfg.base.denom);
         b.model = m; b.error = null; b.height = r.pool.height; b.at = r.pool.at; b.read = readOf(r.pool);
         b.cl = { currentTick: m.currentTick, liquidity: m.L, ranges: m.ranges };
-        b.state = { id: p.id, type: p.type, counterDenom: p.counterDenom!, counterUsd: b.info.usd!, counterDecimals: b.info.decimals!, taker: b.info.taker!, spread: m.spread, at: b.at, height: b.height, cl: { pool: r.pool.value, ranges: r.ranges.value } };
+        b.state = { id: p.id, type: p.type, counterDenom: p.counterDenom!, counterUsd: b.info.usd!, counterDecimals: b.info.decimals!, taker: b.info.taker!, ...(b.info.takerBuy != null ? { takerBuy: b.info.takerBuy } : {}), spread: m.spread, at: b.at, height: b.height, cl: { pool: r.pool.value, ranges: r.ranges.value } };
       } catch (e) { b.error = `gateway answer: ${String((e as Error)?.message ?? e).slice(0, 80)}`; }
     } else b.error = `${b.error}; gateway: ${errOf(isOk(r.pool) ? r.ranges : r.pool)}`;
   }
@@ -450,7 +508,7 @@ export async function minute(env: Env, now: number, ctx: MinuteCtx): Promise<Min
 
   // 6. the aggregate and every figure of the minute
   const priced = builds.filter((b) => b.model && !b.error && b.info.usd != null && b.info.decimals != null && b.info.taker != null);
-  const pricedPools: PricedPool[] = priced.map((b) => ({ id: b.listed.id, type: b.listed.type, model: b.model!, counterUsd: b.info.usd!, counterDecimals: b.info.decimals!, taker: b.info.taker! }));
+  const pricedPools: PricedPool[] = priced.map((b) => ({ id: b.listed.id, type: b.listed.type, model: b.model!, counterUsd: b.info.usd!, counterDecimals: b.info.decimals!, taker: b.info.taker!, ...(b.info.takerBuy != null ? { takerBuy: b.info.takerBuy } : {}) }));
   const grid = buildGrid(refUsd);
   const agg = aggregate(pricedPools, grid, cfg.base.decimals);
   const sells = cfg.sizes.map((n) => executeSell(agg, pricedPools, n));
@@ -501,7 +559,7 @@ export async function minute(env: Env, now: number, ctx: MinuteCtx): Promise<Min
     });
     const pool: DepthPool = {
       id: b.listed.id, type: b.listed.type, pair: pairOf(cfg, b.listed, counters), counterDenom: b.listed.counterDenom!, counterSymbol: b.info.symbol, counterDecimals: b.info.decimals,
-      counterUsd: b.info.usd, counterUsdHow: b.info.how, spotUsd, spread: b.model?.spread ?? b.listed.spread, taker: b.info.taker, sides: b.listed.sides,
+      counterUsd: b.info.usd, counterUsdHow: b.info.how, spotUsd, spread: b.model?.spread ?? b.listed.spread, taker: b.info.taker, takerBuy: b.info.takerBuy, sides: b.listed.sides,
       nam: b.listed.baseBase / 10 ** cfg.base.decimals, counter: counterWhole, counterValueUsd: counterValue, balancesAt: listAt, read: b.read,
     };
     if (b.cl) pool.cl = b.cl;

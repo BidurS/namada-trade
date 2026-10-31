@@ -234,14 +234,19 @@ describe('a steady minute on the saved answers', () => {
 });
 
 describe('the first minute, with no parameters and no book known', () => {
-  it('reads the token metadata, three taker fees (the rest next minutes), lists the book’s ticks and reads orders as far as the cap allows; pools whose taker fee is not yet read are unpriced with that reason', async () => {
+  it('reads the token metadata, one coin’s taker fees both ways (two requests; the rest next minutes, 2026-10-31), lists the book’s ticks and reads orders as far as the cap allows; pools whose taker fee is not yet read are unpriced with that reason', async () => {
     const { db, net, health, res } = await run(seeded({ params: false, book: false }));
     const paths = net.calls.map((c) => new URL(c.url).pathname);
     expect(paths.filter((p) => p === '/tokens/metadata')).toHaveLength(1);
-    expect(paths.filter((p) => p.endsWith('/trading_pair_takerfee'))).toHaveLength(cfg.read.takerReadsPerMinute);
+    // one coin a minute, each way: selling (NAM in) and buying (the coin in), which the chain charges apart
+    const takerCalls = net.calls.filter((c) => new URL(c.url).pathname.endsWith('/trading_pair_takerfee')).map((c) => new URL(c.url).searchParams);
+    expect(takerCalls).toHaveLength(2);
+    expect(takerCalls[0].get('denom_1')).toBe(takerCalls[1].get('denom_0'));
+    expect(takerCalls[0].get('denom_0')).toBe(takerCalls[1].get('denom_1'));
     expect(net.calls).toHaveLength(cfg.caps.requestsPerMinute);
     const params = kv(db, 'depth.params')!;
-    expect(Object.keys(params.taker)).toHaveLength(3);
+    expect(Object.keys(params.taker)).toHaveLength(1);
+    expect(Object.values<any>(params.taker)[0]).toMatchObject({ fee: expect.any(Number), feeBuy: expect.any(Number) });
     expect(Object.keys(params.tokens).length).toBeGreaterThanOrEqual(5);
     const r = rows(db);
     const noTaker = r.filter((x) => x.note === UNPRICED_NO_TAKER).map((x) => x.pool_id);
@@ -375,54 +380,85 @@ describe('the three checks', () => {
     const buy = executeBuyUsd(aggregate(two, buildGrid(states.ref.usd), 6), two, 2);
     expect(buy.complete).toBe(true);
     const ts = states.at + 20_000;
-    const flow = (id: string, kind: 'buy' | 'sell', poolId: string, settle: Record<string, unknown>, extra: Record<string, unknown> = {}) => ({
-      id: `osmosis:${id}:0`, chain: 'osmosis', height: 73429300, ts, tx_hash: id, kind, from_addr: 'osmo1test', to_addr: null, amount_num: 1, counter_denom: 'USDC', counter_amount: 1, pool_id: poolId, price_usd: null, value_usd: null, meta: JSON.stringify({ settle, ...extra }),
+    // each NAM leg is compared alone in its own pool at the chain's own amounts (meta.legs, net of the hop's fees; review
+    // of 2026-10-31): a leg built here from the depth itself, net of the pool's fees as the chain reports it, reads 0 %
+    const netOf = (p: PricedPool, gross: number, taker: number) => gross * (p.type === 'concentrated' ? 1 - p.model.spread : 1) * (1 - taker);
+    const saleLeg = (p: PricedPool, grossNam: number, factor = 1) => { const f = executeSell(aggregate([p], buildGrid(states.ref.usd), 6), [p], grossNam); return { pool: p.id, nam: netOf(p, grossNam, p.taker), coin: 'USDC', amount: (f.usd / p.counterUsd) * factor }; };
+    const buyLeg = (p: PricedPool, grossUsd: number, coin: string) => { const f = executeBuyUsd(aggregate([p], buildGrid(states.ref.usd), 6), [p], grossUsd); return { pool: p.id, nam: f.nam, coin, amount: netOf(p, grossUsd / p.counterUsd, p.takerBuy ?? p.taker) }; };
+    const flow = (id: string, kind: 'buy' | 'sell', poolId: string, legs: unknown[] | null) => ({
+      id: `osmosis:${id}:0`, chain: 'osmosis', height: 73429300, ts, tx_hash: id, kind, from_addr: 'osmo1test', to_addr: null, amount_num: 1, counter_denom: 'USDC', counter_amount: 1, pool_id: poolId, price_usd: null, value_usd: null, meta: legs ? JSON.stringify({ trader: 'osmo1test', legs }) : null,
     });
+    const p3368 = two.find((x) => x.id === '3368')!;
+    // a buy leg whose gross is the chain's own charge (meta.legs gross), at OSMO's buying fee of 0.8 %, against a stored state that knows only the selling fee (0.2 %)
+    const charged = { ...p3368, taker: 0.002, takerBuy: 0.008 };
+    const chargedFill = executeBuyUsd(aggregate([charged], buildGrid(states.ref.usd), 6), [charged], 1);
+    const chargedLeg = { pool: '3368', nam: chargedFill.nam, coin: 'OSMO', amount: netOf(charged, 1 / charged.counterUsd, 0.008), gross: 1 / charged.counterUsd };
+    // the ask side at the buying taker fee (2026-10-31: OSMO in for NAM pays 0.8%, NAM in for OSMO 0.2%): the same dollar buys 0.992 / 0.998 of the NAM, the sell side unchanged
+    const atBuyFee = { ...p3368, taker: 0.002, takerBuy: 0.008 }, atSellFee = { ...p3368, taker: 0.002 };
+    const g = buildGrid(states.ref.usd);
+    expect(executeBuyUsd(aggregate([atBuyFee], g, 6), [atBuyFee], 1).nam / executeBuyUsd(aggregate([atSellFee], g, 6), [atSellFee], 1).nam).toBeCloseTo(0.992 / 0.998, 3);
+    expect(executeSell(aggregate([atBuyFee], g, 6), [atBuyFee], 100).usd).toBeCloseTo(executeSell(aggregate([atSellFee], g, 6), [atSellFee], 100).usd, 9);
     insert(first.db, 'flows', [
-      flow('AAAA01', 'sell', '3005', { nam: -1000, coins: { USDC: sale.usd } }),                                   // on the curve: 0 %
-      flow('AAAA02', 'sell', '3005', { nam: -1000, coins: { USDC: sale.usd * 1.02 } }),                            // 2 % better than the curve: warn
-      flow('AAAA03', 'buy', '3005,3368', { nam: buy.nam, coins: { USDC: -1, OSMO: -(1 / 0.05) }, rates: { OSMO: 0.05 } }), // paid half in OSMO at the transaction's own rate
-      flow('AAAA04', 'buy', '3005,3008', { nam: 500, coins: { USDC: -0.5 } }),                                     // a book leg: left out
-      flow('AAAA05', 'sell', '3005', { nam: -10, coins: { TIA: 1 } }),                                             // a coin with no rate: left out
-      { ...flow('AAAA06', 'sell', '3005', { nam: -10, coins: { USDC: 0.01 } }), meta: null },                      // no settle: left out
+      flow('AAAA01', 'sell', '3005', [saleLeg(one[0], 1000)]),                                         // on the curve: 0 %
+      flow('AAAA02', 'sell', '3005', [saleLeg(one[0], 1000, 1.02)]),                                   // 2 % more coin than the curve: -1.96 %
+      flow('AAAA03', 'buy', '3005,3368', [buyLeg(one[0], 1, 'USDC'), buyLeg(p3368, 1, 'OSMO')]),       // a split buy, each leg on its own pool: 0 %
+      flow('AAAA04', 'buy', '3005,3008', [buyLeg(one[0], 0.5, 'USDC')]),                               // a book leg: left out
+      flow('AAAA05', 'sell', '3005', null),                                                            // a row written before the legs: left out
+      flow('AAAA06', 'sell', '3005', [{ pool: '3005', nam: 0, coin: 'USDC', amount: 1 }]),             // a leg with no NAM: left out
+      flow('AAAA07', 'buy', '3368', [chargedLeg]),                                                     // the chain charged 0.8 %, the stored state says 0.2 %: the check sees it
     ]);
     const second = await run(first.db, {}, {}, T + 60_000);
     const c = checks(second.db).depth_vs_executed;
-    expect(c.status).toBe('warn');
-    expect(c.detail.n).toBe(3);
-    expect(c.detail.within1pct).toBe(2);
+    // sells' middle of 0 and 1.96 is 0.98, buys' of 0 and 0.6 is 0.3: ok (each side judged on its middle from 2026-10-31)
+    expect(c.status).toBe('ok');
+    expect(c.detail.n).toBe(4);
+    expect(c.detail.within1pct).toBe(3);
+    expect(c.detail.medianBuyPct).toBeCloseTo(0.3, 1);
+    // the leg with the chain's own gross reads the stored state's fee as 0.6 % too generous; the legs rebuilt from the depth's fees are marked so
+    const byId0 = Object.fromEntries((c.detail.trades as Realised[]).map((t) => [t.id, t]));
+    expect(byId0['osmosis:AAAA07:0'].diffPct).toBeCloseTo((0.998 / 0.992 - 1) * 100, 1);
+    expect(byId0['osmosis:AAAA07:0'].feesRebuilt).toBeUndefined();
+    expect(byId0['osmosis:AAAA01:0'].feesRebuilt).toBe(true);
+    expect(c.detail.medianSellPct).toBeCloseTo(0.9804, 3);
     const byId = Object.fromEntries((c.detail.trades as Realised[]).map((t) => [t.id, t]));
     expect(Math.abs(byId['osmosis:AAAA01:0'].diffPct)).toBeLessThan(1e-6);
     expect(byId['osmosis:AAAA02:0'].diffPct).toBeCloseTo(-1.9608, 3); // 1 / 1.02 - 1
-    expect(byId['osmosis:AAAA03:0']).toMatchObject({ kind: 'buy', route: ['3005', '3368'], minute: MINUTE });
+    expect(byId['osmosis:AAAA03:0']).toMatchObject({ kind: 'buy', route: ['3005', '3368'], minute: MINUTE, basis: 'pools' });
     expect(Math.abs(byId['osmosis:AAAA03:0'].diffPct)).toBeLessThan(1e-6);
     const leftOut = Object.fromEntries((c.detail.leftOut as { id: string; why: string }[]).map((x) => [x.id, x.why]));
     expect(leftOut['osmosis:AAAA04:0']).toBe(BOOK_LEG_LEFT_OUT);
-    expect(leftOut['osmosis:AAAA05:0']).toContain('no rate for TIA');
-    expect(leftOut['osmosis:AAAA06:0']).toContain('no settle record');
-    expect(kv<Realised[]>(second.db, 'depth.realised')).toHaveLength(3);
-    expect(second.res.latest!.checks.realised).toEqual({ n: 3, within1pct: 2, lastAt: ts });
+    expect(leftOut['osmosis:AAAA05:0']).toBe('its legs at the pools are not stored (a row written before 2026-10-31)');
+    expect(leftOut['osmosis:AAAA06:0']).toBe('its leg in pool 3005 has no amount');
+    expect(kv<Realised[]>(second.db, 'depth.realised')).toHaveLength(4);
+    expect(second.res.latest!.checks.realised).toEqual({ n: 4, within1pct: 3, lastAt: ts });
     // the third minute keeps the comparisons (each trade compared once, on the state read before it) and does not compare them again
     const third = await run(second.db, {}, {}, T + 120_000);
-    expect(checks(third.db).depth_vs_executed.detail.n).toBe(3);
-    expect(kv<Realised[]>(third.db, 'depth.realised')!.map((r) => r.id).sort()).toEqual(['osmosis:AAAA01:0', 'osmosis:AAAA02:0', 'osmosis:AAAA03:0']);
+    expect(checks(third.db).depth_vs_executed.detail.n).toBe(4);
+    expect(kv<Realised[]>(third.db, 'depth.realised')!.map((r) => r.id).sort()).toEqual(['osmosis:AAAA01:0', 'osmosis:AAAA02:0', 'osmosis:AAAA03:0', 'osmosis:AAAA07:0']);
   });
 
-  it('executedCheck fails past 3 %, warns between 1 and 3, is ok under 1, and keeps the newest twenty', () => {
+  it('executedCheck judges the middle of each side of the newest twenty (review of 2026-10-31): one trade past 3 % warns, a side whose middle is past 3 % fails even when the other side is fine, past 1 % warns; a comparison kept from before is dropped', () => {
     const states: DepthStates = { minute: MINUTE, at: T, ref: { pool: '3005', usd: 0.001, height: 1 }, pools: [] };
-    const kept: Realised[] = Array.from({ length: 25 }, (_, i) => ({ id: `k${i}`, kind: 'sell', at: T - i * 1000, nam: 1, predicted: 1, settle: 1, diffPct: i === 0 ? 3.5 : 0.1, route: ['3005'], minute: MINUTE }));
+    const kept: Realised[] = Array.from({ length: 25 }, (_, i) => ({ id: `k${i}`, kind: i % 2 ? 'buy' : 'sell', at: T - i * 1000, nam: 1, predicted: 1, settle: 1, diffPct: i === 0 ? 3.5 : 0.1, route: ['3005'], minute: MINUTE, basis: 'pools' }));
     const r = executedCheck(cfg, [], [states], kept, T);
-    expect(r.stmt.params[1]).toBe('fail');
+    // one trade at 3.5 % among nineteen at 0.1 %: a warning, no longer a failure that lasts until twenty newer trades push it out
+    expect(r.stmt.params[1]).toBe('warn');
     expect((r.stmt.params[0])).toBe('depth_vs_executed');
     const detail = JSON.parse(r.stmt.params[3] as string);
-    expect(detail.n).toBe(20);
+    expect(detail).toMatchObject({ n: 20, worstPct: 3.5, medianBuyPct: 0.1, medianSellPct: 0.1 });
     expect(r.kept).toHaveLength(25);
-    const warn = executedCheck(cfg, [], [states], kept.map((k) => ({ ...k, diffPct: k.id === 'k0' ? 2 : 0.1 })), T);
-    expect(warn.stmt.params[1]).toBe('warn');
-    const ok = executedCheck(cfg, [], [states], kept.map((k) => ({ ...k, diffPct: 0.9 })), T);
-    expect(ok.stmt.params[1]).toBe('ok');
+    // every buy 3.5 % off, every sell on the curve: the buys' middle fails (the reviewer's case: a one-sided bias cannot hide)
+    expect(executedCheck(cfg, [], [states], kept.map((k) => ({ ...k, diffPct: k.kind === 'buy' ? 3.5 : 0 })), T).stmt.params[1]).toBe('fail');
+    // nineteen buys on the curve and one sale 3.5 % off: one trade on its side is a warning, not a failure (EXECUTED_SIDE_MIN)
+    const oneSale = kept.slice(0, 20).map((k, i) => ({ ...k, kind: (i === 0 ? 'sell' : 'buy') as 'buy' | 'sell', diffPct: i === 0 ? 3.5 : 0.1 }));
+    expect(executedCheck(cfg, [], [states], oneSale, T).stmt.params[1]).toBe('warn');
+    expect(executedCheck(cfg, [], [states], kept.map((k) => ({ ...k, diffPct: k.kind === 'buy' ? 2 : 0 })), T).stmt.params[1]).toBe('warn');
+    expect(executedCheck(cfg, [], [states], kept.map((k) => ({ ...k, diffPct: k.id === 'k0' ? 2 : 0.1 })), T).stmt.params[1]).toBe('ok');
+    expect(executedCheck(cfg, [], [states], kept.map((k) => ({ ...k, diffPct: 0.9 })), T).stmt.params[1]).toBe('ok');
     // a day old: idle
     expect(executedCheck(cfg, [], [states], kept.map((k) => ({ ...k, at: T - 86_400_001 })), T).stmt.params[1]).toBe('idle');
+    // comparisons kept from before 2026-10-31 (made at the trader's own coins, no basis) are dropped
+    expect(executedCheck(cfg, [], [states], kept.map(({ basis: _b, ...k }) => k), T).stmt.params[1]).toBe('idle');
   });
 });
 

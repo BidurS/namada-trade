@@ -167,7 +167,7 @@ export function Ladder({ d, symbol, stamp, reading, headingId }: LadderProps) {
               </li>
             ))}
           </ul>
-          {taker != null ? <p className="cap">{takerOnEvery(fmtPctRule(taker, taker % 1 ? 2 : 0))}.</p> : null}
+          {taker != null ? <p className="cap">{takerOnEvery(fmtPctRule(taker, taker % 1 ? 2 : 0), poolName(d, d.ref.pool))}.</p> : null}
           {marked === sheet && reading ? <p className="cap">{markedWords(fmtNamRule(reading.nam), symbol)}.</p> : null}
           <p className="cap">{distFromPrice(pct(sheet.dist))} · {ladderLead(symbol)}</p>
         </Sheet>

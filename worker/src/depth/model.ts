@@ -379,12 +379,17 @@ export interface PricedPool {
   /** USD per whole counter coin */
   counterUsd: number;
   counterDecimals: number;
+  /** The pair's taker fee with NAM put in (the bid side). */
   taker: number;
+  /** With the counter coin put in (the ask side); the selling fee stands in when not known (a state stored before 2026-10-31). */
+  takerBuy?: number;
 }
 /** Multiply a raw price by this to get USD per whole base coin. */
 export const usdPerRaw = (p: { counterUsd: number; counterDecimals: number }, baseDecimals: number): number => p.counterUsd * 10 ** (baseDecimals - p.counterDecimals);
-/** The fee factor on the coin in: a pool's spread and the pair's taker fee, charged once. */
+/** The fee factor on the coin in when selling NAM: a pool's spread and the pair's taker fee with NAM put in, charged once. */
 export const feeFactor = (p: { model: { spread: number }; taker: number }): number => (1 - p.model.spread) * (1 - p.taker);
+/** The same when buying NAM: the taker fee with the counter coin put in, which the chain sets apart (0.8% for OSMO against 0.2% the other way, 2026-10-31). */
+export const feeFactorBuy = (p: { model: { spread: number }; taker: number; takerBuy?: number }): number => (1 - p.model.spread) * (1 - (p.takerBuy ?? p.taker));
 
 /** The price grid and its thinning for the page live in shared/depth-grid.ts (the page rebuilds the grid); re-exported for the module's callers. */
 export { buildGrid, thinIndices };
@@ -414,7 +419,7 @@ export function aggregate(pools: PricedPool[], grid: number[], baseDecimals: num
   pools.forEach((p, pi) => {
     const k = usdPerRaw(p, baseDecimals);
     if (!(k > 0)) return;
-    const fee = feeFactor(p);
+    const fee = feeFactor(p), feeBuy = feeFactorBuy(p);
     const cUnit = 10 ** p.counterDecimals;
     const pp = perPool[pi];
     for (let i = 0; i < n; i++) {
@@ -423,9 +428,9 @@ export function aggregate(pools: PricedPool[], grid: number[], baseDecimals: num
       const s = p.model.sellTo(q / (k * fee));
       const gNam = s.namIn / fee / baseUnit, usd = s.counterOut * p.counterUsd / cUnit;
       pp.bidNam[i] = gNam; pp.bidUsd[i] = usd; all.bidNam[i] += gNam; all.bidUsd[i] += usd;
-      // buy side: effective cost q = pRaw x k / fee -> pRaw = q x fee / k
-      const b = p.model.buyTo(q * fee / k);
-      const gUsd = b.counterIn / fee * p.counterUsd / cUnit, nam = b.namOut / baseUnit;
+      // buy side, at the buying fee: effective cost q = pRaw x k / feeBuy -> pRaw = q x feeBuy / k
+      const b = p.model.buyTo(q * feeBuy / k);
+      const gUsd = b.counterIn / feeBuy * p.counterUsd / cUnit, nam = b.namOut / baseUnit;
       pp.askNam[i] = nam; pp.askUsd[i] = gUsd; all.askNam[i] += nam; all.askUsd[i] += gUsd;
     }
   });

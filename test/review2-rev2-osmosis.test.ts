@@ -45,7 +45,8 @@ describe('a swap whose trader is not the signer and pays a cut is one swap row: 
   it('S1: Skip pays its affiliate 125 NAM, then delivers 49,875 to an Osmosis account: one buy to that account, the cut a transfer, one whale', () => {
     const p = parseOsmosisTx(skip('C1', [xfer(E, AFF, nam(125), '1'), xfer(E, U, nam(49875), '1')]), ctx);
     expect(rows(p.flows)).toEqual([['buy', null, U, 50000], ['transfer', E, AFF, 125]]);
-    expect(p.flows[0].meta).toEqual({ trader: U });
+    // the trade's NAM legs ride along (meta.legs, 2026-10-31: the depth check compares a trade at its NAM pools)
+    expect(p.flows[0].meta).toEqual({ trader: U, legs: expect.any(Array) });
     expect(whales(p.flows)).toBe(1);
     // the NAM itself is still on every account it touched
     expect(p.moves).toContainEqual(expect.objectContaining({ address: U, delta: 49875 }));
@@ -115,7 +116,7 @@ describe('a swap whose trader is not the signer and pays a cut is one swap row: 
     it('S5: the bot takes a 20 NAM service fee from the granter, then sells its 20,000: one sell from the granter, the fee a transfer, one whale', () => {
       const p = parseOsmosisTx(sell('A1', [xfer(G, GR, nam(20), '0'), xfer(G, E2, nam(20000), '0'), xfer(E2, R, nam(20000), '0')], 19980), ctx);
       expect(rows(p.flows)).toEqual([['sell', G, null, 19980], ['transfer', G, GR, 20]]);
-      expect(p.flows[0].meta).toEqual({ trader: G });
+      expect(p.flows[0].meta).toEqual({ trader: G, legs: expect.any(Array) });
       expect(whales(p.flows)).toBe(1);
     });
 

@@ -188,7 +188,8 @@ export function bookKvFromFixture(at: number): BookKv {
 /** kv depth.params as a minute that had read every taker fee and the token metadata would leave it. */
 export function paramsKvFromFixture(at: number): DepthParamsKv {
   const taker: DepthParamsKv['taker'] = {};
-  for (const [d, t] of Object.entries<any>(LATEST.takerByDenom)) if (t.fee != null) taker[d] = { fee: t.fee, at, url: t.url };
+  // the research read one direction (NAM in); the fixture's pairs charge the same both ways, as Noble USDC does (2026-10-31)
+  for (const [d, t] of Object.entries<any>(LATEST.takerByDenom)) if (t.fee != null) taker[d] = { fee: t.fee, feeBuy: t.fee, at, url: t.url };
   const tokens: DepthParamsKv['tokens'] = {};
   for (const [d, m] of Object.entries(TOKEN_META.tokens)) tokens[d] = { symbol: m.symbol, decimals: m.decimals };
   return { taker, tokens, tokensAt: at, tokensUrl: TOKEN_META.url };
@@ -234,6 +235,8 @@ export interface NetOptions {
   ignorePin?: boolean;
   /** The orderbook_state answer carries no block-height header, so there is no height to read the book at. */
   stateNoHeight?: boolean;
+  /** A pair's taker fee buying NAM with the coin, by the coin's denom, where it differs from selling (OSMO's 0.8% against 0.2%, 2026-10-31). */
+  takerBuy?: Record<string, number>;
 }
 export interface Net { fetch: FetchLike; calls: { url: string; body: string | null; method: string; headers: Record<string, string> }[]; posts: () => number }
 
@@ -292,7 +295,7 @@ export function depthNetwork(opts: NetOptions = {}): Net {
     }
     if (u.origin === OSMOSIS.publicRest) {
       const hh = { 'grpc-metadata-x-cosmos-block-height': String(opts.restHeight ?? height) };
-      if (u.pathname.endsWith('/trading_pair_takerfee')) { const t = LATEST.takerByDenom[u.searchParams.get('denom_1') ?? '']; return t?.fee != null ? json({ taker_fee: t.fee.toFixed(18) }, hh) : new Response('not found', { status: 404 }); }
+      if (u.pathname.endsWith('/trading_pair_takerfee')) { const d0 = u.searchParams.get('denom_0') ?? '', d1 = u.searchParams.get('denom_1') ?? ''; const buying = d1 === NAM_DENOM; const coin = buying ? d0 : d1; const t = LATEST.takerByDenom[coin]; const fee = buying && opts.takerBuy?.[coin] != null ? opts.takerBuy[coin] : t?.fee; return fee != null ? json({ taker_fee: Number(fee).toFixed(18) }, hh) : new Response('not found', { status: 404 }); }
       if (u.pathname.includes('/estimate/single_pool_swap_exact_amount_in')) return json(ESTIMATE, hh);
       if (u.pathname === '/osmosis/poolmanager/v1beta1/pools/3005') return json(depthFixture('lcd_pm_pool_3005.json'), hh);
       if (u.pathname === '/osmosis/concentratedliquidity/v1beta1/params') return json(CL_PARAMS, hh);

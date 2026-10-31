@@ -141,7 +141,7 @@ export const deleteOldMinutesStmts = (poolIds: readonly string[], before: number
 };
 
 /** The stored swaps the realised check walks (check 3): the buys and sells of `chain` in the window, newest first. */
-export const SWAPS_SQL = 'SELECT id, ts, kind, pool_id, meta FROM flows WHERE chain = ? AND kind IN (\'buy\', \'sell\') AND ts >= ? AND ts < ? ORDER BY ts DESC LIMIT 200';
+export const SWAPS_SQL = 'SELECT id, ts, kind, pool_id, counter_denom, counter_amount, meta FROM flows WHERE chain = ? AND kind IN (\'buy\', \'sell\') AND ts >= ? AND ts < ? ORDER BY ts DESC LIMIT 200';
 export const swapsStmt = (chain: string, from: number, to: number): Stmt => ({ sql: SWAPS_SQL, params: [chain, from, to] });
 
 /** The pool id of the aggregate's own rows (depth_minute and depth_hourly): every live pool summed, the only row with heat bands. */

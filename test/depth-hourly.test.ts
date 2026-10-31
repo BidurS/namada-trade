@@ -476,7 +476,8 @@ describe('the writes beside the minute', () => {
     expect(b.r2Puts).toBe(res.archived);
     const p = kv<any>(db, 'depth.params')!;
     const refreshed = Object.values<any>(p.taker).filter((t) => t.at >= TH);
-    expect(refreshed).toHaveLength(cfg.read.takerReadsPerMinute);
+    // one coin's fees a minute, both ways (two requests each, 2026-10-31)
+    expect(refreshed).toHaveLength(Math.max(1, Math.floor(cfg.read.takerReadsPerMinute / 2)));
     expect(Object.keys(p.gamm)).toHaveLength(LIVE_GAMM);
     expect(p.clParams.at).toBeGreaterThan(TH);
     expect(p.tokensAt).toBe(T1 - MIN);

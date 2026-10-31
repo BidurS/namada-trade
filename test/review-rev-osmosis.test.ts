@@ -48,7 +48,8 @@ describe('a swap whose trader is not the signer is one swap row: its delivery or
   it('Skip delivers the 50,000 NAM it bought to an Osmosis account: one buy to that account, one whale post', () => {
     const p = parseOsmosisTx(skip('S1', [xfer(E, U, nam(50000), '1')]), ctx);
     expect(rows(p.flows)).toEqual([['buy', null, U, 50000]]);
-    expect(p.flows[0].meta).toEqual({ trader: U });
+    // the trade's NAM legs ride along (meta.legs, 2026-10-31: the depth check compares a trade at its NAM pools)
+    expect(p.flows[0].meta).toEqual({ trader: U, legs: expect.any(Array) });
     expect(p.flows.filter((f) => isNamWhale(f, 10000))).toHaveLength(1);
     // the NAM itself is still on every account it touched
     expect(p.moves).toContainEqual(expect.objectContaining({ address: U, delta: 50000 }));
@@ -82,7 +83,7 @@ describe('a swap whose trader is not the signer is one swap row: its delivery or
       ev('token_swapped', { module: 'gamm', sender: R, pool_id: '3005', tokens_in: nam(19980), tokens_out: usdc(18), msg_index: '0' }),
     ]), ctx);
     expect(rows(p.flows)).toEqual([['sell', G, null, 19980]]);
-    expect(p.flows[0].meta).toEqual({ trader: G });
+    expect(p.flows[0].meta).toEqual({ trader: G, legs: expect.any(Array) });
   });
 
   it('a keeper running a vault\'s buy for its owner: one buy to the owner', () => {
