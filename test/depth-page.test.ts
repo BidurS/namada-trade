@@ -18,6 +18,10 @@
 // 320, 375, 640 and 1280 px, at a 16 px and a 20 px root font, reads each into its readout, moves no plot (the readouts keep one
 // height, depth.css) and never clips the curve's pools line. Skipped, with the reason,
 // without the build or a browser, except under CI, where the missing build or browser fails the file.
+// The phone cut (owner, 2026-10-30) adds: the hero's figure on the first screen at 375 x 667, the page's height in screens
+// with each band, the strip showing one evidence band at a time under 1024 px and none of it at 1280, the cost and
+// left-out lines behind one disclosure grouped by reason, the owners' largest five and a fold naming the rest, one-line
+// leads and folds, and the audit of the new parts at 375 and 320.
 // With DEPTH_SHOTS=1 it also writes docs/design/build-shots/depth-375.png and depth-1280.png (full page, dark).
 import { describe, it, expect, beforeAll, afterAll } from 'vitest';
 import { existsSync, readFileSync } from 'node:fs';
@@ -27,7 +31,7 @@ import { chromium, type Browser, type Locator, type Page } from '@playwright/tes
 import { depthFixtureText } from './depth-fixtures';
 import { BANNED } from './banned-words';
 import { routeById } from '../shared/routes';
-import { EXEC_READING, GAPS_NONE, HEAT_EDGES, HEAT_HOW, OWNERS_REWIND, REWIND_NO_BOOK, REWIND_NO_SPLIT, recordedSince, sellQuotableLead, tradesInView, type DepthChangeRow } from '../shared/depth';
+import { EXEC_READING, GAPS_NONE, HEAT_EDGES, HEAT_HOW, OPS_FOLD, OWNERS_REWIND, REWIND_NO_BOOK, REWIND_NO_SPLIT, depthLeadShort, leftOutGroup, recordedSince, sellQuotableLead, tradesInView, whoFewer, whoMore, type DepthChangeRow } from '../shared/depth';
 import { fmtUtcLong } from '../shared/format';
 
 const ROOT = join(__dirname, '..');
@@ -281,6 +285,19 @@ const hidden = (loc: Locator, timeout = T) => expect.poll(() => loc.first().isVi
 const count = (loc: Locator, timeout = T) => expect.poll(() => loc.count(), { timeout });
 const text = (loc: Locator, timeout = T) => expect.poll(() => loc.first().textContent().then((t) => (t ?? '').replace(/\s+/g, ' ').trim()).catch(() => ''), { timeout });
 const settled = async (page: Page) => seen(page.locator('.dp-get [data-num][data-status="fresh"]'));
+/** How many lines the visible elements' text takes, read from the text's own boxes (a 44 px control holds two 18 px lines, so its height cannot say). */
+const textLines = (loc: Locator) => loc.evaluateAll((els) => els.filter((e) => (e as HTMLElement).offsetParent != null).map((e) => {
+  const r = document.createRange();
+  r.selectNodeContents(e);
+  const tops = new Set([...r.getClientRects()].filter((b) => b.width > 0.5).map((b) => Math.round(b.top)));
+  // boxes on one line can differ in top by a pixel or two (a bold run, a code font): count tops more than 4 px apart
+  const lines = [...tops].sort((a, b) => a - b).filter((t, i, all) => i === 0 || t - all[i - 1] > 4).length;
+  return { t: (e.textContent ?? '').trim().slice(0, 48), n: lines };
+}));
+/** Under 1024 px the evidence bands show one at a time: pick one on the strip (from 1024 px every band shows and the strip is hidden). */
+const band = async (page: Page, name: 'The book' | 'Over time' | 'Who holds it') => {
+  if ((page.viewportSize()?.width ?? 0) < 1024) await page.locator('.dp-strip').getByRole('radio', { name }).click();
+};
 
 describe.skipIf(!ready)('the depth page, built, on the fixtures (375, 320 and 1280 wide)', () => {
   for (const [w, h] of [[375, 812], [320, 700], [1280, 800]] as const) {
@@ -406,7 +423,7 @@ describe.skipIf(!ready)('the depth page, built, on the fixtures (375, 320 and 12
       await page.getByRole('radio', { name: '0.5% levels' }).click();
       await expect.poll(() => page.locator('.dp-lrow--bid').count()).toBeGreaterThan(rows1);
       await page.getByRole('button', { name: 'Table view' }).first().click();
-      await count(page.locator('.dp-fold')).toBe(0);
+      await count(page.locator('.dp-rows .dp-fold')).toBe(0);
       await seen(page.locator('.dp-ladder[data-view="table"]'));
       // no figure runs out of its cell in the table view, where every band is unfolded and the far rows' distances are long
       const spilt = await page.locator('.dp-rows .dp-lrow__cum, .dp-rows .dp-lrow__dist, .dp-rows .dp-lrow__rest').evaluateAll((els) => els.filter((e) => e.scrollWidth > e.clientWidth + 1).map((e) => `${e.className}: ${e.textContent}`));
@@ -446,17 +463,22 @@ describe.skipIf(!ready)('the depth page, built, on the fixtures (375, 320 and 12
         if (w < 1024) await page.getByRole('radio', { name: 'Curve' }).click();
         await seen(page.locator('.dp-chart__plot svg'));
         const over = page.locator('.dp-over');
+        await band(page, 'Over time');
         await seen(over.locator('.dph-plot canvas'));
         await seen(over.locator('.dp-exec__plot svg'));
         for (const root of [16, 20]) {
           if (root !== 16) await page.addStyleTag({ content: `html { font-size: ${root}px }` });
           const at = `at a ${root} px root`;
+          await band(page, 'The book');
+          await seen(page.locator('.dp-chart__plot svg'));
           const curve = await sweep(page, '.dp-chart__plot', '.dp-chart .readout');
           expect(curve.read, at).toMatch(/selling|buying/);
           // the pools line after the words, with a space between: at least one named, at most three, the rest counted, and never wider than its box
           expect(curve.read, at).toMatch(/ here (pool|order book) \d+(, (pool|order book) \d+){0,2}( and \d+ more)?$/);
           expect(curve.clipped, `the pools line unclipped ${at}`).toBe(false);
           expect(curve.tops, `the curve plot held its top ${at} (readout heights ${curve.heights.join(', ')})`).toEqual([curve.top0]);
+          await band(page, 'Over time');
+          await seen(over.locator('.dph-plot canvas'));
           const heat = await sweep(page, '.dph-plot', '.dph .readout');
           expect(heat.read, at).toMatch(/UTC: /);
           expect(heat.tops, `the heat plot held its top ${at} (readout heights ${heat.heights.join(', ')})`).toEqual([heat.top0]);
@@ -506,6 +528,7 @@ describe.skipIf(!ready)('the depth page, built, on the fixtures (375, 320 and 12
       await count(page.locator('.dp-rows')).toBe(0);
       await count(page.locator('.dp-say p')).toBe(0);
       await text(page.locator('.dp-who')).toContain(OWNERS_REWIND);
+      await band(page, 'Over time');
       await seen(page.locator('.dph-plot canvas'));
       await count(page.locator('.dp-cost')).toBe(0);
       expect(errors).toEqual([]);
@@ -521,6 +544,7 @@ describe.skipIf(!ready)('the depth page, built, on the fixtures (375, 320 and 12
       const { page, ctx, errors } = await open(w, h);
       try {
         await settled(page);
+        await band(page, 'Over time');
         const over = page.locator('.dp-over');
         await seen(over.locator('.dph-plot canvas'));
         // the phone opens on the day drawn in five-minute columns; the desktop on the week; the five-minute rule is said once (the count and the how), never a third time
@@ -603,6 +627,7 @@ describe.skipIf(!ready)('the depth page, built, on the fixtures (375, 320 and 12
       const { page, ctx, errors } = await open(w, h);
       try {
         await settled(page);
+        await band(page, 'Who holds it');
         const who = page.locator('.dp-who');
         await count(who.locator('details.dp-orow')).toBe(OWNERS.owners.length);
         await text(who.locator('.dp-who__totals')).toContain(`${OWNERS.owners.length} owners`);
@@ -658,4 +683,198 @@ describe.skipIf(!ready)('the depth page, built, on the fixtures (375, 320 and 12
       }
     }
   }, 60_000);
+});
+
+describe.skipIf(!ready)('the depth page on a phone: the evidence bands one at a time (the phone cut, owner 2026-10-30)', () => {
+  const BANDS = ['.dp-bookband', '.dp-overband', '.dp-whoband'] as const;
+  const shownBands = (page: Page) => page.evaluate((sels) => sels.filter((s) => { const e = document.querySelector(s); return !!e && e.getBoundingClientRect().height > 0; }), [...BANDS]);
+  const screens = (page: Page) => page.evaluate(() => document.documentElement.scrollHeight / window.innerHeight);
+
+  it('375 x 667: the hero’s figure in money is on the first screen above the tab bar, the lead is one line, and the amount field is a cell of the chip row', async () => {
+    const { page, ctx, errors } = await open(375, 667);
+    try {
+      await settled(page);
+      const m = await page.evaluate(() => {
+        const r = (s: string) => document.querySelector(s)!.getBoundingClientRect();
+        const bar = document.querySelector('.tabbar');
+        const lead = document.querySelector('.dp-ticket .sub .dp-short')!;
+        return { hero: r('.dp-get .hero-n__v'), barTop: bar && bar.getBoundingClientRect().height ? bar.getBoundingClientRect().top : window.innerHeight, scrollY: window.scrollY, leadH: lead.getBoundingClientRect().height, leadLh: parseFloat(getComputedStyle(lead.parentElement!).lineHeight), field: r('.dp-sizes .field__box'), chips: [...document.querySelectorAll('.dp-sizes .pre')].map((e) => e.getBoundingClientRect().top) };
+      });
+      expect(m.scrollY).toBe(0);
+      expect(m.hero.bottom, `the hero ends at ${m.hero.bottom}, the tab bar starts at ${m.barTop}`).toBeLessThanOrEqual(m.barTop);
+      expect(m.leadH).toBeLessThanOrEqual(m.leadLh * 1.5);
+      await text(page.locator('.dp-ticket .sub .dp-short')).toBe(depthLeadShort('NAM'));
+      await hidden(page.locator('.dp-ticket .sub .dp-long'));
+      // the field sits on the row of the last chip, not under the chips
+      expect(m.chips.some((t) => Math.abs(t - m.field.top) <= 2), `chips at ${m.chips.join(', ')}, the field at ${m.field.top}`).toBe(true);
+      expect(Math.round(m.field.height)).toBeGreaterThanOrEqual(44);
+      // the chip group keeps its role and the field its name
+      await count(page.getByRole('radiogroup', { name: 'Size' })).toBe(1);
+      await count(page.getByRole('textbox', { name: 'Amount' })).toBe(1);
+      // a typed size shows "asking for this size" under the field while the quote is on its way, and the hero does not move
+      await page.route('**/api/depth/quote**', async (route) => { await new Promise((r) => setTimeout(r, 1500)); await route.fallback(); });
+      const top0 = (await page.locator('.dp-get .hero-n__v').boundingBox())!.y;
+      await page.locator('.dp-sizes .field__in').fill('7300');
+      await seen(page.locator('.dp-sizes .field__state'));
+      expect((await page.locator('.dp-get .hero-n__v').boundingBox())!.y).toBe(top0);
+      await hidden(page.locator('.dp-sizes .field__state'), 10_000);
+      expect((await page.locator('.dp-get .hero-n__v').boundingBox())!.y).toBe(top0);
+      expect(errors).toEqual([]);
+    } finally {
+      await ctx.close();
+    }
+  }, 60_000);
+
+  it('375 x 667: the page is about five to seven screens with each band (about 21 on the same fixtures before the cut), and the strip shows exactly one evidence band', async () => {
+    const { page, ctx, errors } = await open(375, 667);
+    try {
+      await settled(page);
+      await seen(page.locator('.dp-strip'));
+      // the strip is a real control: three radios with the bands' names, each at least 44 px
+      const radios = page.locator('.dp-strip').getByRole('radio');
+      await count(radios).toBe(3);
+      const opts = await page.locator('.dp-strip .seg__opt').evaluateAll((els) => els.map((e) => ({ t: (e.textContent ?? '').trim(), h: e.getBoundingClientRect().height, w: e.getBoundingClientRect().width })));
+      expect(opts.map((o) => o.t)).toEqual(['The book', 'Over time', 'Who holds it']);
+      for (const o of opts) expect(Math.min(o.h, o.w), o.t).toBeGreaterThanOrEqual(44);
+      await count(page.getByRole('radiogroup', { name: 'Band to show' })).toBe(1);
+      const measured: Record<string, number> = {};
+      for (const [name, sel] of [['The book', '.dp-bookband'], ['Over time', '.dp-overband'], ['Who holds it', '.dp-whoband']] as const) {
+        await band(page, name);
+        await expect.poll(() => shownBands(page), { timeout: T }).toEqual([sel]);
+        await page.waitForTimeout(300);
+        measured[name] = await screens(page);
+      }
+      // measured on the fixtures on 2026-10-30: the book 6.3, over time 7.0, who holds it 5.6 screens of 667 px
+      expect(measured['The book'], JSON.stringify(measured)).toBeLessThanOrEqual(6.5);
+      expect(measured['Over time'], JSON.stringify(measured)).toBeLessThanOrEqual(7.5);
+      expect(measured['Who holds it'], JSON.stringify(measured)).toBeLessThanOrEqual(6.5);
+      // every band stays a labelled section in the DOM, its heading present even while another band shows
+      for (const sel of BANDS) {
+        const name = await page.locator(sel).evaluate((e) => document.getElementById(e.getAttribute('aria-labelledby') ?? '')?.textContent?.trim() ?? '');
+        expect(name.length, sel).toBeGreaterThan(3);
+      }
+      expect(errors).toEqual([]);
+    } finally {
+      await ctx.close();
+    }
+  }, 60_000);
+
+  it('1280 x 800: as before the cut: every band shows, no strip, the full leads and fold words, the cost and left-out lines open, every owner listed', async () => {
+    const { page, ctx, errors } = await open(1280, 800);
+    try {
+      await settled(page);
+      await hidden(page.locator('.dp-strip'));
+      await expect.poll(() => shownBands(page), { timeout: T }).toEqual([...BANDS]);
+      await expect.poll(() => page.locator('.depth .dp-short').evaluateAll((els) => els.filter((e) => (e as HTMLElement).offsetParent != null).length), { timeout: T }).toBe(0);
+      await seen(page.locator('.dp-ticket .sub .dp-long'));
+      await seen(page.locator('.dp-fold .dp-long'));
+      await seen(page.locator('.dp-sizes .field__l'));
+      await hidden(page.locator('.dp-cost__fold'));
+      await seen(page.locator('.dp-cost__body .dp-leftout'));
+      await hidden(page.locator('.dp-who__fold'));
+      await expect.poll(() => page.locator('details.dp-orow').evaluateAll((els) => els.filter((e) => (e as HTMLElement).offsetParent != null).length), { timeout: T }).toBe(OWNERS.owners.length);
+      await seen(page.locator('.dp-band__eyebrow'));
+      expect(errors).toEqual([]);
+    } finally {
+      await ctx.close();
+    }
+  }, 60_000);
+
+  it('375 wide: the cost and left-out lines are one line with a disclosure, the left-out pools grouped by reason with a count each', async () => {
+    const { page, ctx } = await open(375, 812);
+    try {
+      await settled(page);
+      await band(page, 'Over time');
+      const fold = page.locator('.dp-cost__fold');
+      await seen(fold);
+      await text(fold).toBe(`▸${OPS_FOLD}`);
+      expect((await textLines(fold)).map((l) => l.n)).toEqual([1]);
+      expect(await fold.getAttribute('aria-expanded')).toBe('false');
+      await hidden(page.locator('.dp-cost__body'));
+      await fold.click();
+      await seen(page.locator('.dp-cost__body .dp-leftout'));
+      expect(await fold.getAttribute('aria-expanded')).toBe('true');
+      // the reasons as the minute lists them, each once with its count: the fixture's thirteen pools are three reasons
+      const by = new Map<string, number>();
+      for (const u of LATEST.unpriced as { why: string }[]) by.set(u.why, (by.get(u.why) ?? 0) + 1);
+      const items = await page.locator('.dp-leftout li').allTextContents();
+      expect(items.length).toBe(by.size + 1);
+      for (const [why, n] of by) expect(items.filter((t) => t.startsWith(n === 1 ? `1 pool: ${why}: ` : `${n} pools, each: ${why}: `)).length, why).toBe(1);
+      expect(items).toContain(leftOutGroup(1, LATEST.unpriced[0].why, 'pool 3020 (NAM / UM)'));
+      expect(items.join(' ')).not.toContain('NAM / nothing');
+      // a raw denomination is never shown
+      expect(items.join(' ')).not.toMatch(/ibc\/|factory\//);
+      await text(page.locator('.dp-cost__body')).toMatch(/\d+ requests, [\d.]+ KB read/);
+      await seen(page.locator('.dp-cost__body .srcb'));
+    } finally {
+      await ctx.close();
+    }
+  }, 60_000);
+
+  it('375 wide: who holds it shows the totals and the five largest owners, then a fold naming how many more it holds', async () => {
+    const { page, ctx } = await open(375, 812);
+    try {
+      await settled(page);
+      await band(page, 'Who holds it');
+      const visibleRows = () => page.locator('details.dp-orow').evaluateAll((els) => els.filter((e) => (e as HTMLElement).offsetParent != null).length);
+      await seen(page.locator('.dp-who__totals'));
+      await expect.poll(visibleRows, { timeout: T }).toBe(5);
+      await count(page.locator('details.dp-orow')).toBe(OWNERS.owners.length);
+      const fold = page.locator('.dp-who__fold');
+      await text(fold).toBe(`▸${whoMore(OWNERS.owners.length - 5)}`);
+      expect((await textLines(fold)).map((l) => l.n)).toEqual([1]);
+      await fold.click();
+      await expect.poll(visibleRows, { timeout: T }).toBe(OWNERS.owners.length);
+      await text(fold).toBe(`▾${whoFewer(5)}`);
+      expect(await fold.getAttribute('aria-expanded')).toBe('true');
+    } finally {
+      await ctx.close();
+    }
+  }, 60_000);
+
+  for (const [w, h] of [[375, 812], [320, 700]] as const) {
+    it(`${w} x ${h}: the new parts with every band shown and every new fold open: no text under 11 px, no control under 44 px, no sideways scroll; the leads, the folds and the strip one line; the reference row two lines`, async () => {
+      const { page, ctx, errors } = await open(w, h);
+      try {
+        await settled(page);
+        for (const name of ['The book', 'Over time', 'Who holds it'] as const) {
+          await band(page, name);
+          if (name === 'Over time') await page.locator('.dp-cost__fold').click();
+          if (name === 'Who holds it') await page.locator('.dp-who__fold').click();
+          await page.waitForTimeout(300);
+          const a = await audit(page);
+          expect(a.overflowX, `${name}: ${a.wide.join(' | ')}`).toBe(false);
+          expect(a.smallText, name).toEqual([]);
+          expect(a.smallTargets, name).toEqual([]);
+          // the folds stay one line of text
+          const folds = await textLines(page.locator('.dp-fold'));
+          expect(folds.length, name).toBeGreaterThan(0);
+          for (const f of folds) expect(f.n, f.t).toBe(1);
+          if (w === 375) {
+            const leads = await textLines(page.locator('.dp-lead .dp-short'));
+            if (name !== 'Over time') expect(leads.length, name).toBeGreaterThan(0);
+            for (const l of leads) expect(l.n, l.t).toBe(1);
+          }
+        }
+        await band(page, 'The book');
+        const strip = await textLines(page.locator('.dp-strip .seg__opt > span'));
+        expect(strip.length).toBe(3);
+        for (const o of strip) expect(o.n, o.t).toBe(1);
+        // the reference row: two lines at 375 (the price with the crossing or the spread, then the touch after fees), at most three at 320
+        const ref = await textLines(page.locator('.dp-lrow--ref .dp-short'));
+        expect(ref.length).toBe(1);
+        expect(ref[0].n, ref[0].t).toBeLessThanOrEqual(w === 375 ? 2 : 3);
+        await text(page.locator('.dp-lrow--ref .dp-short')).toMatch(/^Pool 3005 price [\d.]+ · (crossed [\d.]+%|spread [−+]?[\d.]+%)100 NAM after fees: bid [\d.]+, ask [\d.]+$/);
+        // the curve's lead, on its tab
+        if (w === 375) {
+          await page.getByRole('radio', { name: 'Curve' }).click();
+          const curve = await textLines(page.locator('.dp-curve .dp-lead .dp-short'));
+          expect(curve.map((l) => l.n)).toEqual([1]);
+        }
+        expect(errors).toEqual([]);
+      } finally {
+        await ctx.close();
+      }
+    }, 90_000);
+  }
 });

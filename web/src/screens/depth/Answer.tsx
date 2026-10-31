@@ -4,11 +4,13 @@
 // own answer for the smallest size from the minute's check, the when-not-to-act sentences computed from the reading
 // (verify.txt C3: never typed), a ProvChip on the hero and one SourceLine naming every read of the minute.
 // Rewound: the stored figures of that minute from /api/depth/history (no split, said so); the field is off.
+// Under 1024 px (the phone cut, owner 2026-10-30) the lead is one line and the amount field sits in the chip row as its
+// last cell, so the hero's figure is on the first screen at 375 by 667; from 1024 px both stand as before.
 import type { ReactNode } from 'react';
 import type { DepthHistoryPoint, DepthResponse } from '../../../../shared/depth';
 import {
   ANSWER_WAITS, ASKING_SIZE, DEPTH_EYEBROW, DEPTH_OFFSETS_PCT, DEPTH_PLAIN_SOURCE, DEPTH_SOURCES, DEPTH_SOURCE_LABEL, DEPTH_TOUCH_SIZE, FACT_AVG, FACT_REF_UNNAMED, LABEL_AMOUNT, LABEL_SIDE, LABEL_SIZE, MINUTE_FIGURES, MINUTE_NOT_ANSWERED, NOT_AMOUNT, NOT_STORED_PER_MINUTE, OFFSET_10_INDEX, OFFSET_50_INDEX, REWIND_FIELD_OFF, REWIND_NO_SPLIT, ROUTER_AGREE, ROUTER_AGREE_PCT, ROUTER_IDLE, SPLIT_LABEL, STORED_MINUTE_FIGURES, THROUGH, TRY_AGAIN,
-  afterFees, amountsAre, andMore, bookBidUnder, cliffBuyWords, cliffWords, depthLead, factAskUsdWithin, factAskWithin, factBidWithin, factMarginal, factRef, factTouch, heightClock, heroVerb, heroWords, marketWords, quoteIncomplete, readingOf, routerDiffer, routerOurs, routerSays, sideLabel, splitWords, toTakeAll, updatedAgo, vsRefWords, withinAllWords,
+  afterFees, amountsAre, andMore, bookBidUnder, cliffBuyWords, cliffWords, depthLead, depthLeadShort, factAskUsdWithin, factAskWithin, factBidWithin, factMarginal, factRef, factTouch, heightClock, heroVerb, heroWords, marketWords, quoteIncomplete, readingOf, routerDiffer, routerOurs, routerSays, sideLabel, splitWords, toTakeAll, updatedAgo, vsRefWords, withinAllWords,
 } from '../../../../shared/depth';
 import { Button, Fact, Field, HeroNumber, Notice, Num, ProvChip, Segmented, SelectChip, SkeletonBlock, SourceLine, useUiNow, type ScopeItem, type Stamp } from '../../ui/index';
 import { NBSP, fmtAgo, fmtCoin, fmtCount, fmtNamRule, fmtPctRule, fmtPctSigned, fmtSharePct, fmtSig, fmtUsdRule, fmtUtcClock } from '../../lib/format';
@@ -133,28 +135,30 @@ export function Answer(p: AnswerProps) {
     <div className="dp-ticket" id="dp-ticket" data-prov-group="" data-mode={rewound ? 'rewind' : reading?.kind ?? 'loading'}>
       <p className="eyebrow">{DEPTH_EYEBROW}</p>
       <h1 className="h1">{h1}</h1>
-      <p className="sub">{depthLead(symbol)}</p>
+      <p className="sub"><span className="dp-long">{depthLead(symbol)}</span><span className="dp-short">{depthLeadShort(symbol)}</span></p>
       <Segmented label={LABEL_SIDE} block className="seg--side" value={side} onChange={p.onSide} options={sides} />
-      <SelectChip
-        layout="presets"
-        label={LABEL_SIZE}
-        value={p.amount != null && SIZES.includes(p.amount) ? String(p.amount) : null}
-        onChange={(v) => p.onPick(Number(v))}
-        options={SIZES.map((n) => ({ value: String(n), label: fmtNamRule(n) }))}
-      />
-      <Field
-        className="dp-field"
-        label={LABEL_AMOUNT}
-        state={marker}
-        unit={symbol}
-        value={p.text}
-        onChange={p.onType}
-        readOnly={!editable}
-        error={invalid ? <Notice tone="danger" title={NOT_AMOUNT}>{amountsAre(symbol)}</Notice> : null}
-        onBlur={() => {
-          if (p.amount != null && p.text !== fmtNamRule(p.amount)) p.onType(fmtNamRule(p.amount));
-        }}
-      />
+      <div className="dp-sizes">
+        <SelectChip
+          layout="presets"
+          label={LABEL_SIZE}
+          value={p.amount != null && SIZES.includes(p.amount) ? String(p.amount) : null}
+          onChange={(v) => p.onPick(Number(v))}
+          options={SIZES.map((n) => ({ value: String(n), label: fmtNamRule(n) }))}
+        />
+        <Field
+          className="dp-field"
+          label={LABEL_AMOUNT}
+          state={marker}
+          unit={symbol}
+          value={p.text}
+          onChange={p.onType}
+          readOnly={!editable}
+          error={invalid ? <Notice tone="danger" title={NOT_AMOUNT}>{amountsAre(symbol)}</Notice> : null}
+          onBlur={() => {
+            if (p.amount != null && p.text !== fmtNamRule(p.amount)) p.onType(fmtNamRule(p.amount));
+          }}
+        />
+      </div>
       {p.failed && !d ? (
         <Notice tone="warning" title={p.failed} action={<Button size="sm" onClick={p.retry}>{TRY_AGAIN}</Button>}>
           {ANSWER_WAITS}

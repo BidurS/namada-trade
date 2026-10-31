@@ -303,3 +303,47 @@
     .dp-orow--head > span:nth-child(7) { grid-area: since; text-align: right; }
   }
 }
+
+/* ==========================================================================
+   Depth, the phone cut (owner, 2026-10-29: the phone view is not user
+   friendly; the go for the rest of the cut on 2026-10-30). Under 1024 px: a
+   segmented strip under the answer band shows one evidence band at a time
+   (.band.is-off is the bands not picked; the strip names the band, so the
+   bands' eyebrows go); the one-line leads (.dp-short) stand for the full ones
+   (.dp-long); the amount field is the chip row's last cell, so the hero's
+   figure is on the first screen at 375 by 667; the cost and left-out lines sit
+   behind one disclosure; the owners list opens on its largest five. From
+   1024 px the strip, the short leads and the new folds are hidden and the page
+   is as before. Reads --c-* ground tokens only; every control 44 px.
+   ========================================================================== */
+@layer components {
+  .dp-stripband { padding-block: var(--s-5) 0; }
+  .dp-strip { max-width: 30rem; }
+  @media (max-width: 359px) { .dp-strip .seg__opt > span { padding-inline: 4px; white-space: nowrap; } }   /* "Who holds it" keeps one line in a third of 288 px */
+  .dp-lrow__ref2 { display: block; }
+  .dp-cost__body { display: grid; gap: var(--s-3); }
+  @media (min-width: 1024px) {
+    .dp-stripband, .dp-cost__fold, .dp-who__fold, .depth .dp-short { display: none; }
+  }
+  @media (max-width: 1023px) {
+    .depth .dp-long, .depth .band.is-off, .dp-band__eyebrow { display: none; }
+    .dp-bookband, .dp-overband, .dp-whoband { padding-top: var(--s-5); }
+    .dp-cost:not(.is-open) .dp-cost__body { display: none; }
+    .dp-orows:not(.is-all) .dp-orow.is-rest { display: none; }
+    .dp-who__fold { margin-top: calc(var(--s-4) * -1); }   /* under the last row, whose bottom border it continues */
+    /* the amount field folded into the chip row: the chips and the field are one wrapping row (the chip group keeps its
+       radiogroup role; display: contents only lets its chips sit beside the field), the field's label is for screen
+       readers, and its state marker sits under the box when there is one */
+    .dp-sizes { display: flex; flex-wrap: wrap; align-items: flex-start; gap: var(--s-2); margin-top: var(--s-4); }
+    .dp-sizes .presets { display: contents; }
+    .dp-ticket .dp-sizes .dp-field { display: flex; flex-direction: column; flex: 1 1 8rem; min-width: 8rem; gap: 0; margin-top: 0; }
+    .dp-sizes .field__top { order: 2; justify-content: flex-start; min-height: calc(16px + var(--s-2)); }   /* one marker line kept, so "asking for this size" never moves the hero */
+    .dp-sizes .field__l { position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; border: 0; }
+    .dp-sizes .field__state { margin-top: var(--s-2); flex-wrap: nowrap; align-items: flex-start; text-align: left; }
+    .dp-sizes .field__state .dot { flex: none; margin-top: 4px; }
+    .dp-sizes .field__box { height: 48px; padding: 0 var(--s-3); }   /* the input inside the 2 px border is 44 px */
+    .dp-sizes .field__in { font-size: var(--t-18); line-height: var(--lh-18); }
+    .dp-sizes .notice { order: 3; }
+    .dp-sizes .field--invalid { flex-basis: 100%; }   /* the field takes the row while its notice shows, so the notice is not squeezed beside a chip */
+  }
+}

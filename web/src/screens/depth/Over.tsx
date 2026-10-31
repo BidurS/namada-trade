@@ -8,19 +8,22 @@
 // it, the change rows of the window worded from the diff rows and their owners (a read cut at its page cap says the
 // count is a floor), one
 // SourceLine for every stored read behind the band, the "What a minute costs" line from the minute's own `cost` and
-// "Left out, and why" from its unpriced list and the pools not read. Nothing here types a figure.
+// "Left out, and why" from its unpriced list and the pools not read, grouped by reason (how many pools, the reason once,
+// the pools). Nothing here types a figure. Under 1024 px (the phone cut, owner 2026-10-30) the cost and the left-out
+// lines are the operator's figures, not the reader's, so they sit behind one disclosure line; the change rows' lead is
+// its first sentence and the executable line's unit sentence is left to the key. From 1024 px all of it shows as before.
 import { useMemo, useState } from 'react';
 import type { DepthChangeRow, DepthResponse } from '../../../../shared/depth';
 import {
-  CHANGES_LEAD, CHANGES_NONE, CHANGES_H3, CHANGE_NO_SIZE, CHANGE_VERBS, CHART_VIEW, COST_CAPS, COST_LABEL, CURVE_TRADES_DAYS, DEPTH_QUOTABLE_SIZE, FLOW_INDEX_PLAIN, GAPS_NONE, HEAT_HOW, HEAT_NONE, HEAT_RANGES, HEAT_STEP_WORDS, HEAT_WAITS, HEAT_EDGES, LABEL_WINDOW, LEFT_OUT_LABEL, LEFT_OUT_NONE, OVER_H2, RESERVES_WHAT, SOURCE_CHANGES, SOURCE_EXEC, SOURCE_HEAT, SOURCE_HOURS, SOURCE_OVER, SOURCE_STORED_TRADES, TABLE_VIEW, BY_WORD,
-  changeHead, changesAtLeast, changesInWindow, changesListed, columnsWords, gapsWords, execH2, execUnit, leftOutNamada, leftOutPool, minuteCostWords, notReadPool, orderWhat, pairUnnamed, poolWord, positionWhat, rangeWhat, recordedSince, sizeWords,
+  CHANGES_LEAD, CHANGES_LEAD_SHORT, CHANGES_NONE, CHANGES_H3, CHANGE_NO_SIZE, CHANGE_VERBS, CHART_VIEW, COST_CAPS, COST_LABEL, CURVE_TRADES_DAYS, DEPTH_QUOTABLE_SIZE, FLOW_INDEX_PLAIN, GAPS_NONE, HEAT_HOW, HEAT_NONE, HEAT_RANGES, HEAT_STEP_WORDS, HEAT_WAITS, HEAT_EDGES, LABEL_WINDOW, LEFT_OUT_LABEL, LEFT_OUT_NONE, OPS_FOLD, OVER_H2, RESERVES_WHAT, SOURCE_CHANGES, SOURCE_EXEC, SOURCE_HEAT, SOURCE_HOURS, SOURCE_OVER, SOURCE_STORED_TRADES, TABLE_VIEW, BY_WORD,
+  changeHead, changesAtLeast, changesInWindow, changesListed, columnsWords, gapsWords, execH2, execUnit, leftOutNamada, minuteCostWords, orderWhat, poolWord, positionWhat, rangeWhat, recordedSince, sizeWords,
 } from '../../../../shared/depth';
 import { HEAT_STEP_MS, decodeHeat, slotColumns, type LinePoint } from '../../../../shared/depth-heat';
 import { AddrName, Button, HeatChart, Notice, Segmented, SkeletonBlock, SourceLine, useMinWidth, type ScopeItem, type Stamp } from '../../ui/index';
 import { fmtAge, fmtDayClock, fmtNamRule, fmtSig, fmtUsdRule, fmtUtcLong } from '../../lib/format';
 import { ExecLine } from './ExecLine';
 import { FLOW_INDEX_SOURCE, useDepthHeat, useDepthHistoryWindow, type ChangesWindow, type TradesWeek } from './data';
-import { priceRange, provStamp, tradeMarks } from './model';
+import { leftOutGroups, priceRange, provStamp, tradeMarks } from './model';
 
 export interface OverProps {
   /** The live minute (its cost and its pools), or null under Rewind. */
@@ -55,6 +58,7 @@ export function Over({ d, stamp, symbol, at, trades, changes, headingId }: OverP
   const wide = useMinWidth(WIDE_PX);
   const [days, setDays] = useState<Days>(() => (wide ? '7' : '1'));
   const [table, setTable] = useState(false);
+  const [ops, setOps] = useState(false);
   const nDays = Number(days);
   const heat = useDepthHeat(nDays, at);
   const hist = useDepthHistoryWindow(nDays, at);
@@ -110,10 +114,8 @@ export function Over({ d, stamp, symbol, at, trades, changes, headingId }: OverP
     ...(tradesStamp ? [{ label: SOURCE_STORED_TRADES, p: tradesStamp }] : []),
   ];
 
-  const notRead = d ? d.pools.filter((p) => 'error' in p.read) : [];
-  // a pair whose counter coin has no symbol carries its raw denomination in the list; the page says so in words instead
-  const pairOf = (pair: string) => (/\b(ibc|factory)\//.test(pair) ? pairUnnamed(symbol) : pair);
-  const leftOut = d ? [...d.unpriced.map((u) => leftOutPool(poolWord(u.id, null), pairOf(u.pair), u.why)), ...notRead.map((p) => notReadPool(poolWord(p.id, p.type), pairOf(p.pair), 'error' in p.read ? p.read.error : ''))] : [];
+  // what was left out, one line per reason with its count and its pools (model.ts leftOutGroups)
+  const leftOut = useMemo(() => (d ? leftOutGroups(d, symbol) : []), [d, symbol]);
 
   return (
     <div className="dp-over" data-prov-scope="">
@@ -147,7 +149,7 @@ export function Over({ d, stamp, symbol, at, trades, changes, headingId }: OverP
       ) : null}
       <section className="dp-changes" aria-labelledby={`${headingId}-changes`}>
         <h3 id={`${headingId}-changes`} className="h3">{CHANGES_H3}</h3>
-        <p className="cap dp-lead">{CHANGES_LEAD}</p>
+        <p className="cap dp-lead"><span className="dp-long">{CHANGES_LEAD}</span><span className="dp-short">{CHANGES_LEAD_SHORT}</span></p>
         {cw ? (
           rows.length ? (
             <>
@@ -174,15 +176,21 @@ export function Over({ d, stamp, symbol, at, trades, changes, headingId }: OverP
       </section>
       <SourceLine items={sources} label={SOURCE_OVER} />
       {d && stamp ? (
-        <div className="dp-cost" data-prov-scope="">
-          <h3 className="h3">{COST_LABEL}</h3>
-          <p className="cap"><b data-num="">{minuteCostWords(d.cost.reads, fmtKb(d.cost.bytes), fmtMs(d.cost.ms))}</b> {COST_CAPS}</p>
-          <h3 className="h3">{LEFT_OUT_LABEL}</h3>
-          <ul className="dp-leftout">
-            {leftOut.length ? leftOut.map((w) => <li key={w}>{w}</li>) : <li>{LEFT_OUT_NONE}</li>}
-            <li>{leftOutNamada(symbol)}</li>
-          </ul>
-          <SourceLine items={[{ label: COST_LABEL, p: stamp }]} label={COST_LABEL} />
+        <div className={`dp-cost${ops ? ' is-open' : ''}`} data-prov-scope="">
+          <button type="button" className="dp-fold dp-cost__fold" aria-expanded={ops} aria-controls={`${headingId}-ops`} onClick={() => setOps((v) => !v)}>
+            <span className="dp-fold__t" aria-hidden="true">{ops ? '▾' : '▸'}</span>
+            {OPS_FOLD}
+          </button>
+          <div id={`${headingId}-ops`} className="dp-cost__body">
+            <h3 className="h3">{COST_LABEL}</h3>
+            <p className="cap"><b data-num="">{minuteCostWords(d.cost.reads, fmtKb(d.cost.bytes), fmtMs(d.cost.ms))}</b> {COST_CAPS}</p>
+            <h3 className="h3">{LEFT_OUT_LABEL}</h3>
+            <ul className="dp-leftout">
+              {leftOut.length ? leftOut.map((g) => <li key={g.why}>{g.words}</li>) : <li>{LEFT_OUT_NONE}</li>}
+              <li>{leftOutNamada(symbol)}</li>
+            </ul>
+            <SourceLine items={[{ label: COST_LABEL, p: stamp }]} label={COST_LABEL} />
+          </div>
         </div>
       ) : null}
     </div>

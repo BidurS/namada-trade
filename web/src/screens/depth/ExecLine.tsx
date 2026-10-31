@@ -5,7 +5,8 @@
 // rows bucketed by the hour; the hourly rows' own lo and hi for the month). The line is drawn run by run and breaks at
 // every step with no stored row (shared/depth-heat.ts bucketLine and runsOf; verify.txt C2): a bucket holding a missing
 // minute is blank at every width, so a gap is never bridged, and the readout over a blank step says so. The Over view
-// says the window's gaps in words under the line; the band's SourceLine is the Over view's.
+// says the window's gaps in words under the line; the band's SourceLine is the Over view's. Under 1024 px the unit sentence
+// is left to the key (the phone cut: one sentence for each chart).
 import { useMemo, useState } from 'react';
 import { EXEC_GROUP_LABEL, EXEC_HIGH, EXEC_LAST, EXEC_LOW, EXEC_NONE, EXEC_READING, EXEC_READOUT_NONE, KEY_BAND_HOUR, KEY_EXEC, execGapReadout, execOne, execTakeaway } from '../../../../shared/depth';
 import { bandOf, lineRuns, runsOf, type LinePoint } from '../../../../shared/depth-heat';
@@ -78,7 +79,7 @@ export function ExecLine({ points, stepMs, from, to, hourly, heading, nam, symbo
         <div className="chartsec__title">
           <h3 id={headingId} className="chartsec__h">{heading}</h3>
           <p className="cap">{title}</p>
-          <p className="cap">{unit}</p>
+          <p className="cap dp-long">{unit}</p>
         </div>
       </div>
       <p className="readout" aria-live="polite">

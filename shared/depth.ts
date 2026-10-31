@@ -587,7 +587,9 @@ export const routerSays = (usd: string, nam: string, symbol: string, pool: strin
 export const routerOurs = (usd: string) => `this page’s math gives ${usd} USD for the same sale`;
 export const ROUTER_AGREE = 'The two agree.';
 export const routerDiffer = (pct: string) => `The two differ by ${pct}.`;
-export const ROUTER_IDLE = 'The router was not asked a quote in the reference pool this minute, so there is nothing to compare.';
+/** No router answer to compare this minute (the check was not built: the router was not asked, its answer failed, or the reference pool's
+ *  state was not read). Nothing happened, so the sentence is short (owner, 2026-10-30: the phone cut). */
+export const ROUTER_IDLE = 'Nothing to compare with Osmosis’s router this minute.';
 /** When not to act, computed from the reading (verify.txt C3: never typed). */
 export const cliffWords = (above: string, symbol: string, sizeA: string, pctA: string, sizeB: string, pctB: string) =>
   `Above the first ${above} ${symbol} each extra ${symbol} fetches less: selling ${sizeA} averages ${pctA}, ${sizeB} averages ${pctB}.`;
@@ -618,10 +620,14 @@ export const bestWords = (side: 'bid' | 'ask', n: string, symbol: string, price:
 export const spreadWords = (pct: string) => `that spread is ${pct} after fees`;
 export const crossedWords = (n: string, symbol: string, pct: string, askPool: string, bidPool: string) =>
   `crossed across pools: ${n} ${symbol} is ${pct} cheaper to buy in ${askPool} than it fetches in ${bidPool}, after fees`;
-export const foldFar = (side: 'ask' | 'bid', count: number, pct: string, price: string, amount: string) =>
-  side === 'ask' ? `${count} more ask levels above +${pct}, up to ${price} (${amount})` : `${count} more bid levels below −${pct}, down to ${price} (${amount})`;
-export const foldMid = (side: 'ask' | 'bid', count: number, from: string, to: string, amount: string) =>
-  side === 'ask' ? `${count} ask levels between +${from} and +${to} (${amount})` : `${count} bid levels between −${from} and −${to} (${amount})`;
+/** A fold's words in two parts: the head (how many it hides and where) is shown at every width, so a fold on a phone stays one
+ *  line; the tail (how far the levels reach and what they hold) is shown from 1024 px. */
+export const foldFarHead = (side: 'ask' | 'bid', count: number, pct: string) => (side === 'ask' ? `${count} more ask levels above +${pct}` : `${count} more bid levels below −${pct}`);
+export const foldFarTail = (side: 'ask' | 'bid', price: string, amount: string) => (side === 'ask' ? `, up to ${price} (${amount})` : `, down to ${price} (${amount})`);
+export const foldFar = (side: 'ask' | 'bid', count: number, pct: string, price: string, amount: string) => `${foldFarHead(side, count, pct)}${foldFarTail(side, price, amount)}`;
+export const foldMidHead = (side: 'ask' | 'bid', count: number, from: string, to: string) => (side === 'ask' ? `${count} ask levels between +${from} and +${to}` : `${count} bid levels between −${from} and −${to}`);
+export const foldMidTail = (amount: string) => ` (${amount})`;
+export const foldMid = (side: 'ask' | 'bid', count: number, from: string, to: string, amount: string) => `${foldMidHead(side, count, from, to)}${foldMidTail(amount)}`;
 export const hideFold = (side: 'ask' | 'bid', what: string) => `hide the ${side}s ${what}`;
 export const poolFeeChip = (pool: string, feePct: string) => `${pool} · ${feePct} fee`;
 export const bookChip = (pool: string) => `${pool} · limit order, no fee`;
@@ -832,10 +838,13 @@ export const minuteCostWords = (reads: number, kb: string, ms: string) => `${rea
 export const COST_CAPS = 'The caps the minute runs under are the Worker’s configuration; the Sources sheet carries the store’s row against them.';
 export const LEFT_OUT_LABEL = 'Left out, and why';
 export const LEFT_OUT_NONE = 'Every listed pool was read and priced this minute.';
-export const leftOutPool = (pool: string, pair: string, why: string) => `${pool} (${pair}): ${why}`;
-export const notReadPool = (pool: string, pair: string, why: string) => `${pool} (${pair}): not read this minute (${why}); its last reading is not counted`;
+/** What was left out, grouped by its reason: how many pools, the reason once (written for one pool, so a group says "each"), then
+ *  the pools, each with its pair in brackets. */
+export const leftOutGroup = (n: number, why: string, pools: string) => (n === 1 ? `${n} pool: ${why}: ${pools}` : `${n} pools, each: ${why}: ${pools}`);
+export const poolPair = (pool: string, pair: string) => `${pool} (${pair})`;
 /** A pair whose counter coin has no symbol in the quote service's metadata is named in words, never by its raw denomination. */
 export const pairUnnamed = (symbol: string) => `${symbol} / a coin the metadata does not name`;
+export const notReadWhy = (why: string) => `not read this minute (${why}); its last reading is not counted`;
 export const leftOutNamada = (symbol: string) => `The Namada side: ${symbol} on its own chain has no pool or order book to read, so only Osmosis is counted.`;
 /** Who holds it. */
 export const WHO_EYEBROW = 'Who holds it';
@@ -873,6 +882,27 @@ export const INV_NONE = 'not checked';
 export const ORDERS_CARRIED = 'the orders are the hour before’s reading';
 export const openOwnerAria = (name: string) => `${name}: each position and order`;
 
+// ---------------------------------------------------------------------------------------------------- the phone cut (owner, 2026-10-30)
+/** Under 1024 px the three evidence bands show one at a time; the strip's options are the bands' own eyebrows. */
+export const LABEL_BANDS = 'Band to show';
+/** The one-line leads under 1024 px: none restates its heading, one sentence for each chart. From 1024 px the full leads stand. */
+export const depthLeadShort = (symbol: string) => `Every ${symbol} pool on Osmosis, after fees.`;
+export const LADDER_LEAD_SHORT = 'Distance is from the reference pool’s price.';
+export const CURVE_LEAD_SHORT = 'Selling reads left of the pool price, buying right.';
+export const CHANGES_LEAD_SHORT = 'Each row is two readings of the chain compared.';
+export const WHO_LEAD_SHORT = 'From the hourly read, largest share first.';
+/** The ladder's reference row under 1024 px, two lines at 375 px: the price with the spread (or the crossing: the best ask under the
+ *  best bid), then the best bid and ask for the touch size after fees. The pools of each are named from 1024 px. */
+export const spreadShort = (pct: string) => `spread ${pct}`;
+export const crossedShort = (pct: string) => `crossed ${pct}`;
+export const touchShort = (n: string, symbol: string, bid: string | null, ask: string | null) =>
+  `${n} ${symbol} after fees: ${[bid != null ? `bid ${bid}` : '', ask != null ? `ask ${ask}` : ''].filter(Boolean).join(', ')}`;
+/** The time band's cost and left-out lines under one disclosure under 1024 px (they are the operator's figures, not the reader's). */
+export const OPS_FOLD = 'Reading cost and left-out pools';
+/** Who holds it under 1024 px: the largest owners, then a fold naming how many it hides. */
+export const whoMore = (n: number) => `Show the other ${n} ${n === 1 ? 'owner' : 'owners'}`;
+export const whoFewer = (n: number) => `Show the ${n} largest only`;
+
 /** Every fixed sentence above, for test/depth-words.test.ts: none may carry a figure. */
 export const DEPTH_FIXED_WORDS: readonly string[] = [
   ...Object.values(DEPTH_SOURCES), ...Object.values(DEPTH_CHECK_TITLES), HEAT_RANGE_WORDS, CL_LEVEL_WORDS, UNPRICED_NO_PRICE, UNPRICED_NO_TAKER, UNPRICED_EMPTY, UNPRICED_NO_META,
@@ -889,6 +919,8 @@ export const DEPTH_FIXED_WORDS: readonly string[] = [
   EXEC_NONE, KEY_BAND_HOUR, KEY_EXEC, EXEC_LOW, EXEC_HIGH, EXEC_LAST, EXEC_READING, EXEC_READOUT_NONE, EXEC_GROUP_LABEL, SOURCE_OVER, SOURCE_HEAT, SOURCE_EXEC, SOURCE_HOURS, SOURCE_CHANGES,
   CHANGES_H3, CHANGES_NONE, CHANGES_LEAD, ...Object.values(CHANGE_VERBS), RESERVES_WHAT, CHANGE_NO_SIZE, BY_WORD, COST_LABEL, COST_CAPS, LEFT_OUT_LABEL, LEFT_OUT_NONE,
   WHO_EYEBROW, WHO_H2, HEAD_OWNER, HEAD_USD_RESTING, HEAD_SHARE, HEAD_HOLDS, HEAD_SINCE, OWNERS_NONE_LABELLED, OWNERS_SOURCE_LABEL, SOURCE_OWNERS, OWNERS_REWIND, OWNERS_WAITS, ITEMS_LABEL, INVARIANTS_LABEL, INV_OK, INV_NOT, INV_NONE, ORDERS_CARRIED, FULL_RANGE, ORDER_BID_UNIT,
+  // the phone cut
+  LABEL_BANDS, LADDER_LEAD_SHORT, CURVE_LEAD_SHORT, CHANGES_LEAD_SHORT, WHO_LEAD_SHORT, OPS_FOLD,
 ];
 /** The sentences built from a read or the configuration, with sample arguments: the only figures they carry are the ones passed in. */
 export const DEPTH_BUILT_WORDS: readonly string[] = [
@@ -905,6 +937,7 @@ export const DEPTH_PAGE_WORDS: readonly string[] = [
   cliffWords('1,000', 'NAM', '100,000', '−16.6%', '1,000,000', '−67.7%'), cliffBuyWords('1,000', 'NAM', '100,000', '+16.6%', '1,000,000', '+67.7%'), bookBidUnder('65.7%', 'order book 3008'), marketWords('sell', '$506.80', '10,000', 'NAM', '2%'), marketWords('buy', '1,726,372 NAM', '10,000', 'NAM', '0.58%'),
   ladderLead('NAM'), ladderShared(['pool 3005', 'pool 3368', 'pool 3402'], 6), ladderShared(['pool 3005', 'pool 3368', 'pool 3402'], 0), ladderShared(['pool 3005'], 0), bandHead('NAM'), bandWidthLabel('1%'), refRowWords('3005', '0.0010199'), bestWords('bid', '100', 'NAM', '0.0010168', 'pool 3005'), bestWords('ask', '100', 'NAM', '0.0009886', 'pool 3009'), spreadWords('−2.77%'), crossedWords('100', 'NAM', '2.77%', 'pool 3009', 'pool 3005'),
   foldFar('ask', 1171, '50%', '198.57', '1,322,018 NAM'), foldFar('bid', 12, '50%', '0.0000001', '$12.40'), foldMid('ask', 31, '10%', '50%', '371,945 NAM'), foldMid('bid', 4, '10%', '50%', '$95.10'), hideFold('ask', 'above +50%'),
+  foldFarHead('ask', 1171, '50%'), foldFarTail('bid', '0.0000001', '$12.40'), foldMidHead('bid', 4, '10%', '50%'), foldMidTail('371,945 NAM'), foldFarHead('bid', 12, '50%'), foldFarTail('ask', '198.57', '1,322,018 NAM'), foldMidHead('ask', 31, '10%', '50%'),
   poolFeeChip('pool 3005', '0.2%'), bookChip('order book 3008'), rangesWords(1), rangesWords(3), ordersWords(1), ordersWords(2), takerOnEvery('0.1%'), sellDownWords('0.0010098', '$1.41'), buyUpWords('0.0010301', '$2.12'), markedBand('10,000', 'NAM'),
   curveLead('NAM'), axisPrice('NAM', true), axisPrice('NAM', false), keyBids('NAM'), keyAsks('NAM'), keyTrades(7), keyRef('3005'), sizeMark('10k', '$9.92'), tradesInView(387, 389, 7), tradesNone(7), tradesCut(300, 7),
   readoutWords('bid', '$9.92', '10,000', 'NAM'), readoutWords('ask', '$10.37', '10,000', 'NAM'), readoutPools(['pool 3005', 'pool 3368', 'pool 3015'], 10), readoutPools(['pool 3005'], 0), updatedAgo('12 s ago'), readingOf('02:56 UTC'), rewindMinute('02:56 UTC'),
@@ -919,9 +952,11 @@ export const DEPTH_PAGE_WORDS: readonly string[] = [
   heatAria(288, 3, '0.00025', '0.0041', 'NAM', 4), recordedSince('26 Oct 2026, 12:00 UTC'), execH2('10,000', 'NAM'), execUnit('NAM'), execTakeaway('10,000', 'NAM', '$9.92', '$9.80', '$9.95'), execOne('10,000', 'NAM', '$9.92'), execGapReadout('28 Oct, 02:40 UTC'),
   changesInWindow(12), changesListed(200), positionWhat('15533107', rangeWords('0.000902', '0.000923')), positionWhat('14599704', FULL_RANGE), orderWhat('140', 'ask', '1.0'), orderWhat('140', null, '1.0'), rangeWhat('0.00090', '0.00092'),
   changeWords('28 Oct, 14:49 UTC', 'position 15533107 (0.000902 – 0.000923)', 'withdrawn from', 'pool 3005', 'osmo1…9l27', '201,000 NAM, $190'), changeWords('28 Oct, 14:49 UTC', 'the pool’s reserves', 'grew in', 'pool 3439', null, '990 NAM, $1.02'), sizeWords('201,000', 'NAM', '$190'), changeHead('28 Oct, 14:49 UTC', 'order 140 at 1.0', 'filled in', 'order book 3008'),
-  minuteCostWords(6, '57.5 KB', '1.2 s'), leftOutPool('pool 3020', 'NAM / UM', UNPRICED_NO_PRICE), notReadPool('pool 3368', 'NAM / OSMO', 'status 429'), leftOutNamada('NAM'), pairUnnamed('NAM'),
+  minuteCostWords(6, '57.5 KB', '1.2 s'), leftOutGroup(1, UNPRICED_NO_PRICE, poolPair('pool 3020', 'NAM / UM')), leftOutGroup(2, UNPRICED_EMPTY, 'pool 3016, pool 3021'), pairUnnamed('NAM'), leftOutGroup(1, notReadWhy('status 429'), poolPair('pool 3368', 'NAM / OSMO')), leftOutNamada('NAM'),
   whoLead('NAM'), headResting('NAM'), positionsWords(1), positionsWords(4), holdsWords(4, 10), holdsWords(0, 1), replacedWords(1), replacedWords(3), itemPosition('14599704', FULL_RANGE, '156,566', 'NAM', '$159.67', true), itemPosition('15533107', rangeWords('0.000902', '0.000923'), '201,000', 'NAM', '$190', false),
   itemOrder('140', 'ask', '1.0', '221', '221', 'NAM'), ownersTotals(50, 49, 43, '$916,851'), ownersLabelled(3), ownersReadAt('03:05 UTC', '73,429,291'), openOwnerAria('osmo1…9l27'),
+  // the phone cut
+  depthLeadShort('NAM'), spreadShort('0.12%'), crossedShort('2.37%'), touchShort('100', 'NAM', '0.0010168', '0.00099267'), touchShort('100', 'NAM', null, '0.00099267'), whoMore(45), whoMore(1), whoFewer(5),
   // the curve's three windows and the heat's are input choices (as a chart's 24h / 7d / 30d), not figures
   ...CURVE_RANGES.map((r) => r.label),
   ...HEAT_RANGES.map((r) => r.label),

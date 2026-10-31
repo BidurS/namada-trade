@@ -10,11 +10,15 @@
 // coin fills in is marked. A row tap opens a Sheet (never a hover box off the page edge): the pools in the band with
 // each one's NAM, USD and tick ranges or orders, and what selling down to (or buying up to) the band comes to.
 // Table view: every band in order with its cumulative figure, no bars, nothing folded.
+// Under 1024 px (the phone cut, owner 2026-10-30) the lead is its first sentence, a fold says how many levels it hides and
+// where on one line (how far they reach and what they hold from 1024 px), and the reference row is two lines: the price
+// with the spread or the crossing, then the best bid and ask for the touch size after fees; the pools of each are named in
+// the full row from 1024 px (on a phone the answer band's fact strip names the picked side's pool).
 import { Fragment, useMemo, useState } from 'react';
 import type { DepthResponse } from '../../../../shared/depth';
 import {
-  CHART_VIEW, HEAD_CUM, HEAD_FROM, LABEL_LEVEL_WIDTH, LADDER_H2, LADDER_TABLE_LABEL, RESERVES_WORDS, SOURCE_EVERY_LEVEL, SOURCE_LEVELS, HEAD_POOLS, HEAD_RESTING, LADDER_BAND_PCTS, LADDER_FOLD_PCT, LADDER_MID_PCT, TABLE_VIEW, bandHead, bandWidthLabel, bestWords, bookChip, buyUpWords, crossedWords, distFromPrice, foldFar, foldMid, hideFold, ladderLead, ladderShared, LADDER_SHARED_NAMED,
-  markedBand as markedWords, openBandAria, ordersWords, poolFeeChip, rangesWords, refRowWords, sellDownWords, sheetTitle, spreadWords, takerOnEvery,
+  CHART_VIEW, HEAD_CUM, HEAD_FROM, LABEL_LEVEL_WIDTH, LADDER_H2, LADDER_TABLE_LABEL, RESERVES_WORDS, SOURCE_EVERY_LEVEL, SOURCE_LEVELS, HEAD_POOLS, HEAD_RESTING, LADDER_BAND_PCTS, LADDER_FOLD_PCT, LADDER_MID_PCT, TABLE_VIEW, bandHead, bandWidthLabel, bestWords, bookChip, buyUpWords, crossedShort, crossedWords, distFromPrice, foldFarHead, foldFarTail, foldMidHead, foldMidTail, hideFold, ladderLead, LADDER_LEAD_SHORT, ladderShared, LADDER_SHARED_NAMED,
+  markedBand as markedWords, openBandAria, ordersWords, poolFeeChip, rangesWords, refRowWords, sellDownWords, sheetTitle, spreadShort, spreadWords, takerOnEvery, touchShort,
 } from '../../../../shared/depth';
 import { Button, Segmented, Sheet, SourceLine, type Stamp } from '../../ui/index';
 import { NBSP, fmtCount, fmtNamRule, fmtPctRule, fmtPctSigned, fmtSig, fmtUsdRule } from '../../lib/format';
@@ -79,13 +83,13 @@ export function Ladder({ d, symbol, stamp, reading, headingId }: LadderProps) {
       </div>
     );
   };
-  const foldRow = (key: string, side: 'ask' | 'bid', rows: Band[], words: string, hide: string) =>
+  const foldRow = (key: string, side: 'ask' | 'bid', rows: Band[], head: string, tail: string, hide: string) =>
     rows.length ? (
       <Fragment key={key}>
         {!table ? (
           <button type="button" className="dp-fold" aria-expanded={shown(key)} onClick={() => toggle(key)}>
             <span className="dp-fold__t" aria-hidden="true">{shown(key) ? '▾' : '▸'}</span>
-            {shown(key) ? hideFold(side, hide) : words}
+            {shown(key) ? hideFold(side, hide) : <span>{head}<span className="dp-long">{tail}</span></span>}
           </button>
         ) : null}
         {shown(key) ? rows.map(row) : null}
@@ -105,6 +109,16 @@ export function Ladder({ d, symbol, stamp, reading, headingId }: LadderProps) {
       ) : null}
     </>
   );
+  // under 1024 px: the price with the spread on the first line, the best bid and ask for the touch size on the second
+  const refShort = (
+    <>
+      <b>{refRowWords(d.ref.pool, fmtSig(d.ref.usd))}</b>
+      {spread != null && t.bestBidPool && t.bestAskPool ? <> · {spread < 0 ? crossedShort(fmtPctRule(-spread, 2)) : spreadShort(fmtPctSigned(spread, 2))}</> : null}
+      {(t.bestBidEff != null && t.bestBidPool) || (t.bestAskEff != null && t.bestAskPool) ? (
+        <span className="dp-lrow__ref2">{touchShort(fmtCount(t.sizeNam), symbol, t.bestBidEff != null && t.bestBidPool ? fmtSig(t.bestBidEff) : null, t.bestAskEff != null && t.bestAskPool ? fmtSig(t.bestAskEff) : null)}</span>
+      ) : null}
+    </>
+  );
   const total = ladder.asks.length + ladder.bids.length + 1;
   // the pools in every near level, in the first near ask's order (its largest first), for the narrow ladder's one sentence
   const near = [...nearA, ...nearB];
@@ -113,7 +127,7 @@ export function Ladder({ d, symbol, stamp, reading, headingId }: LadderProps) {
   return (
     <div className="dp-ladder" data-prov-scope="" data-view={table ? 'table' : 'ladder'}>
       <h2 id={headingId} className="h2">{LADDER_H2}</h2>
-      <p className="cap dp-lead">{ladderLead(symbol)}</p>
+      <p className="cap dp-lead"><span className="dp-long">{ladderLead(symbol)}</span><span className="dp-short">{LADDER_LEAD_SHORT}</span></p>
       <div className="dp-ctl">
         <Segmented label={LABEL_LEVEL_WIDTH} variant="range" value={width} onChange={setWidth} options={WIDTHS} />
         <Button size="sm" aria-pressed={table} onClick={() => setTable((v) => !v)}>{table ? CHART_VIEW : TABLE_VIEW}</Button>
@@ -127,13 +141,13 @@ export function Ladder({ d, symbol, stamp, reading, headingId }: LadderProps) {
           <span role="columnheader">{HEAD_FROM}</span>
           <span role="columnheader">{HEAD_POOLS}</span>
         </div>
-        {foldRow('fa', 'ask', farA, foldFar('ask', farA.length, fold, fmtSig(farA[0]?.hi ?? 0), sum(farA, 'ask', symbol)), `above +${fold}`)}
-        {foldRow('ma', 'ask', midA, foldMid('ask', midA.length, mid, fold, sum(midA, 'ask', symbol)), `between +${mid} and +${fold}`)}
+        {foldRow('fa', 'ask', farA, foldFarHead('ask', farA.length, fold), foldFarTail('ask', fmtSig(farA[0]?.hi ?? 0), sum(farA, 'ask', symbol)), `above +${fold}`)}
+        {foldRow('ma', 'ask', midA, foldMidHead('ask', midA.length, mid, fold), foldMidTail(sum(midA, 'ask', symbol)), `between +${mid} and +${fold}`)}
         {nearA.map(row)}
-        <div className="dp-lrow dp-lrow--ref" role="row"><span role="cell">{refWords}</span></div>
+        <div className="dp-lrow dp-lrow--ref" role="row"><span role="cell"><span className="dp-long">{refWords}</span><span className="dp-short">{refShort}</span></span></div>
         {nearB.map(row)}
-        {foldRow('mb', 'bid', midB, foldMid('bid', midB.length, mid, fold, sum(midB, 'bid', symbol)), `between −${mid} and −${fold}`)}
-        {foldRow('fb', 'bid', farB, foldFar('bid', farB.length, fold, fmtSig(farB[farB.length - 1]?.lo ?? 0), sum(farB, 'bid', symbol)), `below −${fold}`)}
+        {foldRow('mb', 'bid', midB, foldMidHead('bid', midB.length, mid, fold), foldMidTail(sum(midB, 'bid', symbol)), `between −${mid} and −${fold}`)}
+        {foldRow('fb', 'bid', farB, foldFarHead('bid', farB.length, fold), foldFarTail('bid', fmtSig(farB[farB.length - 1]?.lo ?? 0), sum(farB, 'bid', symbol)), `below −${fold}`)}
       </div>
       <SourceLine items={[{ label: SOURCE_EVERY_LEVEL, p: stamp }]} label={SOURCE_LEVELS} />
       {sheet ? (

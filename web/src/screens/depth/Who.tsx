@@ -5,12 +5,14 @@
 // range or each order's price and what is left of it. Sorted by share. An owner who placed and pulled orders within
 // the week carries "replaced N times this week", counted from the change rows (an order added and one withdrawn by the
 // same address). One SourceLine naming the hour's reads; the hour's own three checks with their words. Live only: the
-// kv row holds the newest hour, and a rewound page says so.
-import { useMemo } from 'react';
+// kv row holds the newest hour, and a rewound page says so. Under 1024 px (the phone cut, owner 2026-10-30) the lead is one
+// line and the totals are followed by the WHO_TOP largest owners and a fold naming how many more it holds; every row stays
+// in the DOM, and from 1024 px every row shows with no fold, as before.
+import { useMemo, useState } from 'react';
 import type { DepthChangeRow, DepthOwner, DepthOwnersApiResponse } from '../../../../shared/depth';
 import {
-  HEAD_HOLDS, HEAD_OWNER, HEAD_POOLS, HEAD_SHARE, HEAD_SINCE, HEAD_USD_RESTING, INVARIANTS_LABEL, INV_NONE, INV_NOT, INV_OK, INVARIANT_WORDS, ITEMS_LABEL, ORDERS_CARRIED, ORDER_BID_UNIT, OWNERS_NONE_LABELLED, OWNERS_REWIND, OWNERS_SOURCE_LABEL, OWNERS_WAITS, SOURCE_OWNERS, WHO_H2,
-  headResting, holdsWords, itemOrder, itemPosition, openOwnerAria, ownersLabelled, ownersReadAt, ownersTotals, poolWord, replacedWords, whoLead,
+  HEAD_HOLDS, HEAD_OWNER, HEAD_POOLS, HEAD_SHARE, HEAD_SINCE, HEAD_USD_RESTING, INVARIANTS_LABEL, INV_NONE, INV_NOT, INV_OK, INVARIANT_WORDS, ITEMS_LABEL, ORDERS_CARRIED, ORDER_BID_UNIT, OWNERS_NONE_LABELLED, OWNERS_REWIND, OWNERS_SOURCE_LABEL, OWNERS_WAITS, SOURCE_OWNERS, WHO_H2, WHO_LEAD_SHORT,
+  headResting, holdsWords, itemOrder, itemPosition, openOwnerAria, ownersLabelled, ownersReadAt, ownersTotals, poolWord, replacedWords, whoFewer, whoLead, whoMore,
 } from '../../../../shared/depth';
 import { AddrName, Notice, SkeletonBlock, SourceLine, Tag, type Stamp } from '../../ui/index';
 import { fmtAddr, fmtCount, fmtDayMonthYear, fmtNamRule, fmtSharePct, fmtSig, fmtUsdRule, fmtUtcClock } from '../../lib/format';
@@ -26,6 +28,8 @@ export interface WhoProps {
 }
 
 const WEEK_MS = 7 * 86_400_000;
+/** Under 1024 px the owners list opens on this many, the largest first. */
+export const WHO_TOP = 5;
 
 /** How many times an owner placed an order and pulled one within the week: the smaller of the two counts, from the change rows. */
 export function replacedCount(rows: DepthChangeRow[], address: string, now: number): number {
@@ -54,11 +58,13 @@ export function Who({ owners, changes, symbol, rewound, headingId }: WhoProps) {
   const stamp: Stamp | null = o ? { source: SOURCE_OWNERS, plain: SOURCE_OWNERS, at: o.at, height: o.height, status: 'live', note: o.notes[0] } : null;
   const reads = o ? o.prov.slice(0, 12).map((p) => ({ label: p.what, p: provStamp(p) })) : [];
   const invWord = (ok: boolean | null) => (ok === true ? INV_OK : ok === false ? INV_NOT : INV_NONE);
+  const [all, setAll] = useState(false);
+  const rest = Math.max(0, sorted.length - WHO_TOP);
 
   return (
     <div className="dp-who" data-prov-scope="">
       <h2 id={headingId} className="h2">{WHO_H2}</h2>
-      <p className="cap dp-lead">{whoLead(symbol)}</p>
+      <p className="cap dp-lead"><span className="dp-long">{whoLead(symbol)}</span><span className="dp-short">{WHO_LEAD_SHORT}</span></p>
       {rewound ? (
         <Notice tone="info" title={OWNERS_REWIND} />
       ) : o ? (
@@ -66,7 +72,7 @@ export function Who({ owners, changes, symbol, rewound, headingId }: WhoProps) {
           <p className="cap dp-who__totals">
             <b data-num="">{ownersTotals(o.owners.length, o.totals.positions, o.totals.orders, fmtUsdRule(o.totals.usd))}</b> · {o.labelled ? ownersLabelled(o.labelled) : OWNERS_NONE_LABELLED} · {ownersReadAt(fmtUtcClock(o.at), o.height != null ? fmtCount(o.height) : '—')}{!o.orders.read && o.orders.at != null ? ` · ${ORDERS_CARRIED}` : ''}
           </p>
-          <div className="dp-orows" role="table" aria-label={WHO_H2}>
+          <div className={`dp-orows${all ? ' is-all' : ''}`} role="table" aria-label={WHO_H2} id={`${headingId}-rows`}>
             <div className="dp-orow dp-orow--head" role="row">
               <span role="columnheader">{HEAD_OWNER}</span>
               <span role="columnheader">{HEAD_POOLS}</span>
@@ -76,12 +82,12 @@ export function Who({ owners, changes, symbol, rewound, headingId }: WhoProps) {
               <span role="columnheader">{HEAD_HOLDS}</span>
               <span role="columnheader">{HEAD_SINCE}</span>
             </div>
-            {sorted.map((w) => {
+            {sorted.map((w, i) => {
               const rep = replacedCount(rows, w.address, now);
               const s = since(w);
               const name = w.label ?? fmtAddr(w.address);
               return (
-                <details key={w.address} className="dp-orow" role="row">
+                <details key={w.address} className={`dp-orow${i >= WHO_TOP ? ' is-rest' : ''}`} role="row">
                   <summary aria-label={openOwnerAria(name)}>
                     <span role="cell" className="dp-orow__owner">
                       <AddrName address={w.address} label={w.label} />
@@ -113,6 +119,12 @@ export function Who({ owners, changes, symbol, rewound, headingId }: WhoProps) {
               );
             })}
           </div>
+          {rest ? (
+            <button type="button" className="dp-fold dp-who__fold" aria-expanded={all} aria-controls={`${headingId}-rows`} onClick={() => setAll((v) => !v)}>
+              <span className="dp-fold__t" aria-hidden="true">{all ? '▾' : '▸'}</span>
+              {all ? whoFewer(WHO_TOP) : whoMore(rest)}
+            </button>
+          ) : null}
           <dl className="dp-inv">
             <dt>{INVARIANTS_LABEL}</dt>
             {(['inRange', 'tickStore', 'bookTotals'] as const).map((k) => (

@@ -7,7 +7,7 @@
 // whole reserves, from that pool's own curve in the answer (thinned to 120 points a side on the grid rebuilt here from the
 // reference price with shared/depth-grid.ts), as shares of the band's own figure.
 import type { DepthCurve, DepthFill, DepthHistoryPoint, DepthHistoryResponse, DepthLevel, DepthPool, DepthPoolType, DepthQuoteResponse, DepthResponse } from '../../../../shared/depth';
-import { CURVE_POOL_POINTS_MAX, DEPTH_PLAIN_SOURCE, DEPTH_QUOTABLE_SIZE, DEPTH_SIZES, DEPTH_SOURCES, FULL_RANGE, LADDER_FOLD_PCT, LADDER_MID_PCT, poolWord, rangeWords } from '../../../../shared/depth';
+import { CURVE_POOL_POINTS_MAX, DEPTH_PLAIN_SOURCE, DEPTH_QUOTABLE_SIZE, DEPTH_SIZES, DEPTH_SOURCES, FULL_RANGE, LADDER_FOLD_PCT, LADDER_MID_PCT, leftOutGroup, notReadWhy, pairUnnamed, poolPair, poolWord, rangeWords } from '../../../../shared/depth';
 import { fmtSig } from '../../../../shared/format';
 import { buildGrid, cumOn, thinIndices } from '../../../../shared/depth-grid';
 import { SIZE_SLICE_JUMP_FROM_ZERO_PCT, SIZE_SLICE_JUMP_MIN_PCT, SIZE_SLICE_JUMP_RATIO } from '../../../../shared/size-table';
@@ -91,6 +91,22 @@ export const splitShares = (fill: DepthFill): { pool: string; nam: number; usd: 
 
 export const poolOf = (d: DepthResponse, id: string): DepthPool | undefined => d.pools.find((p) => p.id === id);
 export const poolName = (d: DepthResponse | null, id: string): string => poolWord(id, d ? poolOf(d, id)?.type ?? null : null);
+
+/**
+ * What the minute left out, grouped by its reason in the order the minute lists them (the unpriced pools, then the pools not
+ * read, each failure's own text its own reason): one line per reason with its count and its pools, where every pool once had
+ * its own near-identical line. A pair whose counter coin has no symbol carries its raw denomination in the list, so it is
+ * named in words; a pool empty on both sides is named without its pair ("NAM / nothing" says nothing its reason does not).
+ */
+export function leftOutGroups(d: Pick<DepthResponse, 'unpriced' | 'pools'>, symbol: string): { why: string; words: string }[] {
+  const pairOf = (pair: string) => (/\b(ibc|factory)\//.test(pair) ? pairUnnamed(symbol) : pair);
+  const named = (pool: string, pair: string) => (/\/\s*nothing$/.test(pair) ? pool : poolPair(pool, pairOf(pair)));
+  const by = new Map<string, string[]>();
+  const add = (why: string, pool: string) => { const g = by.get(why); if (g) g.push(pool); else by.set(why, [pool]); };
+  for (const u of d.unpriced) add(u.why, named(poolWord(u.id, null), u.pair));
+  for (const p of d.pools) if ('error' in p.read) add(notReadWhy(p.read.error), named(poolWord(p.id, p.type), p.pair));
+  return [...by].map(([why, pools]) => ({ why, words: leftOutGroup(pools.length, why, pools.join(', ')) }));
+}
 export const isBook = (type: DepthPoolType | null | undefined) => type === 'cosmwasm';
 /** The pool fee in percent (the book charges none: its levels are limit orders). */
 export const poolFeePct = (p: DepthPool): number => (isBook(p.type) ? 0 : p.spread * 100);

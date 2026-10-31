@@ -4,6 +4,11 @@
 // time band (view 3: the heat, the executable line, the change rows, the cost and what was left out) and the black
 // owners band (view 4).
 //
+// The phone cut (owner, 2026-10-29: the phone view is not user friendly; the go for the rest of it on 2026-10-30): under
+// 1024 px a segmented strip under the answer band shows one of the three evidence bands at a time (the book first), so
+// the page is about five screens instead of fifteen; every band stays a labelled section in the DOM, and from 1024 px
+// the strip is hidden and all three bands show as before.
+//
 // One shared state for the side and the size: the chips read the minute's own figures for the four stored sizes;
 // any other size typed is walked on the stored minute by /api/depth/quote (debounced). The minute is fetched every
 // DEPTH_REFRESH_MS and at once when the live stream delivers an Osmosis swap (depth plan section 4), with an "updated
@@ -17,7 +22,7 @@ import { Notice, Segmented, SkeletonBlock } from '../../ui/index';
 import { fmtNamRule, fmtUtcClock } from '../../lib/format';
 import { ageOutStamps } from '../../lib/prov';
 import { routeById } from '../../../../shared/routes';
-import { BOOK_EYEBROW, BOOK_WAITS, DEPTH_ASKING, FETCHING_MINUTE, LABEL_BOOK_VIEW, OVER_EYEBROW, REWIND_NO_BOOK, REWIND_NO_MINUTE, SITE_SYMBOL, TAB_CURVE, TAB_LEVELS, WHO_EYEBROW, rewindMinute } from '../../../../shared/depth';
+import { BOOK_EYEBROW, BOOK_WAITS, DEPTH_ASKING, FETCHING_MINUTE, LABEL_BANDS, LABEL_BOOK_VIEW, OVER_EYEBROW, REWIND_NO_BOOK, REWIND_NO_MINUTE, SITE_SYMBOL, TAB_CURVE, TAB_LEVELS, WHO_EYEBROW, rewindMinute } from '../../../../shared/depth';
 import { Answer } from './Answer';
 import { Ladder } from './Ladder';
 import { Curve } from './Curve';
@@ -29,6 +34,7 @@ import { DEFAULT_SIZE, SIZES, depthStamp, parseAmount, pointAt, readingOfPoint, 
 
 const DEPTH = routeById('depth');
 type BookView = 'levels' | 'curve';
+type Band = 'book' | 'over' | 'who';
 
 export default function DepthScreen({ route }: ScreenProps) {
   const { liveFlows } = useOverview();
@@ -45,6 +51,9 @@ export default function DepthScreen({ route }: ScreenProps) {
   const type = (t: string) => { setImmediate(false); setText(t); setAmount(parseAmount(t)); };
   const onSide = (s: Side) => { setImmediate(true); setSide(s); };
   const [view, setView] = useState<BookView>('levels');
+  const [band, setBand] = useState<Band>('book');
+  // a class, not the hidden attribute (the reset's [hidden] rule is !important): from 1024 px every band shows
+  const off = (b: Band) => (band !== b ? ' is-off' : '');
 
   // ---- data: the newest streamed Osmosis swap asks the minute again
   const swap = liveFlows.find((f) => f.chain === 'osmosis' && (f.kind === 'buy' || f.kind === 'sell'));
@@ -133,9 +142,14 @@ export default function DepthScreen({ route }: ScreenProps) {
           />
         </div>
       </section>
-      <section className="band ground-ink dp-bookband" aria-labelledby="h-book">
+      <div className="band ground-ink dp-stripband">
         <div className="wrap">
-          <p className="eyebrow">{BOOK_EYEBROW}</p>
+          <Segmented label={LABEL_BANDS} block className="dp-strip" value={band} onChange={setBand} options={[{ value: 'book', label: BOOK_EYEBROW }, { value: 'over', label: OVER_EYEBROW }, { value: 'who', label: WHO_EYEBROW }]} />
+        </div>
+      </div>
+      <section className={`band ground-ink dp-bookband${off('book')}`} aria-labelledby="h-book">
+        <div className="wrap">
+          <p className="eyebrow dp-band__eyebrow">{BOOK_EYEBROW}</p>
           <h2 id="h-book" className="sr-only">{BOOK_EYEBROW}</h2>
           {!rewound && d ? (
             <Segmented label={LABEL_BOOK_VIEW} className="dp-tabs" value={view} onChange={setView} options={[{ value: 'levels', label: TAB_LEVELS }, { value: 'curve', label: TAB_CURVE }]} />
@@ -143,15 +157,15 @@ export default function DepthScreen({ route }: ScreenProps) {
           {bookBody}
         </div>
       </section>
-      <section className="band ground-ink dp-overband" aria-labelledby="h-over">
+      <section className={`band ground-ink dp-overband${off('over')}`} aria-labelledby="h-over">
         <div className="wrap">
-          <p className="eyebrow">{OVER_EYEBROW}</p>
+          <p className="eyebrow dp-band__eyebrow">{OVER_EYEBROW}</p>
           <Over d={d} stamp={stamp} symbol={symbol} at={at} trades={trades} changes={changes} headingId="h-over" />
         </div>
       </section>
-      <section className="band ground-ink dp-whoband" aria-labelledby="h-who">
+      <section className={`band ground-ink dp-whoband${off('who')}`} aria-labelledby="h-who">
         <div className="wrap">
-          <p className="eyebrow">{WHO_EYEBROW}</p>
+          <p className="eyebrow dp-band__eyebrow">{WHO_EYEBROW}</p>
           <Who owners={owners} changes={changes} symbol={symbol} rewound={rewound} headingId="h-who" />
         </div>
       </section>
