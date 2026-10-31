@@ -115,6 +115,13 @@ export const OSMOSIS_SWEEP_EVERY_MS = 5 * 60_000;
  * block, so a move younger than that may still be on its way, and one just after a reconnect may have come in the gap.
  */
 export const OSMOSIS_DEAF_GRACE_MS = 2 * 60_000;
+/**
+ * How often the hub sends the Osmosis node a request on its socket. Measured on 2026-10-31 (kv osmosis.live, after the
+ * close record was added): with nothing sent after the subscriptions, the endpoint cut the socket after about 29 s open,
+ * code 1006, "WebSocket disconnected without sending Close frame", twice in three minutes, and each reconnect left a
+ * gap the catch-up search had to fill. CometBFT answers `health` with an empty result, which the hub reads as no move.
+ */
+export const OSMOSIS_KEEPALIVE_MS = 15_000;
 /** The move's time when the open socket (open since `since`) should have delivered it and did not; null otherwise. */
 export const osmoDeafAt = (since: number | null, open: boolean, ts: number, now: number): number | null =>
   open && since != null && ts - since >= OSMOSIS_DEAF_GRACE_MS && now - ts >= OSMOSIS_DEAF_GRACE_MS ? ts : null;
@@ -584,7 +591,13 @@ export class LiveHub extends DurableObject<Env> {
     });
 
     const openedAt = Date.now();
+    // the keepalive (OSMOSIS_KEEPALIVE_MS): a send that throws means the socket is going, which its close handles
+    const keepalive = setInterval(() => {
+      if (this.osmoWs !== ws) { clearInterval(keepalive); return; }
+      try { ws.send(JSON.stringify({ jsonrpc: '2.0', method: 'health', id: 'keepalive', params: {} })); } catch {}
+    }, OSMOSIS_KEEPALIVE_MS);
     ws.addEventListener('close', (ev: CloseEvent) => {
+      clearInterval(keepalive);
       // a socket the hub already let go (dropOsmosisWs) closing late: the new one is not touched
       if (this.osmoWs !== ws) return;
       // Why it closed, kept with the drops (kv osmosis.live): on 2026-10-30 the hub opened a new socket about once a

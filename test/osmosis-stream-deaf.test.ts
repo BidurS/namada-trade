@@ -9,7 +9,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import { testD1 } from './d1-sqlite';
 import { NAM } from '../worker/src/config';
 vi.mock('cloudflare:workers', () => ({ DurableObject: class {} }));
-import { LiveHub, osmoDeafAt, OSMOSIS_DEAF_GRACE_MS } from '../worker/src/live-hub';
+import { LiveHub, osmoDeafAt, OSMOSIS_DEAF_GRACE_MS, OSMOSIS_KEEPALIVE_MS } from '../worker/src/live-hub';
 import { HubQuote } from '../worker/src/live-quote';
 afterEach(() => { vi.unstubAllGlobals(); vi.useRealTimers(); });
 
@@ -68,6 +68,30 @@ describe('a socket that delivers nothing is closed', () => {
     expect(hub.osmoDrops.error).toBe(1);
     expect(hub.osmoWs).toBe(null);
     expect(hub.needSweep).toBe(true);
+  });
+
+  it('the socket is kept alive with a health request every 15 s, and the requests stop once it closes or is let go (2026-10-31: idle sockets were cut after about 29 s)', async () => {
+    vi.useFakeTimers();
+    const hub = hubOver(testD1());
+    const ws = fakeWs();
+    hub.openedOsmosisWs(ws);
+    expect(ws.sent).toHaveLength(4); // the subscriptions
+    vi.advanceTimersByTime(OSMOSIS_KEEPALIVE_MS * 3);
+    const pings = ws.sent.slice(4).map((m) => JSON.parse(m));
+    expect(pings).toEqual(Array(3).fill({ jsonrpc: '2.0', method: 'health', id: 'keepalive', params: {} }));
+    // CometBFT's answer to it is no move and no error: the socket stays
+    await ws.fire('message', { data: JSON.stringify({ jsonrpc: '2.0', id: 'keepalive', result: {} }) });
+    expect(ws.closed).toBe(0);
+    await ws.fire('close', { code: 1006, reason: '' });
+    vi.advanceTimersByTime(OSMOSIS_KEEPALIVE_MS * 3);
+    expect(ws.sent).toHaveLength(7);
+    // a socket the hub let go stops too, even if no close event ever comes
+    const other = fakeWs();
+    hub.osmoWs = null;
+    hub.openedOsmosisWs(other);
+    hub.osmoWs = null;
+    vi.advanceTimersByTime(OSMOSIS_KEEPALIVE_MS * 3);
+    expect(other.sent).toHaveLength(4);
   });
 
   it('an error a node gives one subscribe (not a cancelled subscription) is logged and the socket kept, so it never loops (review of 2026-10-30)', async () => {
