@@ -2,6 +2,7 @@ import { NAM, NAMADA } from '../config';
 import { decodeU256LE, decodeU64LE, fetchJson, fetchText, withFailover, ReadCutError, FETCH_TEXT_MAX_BYTES, base64Bytes } from '../util';
 import { bech32m } from '@scure/base';
 import type { NamadaBlock } from '../parse/namada';
+import { INTERNAL_ADDRESSES } from '../parse/namada-tx';
 // The base64 decoder lives in util.ts (the depth module reads the chain node's answers with it too); callers of this file keep their import.
 export { base64Bytes };
 
@@ -550,8 +551,10 @@ const sameBytes = (a: Uint8Array, b: Uint8Array) => a.length === b.length && a.e
  * is why the protocol accounts read tnam1qgqqq… (PoS, 2), tnam1qcqqq… (IBC, 6), tnam1q5qqq… (governance, 5),
  * tnam1pyqqq… (multitoken, 9), tnam1pgqqq… (PGF, 10) and tnam1pcqqq… (MASP, 14). Checked against config.ts.
  */
-const INTERNAL_DISCRIMINANT = [2, 3, 4, 6, 13, 5, 7, 8, 11, 12, 9, 10, 14, 15, 16];
-const INTERNAL_WITH_HASH = new Set([4, 8, 9]);
+// one table for both readers (parse/namada-tx.ts INTERNAL_ADDRESSES, from Namada's own enum): the one kept here had
+// ReplayProtection and TempStorage's raw discriminants swapped (15 and 16), which no listing ever named
+const INTERNAL_DISCRIMINANT = INTERNAL_ADDRESSES.map((v) => v.raw);
+const INTERNAL_WITH_HASH = new Set(INTERNAL_ADDRESSES.flatMap((v, i) => (v.data ? [i] : [])));
 
 /** A borsh reader over an ABCI answer. Every read past the end throws, so a cut answer is refused, never half-read. */
 class Borsh {

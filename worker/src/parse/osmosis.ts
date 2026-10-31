@@ -135,6 +135,15 @@ function counterOf(coins: string, ctx: OsmoCtx) {
  * (factory/<creator>/<any name>), so its label keeps the factory path and its creator: a coin someone called "USDC"
  * must never read as USDC, which only the asset map's Noble USDC may be.
  */
+/** Two coin lists the same, whatever their order: each denom's amount summed and compared exactly. */
+function sameCoins(a: string, b: string): boolean {
+  const sum = (s: string) => { const m = new Map<string, bigint>(); for (const c of parseCoins(s)) m.set(c.denom, (m.get(c.denom) ?? 0n) + BigInt(c.amount)); return m; };
+  const x = sum(a), y = sum(b);
+  if (x.size !== y.size) return false;
+  for (const [d, v] of x) if (y.get(d) !== v) return false;
+  return true;
+}
+
 export function shortDenom(d: string): string {
   if (d === 'uosmo') return 'OSMO';
   if (d === OSMOSIS.allUsdc) return 'allUSDC';
@@ -536,20 +545,53 @@ export function parseOsmosisTx(tx: NormTx, ctx: OsmoCtx): OsmoParsed {
     const settled = (x: string) => !ctx.poolAddrs.has(x) && (x === trader || x === OSMOSIS.transferModule || n.get(x) === 0n);
     return settled(t.from) && settled(t.to);
   };
+  // The coins other than NAM a leg carries beside its NAM (a position's withdrawal pays both of its coins in one leg,
+  // its spread rewards too: tx EFEF3604… of 2026-10-27, 142,448.988745 NAM and 60.517489 USDC out of pool 3005, and
+  // 185.868422 NAM and 0.320610 USDC of rewards), by symbol, so a row says what moved with its NAM. A coin the asset map
+  // does not know is kept by its denom in base units, never given a guessed number of decimals.
+  const alsoCoins = (legs: readonly { coins: string }[]): Record<string, unknown> => {
+    const known: Record<string, number> = {}, unknown: Record<string, string> = {};
+    for (const l of legs) for (const c of parseCoins(l.coins)) {
+      if (c.denom === NAM.osmoDenom) continue;
+      const a = ctx.assets.get(c.denom);
+      if (a) known[a.symbol] = (known[a.symbol] ?? 0) + Number(c.amount) / 10 ** a.decimals;
+      else unknown[c.denom] = String(BigInt(unknown[c.denom] ?? '0') + BigInt(c.amount));
+    }
+    return { ...(Object.keys(known).length ? { alsoCoins: known } : {}), ...(Object.keys(unknown).length ? { alsoCoinsUnknown: unknown } : {}) };
+  };
+  // A concentrated position's spread rewards (or incentives) paid in this message: the collect event names the pool and
+  // the position and the coins it paid, which are the leg's own coins.
+  // each collect event names one payout: once matched to a leg it is taken, so two positions paid the same coins in one
+  // message are each named
+  const rewardTaken = new Set<number>();
+  const rewardOf = (t: (typeof namTransfers)[number]): Record<string, unknown> | null => {
+    for (let i = 0; i < tx.events.length; i++) {
+      const e = tx.events[i];
+      if ((e.type !== 'collect_spread_rewards' && e.type !== 'collect_incentives') || msgOf[i] !== t.msg || rewardTaken.has(i)) continue;
+      const a = ev[i];
+      if (!a.tokens_out || !sameCoins(a.tokens_out, t.coins)) continue;
+      rewardTaken.add(i);
+      return { reward: e.type === 'collect_spread_rewards' ? 'spread' : 'incentive', ...(a.pool_id ? { rewardPool: a.pool_id } : {}), ...(a.position_id ? { rewardPosition: a.position_id } : {}) };
+    }
+    return null;
+  };
   let lpAdd = 0, lpRemove = 0;
   const lpPools = new Set<string>();
+  const addLegs: (typeof namTransfers)[number][] = [], removeLegs: (typeof namTransfers)[number][] = [];
   for (const t of namTransfers) {
     if (theSwaps(t)) continue;
     const toPool = ctx.poolAddrs.get(t.to);
     const fromPool = ctx.poolAddrs.get(t.from);
-    if (toPool) { lpAdd += t.amount; lpPools.add(toPool); continue; }
-    if (fromPool) { lpRemove += t.amount; lpPools.add(fromPool); continue; }
+    if (toPool) { lpAdd += t.amount; lpPools.add(toPool); addLegs.push(t); continue; }
+    if (fromPool) { lpRemove += t.amount; lpPools.add(fromPool); removeLegs.push(t); continue; }
     // The transfer module's legs are the bridge's (ibc_in / ibc_out / refund rows above), not transfers.
     if (t.from === OSMOSIS.transferModule || t.to === OSMOSIS.transferModule) continue;
-    out.flows.push(flow(tx, `xfer:${t.idx}`, 'transfer', t.from, t.to, t.amount, ctx.priceUsd, null));
+    const extra = { ...alsoCoins([t]), ...(rewardOf(t) ?? {}) };
+    out.flows.push(flow(tx, `xfer:${t.idx}`, 'transfer', t.from, t.to, t.amount, ctx.priceUsd, Object.keys(extra).length ? extra : null));
   }
-  if (lpAdd > 0) out.flows.push({ ...flow(tx, 'lp_add', 'lp_add', signer, null, lpAdd, ctx.priceUsd, null), poolId: [...lpPools].join(',') });
-  if (lpRemove > 0) out.flows.push({ ...flow(tx, 'lp_remove', 'lp_remove', null, signer, lpRemove, ctx.priceUsd, null), poolId: [...lpPools].join(',') });
+  const lpMeta = (legs: typeof addLegs) => { const m = alsoCoins(legs); return Object.keys(m).length ? m : null; };
+  if (lpAdd > 0) out.flows.push({ ...flow(tx, 'lp_add', 'lp_add', signer, null, lpAdd, ctx.priceUsd, lpMeta(addLegs)), poolId: [...lpPools].join(',') });
+  if (lpRemove > 0) out.flows.push({ ...flow(tx, 'lp_remove', 'lp_remove', null, signer, lpRemove, ctx.priceUsd, lpMeta(removeLegs)), poolId: [...lpPools].join(',') });
 
   // The packets' memos, receivers and senders are the sender's own text: every flow is kept with them bounded.
   out.flows = out.flows.map(boundFlowText);

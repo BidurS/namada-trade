@@ -1,0 +1,337 @@
+{
+ "_source": "osmosis-lcd.stakely.io /cosmos/tx/v1beta1/txs/EFEF3604F504B350FA031101B1E9A6C0870D79A5CC760722417C7B2C8A910327, read 2026-10-30, as a tx_search entry",
+ "height": "73498387",
+ "hash": "EFEF3604F504B350FA031101B1E9A6C0870D79A5CC760722417C7B2C8A910327",
+ "tx_result": {
+  "code": 0,
+  "events": [
+   {
+    "type": "coin_spent",
+    "attributes": [
+     {
+      "key": "spender",
+      "value": "osmo1nn62s9hm7ns4lwqsl70y49xx5tpe0ft45evpvh"
+     },
+     {
+      "key": "amount",
+      "value": "31055uosmo"
+     }
+    ]
+   },
+   {
+    "type": "coin_received",
+    "attributes": [
+     {
+      "key": "receiver",
+      "value": "osmo17xpfvakm2amg962yls6f84z3kell8c5lczssa0"
+     },
+     {
+      "key": "amount",
+      "value": "31055uosmo"
+     }
+    ]
+   },
+   {
+    "type": "transfer",
+    "attributes": [
+     {
+      "key": "recipient",
+      "value": "osmo17xpfvakm2amg962yls6f84z3kell8c5lczssa0"
+     },
+     {
+      "key": "sender",
+      "value": "osmo1nn62s9hm7ns4lwqsl70y49xx5tpe0ft45evpvh"
+     },
+     {
+      "key": "amount",
+      "value": "31055uosmo"
+     }
+    ]
+   },
+   {
+    "type": "message",
+    "attributes": [
+     {
+      "key": "sender",
+      "value": "osmo1nn62s9hm7ns4lwqsl70y49xx5tpe0ft45evpvh"
+     }
+    ]
+   },
+   {
+    "type": "tx",
+    "attributes": [
+     {
+      "key": "fee",
+      "value": "31055uosmo"
+     }
+    ]
+   },
+   {
+    "type": "tx",
+    "attributes": [
+     {
+      "key": "acc_seq",
+      "value": "osmo1nn62s9hm7ns4lwqsl70y49xx5tpe0ft45evpvh/74"
+     }
+    ]
+   },
+   {
+    "type": "tx",
+    "attributes": [
+     {
+      "key": "signature",
+      "value": "fWA/To8rfytRRTsW3pu3xxW3vSrnNl7cyF7FGeRvPNFicJcc79REhs+7XrijPhmpRtIy9DUqyHEPADhZxbIehQ=="
+     }
+    ]
+   },
+   {
+    "type": "message",
+    "attributes": [
+     {
+      "key": "action",
+      "value": "/osmosis.concentratedliquidity.v1beta1.MsgWithdrawPosition"
+     },
+     {
+      "key": "sender",
+      "value": "osmo1nn62s9hm7ns4lwqsl70y49xx5tpe0ft45evpvh"
+     },
+     {
+      "key": "msg_index",
+      "value": "0"
+     }
+    ]
+   },
+   {
+    "type": "coin_spent",
+    "attributes": [
+     {
+      "key": "spender",
+      "value": "osmo1m459jtgn77tz8cffvthq5jh0erswxu9872mjd9qde546mslc6udq85we5r"
+     },
+     {
+      "key": "amount",
+      "value": "60517489ibc/498A0751C798A0D9A389AA3691123DADA57DAA4FE165D5C75894505B876BA6E4,142448988745ibc/C7110DEC66869DAE9BE9C3C60F4B5313B16A2204AE020C3B0527DD6B322386A3"
+     },
+     {
+      "key": "msg_index",
+      "value": "0"
+     }
+    ]
+   },
+   {
+    "type": "coin_received",
+    "attributes": [
+     {
+      "key": "receiver",
+      "value": "osmo1nn62s9hm7ns4lwqsl70y49xx5tpe0ft45evpvh"
+     },
+     {
+      "key": "amount",
+      "value": "60517489ibc/498A0751C798A0D9A389AA3691123DADA57DAA4FE165D5C75894505B876BA6E4,142448988745ibc/C7110DEC66869DAE9BE9C3C60F4B5313B16A2204AE020C3B0527DD6B322386A3"
+     },
+     {
+      "key": "msg_index",
+      "value": "0"
+     }
+    ]
+   },
+   {
+    "type": "transfer",
+    "attributes": [
+     {
+      "key": "recipient",
+      "value": "osmo1nn62s9hm7ns4lwqsl70y49xx5tpe0ft45evpvh"
+     },
+     {
+      "key": "sender",
+      "value": "osmo1m459jtgn77tz8cffvthq5jh0erswxu9872mjd9qde546mslc6udq85we5r"
+     },
+     {
+      "key": "amount",
+      "value": "60517489ibc/498A0751C798A0D9A389AA3691123DADA57DAA4FE165D5C75894505B876BA6E4,142448988745ibc/C7110DEC66869DAE9BE9C3C60F4B5313B16A2204AE020C3B0527DD6B322386A3"
+     },
+     {
+      "key": "msg_index",
+      "value": "0"
+     }
+    ]
+   },
+   {
+    "type": "message",
+    "attributes": [
+     {
+      "key": "sender",
+      "value": "osmo1m459jtgn77tz8cffvthq5jh0erswxu9872mjd9qde546mslc6udq85we5r"
+     },
+     {
+      "key": "msg_index",
+      "value": "0"
+     }
+    ]
+   },
+   {
+    "type": "coin_spent",
+    "attributes": [
+     {
+      "key": "spender",
+      "value": "osmo1n6mm8p4dzd9fe3aly9uzfxx963zxf3ah8vurl4lqm5ggnk0q2vuskr0rtv"
+     },
+     {
+      "key": "amount",
+      "value": "320610ibc/498A0751C798A0D9A389AA3691123DADA57DAA4FE165D5C75894505B876BA6E4,185868422ibc/C7110DEC66869DAE9BE9C3C60F4B5313B16A2204AE020C3B0527DD6B322386A3"
+     },
+     {
+      "key": "msg_index",
+      "value": "0"
+     }
+    ]
+   },
+   {
+    "type": "coin_received",
+    "attributes": [
+     {
+      "key": "receiver",
+      "value": "osmo1nn62s9hm7ns4lwqsl70y49xx5tpe0ft45evpvh"
+     },
+     {
+      "key": "amount",
+      "value": "320610ibc/498A0751C798A0D9A389AA3691123DADA57DAA4FE165D5C75894505B876BA6E4,185868422ibc/C7110DEC66869DAE9BE9C3C60F4B5313B16A2204AE020C3B0527DD6B322386A3"
+     },
+     {
+      "key": "msg_index",
+      "value": "0"
+     }
+    ]
+   },
+   {
+    "type": "transfer",
+    "attributes": [
+     {
+      "key": "recipient",
+      "value": "osmo1nn62s9hm7ns4lwqsl70y49xx5tpe0ft45evpvh"
+     },
+     {
+      "key": "sender",
+      "value": "osmo1n6mm8p4dzd9fe3aly9uzfxx963zxf3ah8vurl4lqm5ggnk0q2vuskr0rtv"
+     },
+     {
+      "key": "amount",
+      "value": "320610ibc/498A0751C798A0D9A389AA3691123DADA57DAA4FE165D5C75894505B876BA6E4,185868422ibc/C7110DEC66869DAE9BE9C3C60F4B5313B16A2204AE020C3B0527DD6B322386A3"
+     },
+     {
+      "key": "msg_index",
+      "value": "0"
+     }
+    ]
+   },
+   {
+    "type": "message",
+    "attributes": [
+     {
+      "key": "sender",
+      "value": "osmo1n6mm8p4dzd9fe3aly9uzfxx963zxf3ah8vurl4lqm5ggnk0q2vuskr0rtv"
+     },
+     {
+      "key": "msg_index",
+      "value": "0"
+     }
+    ]
+   },
+   {
+    "type": "collect_spread_rewards",
+    "attributes": [
+     {
+      "key": "module",
+      "value": "concentratedliquidity"
+     },
+     {
+      "key": "pool_id",
+      "value": "3005"
+     },
+     {
+      "key": "position_id",
+      "value": "15533215"
+     },
+     {
+      "key": "tokens_out",
+      "value": "320610ibc/498A0751C798A0D9A389AA3691123DADA57DAA4FE165D5C75894505B876BA6E4,185868422ibc/C7110DEC66869DAE9BE9C3C60F4B5313B16A2204AE020C3B0527DD6B322386A3"
+     },
+     {
+      "key": "msg_index",
+      "value": "0"
+     }
+    ]
+   },
+   {
+    "type": "remove_tick",
+    "attributes": [
+     {
+      "key": "module",
+      "value": "concentratedliquidity"
+     },
+     {
+      "key": "pool_id",
+      "value": "3005"
+     },
+     {
+      "key": "tick_idx",
+      "value": "-26956300"
+     },
+     {
+      "key": "msg_index",
+      "value": "0"
+     }
+    ]
+   },
+   {
+    "type": "withdraw_position",
+    "attributes": [
+     {
+      "key": "module",
+      "value": "concentratedliquidity"
+     },
+     {
+      "key": "position_id",
+      "value": "15533215"
+     },
+     {
+      "key": "sender",
+      "value": "osmo1nn62s9hm7ns4lwqsl70y49xx5tpe0ft45evpvh"
+     },
+     {
+      "key": "pool_id",
+      "value": "3005"
+     },
+     {
+      "key": "lower_tick",
+      "value": "-26956300"
+     },
+     {
+      "key": "upper_tick",
+      "value": "-26900000"
+     },
+     {
+      "key": "join_time",
+      "value": "2026-10-29 06:43:09.127568734 +0000 UTC"
+     },
+     {
+      "key": "liquidity",
+      "value": "-249209924246.250224900997343876"
+     },
+     {
+      "key": "amount0",
+      "value": "-142448988745"
+     },
+     {
+      "key": "amount1",
+      "value": "-60517489"
+     },
+     {
+      "key": "msg_index",
+      "value": "0"
+     }
+    ]
+   }
+  ]
+ }
+}

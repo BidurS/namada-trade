@@ -72,8 +72,8 @@ export interface StoppedChannel { status: number; at: number; reason?: 'notice';
  */
 export interface NoticeNotTaken { status: number; at: number; tries?: { n: number; status: number; at: number } }
 
-const RULE_IDS: AlertRuleId[] = ['ibc_inventory', 'unlock', 'big_swap', 'unshield', 'bond'];
-const KEY_OF: Record<AlertRuleId, keyof AlertThresholds> = { ibc_inventory: 'ibcInventory', unlock: 'unlock', big_swap: 'bigSwap', unshield: 'unshield', bond: 'bond' };
+const RULE_IDS: AlertRuleId[] = ['ibc_inventory', 'unlock', 'big_swap', 'unshield', 'bond', 'exit_bridge'];
+const KEY_OF: Record<AlertRuleId, keyof AlertThresholds> = { ibc_inventory: 'ibcInventory', unlock: 'unlock', big_swap: 'bigSwap', unshield: 'unshield', bond: 'bond', exit_bridge: 'exitBridge' };
 
 export function defaultPrefs(): NotificationPrefs {
   return {
@@ -144,7 +144,20 @@ export async function loadSettings(db: D1Database, secret: string, address: stri
   // The plaintext alert settings from before sign-in existed (`webhook:user:<address>`) are not read: nothing
   // proves a row there belongs to whoever signs in as the address, and its webhook URL never passed applyUpdate's
   // check. None existed in production on 2026-10-21; sweepAuth deletes any a restore brings back.
-  return blob?.blob ? ((await open(secret, blob.blob)) as StoredSettings) : null;
+  return blob?.blob ? withEveryRule((await open(secret, blob.blob)) as StoredSettings) : null;
+}
+
+/**
+ * Settings saved before a rule existed (the sixth, a shielded exit sent over the bridge, from 2026-10-30) have no entry
+ * for it: it is given one, off, at the site's size, so Settings shows it and its switch saves, and a subscriber who had
+ * chosen their rules gets no new kind of alert they did not turn on. A new subscriber's defaults have every rule on.
+ */
+export function withEveryRule(s: StoredSettings): StoredSettings {
+  const rules = (s.notifications?.rules ?? {}) as NotificationPrefs['rules'];
+  if (RULE_IDS.every((id) => rules[id])) return s;
+  const filled = { ...rules };
+  for (const id of RULE_IDS) filled[id] ??= { on: false, thresholdNam: DEFAULT_THRESHOLDS[KEY_OF[id]] };
+  return { ...s, notifications: { ...s.notifications, rules: filled } };
 }
 
 /**
@@ -504,7 +517,7 @@ export function applyUpdate(cur: StoredSettings, body: any): StoredSettings | st
   if (np) {
     if (np.rules) for (const id of RULE_IDS) {
       const r = np.rules[id];
-      if (r) n.notifications.rules[id] = { on: !!r.on, thresholdNam: Math.min(1e12, Math.max(1, Number(r.thresholdNam) || n.notifications.rules[id].thresholdNam)) };
+      if (r) n.notifications.rules[id] = { on: !!r.on, thresholdNam: Math.min(1e12, Math.max(1, Number(r.thresholdNam) || (n.notifications.rules[id]?.thresholdNam ?? DEFAULT_THRESHOLDS[KEY_OF[id]]))) };
     }
     if (Array.isArray(np.watchlist)) {
       const list = [...new Set(np.watchlist.map((a: any) => String(a).trim()).filter((a: string) => /^(tnam1|osmo1)[0-9a-z]{20,80}$/.test(a)))].slice(0, 100);

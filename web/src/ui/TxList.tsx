@@ -9,7 +9,7 @@ import { kindSign } from '../lib/kinds';
 import { MINUS, fmtAddr, fmtAgo, fmtCoin, fmtCount, fmtNamRule, fmtUsdRule, fmtUtcLong, explorerTxOf, labelNeedsAddr } from '../lib/format';
 import { chainWord, coinWord, dayHm, priceHow, priceShort, tagOf, timeEstimated, type PriceHow } from '../lib/flows';
 import { priceAtOf, priceBasisWords, priceRouteOf } from '../../../shared/flow-rules';
-import { flowSettle, settleGasNote, settleWords } from '../lib/settle';
+import { alsoCoinsWords, flowSettle, rewardWords, settleGasNote, settleWords } from '../lib/settle';
 import { settleUsd, type Settle } from '../../../shared/settle';
 import { tagByline } from '../../../shared/labels';
 import { Icon } from './Icon';
@@ -195,6 +195,8 @@ function Detail({ f, how, settle }: { f: Flow; how: PriceHow; settle: Settle | n
       ) : pools ? (
         <span>Pool{pools.includes(',') ? 's' : ''} {pools}.</span>
       ) : null}
+      {rewardWords(f) ? <span>{rewardWords(f)}.</span> : null}
+      {alsoCoinsWords(f) ? <span>With its NAM: {alsoCoinsWords(f)}.</span> : null}
       <a className="link tx__morelink" href={explorerTxOf(f)} target="_blank" rel="noreferrer noopener">
         <span>{chainWord(f.chain)} record, block {fmtCount(f.height)}</span>
         <Icon name="external" className="ico ico--inline" />

@@ -1092,7 +1092,7 @@ export interface IntelResponse {
 
 // ---------------------------------------------------------------- per-user settings (D7)
 
-export type AlertRuleId = 'ibc_inventory' | 'unlock' | 'big_swap' | 'unshield' | 'bond';
+export type AlertRuleId = 'ibc_inventory' | 'unlock' | 'big_swap' | 'unshield' | 'bond' | 'exit_bridge';
 
 export interface RulePref { on: boolean; thresholdNam: number }
 

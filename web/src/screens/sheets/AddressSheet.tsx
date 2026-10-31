@@ -18,6 +18,7 @@ import { fetchAddressReport, saveLabel } from '../../api';
 import { Button, Derived, Notice, Num, ProvDot, SelectChip, Sheet, Skeleton, SourceLine, SNum, Tag, type Stamp } from '../../ui/index';
 import { Icon } from '../../ui/Icon';
 import { explorerAddr, explorerTxOf, fmtAddr, fmtAgo, fmtCount, fmtDayClock, fmtNamRule, fmtNamSigned, fmtPctRule, fmtUsdRule, fmtCoin, labelNeedsAddr } from '../../lib/format';
+import { alsoCoinsWords, rewardWords, tradesOf, tradesWords } from '../../lib/settle';
 import { label_plain, tagByline } from '../../../../shared/labels';
 import { coinOf, counterpartiesOf, crossingsWith, onePerCrossing } from './moves';
 import { plainError, useCopy } from './util';
@@ -211,6 +212,8 @@ function Report({
   const recorded = at ? flows.length : r.totalFlowsCount ?? r.flows.length;
   const partial = (r.totalFlowsCount ?? r.flows.length) > r.flows.length;
   const overWords = partial ? `the newest ${fmtCount(moves.length)} moves listed below` : `the ${fmtCount(moves.length)} moves listed below`;
+  // what the address's trades realised, at their settle prices, beside the moves (the rows' own values are NAM at the minute's price)
+  const tradeWords = useMemo(() => tradesWords(tradesOf(moves, r.address), overWords), [moves, r.address, overWords]);
 
   return (
     <>
@@ -372,6 +375,7 @@ function Report({
           </div>
         ) : null}
 
+        {tradeWords ? <p className="sh-cap" data-testid="sh-trades">{tradeWords}</p> : null}
         <Moves moves={moves} loaded={flows.length} recorded={recorded} note={r.flowsNote ?? null} address={r.address} now={now} openAddress={openAddress} />
 
         {last != null ? (
@@ -452,6 +456,8 @@ function Moves({ moves: flows, loaded, recorded, note, address, now, openAddress
                     <span className="sr-only"> (the transaction, in the explorer)</span>
                   </a>
                   {coin === 'NAM' && f.counterAmount && f.counterDenom ? <span className="sh-mv__x">{fmtCoin(f.counterAmount)} {f.counterDenom}</span> : null}
+                  {coin === 'NAM' && alsoCoinsWords(f) ? <span className="sh-mv__x">with {alsoCoinsWords(f)}</span> : null}
+                  {rewardWords(f) ? <span className="sh-mv__x">{rewardWords(f)}</span> : null}
                   {cp ? (
                     // plain text: a separate span inside this inline-flex button would split into a column
                     <button type="button" className="sh-mv__cp" onClick={() => openAddress(cp)}>{out ? 'to ' : 'from '}{cpName}{labelNeedsAddr(cp, cpLabel) ? ` · ${fmtAddr(cp)}` : ''}</button>

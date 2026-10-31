@@ -219,6 +219,8 @@ export function hitKind(h: AlertHit): TagKind | null {
       // the rule fires on NAM arriving on Osmosis (its ibc_in): a crossing to Osmosis, the same words as Activity's
       return 'toOsmosis';
     case 'unshield':
+    case 'exit_bridge':
+      // a send over the bridge the shielded set paid for: drawn as a move out of it, as its first step was
       return 'shieldOut';
     case 'bond':
       return 'staked';
@@ -232,5 +234,5 @@ export function hitKind(h: AlertHit): TagKind | null {
 }
 
 /** The page a rewind to an alert opens on: the one that shows that kind of move first. */
-export const hitPage = (h: AlertHit): string => (h.ruleId === 'unshield' ? '/shielded' : h.ruleId === 'big_swap' ? '/activity' : '/supply');
+export const hitPage = (h: AlertHit): string => (h.ruleId === 'unshield' || h.ruleId === 'exit_bridge' ? '/shielded' : h.ruleId === 'big_swap' ? '/activity' : '/supply');
 

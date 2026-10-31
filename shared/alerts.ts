@@ -52,6 +52,7 @@ export interface AlertThresholds {
   bigSwap: number;
   unshield: number;
   bond: number;
+  exitBridge: number;
 }
 
 /** Defaults in NAM. Small on purpose: NAM trades in thin pools, so these sizes already move the price. */
@@ -61,6 +62,9 @@ export const DEFAULT_THRESHOLDS: AlertThresholds = {
   bigSwap: 10_000,
   unshield: 50_000,
   bond: 1_000_000,
+  // the seller traced on 2026-10-29 sent 434,000 to 1,500,000 NAM so; the next largest send over channel-1 in October
+  // was 16,657 NAM (/api/flows?kind=ibc_out&chain=namada, read 2026-10-29)
+  exitBridge: 100_000,
 };
 
 interface Rule {
@@ -141,7 +145,32 @@ const RULES: Rule[] = [
         ? { title: `${fmt(f.amount)} NAM staked`, detail: `by ${from(f)}`, address: f.from }
         : null,
   },
+  {
+    id: 'exit_bridge',
+    title: 'Shielded NAM sent to Osmosis',
+    decision: 'D5',
+    key: 'exitBridge',
+    condition: (t) => `${fmt(t)} NAM or more sent to Osmosis by the shielded set itself, or by an address that had at least half of it from the shielded set in the hour before`,
+    // the Namada scan stamps the send (worker/src/exit-bridge.ts): its sender had at least half of it unshielded to it in the hour before, or the shielded pool sent it itself
+    test: (f, t) => {
+      const s = f.chain === 'namada' && f.kind === 'ibc_out' && f.amount >= t ? fromShieldedOf(f) : null;
+      if (!s) return null;
+      const mins = Math.max(1, Math.round((f.ts - s.lastAt) / 60_000));
+      return {
+        title: `${fmt(f.amount)} NAM sent to Osmosis from the shielded set`,
+        detail: s.direct ? `straight from the shielded set, to ${to(f)}` : `${fmt(s.nam)} NAM left the shielded set to ${from(f)} ${s.unshields === 1 ? '' : `in ${s.unshields} unshields, the last `}${s.lastAt === f.ts ? 'in the same block' : `${mins} min before`}; it then sent ${fmt(f.amount)} NAM to ${to(f)}`,
+        address: f.from,
+      };
+    },
+  },
 ];
+
+/** A send's shielded source as the Namada scan stamped it (meta.fromShielded, worker/src/exit-bridge.ts), or null. */
+export function fromShieldedOf(f: Pick<Flow, 'meta'>): { nam: number; firstAt: number; lastAt: number; unshields: number; direct?: true } | null {
+  const s = (f.meta as Record<string, unknown> | null | undefined)?.fromShielded as Record<string, unknown> | undefined;
+  if (!s || typeof s !== 'object' || typeof s.nam !== 'number' || typeof s.lastAt !== 'number' || typeof s.firstAt !== 'number' || typeof s.unshields !== 'number') return null;
+  return { nam: s.nam, firstAt: s.firstAt, lastAt: s.lastAt, unshields: s.unshields, ...(s.direct === true ? { direct: true as const } : {}) };
+}
 
 /**
  * Swap rows written from this time on carry the USDC of every leg of the trade, and 'USDC' only for real USDC

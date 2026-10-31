@@ -11,8 +11,9 @@
  *   - Code/ExtraData section hash = sha256(variant ‖ salt ‖ H ‖ tag) where H is the 32-byte wasm/memo hash
  *     (Commitment::Hash as-is, Commitment::Id(bytes) collapsed to sha256(bytes)); the Commitment tag byte is
  *     not hashed. Commitments reference these hashes.
- *   - Address (borsh) = enum tag + 20-byte hash: 0 Established, 1 Implicit, 2 Internal. The bech32m `tnam`
- *     raw form uses a different discriminant byte: 0 Implicit, 1 Established, 2 PoS, … (see rawDiscriminant).
+ *   - Address (borsh) = enum tag + 20-byte hash: 0 Established, 1 Implicit, 2 Internal (then the internal variant
+ *     and, for IbcToken, Erc20 and Nut, 20 bytes). The bech32m `tnam` raw form uses a different discriminant byte:
+ *     0 Implicit, 1 Established, 2 PoS, … (see INTERNAL_ADDRESSES).
  *   - Unbond = Bond = { validator: Address, amount: Uint (4 × u64 LE), source: Option<Address> }
  *
  * Anything this decoder does not understand is reported as undecodable, never guessed.
@@ -74,30 +75,53 @@ class Reader {
 
 const H = (b: Uint8Array) => hex.encode(sha256(b)).toUpperCase();
 
-/** borsh Address enum tag -> bech32m raw discriminant (namada_core::address::raw::Discriminant) */
-function rawDiscriminant(tag: number, internalVariant: number | null): number {
-  if (tag === 0) return 1; // Established
-  if (tag === 1) return 0; // Implicit
-  if (tag === 2 && internalVariant === 0) return 2; // Internal::PoS
-  throw new Error(`unsupported address variant ${tag}/${internalVariant}`);
-}
+/**
+ * borsh `InternalAddress` variant -> its bech32m raw discriminant and whether it carries 20 bytes of data, in the
+ * enum's declaration order (namada crates/core/src/address.rs `InternalAddress`, raw.rs `Discriminant`, read on
+ * 2026-10-30): a variant without data has 20 zero bytes in its raw form. IbcToken is the one a fee paid in an IBC
+ * coin names (block 8,478,630 on 2026-10-30: a withdrawal whose wrapper paid its fee in OSMO over channel-1,
+ * tnam1p5z8ruwyu7ha8urhq2l0dhpk2f5dv3ts7uyf2n75).
+ */
+export const INTERNAL_ADDRESSES: readonly { name: string; raw: number; data: boolean }[] = [
+  { name: 'PoS', raw: 2, data: false },
+  { name: 'PosSlashPool', raw: 3, data: false },
+  { name: 'Parameters', raw: 4, data: false },
+  { name: 'Ibc', raw: 6, data: false },
+  { name: 'IbcToken', raw: 13, data: true },
+  { name: 'Governance', raw: 5, data: false },
+  { name: 'EthBridge', raw: 7, data: false },
+  { name: 'EthBridgePool', raw: 8, data: false },
+  { name: 'Erc20', raw: 11, data: true },
+  { name: 'Nut', raw: 12, data: true },
+  { name: 'Multitoken', raw: 9, data: false },
+  { name: 'Pgf', raw: 10, data: false },
+  { name: 'Masp', raw: 14, data: false },
+  { name: 'ReplayProtection', raw: 16, data: false },
+  { name: 'TempStorage', raw: 15, data: false },
+];
 
-/** Decode a borsh `Address`. Only Established, Implicit and Internal::PoS are supported (the only ones that can appear in PoS txs). */
+/** Decode a borsh `Address`: Established, Implicit, or any internal address (a variant past the list is undecodable, never guessed). */
 export function readAddress(r: Reader): string {
   const tag = r.u8();
-  let variant: number | null = null;
-  let hash: Uint8Array;
-  if (tag === 2) {
-    variant = r.u8();
-    if (variant !== 0) throw new Error(`unsupported internal address variant ${variant}`);
-    hash = new Uint8Array(20);
-  } else {
-    hash = r.bytes(20);
-  }
   const raw = new Uint8Array(21);
-  raw[0] = rawDiscriminant(tag, variant);
-  raw.set(hash, 1);
+  if (tag === 0) { raw[0] = 1; raw.set(r.bytes(20), 1); } // Established
+  else if (tag === 1) { raw[0] = 0; raw.set(r.bytes(20), 1); } // Implicit
+  else if (tag === 2) {
+    const variant = r.u8();
+    const v = INTERNAL_ADDRESSES[variant];
+    if (!v) throw new Error(`unsupported internal address variant ${variant}`);
+    raw[0] = v.raw;
+    if (v.data) raw.set(r.bytes(20), 1);
+  } else throw new Error(`unsupported address variant ${tag}`);
   return bech32m.encode('tnam', bech32m.toWords(raw), 100);
+}
+
+/** A borsh `Address` read from its bytes alone (every byte read), as readAddress reads one inside a transaction. */
+export function addressFromBorsh(bytes: Uint8Array): string {
+  const r = new Reader(bytes);
+  const a = readAddress(r);
+  if (r.left) throw new Error(`${r.left} bytes after the address`);
+  return a;
 }
 
 /**

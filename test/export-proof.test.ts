@@ -26,7 +26,8 @@ describe('export-proof', () => {
     expect(r.rows.length).toBe(r.events);
     expect(r.flagged).toBeLessThanOrEqual(r.priceMoves);
     expect(r.windowH).toBe(48);
-    expect(r.thresholds).toEqual({ ibcInventory: 25000, unlock: 100000, bigSwap: 10000, unshield: 50000, bond: 1000000 });
+    // the report regenerated on 2026-10-30 carries the sixth rule's size (a shielded exit sent over the bridge)
+    expect(r.thresholds).toEqual({ ibcInventory: 25000, unlock: 100000, bigSwap: 10000, unshield: 50000, bond: 1000000, exitBridge: 100000 });
     if (r.leadRangeH) expect(r.leadRangeH[0]).toBeLessThanOrEqual(r.medianLeadH!);
   });
 

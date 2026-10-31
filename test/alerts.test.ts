@@ -12,9 +12,10 @@ describe('alert rules in plain words (W9)', () => {
   it('keeps ids, thresholds and decisions; titles are the brief\'s names', () => {
     const rules = alertRules();
     expect(rules.map((r) => [r.id, r.thresholdNam, r.decision])).toEqual([
-      ['ibc_inventory', 25000, 'D2'], ['unlock', 100000, 'D3'], ['big_swap', 10000, 'D4'], ['unshield', 50000, 'D5'], ['bond', 1000000, 'D3'],
+      ['ibc_inventory', 25000, 'D2'], ['unlock', 100000, 'D3'], ['big_swap', 10000, 'D4'], ['unshield', 50000, 'D5'], ['bond', 1000000, 'D3'], ['exit_bridge', 100000, 'D5'],
     ]);
-    expect(rules.map((r) => r.title)).toEqual(['NAM bridged to Osmosis', 'NAM unstaked', 'Large trade', 'NAM left the shielded set', 'Large amount staked']);
+    // the sixth rule, a shielded exit sent over the bridge (2026-10-30, after the seller traced on 2026-10-29)
+    expect(rules.map((r) => r.title)).toEqual(['NAM bridged to Osmosis', 'NAM unstaked', 'Large trade', 'NAM left the shielded set', 'Large amount staked', 'Shielded NAM sent to Osmosis']);
     expect(rules.find((r) => r.id === 'unshield')!.condition).toBe('50,000 NAM or more moved out of the shielded set to a personal address');
     for (const r of rules) {
       expect(r.title, r.id).not.toMatch(BANNED);

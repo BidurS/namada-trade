@@ -1,4 +1,4 @@
-// The five alert rules as the Alerts and Settings screens show them (S6).
+// The six alert rules as the Alerts and Settings screens show them (S6; the sixth, a shielded exit sent over the bridge, from 2026-10-30).
 //
 // Sizes come from the server (/api/alerts/rules, `thresholdNam`): a number is never typed here (N2).
 // Titles and conditions are the plain words of shared/alerts.ts (W9), built for the server's sizes,
@@ -16,6 +16,7 @@ const KEY: Record<string, keyof AlertThresholds> = {
   big_swap: 'bigSwap',
   unshield: 'unshield',
   bond: 'bond',
+  exit_bridge: 'exitBridge',
 };
 
 /** The flow tag a rule is drawn with (plain word and hue from lib/kinds). */
@@ -25,6 +26,7 @@ export const RULE_KIND: Record<string, TagKind> = {
   big_swap: 'sell',
   unshield: 'shieldOut',
   bond: 'staked',
+  exit_bridge: 'shieldOut',
 };
 
 export interface RuleView {
@@ -38,7 +40,7 @@ export interface RuleView {
   kind: TagKind;
 }
 
-const blank = (): AlertThresholds => ({ ibcInventory: NaN, unlock: NaN, bigSwap: NaN, unshield: NaN, bond: NaN });
+const blank = (): AlertThresholds => ({ ibcInventory: NaN, unlock: NaN, bigSwap: NaN, unshield: NaN, bond: NaN, exitBridge: NaN });
 
 /** Plain words for the server's rule list, in the server's order; unknown ids keep the server's words. */
 export function plainRules(api: AlertRuleInfo[]): RuleView[] {

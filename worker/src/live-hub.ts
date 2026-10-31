@@ -1,3 +1,4 @@
+import { priorUnshields, sendsToStamp, stampShieldedExits } from './exit-bridge';
 import { DurableObject } from 'cloudflare:workers';
 import type { Env } from './util';
 import type { LiveMessage, Flow } from '../../shared/types';
@@ -108,6 +109,15 @@ const LEGS_RETRY_EACH = 20;
 /** How often the stream state is written to kv (osmosis.live) and the catch-up search runs. */
 export const OSMOSIS_LIVE_EVERY_MS = 60_000;
 export const OSMOSIS_SWEEP_EVERY_MS = 5 * 60_000;
+/**
+ * A move the catch-up search found is one the open socket should have delivered when the socket opened at least this
+ * long before the move's block and the block is this old now: the stream gives a transaction within seconds of its
+ * block, so a move younger than that may still be on its way, and one just after a reconnect may have come in the gap.
+ */
+export const OSMOSIS_DEAF_GRACE_MS = 2 * 60_000;
+/** The move's time when the open socket (open since `since`) should have delivered it and did not; null otherwise. */
+export const osmoDeafAt = (since: number | null, open: boolean, ts: number, now: number): number | null =>
+  open && since != null && ts - since >= OSMOSIS_DEAF_GRACE_MS && now - ts >= OSMOSIS_DEAF_GRACE_MS ? ts : null;
 /**
  * Pages of 50 per query and sweep, newest first (the search cannot take a height range on the public node). A query
  * with more than these above the cursor is read on by the next search from where this one stopped (OsmosisResume).
@@ -398,6 +408,10 @@ export class LiveHub extends DurableObject<Env> {
   private lastAgreedSaved = 0;
   private osmoSince: number | null = null;
   private osmoLastMsgAt: number | null = null;
+  /** Why the hub closed an open Osmosis socket since it started: a node's error message, or the catch-up search finding a move the open socket never delivered (reported in kv osmosis.live). */
+  private osmoDrops = { error: 0, deaf: 0, lastAt: null as number | null, closes: 0, lastClose: null as { code: number; reason: string; openMs: number; at: number } | null };
+  /** When this hub instance started: a later time in kv osmosis.live than the one before is a restart (its socket and its counts begin again). */
+  private readonly bornAt = Date.now();
   private lastLiveReport = 0;
   private lastSweep = 0;
   /** When the alarm last looked at the cron's last completed tick (ops.ts watchCronStall). */
@@ -547,13 +561,38 @@ export class LiveHub extends DurableObject<Env> {
       const at = Date.now();
       try {
         const msg = JSON.parse(event.data as string);
+        // A node that ends a subscription says so in a message with an error (CometBFT: "subscription was cancelled
+        // (reason: client is not pulling messages fast enough)") and keeps the socket open, which then delivers
+        // nothing for that query while the hub reads it as connected. Any error is taken as a lost subscription: the
+        // socket is closed, so the close handler reconnects in 5 s and the next alarm's catch-up search reads the gap.
+        if (msg && typeof msg === 'object' && 'error' in msg && msg.error) {
+          const words = redact(JSON.stringify(msg.error)).slice(0, 200);
+          // Only a cancelled subscription closes the socket: an error a node keeps giving to one subscribe (a lower
+          // subscription limit, a query it refuses) would close it every 5 s for good, while the other queries work.
+          if (/subscription was cancel/i.test(words)) {
+            console.error(`Osmosis WS subscription cancelled, reconnecting: ${words}`);
+            this.osmoDrops.error++;
+            this.osmoDrops.lastAt = Date.now();
+            this.dropOsmosisWs(ws);
+          } else console.error(`Osmosis WS error message: ${words}`);
+          return;
+        }
         await this.handleOsmosisMessage(msg, at);
       } catch (e) {
         console.error('Error handling Osmosis WS message:', e);
       }
     });
 
-    ws.addEventListener('close', () => {
+    const openedAt = Date.now();
+    ws.addEventListener('close', (ev: CloseEvent) => {
+      // a socket the hub already let go (dropOsmosisWs) closing late: the new one is not touched
+      if (this.osmoWs !== ws) return;
+      // Why it closed, kept with the drops (kv osmosis.live): on 2026-10-30 the hub opened a new socket about once a
+      // minute with nothing saying why, which is where the stream's missed moves come from (8% of a day's moves).
+      const code = Number(ev?.code ?? 0), reason = String(ev?.reason ?? '').slice(0, 80), openMs = Date.now() - openedAt;
+      console.log(`Osmosis WS closed: code ${code}${reason ? ` (${reason})` : ''}, open ${Math.round(openMs / 1000)} s`);
+      this.osmoDrops.closes++;
+      this.osmoDrops.lastClose = { code, reason, openMs, at: Date.now() };
       this.osmoWs = null;
       this.isConnectingOsmo = false;
       this.osmoSince = null;
@@ -585,6 +624,20 @@ export class LiveHub extends DurableObject<Env> {
     });
 
     this.broadcastStatus();
+  }
+
+  /**
+   * Lets go of an Osmosis socket the hub found deaf or cancelled: it is no longer the hub's socket from this moment
+   * (so a runtime that fires `close` only once the node answers, or never, cannot hold the reconnect), the next alarm's
+   * catch-up search reads the gap, and a new socket opens in 5 s.
+   */
+  private dropOsmosisWs(ws: WebSocket) {
+    if (this.osmoWs !== ws) return;
+    this.osmoWs = null;
+    this.osmoSince = null;
+    this.needSweep = true;
+    try { ws.close(); } catch {}
+    setTimeout(() => this.ensureOsmosisWs(), 5000);
   }
 
   /** One stream message, `at` the time it came: a move's time is when the stream gave it (normFromWs). */
@@ -1075,7 +1128,7 @@ export class LiveHub extends DurableObject<Env> {
       const t = Date.now();
       if (t - this.lastLiveReport >= OSMOSIS_LIVE_EVERY_MS) {
         this.lastLiveReport = t;
-        await kvSet(this.env.DB, 'osmosis.live', { connected: !!this.osmoWs, since: this.osmoSince, lastMsgAt: this.osmoLastMsgAt, height: this.osmoHeight || null }).catch(() => {});
+        await kvSet(this.env.DB, 'osmosis.live', { connected: !!this.osmoWs, since: this.osmoSince, lastMsgAt: this.osmoLastMsgAt, height: this.osmoHeight || null, drops: this.osmoDrops, hubSince: this.bornAt }).catch(() => {});
       }
       // The hour's count of open sockets, and the hours ended written once each.
       await this.noteSockets(t).catch((e) => console.error('live sockets: the hour\'s count was not written:', e));
@@ -1296,6 +1349,14 @@ export class LiveHub extends DurableObject<Env> {
             if (now - blk.ts > LATE_SCAN_MS) for (const f of parsed.flows) f.meta = { ...(f.meta ?? {}), via: 'late scan' };
             // Priced at a quote that was a route's spot: the moves say which route (price-how.ts stampPriceRoute).
             stampPriceRoute(parsed.flows, route);
+            // A send over the bridge whose NAM had just left the shielded pool says so (exit-bridge.ts): one read of the
+            // senders' unshields, only for a block with a send. A read that fails leaves the sends unstamped, never the
+            // block unwritten: the stamp is what one alert rule reads, not a figure.
+            const sends = sendsToStamp(parsed.flows);
+            if (sends.length) {
+              const prior = await priorUnshields(this.env.DB, sends).catch((e) => { console.error(`Namada block ${h}: the senders' unshields could not be read, the sends are left unstamped:`, e); return null; });
+              if (prior) stampShieldedExits(parsed.flows, prior);
+            }
             // Each link right before its own flow (db.ts stmt.linkOnce: counted only while that flow is not stored),
             // the pairs first, so runBatch's batches of 80 never part a link from its flow: a block read again (a
             // cursor moved back) or written again after a failed batch counts each link once.
@@ -1423,6 +1484,8 @@ export class LiveHub extends DurableObject<Env> {
   }
 
   private async sweepOsmosisWith(signal: AbortSignal | undefined, prev: OsmosisCursor | null, alerts: AlertBudget) {
+    // the time of the first move this search wrote that the socket, open since before it, should have delivered
+    let deafAt: number | null = null;
     const rpcs = [{ provider: 'publicnode', url: OSMOSIS.publicRpc }, ...(this.env.KEPLR_KEY ? [{ provider: 'keplr', url: OSMOSIS.keplrRpc }] : [])];
     // Keplr's key travels in a header, never in the URL an error message carries.
     const initOf = (provider: string): RequestInit | undefined => (provider === 'keplr' ? { headers: keplrHeaders(this.env.KEPLR_KEY) } : undefined);
@@ -1762,6 +1825,8 @@ export class LiveHub extends DurableObject<Env> {
           throw e;
         }
         added += parsed.flows.length;
+        // a transaction the stream did deliver, whose write failed (osmoRetryTx), is not one the socket missed
+        if (parsed.flows.length && !this.osmoRetryTx.has(hash)) deafAt ??= osmoDeafAt(this.osmoSince, this.osmoWs != null, times.get(h)!, Date.now());
       }
       this.seenOsmoTx.add(hash);
       this.osmoRetryTx.delete(hash);
@@ -1770,6 +1835,14 @@ export class LiveHub extends DurableObject<Env> {
       // it is older than LATE_ALERT_MAX_AGE_MS, so a long outage does not flood the channels with old news.
       const recent = parsed.flows.filter((f) => Date.now() - f.ts <= LATE_ALERT_MAX_AGE_MS);
       if (recent.length) await this.alertFlows(recent, undefined, undefined, alerts).catch((e) => console.error('late alert:', e));
+    }
+    // A move the open socket should have delivered and did not: the socket is deaf (a subscription the node ended
+    // without a message the hub could read). It is closed, so the close handler opens a new one with every query.
+    if (deafAt != null && this.osmoWs) {
+      console.error(`Osmosis WS deaf: the catch-up search wrote a move of ${new Date(deafAt).toISOString()} the socket, open since ${new Date(this.osmoSince ?? 0).toISOString()}, did not deliver; reconnecting`);
+      this.osmoDrops.deaf++;
+      this.osmoDrops.lastAt = Date.now();
+      this.dropOsmosisWs(this.osmoWs);
     }
     if (head > this.osmoHeight) this.osmoHeight = head;
     if (complete && this.osmoRetryGen === retryGen) {

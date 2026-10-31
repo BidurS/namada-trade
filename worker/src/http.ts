@@ -8,7 +8,7 @@ import { QUOTE_NAM_MIN, QUOTE_NAM_MAX, roundQuoteNam, HEAT_DAYS, CHANGES_LIMIT_M
 
 export const CACHEABLE_API = /^\/api\/(overview|pools|pressure|blindspot|orderflow|flows|holders|search|metrics\/history|quote\/curve|alerts\/rules|alerts\/recent|intel|series|series\/changes|series\/volume|series\/pairs|series\/trades|series\/values|depth|depth\/quote|depth\/history|depth\/heat|depth\/owners|depth\/changes|integrity|donation|health)$/;
 
-const THRESHOLDS = ['ibcInventory', 'unlock', 'bigSwap', 'unshield', 'bond'];
+const THRESHOLDS = ['ibcInventory', 'unlock', 'bigSwap', 'unshield', 'bond', 'exitBridge'];
 /**
  * The query parameters each cacheable route reads (worker/src/api.ts, flows-query.ts). The edge copy is keyed on
  * these only, sorted, so `?r=<random>` cannot get past the cache; a parameter a route reads MUST be listed here,
