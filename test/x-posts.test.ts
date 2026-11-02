@@ -246,7 +246,9 @@ describe('posting', () => {
   });
 
   it('each kind stops at its share of the day, the recap\'s share is its own, and the shares start again the next day', async () => {
-    expect(X_SHARES.move + X_SHARES.ibc + X_SHARES.gov + X_SHARES.recap).toBe(X_DAILY_MAX);
+    // the hours' liquidity adds have their own two from 2026-11-01, the day's posts 17
+    expect(X_SHARES.move + X_SHARES.ibc + X_SHARES.lp + X_SHARES.gov + X_SHARES.recap).toBe(X_DAILY_MAX);
+    expect(X_DAILY_MAX).toBe(17);
     expect(X_SHARES.recap).toBe(1);
     const db = testD1();
     const s = x();
@@ -255,8 +257,11 @@ describe('posting', () => {
     // the crossings' share is their own: the moves spent theirs, the crossings still post, to their own share
     for (let i = 0; i < X_SHARES.ibc + 2; i++) await postOnce(env(db), `alert:x:ibc:test:${i}`, 'ibc', () => `crossing ${i}`, `crossing ${i}`);
     expect(s.posts).toHaveLength(X_SHARES.move + X_SHARES.ibc);
+    // the liquidity adds' share is their own too (2026-11-01)
+    for (let i = 0; i < X_SHARES.lp + 2; i++) await postOnce(env(db), `alert:x:lp:test:${i}`, 'lp', () => `liquidity ${i}`, `liquidity ${i}`);
+    expect(s.posts).toHaveLength(X_SHARES.move + X_SHARES.ibc + X_SHARES.lp);
     for (let i = 0; i < X_SHARES.gov + 2; i++) await postOnce(env(db), `alert:x:gov:test:${i}`, 'gov', () => `gov ${i}`, `gov ${i}`);
-    expect(s.posts).toHaveLength(X_SHARES.move + X_SHARES.ibc + X_SHARES.gov);
+    expect(s.posts).toHaveLength(X_SHARES.move + X_SHARES.ibc + X_SHARES.lp + X_SHARES.gov);
     // the moves, the crossings and the proposals spent theirs: the recap still has its place
     t = Date.UTC(2026, 9, 29, X_RECAP_HOUR_UTC, 1);
     await postRecapOnX(env(db), async () => ({ generatedAt: t, price: { usd: { value: 0.001 } } }), t, async () => null);

@@ -603,22 +603,27 @@ export function parseOsmosisTx(tx: NormTx, ctx: OsmoCtx): OsmoParsed {
     return null;
   };
   let lpAdd = 0, lpRemove = 0;
-  const lpPools = new Set<string>();
+  // each side's own pools: a transaction that takes out of one pool and puts into another names each where it went
+  const addPools = new Set<string>(), removePools = new Set<string>();
   const addLegs: (typeof namTransfers)[number][] = [], removeLegs: (typeof namTransfers)[number][] = [];
   for (const t of namTransfers) {
     if (theSwaps(t)) continue;
     const toPool = ctx.poolAddrs.get(t.to);
     const fromPool = ctx.poolAddrs.get(t.from);
-    if (toPool) { lpAdd += t.amount; lpPools.add(toPool); addLegs.push(t); continue; }
-    if (fromPool) { lpRemove += t.amount; lpPools.add(fromPool); removeLegs.push(t); continue; }
+    if (toPool) { lpAdd += t.amount; addPools.add(toPool); addLegs.push(t); continue; }
+    if (fromPool) { lpRemove += t.amount; removePools.add(fromPool); removeLegs.push(t); continue; }
     // The transfer module's legs are the bridge's (ibc_in / ibc_out / refund rows above), not transfers.
     if (t.from === OSMOSIS.transferModule || t.to === OSMOSIS.transferModule) continue;
     const extra = { ...alsoCoins([t]), ...(rewardOf(t) ?? {}) };
     out.flows.push(flow(tx, `xfer:${t.idx}`, 'transfer', t.from, t.to, t.amount, ctx.priceUsd, Object.keys(extra).length ? extra : null));
   }
-  const lpMeta = (legs: typeof addLegs) => { const m = alsoCoins(legs); return Object.keys(m).length ? m : null; };
-  if (lpAdd > 0) out.flows.push({ ...flow(tx, 'lp_add', 'lp_add', signer, null, lpAdd, ctx.priceUsd, lpMeta(addLegs)), poolId: [...lpPools].join(',') });
-  if (lpRemove > 0) out.flows.push({ ...flow(tx, 'lp_remove', 'lp_remove', null, signer, lpRemove, ctx.priceUsd, lpMeta(removeLegs)), poolId: [...lpPools].join(',') });
+  // A transaction that both takes out and puts in (a position moved to a new range, or from one pool to another) is a
+  // rebalance: both rows say so (meta.lpRebalance), so an alert names it once as a move and the hour's liquidity post
+  // never takes it for new liquidity (2026-11-01)
+  const rebalance = lpAdd > 0 && lpRemove > 0;
+  const lpMeta = (legs: typeof addLegs) => { const m = { ...alsoCoins(legs), ...(rebalance ? { lpRebalance: true } : {}) }; return Object.keys(m).length ? m : null; };
+  if (lpAdd > 0) out.flows.push({ ...flow(tx, 'lp_add', 'lp_add', signer, null, lpAdd, ctx.priceUsd, lpMeta(addLegs)), poolId: [...addPools].join(',') });
+  if (lpRemove > 0) out.flows.push({ ...flow(tx, 'lp_remove', 'lp_remove', null, signer, lpRemove, ctx.priceUsd, lpMeta(removeLegs)), poolId: [...removePools].join(',') });
 
   // The packets' memos, receivers and senders are the sender's own text: every flow is kept with them bounded.
   out.flows = out.flows.map(boundFlowText);

@@ -1356,10 +1356,10 @@ export const ALERTS_READ_MAX = 500;
  * hit in [since, to), never a part of [from, to) read as the whole.
  */
 export async function alertsWindow(db: D1Database, from: number, to: number, th: AlertThresholds): Promise<{ hits: AlertHit[]; since: number }> {
-  const minAmt = Math.min(th.ibcInventory, th.unlock, th.bigSwap, th.unshield, th.bond, th.exitBridge);
+  const minAmt = Math.min(th.ibcInventory, th.unlock, th.bigSwap, th.unshield, th.bond, th.exitBridge, th.liquidity);
   const rows = await db
-    .prepare(`${FLOW_SELECT} WHERE f.ts >= ? AND f.ts < ? AND f.amount_num >= ? AND f.kind IN ('ibc_in','withdraw','unbond','buy','sell','unshield','bond','ibc_out') AND (f.kind != 'ibc_out' OR f.meta LIKE '%"fromShielded"%') AND ${NAM_AMOUNT} AND ${NOT_LEGACY_TWIN} ORDER BY f.ts DESC LIMIT ?`)
-    .bind(from, to, minAmt, ALERTS_READ_MAX)
+    .prepare(`${FLOW_SELECT} WHERE f.ts >= ? AND f.ts < ? AND f.amount_num >= ? AND f.kind IN ('ibc_in','withdraw','unbond','buy','sell','unshield','bond','ibc_out','lp_add','lp_remove') AND (f.kind != 'ibc_out' OR f.meta LIKE '%"fromShielded"%') AND (f.kind NOT IN ('lp_add','lp_remove') OR f.amount_num >= ?) AND ${NAM_AMOUNT} AND ${NOT_LEGACY_TWIN} ORDER BY f.ts DESC LIMIT ?`)
+    .bind(from, to, minAmt, th.liquidity, ALERTS_READ_MAX)
     .all<any>();
   let flows = (rows.results || []).map(rowToFlow);
   let since = from;
@@ -1476,7 +1476,8 @@ export async function lastAlertBefore(db: D1Database, to: number, th: AlertThres
     OR (f.chain='osmosis' AND f.kind IN ('buy','sell') AND f.amount_num >= ?)
     OR (f.chain='namada' AND f.kind='unshield' AND f.amount_num >= ?)
     OR (f.chain='namada' AND f.kind='bond' AND f.amount_num >= ?)
-    OR (f.chain='namada' AND f.kind='ibc_out' AND f.amount_num >= ? AND f.meta LIKE '%"fromShielded"%'))`;
+    OR (f.chain='namada' AND f.kind='ibc_out' AND f.amount_num >= ? AND f.meta LIKE '%"fromShielded"%')
+    OR (f.chain='osmosis' AND f.kind IN ('lp_add','lp_remove') AND f.amount_num >= ?))`;
   // The end of the walk: the scan-th entry of flows_ts before `to` (index columns only). None: fewer moves than that,
   // and the walk reaches the oldest.
   const end = (await db.prepare(`SELECT f.ts, f.height, f.id FROM flows f INDEXED BY flows_ts WHERE f.ts < ? ${FLOWS_ORDER} LIMIT 1 OFFSET ?`)
@@ -1492,7 +1493,7 @@ export async function lastAlertBefore(db: D1Database, to: number, th: AlertThres
     const keyParams = after ? [after.ts, after.ts, after.height, after.height, after.id] : [];
     const rows: D1Result<any> = await db
       .prepare(`${flowSelect('INDEXED BY flows_ts')} WHERE f.ts < ? AND ${cond} AND ${NAM_AMOUNT} AND ${NOT_LEGACY_TWIN}${floor}${key} ${FLOWS_ORDER} LIMIT ?`)
-      .bind(to, th.ibcInventory, th.unlock, th.bigSwap, th.unshield, th.bond, th.exitBridge, ...floorParams, ...keyParams, pageSize)
+      .bind(to, th.ibcInventory, th.unlock, th.bigSwap, th.unshield, th.bond, th.exitBridge, th.liquidity, ...floorParams, ...keyParams, pageSize)
       .all<any>();
     const list = rows.results || [];
     const flows = list.map(rowToFlow);

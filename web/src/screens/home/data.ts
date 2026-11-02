@@ -224,6 +224,8 @@ export function hitKind(h: AlertHit): TagKind | null {
       return 'shieldOut';
     case 'bond':
       return 'staked';
+    case 'liquidity':
+      return /taken out/i.test(h.title) ? 'poolRemove' : 'poolAdd';
     case 'unlock':
       return /start/i.test(h.title) ? 'unstaking' : 'unlocked';
     case 'big_swap':
@@ -234,5 +236,5 @@ export function hitKind(h: AlertHit): TagKind | null {
 }
 
 /** The page a rewind to an alert opens on: the one that shows that kind of move first. */
-export const hitPage = (h: AlertHit): string => (h.ruleId === 'unshield' || h.ruleId === 'exit_bridge' ? '/shielded' : h.ruleId === 'big_swap' ? '/activity' : '/supply');
+export const hitPage = (h: AlertHit): string => (h.ruleId === 'unshield' || h.ruleId === 'exit_bridge' ? '/shielded' : h.ruleId === 'big_swap' || h.ruleId === 'liquidity' ? '/activity' : '/supply');
 

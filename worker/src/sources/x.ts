@@ -32,7 +32,7 @@ import { kvSet } from '../db';
 import { holdsNumericHost, safeHttpUrl } from '../../../shared/flow-rules';
 import { alertsOn, claimDiscordAlert, fits, govCard, releaseClaims, type Card, type GovContext } from './discord';
 import { mdToPlain } from './telegram';
-import { claimTaken, hourClaims, hourKey, hourPick, publicRecord, publicTitle, publicValue, publicWho, publicWhy, type HourPart, type PublicHour, type PublicMove } from '../public-posts';
+import { claimTaken, hourClaims, hourKey, hourPick, partsCarried, publicRecord, publicTitle, publicValue, publicWho, publicWhy, type HourPart, type PublicHour, type PublicMove } from '../public-posts';
 import { CHART_MINUTE_BOUND_MS, readChartRows, shapePriceChart, type ChartContext } from '../digest/charts/read';
 import { isNotRead, priceChart, toPng } from '../digest/charts/charts';
 
@@ -41,14 +41,15 @@ export interface XEnv { DB: D1Database; X_API_KEY?: string; X_API_SECRET?: strin
 const POST_URL = 'https://api.x.com/2/tweets';
 /** A call X does not answer within this long is given up. */
 export const X_TIMEOUT_MS = 5000;
-/** The most posts a UTC day, the recap included: about $0.40 a day at most. */
-export const X_DAILY_MAX = 15;
+/** The most posts a UTC day, the recap included: about $0.45 a day at most (15 until 2026-11-01, when the hours' liquidity adds got their own two). */
+export const X_DAILY_MAX = 17;
 /**
  * Each kind of post's share of X_DAILY_MAX, counted apart (`alert:x:day:<date>:<kind>`): the hours' moves (at most one
  * an hour, public-posts.ts), the hours' bridge crossings (HourPart 'ibc': one an hour at most, when the hour's move is
- * no crossing), the proposals, and the recap's one, which nothing else can take.
+ * no crossing), the hours' liquidity adds (HourPart 'lp': one an hour at most, of PUBLIC_LP_NAM_MIN and up, when the
+ * hour's move is not that add), the proposals, and the recap's one, which nothing else can take.
  */
-export const X_SHARES = { move: 9, ibc: 2, gov: 3, recap: 1 } as const;
+export const X_SHARES = { move: 9, ibc: 2, lp: 2, gov: 3, recap: 1 } as const;
 export type XShare = keyof typeof X_SHARES;
 /** A move older than this when offered is not posted. */
 export const X_MAX_AGE_MS = 2 * 3_600_000;
@@ -345,7 +346,7 @@ export function govRecord(p: GovernanceProposal): string {
 const X_HOUR = 'alert:x:hour:';
 /**
  * One part of the closed hour (public-posts.ts publicHour, hourPick), once (`alert:x:hour:<hour>`, the crossing's
- * `alert:x:hour:<hour>:ibc`), while fresh, under that part's share of the day. A quiet part (nothing qualifies) is
+ * `alert:x:hour:<hour>:ibc`, the liquidity add's `alert:x:hour:<hour>:lp`), while fresh, under that part's share of the day. A quiet part (nothing qualifies) is
  * claimed and posts nothing, as is one whose share of the day was spent before; an hour whose moves cannot be read is
  * left for the next tick. A move is posted once (`alert:x:ibc:<crossing>` or `alert:x:flow:<id>`, the keys the live
  * posts used, claimed with the hour's before the post): a crossing's other record, in a later hour, gives way to that
@@ -362,9 +363,9 @@ async function postHourPart(env: XEnv, hour: PublicHour, part: HourPart, now: nu
     if (first === 'wait') return 'skipped';
     if (!first || now - first.move.ts > X_MAX_AGE_MS) { await claimDiscordAlert(env.DB, [key]); return 'quiet'; }
     const pick = first.move;
-    const r = await postOnce(env, hourClaims(X_HOUR, hour, part, pick, posted), part, () => hourText(pick, first.passed, part), `hour ${hour.key}: ${part === 'ibc' ? 'crossing' : 'move'} ${pick.id}`);
-    // a share spent closes the part, and a crossing the move part could not post closes the crossing part too
-    if (r === 'full') await claimDiscordAlert(env.DB, [key, ...(part === 'move' && pick.bridge ? [hourKey(X_HOUR, hour, 'ibc')] : [])]);
+    const r = await postOnce(env, hourClaims(X_HOUR, hour, part, pick, posted), part, () => hourText(pick, first.passed, part), `hour ${hour.key}: ${part === 'ibc' ? 'crossing' : part === 'lp' ? 'liquidity add' : 'move'} ${pick.id}`);
+    // a share spent closes the part, and a crossing or a large liquidity add the move part could not post closes that part too
+    if (r === 'full') await claimDiscordAlert(env.DB, [key, ...(part === 'move' ? partsCarried(X_HOUR, hour, pick) : [])]);
     return r;
   } catch (e) {
     console.error(`x: the hour ${hour.key} (${part}) not posted`, e);
@@ -375,6 +376,8 @@ async function postHourPart(env: XEnv, hour: PublicHour, part: HourPart, now: nu
 export const postHourOnX = (env: XEnv, hour: PublicHour, now = Date.now()) => postHourPart(env, hour, 'move', now);
 /** The cron's tick, after the move: the closed hour's largest bridge crossing, when its move is no crossing (postHourPart). */
 export const postHourCrossingOnX = (env: XEnv, hour: PublicHour, now = Date.now()) => postHourPart(env, hour, 'ibc', now);
+/** The cron's tick, after the move: the closed hour's largest liquidity add of PUBLIC_LP_NAM_MIN and up, when its move is not that add (postHourPart). */
+export const postHourLiquidityOnX = (env: XEnv, hour: PublicHour, now = Date.now()) => postHourPart(env, hour, 'lp', now);
 
 /** A proposal: its card's title (outsider text, xSafe in cardText), its votes and its record in words (govRecord). */
 export const postGovOnX = (env: XEnv, prop: GovernanceProposal, isNew: boolean, g: GovContext = {}) =>

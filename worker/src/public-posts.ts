@@ -6,7 +6,8 @@
 // UTC, before the evening's moves, and a run of them could crowd out the 13:00 UTC recap). Beside it each hour may
 // give its largest bridge crossing (HourPart 'ibc'), under its own small share of X's day (sources/x.ts X_SHARES), when
 // the move it posts is no crossing (hourPick): so a crossing a larger trade outweighs is still heard of, and an hour
-// posts a crossing once at most.
+// posts a crossing once at most. In the same way each hour may give its largest liquidity add of PUBLIC_LP_NAM_MIN and up
+// (HourPart 'lp', owner 2026-11-01: "large liquidity add in twitter post"), when the move it posts is not that add.
 //
 // A move qualifies when the site's own channel hears of it (sources/discord.ts operatorMove: NAM, at or above the
 // chain's whale size, no bot round trip, no rewards claim) and its dollars are known and at least PUBLIC_POST_USD_MIN:
@@ -20,11 +21,11 @@
 // an address. The other public posts must carry some outsider text (a proposal's title, a forum topic's title and its
 // category); plainOutsider keeps it to plain words: no link, no bare domain, no mention, no hidden character.
 import type { Chain, Flow, FlowKind, GovernanceProposal } from '../../shared/types';
-import { INTERNAL_ADDRESSES, isInternal } from '../../shared/alerts';
+import { alsoCoinsText, DEFAULT_THRESHOLDS, INTERNAL_ADDRESSES, isInternal, isLpRebalance } from '../../shared/alerts';
 import { holdsNumericHost, isIbcRefund, priceAtOf, priceHowOf, priceRouteOf, priceSourceWords, type PriceHow } from '../../shared/flow-rules';
 import { CHAIN_WORD, listWords, moveTitle, partiesOf } from '../../shared/flow-words';
 import { bridgeDest } from '../../shared/kinds';
-import { fmtAddr, fmtUsdRule } from '../../shared/format';
+import { fmtAddr, fmtCoinAmount, fmtUsdRule } from '../../shared/format';
 import { settleUsd } from '../../shared/settle';
 import { rowToFlow, safeParseJson, settlePrices } from './analytics';
 import { NAM_AMOUNT, NOT_BOT } from './flows-query';
@@ -38,6 +39,8 @@ const HOUR = 3_600_000;
  * the whale size alone was about $8, the cheapest move anyone could make to be posted (scale plan, Stage 1 item 3).
  */
 export const PUBLIC_POST_USD_MIN = 100;
+/** The least NAM a liquidity add carries for the hour's liquidity part to post it: the alert rule 'liquidity''s default size (shared/alerts.ts). */
+export const PUBLIC_LP_NAM_MIN = DEFAULT_THRESHOLDS.liquidity;
 /**
  * An hour is read no sooner than this after it closed: past one catch-up search (live-hub.ts OSMOSIS_SWEEP_EVERY_MS,
  * 5 min) and a scan the live hub reads late (LATE_SCAN_MS, 5 min), so a move the live feed missed is in the hour it
@@ -84,6 +87,10 @@ export interface PublicMove {
   refund: boolean;
   /** the pools a trade or a pool move went through, digits only */
   pools: string[];
+  /** a pool move's other coins, from the chain's own amounts (meta.alsoCoins: a known symbol and a number only), in words; null for none */
+  alsoCoins: string | null;
+  /** a liquidity row of a transaction that both took out and put in (meta.lpRebalance): never the hour's liquidity add */
+  rebalance: boolean;
   /** the side the move is about, and the other, in words */
   who: string;
   other: string;
@@ -139,12 +146,17 @@ export function publicMoveOf(f: Flow, floors: NamFloors, settle: Flow['settle'] 
     intoShielded: dest === 'namada' && f.to === INTERNAL_ADDRESSES.masp,
     refund: isIbcRefund(f),
     pools,
+    alsoCoins: f.kind === 'lp_add' || f.kind === 'lp_remove' ? alsoCoinsText(f.meta as Record<string, unknown> | null | undefined) : null,
+    rebalance: isLpRebalance(f),
     who: sideWords(first, crossing ? `a sender on ${here} this record does not name` : undefined),
     other: sideWords(second, crossing ? `a receiver on ${there} this record does not name` : undefined),
     person: party.address && !isInternal(party.address) && isRealAddress(party.address) ? party.address : null,
     usd, usdPerNam, basis, ts: f.ts, height: f.height,
   };
 }
+
+/** A liquidity add the hour's liquidity part may post: of PUBLIC_LP_NAM_MIN NAM and up, and new liquidity (no rebalance). */
+export const bigLiquidityAdd = (m: Pick<PublicMove, 'kind' | 'nam' | 'rebalance'>) => m.kind === 'lp_add' && m.nam >= PUBLIC_LP_NAM_MIN && !m.rebalance;
 
 /** Largest dollars first; an equal sum, the earlier move, then the id. */
 const byDollars = (a: PublicMove, b: PublicMove) => b.usd - a.usd || a.ts - b.ts || (a.id < b.id ? -1 : a.id > b.id ? 1 : 0);
@@ -166,10 +178,11 @@ export async function hourMoves(db: D1Database, start: number, end: number, floo
 }
 
 /**
- * The two posts an hour may give: its move (the largest of all its moves) and its crossing (the largest of its bridge
+ * The three posts an hour may give: its move (the largest of all its moves), its liquidity add (the largest new liquidity of
+ * PUBLIC_LP_NAM_MIN and up, when the move is not that add) and its crossing (the largest of its bridge
  * crossings, when the move the hour posts is no crossing: hourPick), each claimed and counted apart.
  */
-export type HourPart = 'move' | 'ibc';
+export type HourPart = 'move' | 'ibc' | 'lp';
 
 /** One closed hour as the public posts take it: its bounds, its key in the claims ("2026-10-29T09"), and its moves, read once whoever asks first. */
 export interface PublicHour { start: number; end: number; key: string; moves: () => Promise<PublicMove[]> }
@@ -250,8 +263,8 @@ export async function firstUnposted(db: D1Database, moves: PublicMove[], postedK
   return null;
 }
 
-/** A voice's claim on one part of the hour: `voice` its prefix ("alert:x:hour:"), the crossing part's with ":ibc". */
-export const hourKey = (voice: string, hour: Pick<PublicHour, 'key'>, part: HourPart) => `${voice}${hour.key}${part === 'ibc' ? ':ibc' : ''}`;
+/** A voice's claim on one part of the hour: `voice` its prefix ("alert:x:hour:"), the crossing part's with ":ibc", the liquidity part's with ":lp". */
+export const hourKey = (voice: string, hour: Pick<PublicHour, 'key'>, part: HourPart) => `${voice}${hour.key}${part === 'ibc' ? ':ibc' : part === 'lp' ? ':lp' : ''}`;
 
 /**
  * The move a voice posts for one part of the hour (HourPart), as firstUnposted gives it: for 'move' any of the hour's
@@ -264,7 +277,7 @@ export const hourKey = (voice: string, hour: Pick<PublicHour, 'key'>, part: Hour
 export async function hourPick(db: D1Database, moves: PublicMove[], part: HourPart, postedKey: (m: PublicMove) => string, voice: string, hour: Pick<PublicHour, 'key'>): Promise<{ move: PublicMove; passed: boolean } | null | 'wait'> {
   if (part === 'move') return firstUnposted(db, moves, postedKey);
   if (!(await db.prepare('SELECT 1 x FROM kv WHERE key = ?').bind(hourKey(voice, hour, 'move')).first())) return 'wait';
-  return firstUnposted(db, moves.filter((m) => m.bridge), postedKey);
+  return firstUnposted(db, moves.filter((m) => (part === 'ibc' ? m.bridge : bigLiquidityAdd(m))), postedKey);
 }
 
 /**
@@ -274,7 +287,10 @@ export async function hourPick(db: D1Database, moves: PublicMove[], part: HourPa
  * (hourKey) and the move's own (`postedKey`).
  */
 export const hourClaims = (voice: string, hour: Pick<PublicHour, 'key'>, part: HourPart, pick: PublicMove, postedKey: (m: PublicMove) => string) =>
-  [...(part === 'move' && pick.bridge ? [hourKey(voice, hour, 'ibc')] : []), hourKey(voice, hour, part), postedKey(pick)];
+  [...(part === 'move' ? partsCarried(voice, hour, pick) : []), hourKey(voice, hour, part), postedKey(pick)];
+/** The other parts' hours the move part's pick stands for: a crossing the crossing part's, a large liquidity add the liquidity part's. */
+export const partsCarried = (voice: string, hour: Pick<PublicHour, 'key'>, pick: Pick<PublicMove, 'bridge' | 'kind' | 'nam' | 'rebalance'>) =>
+  [...(pick.bridge ? [hourKey(voice, hour, 'ibc')] : []), ...(bigLiquidityAdd(pick) ? [hourKey(voice, hour, 'lp')] : [])];
 
 // ---------------------------------------------------------------- the words
 
@@ -297,7 +313,7 @@ export function publicWho(m: PublicMove): string {
     case 'shield': return `From ${m.who} into the shielded pool`;
     case 'unshield': return `To ${m.who}, from the shielded pool`;
     case 'withdraw': case 'pgf': return `To ${m.who}`;
-    case 'lp_add': case 'lp_remove': return `By ${m.who}${via ? `, ${via}` : ''}`;
+    case 'lp_add': case 'lp_remove': return `By ${m.who}${via ? `, ${via}` : ''}${m.alsoCoins ? `, with ${m.alsoCoins}` : ''}`;
     default: return m.refund ? `Refunded to ${m.who}: a send to Namada that timed out` : `By ${m.who}`;
   }
 }
@@ -309,6 +325,8 @@ export function publicValue(m: PublicMove): string {
   const trade = m.kind === 'buy' || m.kind === 'sell';
   if (trade && m.basis.how === 'execution') return `At ${each} a NAM, ${usd} in all (${m.basis.source}).`;
   if (trade) return `What it settled at is not on record; at ${each} a NAM (${m.basis.source}) it is worth about ${usd}.`;
+  // a pool move's other coin is named beside it (publicWho): the dollars are its NAM's alone
+  if (m.kind === 'lp_add' || m.kind === 'lp_remove') return `Its NAM worth ${usd} at ${each} a NAM (${m.basis.source}).`;
   return `Worth ${usd} at ${each} a NAM (${m.basis.source}).`;
 }
 
@@ -319,7 +337,7 @@ export function publicValue(m: PublicMove): string {
  * other record, an hour before), so this is the largest left. `part` 'ibc': the largest of the hour's bridge crossings.
  */
 export const publicWhy = (h: Pick<PublicHour, 'end'> | null, passed = false, part: HourPart = 'move') =>
-  `Largest priced ${part === 'ibc' ? 'bridge crossing' : 'move'} of the hour${h ? ` ending ${new Date(h.end).toISOString().slice(11, 16)} UTC` : ''}${passed ? ' not posted already' : ''}${part === 'ibc' ? '' : ', bot round trips and rewards claims left out'}`;
+  `Largest priced ${part === 'ibc' ? 'bridge crossing' : part === 'lp' ? 'liquidity add' : 'move'} of the hour${h ? ` ending ${new Date(h.end).toISOString().slice(11, 16)} UTC` : ''}${passed ? ' not posted already' : ''}${part === 'move' ? ', bot round trips and rewards claims left out' : ''}`;
 
 /** The record it comes from ("Osmosis record, block 73,444,230"). */
 export const publicRecord = (m: PublicMove) =>

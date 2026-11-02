@@ -16,11 +16,11 @@ import { readTo } from './hour-cover';
 import { BANNED } from './banned-words';
 import { rowToFlow } from '../worker/src/analytics';
 import { configureAlerts, moveCard, resetClaimMemory } from '../worker/src/sources/discord';
-import { hourText, postGovOnX, postHourCrossingOnX, postHourOnX, postRecapOnX, xLength, X_RECAP_HOUR_UTC, X_SHARES } from '../worker/src/sources/x';
+import { hourText, postGovOnX, postHourCrossingOnX, postHourLiquidityOnX, postHourOnX, postRecapOnX, xLength, X_RECAP_HOUR_UTC, X_SHARES } from '../worker/src/sources/x';
 import { forumMessage, hourMessage, sendTelegramForum, sendTelegramGov, sendTelegramHour, telegramRun } from '../worker/src/sources/telegram';
 import { saveSettings, defaultPrefs } from '../worker/src/settings';
 import {
-  hourCovered, hourMoves, plainOutsider, publicHour, publicMoveOf, HOUR_MOVES_SQL, HOUR_SETTLE_MS, PUBLIC_HOUR_READ, PUBLIC_POST_USD_MIN, type NamFloors,
+  hourCovered, hourMoves, plainOutsider, publicHour, publicMoveOf, HOUR_MOVES_SQL, HOUR_SETTLE_MS, PUBLIC_HOUR_READ, PUBLIC_LP_NAM_MIN, PUBLIC_POST_USD_MIN, type NamFloors,
 } from '../worker/src/public-posts';
 import type { Flow, ForumPost, GovernanceProposal } from '../shared/types';
 import { TEXT_MAX } from '../worker/src/sources/discord';
@@ -84,6 +84,7 @@ async function tick(db: TestD1, now: number, tg = true) {
   const hour = publicHour(db as any, now, FLOORS);
   const r = await postHourOnX(xEnv(db), hour, now);
   await postHourCrossingOnX(xEnv(db), hour, now);
+  await postHourLiquidityOnX(xEnv(db), hour, now);
   if (tg) await sendTelegramHour(tgEnv(db), hour, telegramRun(10, 10_000));
   return r;
 }
@@ -246,6 +247,47 @@ describe('choosing the hour\'s move', () => {
     expect(kv(db, 'alert:tg:ch:hour:2026-10-29T08')).toBe('1');
   });
 
+  it('a large liquidity add a larger trade outweighs is posted as the hour\'s liquidity add (owner, 2026-11-01): once a voice, with its other coin, under its own share of X\'s day', async () => {
+    const db = indexed();
+    move(db, at(8, 5), { amount_num: 2_000_000, value_usd: 300 });
+    // the add of 200,000 NAM at $0.001 ($200); one just under the size at $0.003 ($299.997), more dollars, never the liquidity add; a removal, a rebalance's add and an add whose other coin the asset map does not know
+    move(db, at(8, 20), { kind: 'lp_add', from_addr: BUYER, amount_num: PUBLIC_LP_NAM_MIN * 2, price_usd: 0.001, value_usd: 200, meta: { priceSource: 'spot', alsoCoins: { USDC: 60.517489 }, alsoCoinsUnknown: { 'factory/osmo1evil/claim-nam.xyz': '5' } } });
+    move(db, at(8, 30), { kind: 'lp_add', from_addr: BUYER, amount_num: PUBLIC_LP_NAM_MIN - 1, price_usd: 0.003, value_usd: 300 });
+    // (the sale stays the hour's move at $300; the removal $240 and the rebalance's add $260 outrank the add of $200 and are still never the liquidity add)
+    move(db, at(8, 31), { kind: 'lp_remove', from_addr: null, to_addr: SELLER, amount_num: PUBLIC_LP_NAM_MIN * 3, price_usd: 0.0008, value_usd: 240 });
+    move(db, at(8, 32), { kind: 'lp_add', from_addr: SELLER, amount_num: PUBLIC_LP_NAM_MIN * 4, price_usd: 0.00065, value_usd: 260, meta: { priceSource: 'spot', lpRebalance: true } });
+    const s = voices();
+    expect(await tick(db, at(9, 10))).toBe('posted');
+    // the sale is the hour's move; the add of 200,000 NAM its liquidity add; the add under the size is never posted
+    expect(s.x).toHaveLength(2);
+    expect(s.x[0]).toMatch(/^2,000,000 \$NAM sold/);
+    expect(s.x[1]).toMatch(/^200,000 \$NAM added to a pool/);
+    expect(s.x[1]).toContain('By osmo16u4xs…v5qmm, pool 3005, with 60.52 USDC. Its NAM worth $200.00 at $0.001000 a NAM (Osmosis quote).');
+    // a coin the asset map does not know never reaches the post
+    expect(s.x.join(' ')).not.toContain('claim-nam');
+    expect(s.x[1]).toContain('Largest priced liquidity add of the hour.');
+    expect(s.tg).toHaveLength(2);
+    expect(kv(db, 'alert:x:hour:2026-10-29T08:lp')).toBe('1');
+    expect(kv(db, 'alert:tg:ch:hour:2026-10-29T08:lp')).toBe('1');
+    // a later tick posts nothing more
+    expect(await tick(db, at(9, 11))).toBe('skipped');
+    expect(s.x).toHaveLength(2);
+  });
+
+  it('an hour whose largest move is itself a large liquidity add posts it once: the move part carries the liquidity part\'s hour', async () => {
+    const db = indexed();
+    move(db, at(8, 20), { kind: 'lp_add', from_addr: BUYER, amount_num: 500_000, price_usd: 0.001, value_usd: 500 });
+    move(db, at(8, 25), { kind: 'lp_add', from_addr: SELLER, amount_num: 150_000, price_usd: 0.001, value_usd: 150 });
+    const s = voices();
+    expect(await tick(db, at(9, 10))).toBe('posted');
+    // the 500,000 NAM add as the hour's move; the liquidity part then has its hour taken and posts no second add
+    expect(s.x).toHaveLength(1);
+    expect(s.x[0]).toMatch(/^500,000 \$NAM added to a pool/);
+    expect(s.x[0]).toContain('Largest priced move of the hour');
+    expect(kv(db, 'alert:x:hour:2026-10-29T08:lp')).toBe('1');
+    expect(s.tg).toHaveLength(1);
+  });
+
   it('a quiet hour posts nothing and spends none of the day\'s moves; the hour is read once', async () => {
     const db = indexed();
     move(db, at(8, 5), { amount_num: 50_000, value_usd: 7.5 });
@@ -253,12 +295,12 @@ describe('choosing the hour\'s move', () => {
     const claims = () => (db.raw.prepare("SELECT COUNT(*) n FROM kv WHERE key LIKE 'alert:%hour:2026-10-29T08%'").get() as { n: number }).n;
     const prepared = db.queries;
     expect(await tick(db, at(9, 10))).toBe('quiet');
-    // each voice's move and crossing parts
-    expect(claims()).toBe(4);
+    // each voice's move, crossing and liquidity parts (the liquidity part from 2026-11-01)
+    expect(claims()).toBe(6);
     const once = db.queries - prepared;
     expect(await tick(db, at(9, 11))).toBe('skipped');
-    // the second tick reads the four claims and nothing of the hour's moves
-    expect(db.queries - prepared - once).toBeLessThanOrEqual(4);
+    // the second tick reads the six claims and nothing of the hour's moves
+    expect(db.queries - prepared - once).toBeLessThanOrEqual(6);
     expect(s.x).toEqual([]);
     expect(s.tg).toEqual([]);
     expect(kv(db, 'alert:x:day:2026-10-29:move')).toBeNull();

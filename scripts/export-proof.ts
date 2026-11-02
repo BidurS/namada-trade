@@ -223,7 +223,7 @@ export interface Proof {
   /** smallest alert size used for the base rate (NAM) */
   minAlertNam: number | null;
   // the replay report's own sizes: a report generated before the sixth rule (2026-10-30) has none for it
-  thresholds: { ibcInventory: number; unlock: number; bigSwap: number; unshield: number; bond: number; exitBridge?: number };
+  thresholds: { ibcInventory: number; unlock: number; bigSwap: number; unshield: number; bond: number; exitBridge?: number; liquidity?: number };
   /** the Rewind example: the largest move out of the staking account and the first alert before it */
   rewindExample: {
     eventId: string;

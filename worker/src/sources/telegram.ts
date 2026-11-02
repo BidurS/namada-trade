@@ -458,7 +458,7 @@ async function claimAll(db: D1Database, keys: string[]): Promise<boolean> {
  */
 export async function sendTelegramHour(env: TelegramEnv, hour: PublicHour, run: TgRun): Promise<void> {
   if (!sendsTelegram(env) || !env.TELEGRAM_CHANNEL) return;
-  for (const part of ['move', 'ibc'] as const) {
+  for (const part of ['move', 'ibc', 'lp'] as const) {
     try {
       const key = hourKey(TG_HOUR, hour, part);
       if ((await claimTaken(env.DB, key)) || !open(run)) continue;
@@ -467,7 +467,7 @@ export async function sendTelegramHour(env: TelegramEnv, hour: PublicHour, run: 
       if (first === 'wait') continue;
       const keys = first ? hourClaims(TG_HOUR, hour, part, first.move, posted) : [key];
       if (!(await claimAll(env.DB, keys)) || !first) continue;
-      await sendPart(env, [{ chat: env.TELEGRAM_CHANNEL, user: false, msg: hourMessage(first.move, hour, first.passed, part) }], keys, `hour ${hour.key}: ${part === 'ibc' ? 'crossing' : 'move'} ${first.move.id} (channel)`, run);
+      await sendPart(env, [{ chat: env.TELEGRAM_CHANNEL, user: false, msg: hourMessage(first.move, hour, first.passed, part) }], keys, `hour ${hour.key}: ${part === 'lp' ? 'liquidity add' : part === 'ibc' ? 'crossing' : 'move'} ${first.move.id} (channel)`, run);
     } catch (e) {
       // the hour's moves not read: its other part would read the same failure
       console.error(`telegram: the hour ${hour.key} (${part}) not sent to the channel`, e);

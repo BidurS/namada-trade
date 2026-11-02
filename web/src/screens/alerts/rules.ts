@@ -1,4 +1,4 @@
-// The six alert rules as the Alerts and Settings screens show them (S6; the sixth, a shielded exit sent over the bridge, from 2026-10-30).
+// The seven alert rules as the Alerts and Settings screens show them (S6; the sixth, a shielded exit sent over the bridge, from 2026-10-30; the seventh, liquidity added or removed, from 2026-11-01).
 //
 // Sizes come from the server (/api/alerts/rules, `thresholdNam`): a number is never typed here (N2).
 // Titles and conditions are the plain words of shared/alerts.ts (W9), built for the server's sizes,
@@ -17,6 +17,7 @@ const KEY: Record<string, keyof AlertThresholds> = {
   unshield: 'unshield',
   bond: 'bond',
   exit_bridge: 'exitBridge',
+  liquidity: 'liquidity',
 };
 
 /** The flow tag a rule is drawn with (plain word and hue from lib/kinds). */
@@ -27,6 +28,7 @@ export const RULE_KIND: Record<string, TagKind> = {
   unshield: 'shieldOut',
   bond: 'staked',
   exit_bridge: 'shieldOut',
+  liquidity: 'poolAdd',
 };
 
 export interface RuleView {
@@ -40,7 +42,7 @@ export interface RuleView {
   kind: TagKind;
 }
 
-const blank = (): AlertThresholds => ({ ibcInventory: NaN, unlock: NaN, bigSwap: NaN, unshield: NaN, bond: NaN, exitBridge: NaN });
+const blank = (): AlertThresholds => ({ ibcInventory: NaN, unlock: NaN, bigSwap: NaN, unshield: NaN, bond: NaN, exitBridge: NaN, liquidity: NaN });
 
 /** Plain words for the server's rule list, in the server's order; unknown ids keep the server's words. */
 export function plainRules(api: AlertRuleInfo[]): RuleView[] {
@@ -66,6 +68,7 @@ export function conditionFor(id: string, size: number): string | null {
 export function hitKind(h: AlertHit): TagKind {
   if (h.ruleId === 'big_swap') return /^bought/i.test(h.title) ? 'buy' : 'sell';
   if (h.ruleId === 'unlock') return /withdr|unlocked/i.test(h.title) ? 'unlocked' : 'unstaking';
+  if (h.ruleId === 'liquidity') return /taken out/i.test(h.title) ? 'poolRemove' : 'poolAdd';
   return RULE_KIND[h.ruleId] ?? 'transfer';
 }
 

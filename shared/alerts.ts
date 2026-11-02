@@ -53,6 +53,7 @@ export interface AlertThresholds {
   unshield: number;
   bond: number;
   exitBridge: number;
+  liquidity: number;
 }
 
 /** Defaults in NAM. Small on purpose: NAM trades in thin pools, so these sizes already move the price. */
@@ -65,6 +66,8 @@ export const DEFAULT_THRESHOLDS: AlertThresholds = {
   // the seller traced on 2026-10-29 sent 434,000 to 1,500,000 NAM so; the next largest send over channel-1 in October
   // was 16,657 NAM (/api/flows?kind=ibc_out&chain=namada, read 2026-10-29)
   exitBridge: 100_000,
+  // the seller traced on 2026-10-29 placed its asks on pool 3005 as liquidity adds of 50,000 to 250,000 NAM; pool 3005 held about 982,000 NAM
+  liquidity: 100_000,
 };
 
 interface Rule {
@@ -163,7 +166,45 @@ const RULES: Rule[] = [
       };
     },
   },
+  {
+    id: 'liquidity',
+    title: 'Liquidity added or removed',
+    decision: 'D4',
+    key: 'liquidity',
+    condition: (t) => `${fmt(t)} NAM or more added to or taken out of a NAM pool on Osmosis in one transaction`,
+    // a position opened or closed, or a weighted pool joined or left (worker/src/parse/osmosis.ts lp_add, lp_remove: the NAM to or from the pools' addresses)
+    // a rebalance (one transaction both taking out and putting in) is named once, on its add, as a move
+    test: (f, t) => {
+      if (f.chain !== 'osmosis' || (f.kind !== 'lp_add' && f.kind !== 'lp_remove') || !(f.amount >= t)) return null;
+      if (isLpRebalance(f)) return f.kind === 'lp_add' ? { title: `${fmt(f.amount)} NAM of liquidity moved into${poolsOf(f)}`, detail: `by ${from(f)}, in one transaction that also took liquidity out${alsoOf(f)}`, address: f.from } : null;
+      return f.kind === 'lp_add'
+        ? { title: `${fmt(f.amount)} NAM added to${poolsOf(f)}`, detail: `by ${from(f)}${alsoOf(f)}`, address: f.from }
+        : { title: `${fmt(f.amount)} NAM taken out of${poolsOf(f)}`, detail: `by ${to(f)}${alsoOf(f)}`, address: f.to };
+    },
+  },
 ];
+
+/** "pool 3005", "pools 3005 and 3368" from a row's pool list (digits only). */
+const poolsOf = (f: Flow) => { const p = (f.poolId ?? '').split(',').map((x) => x.trim()).filter((x) => /^\d{1,10}$/.test(x)); return p.length ? ` ${p.length === 1 ? 'pool' : 'pools'} ${p.join(', ')}` : ' a pool'; };
+/**
+ * A pool move's other coins (meta.alsoCoins, worker/src/parse/osmosis.ts) in words ("60.52 USDC"): a symbol of letters
+ * and digits from the asset map and a finite amount only; a coin the asset map does not know (meta.alsoCoinsUnknown) is
+ * never shown. Null for none. The alert rule and the public posts (worker/src/public-posts.ts) both say it so.
+ */
+/**
+ * shared/format.ts fmtCoinAmount's rule, kept here so this file has no runtime import (scripts/export-proof.ts loads it
+ * under plain Node): two decimals from 1 up ("60.52", "1,668.11"), three significant digits under it ("0.0451").
+ */
+const coinAmount = (n: number): string => (n >= 1 ? n.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 }) : Number(n.toPrecision(3)).toLocaleString('en-US', { maximumFractionDigits: 20 }));
+export function alsoCoinsText(meta: Record<string, unknown> | null | undefined): string | null {
+  const c = meta?.alsoCoins;
+  if (!c || typeof c !== 'object') return null;
+  const parts = Object.entries(c as Record<string, unknown>).filter(([s, v]) => /^[A-Za-z][A-Za-z0-9.]{0,11}$/.test(s) && typeof v === 'number' && Number.isFinite(v) && v > 0).map(([s, v]) => `${coinAmount(v as number)} ${s}`);
+  return parts.length ? parts.join(' and ') : null;
+}
+const alsoOf = (f: Flow) => { const t = alsoCoinsText(f.meta as Record<string, unknown> | null | undefined); return t ? `, with ${t}` : ''; };
+/** A transaction that both took liquidity out and put it in (meta.lpRebalance): a position moved, not new liquidity. */
+export const isLpRebalance = (f: Pick<Flow, 'meta'>) => (f.meta as Record<string, unknown> | null | undefined)?.lpRebalance === true;
 
 /** A send's shielded source as the Namada scan stamped it (meta.fromShielded, worker/src/exit-bridge.ts), or null. */
 export function fromShieldedOf(f: Pick<Flow, 'meta'>): { nam: number; firstAt: number; lastAt: number; unshields: number; direct?: true } | null {

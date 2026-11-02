@@ -24,7 +24,7 @@ export interface Proof {
   /** smallest alert size used for the base rate (NAM) */
   minAlertNam: number | null;
   // the replay report's own sizes: a report generated before the sixth rule (2026-10-30) has none for it
-  thresholds: { ibcInventory: number; unlock: number; bigSwap: number; unshield: number; bond: number; exitBridge?: number };
+  thresholds: { ibcInventory: number; unlock: number; bigSwap: number; unshield: number; bond: number; exitBridge?: number; liquidity?: number };
   /** the Rewind example: the largest move out of the staking account and the first alert before it */
   rewindExample: {
     eventId: string;
@@ -44,8 +44,8 @@ export interface Proof {
 }
 
 export const PROOF: Proof = {
-  "reportDate": "2026-10-30",
-  "reportGeneratedAt": 1793404500000,
+  "reportDate": "2026-11-02",
+  "reportGeneratedAt": 1793589060000,
   "marketEventsTested": 22,
   "pricePoints": 104,
   "priceMovesFlagged": 10,
@@ -64,7 +64,8 @@ export const PROOF: Proof = {
     "bigSwap": 10000,
     "unshield": 50000,
     "bond": 1000000,
-    "exitBridge": 100000
+    "exitBridge": 100000,
+    "liquidity": 100000
   },
   "rewindExample": {
     "eventId": "whale_namada:6C1989767A6939F9A",

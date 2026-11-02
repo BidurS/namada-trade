@@ -35,6 +35,8 @@ describe('the rules, the watchlist, the forum switch and quiet hours, as saved',
       'Large amount staked: 1,000,000 NAM or more staked in one transaction',
       // the sixth rule, from 2026-10-30: on by default for a new subscriber
       'Shielded NAM sent to Osmosis: 100,000 NAM or more sent to Osmosis by the shielded set itself, or by an address that had at least half of it from the shielded set in the hour before',
+      // the seventh rule, from 2026-11-01
+      'Liquidity added or removed: 100,000 NAM or more added to or taken out of a NAM pool on Osmosis in one transaction',
     ].join('\n'));
     expect(field(e, 'Watchlist')).toBe('off');
     expect(field(e, 'Quiet hours')).toBe('none');
@@ -87,7 +89,7 @@ describe('the example: the newest move on record that matches these rules', () =
     expect(gaveUp.title).toBe('No example this time');
     expect(gaveUp.description).toBe('None among the newest moves looked at matches these rules; the Alerts page keeps looking.');
     expect(testBody(user(), 'unread', T).embeds[1].description).toBe('The newest move that matches these rules could not be read just now; the Alerts page lists them.');
-    const off = user({ notifications: { rules: Object.fromEntries(['ibc_inventory', 'unlock', 'big_swap', 'unshield', 'bond', 'exit_bridge'].map((id) => [id, { on: false, thresholdNam: 100_000 }])) } });
+    const off = user({ notifications: { rules: Object.fromEntries(['ibc_inventory', 'unlock', 'big_swap', 'unshield', 'bond', 'exit_bridge', 'liquidity'].map((id) => [id, { on: false, thresholdNam: 100_000 }])) } });
     expect(await testExample(db as any, off, T)).toBeUndefined();
     expect(testBody(off, undefined, T).embeds).toHaveLength(1);
     expect(testBody(off, undefined, T).embeds[0].fields[0].value).toMatch(/^No rule is on\./);

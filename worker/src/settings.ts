@@ -72,8 +72,8 @@ export interface StoppedChannel { status: number; at: number; reason?: 'notice';
  */
 export interface NoticeNotTaken { status: number; at: number; tries?: { n: number; status: number; at: number } }
 
-const RULE_IDS: AlertRuleId[] = ['ibc_inventory', 'unlock', 'big_swap', 'unshield', 'bond', 'exit_bridge'];
-const KEY_OF: Record<AlertRuleId, keyof AlertThresholds> = { ibc_inventory: 'ibcInventory', unlock: 'unlock', big_swap: 'bigSwap', unshield: 'unshield', bond: 'bond', exit_bridge: 'exitBridge' };
+const RULE_IDS: AlertRuleId[] = ['ibc_inventory', 'unlock', 'big_swap', 'unshield', 'bond', 'exit_bridge', 'liquidity'];
+const KEY_OF: Record<AlertRuleId, keyof AlertThresholds> = { ibc_inventory: 'ibcInventory', unlock: 'unlock', big_swap: 'bigSwap', unshield: 'unshield', bond: 'bond', exit_bridge: 'exitBridge', liquidity: 'liquidity' };
 
 export function defaultPrefs(): NotificationPrefs {
   return {
@@ -148,7 +148,8 @@ export async function loadSettings(db: D1Database, secret: string, address: stri
 }
 
 /**
- * Settings saved before a rule existed (the sixth, a shielded exit sent over the bridge, from 2026-10-30) have no entry
+ * Settings saved before a rule existed (the sixth, a shielded exit sent over the bridge, from 2026-10-30; the seventh,
+ * liquidity added or removed, from 2026-11-01) have no entry
  * for it: it is given one, off, at the site's size, so Settings shows it and its switch saves, and a subscriber who had
  * chosen their rules gets no new kind of alert they did not turn on. A new subscriber's defaults have every rule on.
  */
