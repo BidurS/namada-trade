@@ -166,8 +166,8 @@ echo "D1 bookmark at $bookmark_at: $bookmark"
 # The order matters. A Worker rollback brings back the secrets of the version it goes back to (wrangler 4.151's
 # rollback lists the secrets changed since that version and asks, and goes on without asking where it cannot ask), so
 # it comes before SEND_ALERTS is deleted. The cursor-driven alerts a restore replays are claimed and not posted while
-# SEND_ALERTS is off (sources/discord.ts postAll), but the day's digest, the week's and the X recap are claimed per
-# period and only by a Worker that sends (digest/deliver.ts prepareDigests, sources/x.ts postRecapOnX): one that went
+# SEND_ALERTS is off (sources/discord.ts postAll), but the day's digest and the week's (and, on a version before
+# df33452, the X recap) are claimed per period and only by a Worker that sends (digest/deliver.ts prepareDigests): one that went
 # out after the bookmark is due again, unclaimed, until its period ends, so step 2 counts them, read-only. So are the
 # hour's public posts (public-posts.ts publicHour: X and the Telegram channel), due until ten minutes past the next
 # hour (HOUR_SETTLE_MS) and claimed only by a Worker that sends, so step 2 counts them apart.
@@ -178,7 +178,7 @@ rollback_words() {
   echo "   the database, only when a migration or a write of this deploy must be undone (it overwrites every row"
   echo "   written since, and the restore prints a bookmark of its own that undoes it):"
   echo "     1. npx wrangler secret delete SEND_ALERTS   (restored claims and cursors would post old alerts again)"
-  echo "     2. the day's and the week's digest and the X recap claimed today since the bookmark (a read):"
+  echo "     2. the day's and the week's digest (and the X recap of a version before df33452) claimed today since the bookmark (a read):"
   echo "        npx wrangler d1 execute namada-trade-db --remote --command \"SELECT COUNT(*) n FROM kv WHERE key >= 'alert:' AND key < 'alert;' AND (key LIKE 'alert:digest:%' OR key LIKE 'alert:x:recap:%') AND updated_at >= MAX(${bookmark_s}000, CAST(strftime('%s', 'now', 'start of day') AS INTEGER) * 1000)\""
   echo "        and the hour's public posts claimed since the bookmark (a read):"
   echo "        npx wrangler d1 execute namada-trade-db --remote --command \"SELECT COUNT(*) n FROM kv WHERE key >= 'alert:' AND key < 'alert;' AND (key LIKE 'alert:x:hour:%' OR key LIKE 'alert:tg:ch:hour:%') AND updated_at >= ${bookmark_s}000\""

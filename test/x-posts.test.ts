@@ -192,6 +192,19 @@ describe('a post\'s picture', () => {
 });
 
 describe('posting', () => {
+  it('a text that cannot be built posts nothing and gives back its claim and its share of the day', async () => {
+    const db = testD1();
+    const s = x();
+    expect(await postOnce(env(db), 'alert:x:nb', 'gov', () => { throw new Error('no text'); }, 'nb')).toBe('failed');
+    expect(await postOnce(env(db), 'alert:x:nb2', 'gov', async () => { throw new Error('no text'); }, 'nb2')).toBe('failed');
+    expect(s.posts).toHaveLength(0);
+    // both of the day's posts went back: the whole share still posts
+    for (let i = 0; i < X_SHARES.gov; i++) expect(await postOnce(env(db), `alert:x:nbg:${i}`, 'gov', () => `g${i}`, 'g')).toBe('posted');
+    expect(s.posts).toHaveLength(X_SHARES.gov);
+    // the claim went back too: the key is offered again ('full', not 'claimed')
+    expect(await postOnce(env(db), 'alert:x:nb', 'gov', () => 'again', 'nb')).toBe('full');
+  });
+
   it('signs with OAuth 1.0a HMAC-SHA1 over the method, the URL and the oauth parameters', async () => {
     const h = await oauthHeader(KEYS, 'POST', 'https://api.x.com/2/tweets', 'nonce1', 1700000000);
     const params = 'oauth_consumer_key=ck&oauth_nonce=nonce1&oauth_signature_method=HMAC-SHA1&oauth_timestamp=1700000000&oauth_token=at&oauth_version=1.0';

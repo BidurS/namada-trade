@@ -13,10 +13,10 @@
 // X's API is paid per call (https://docs.x.com/x-api/getting-started/pricing: $0.015 a post, $0.20 a post with a
 // link, checked 2026-10-29), so no post carries a link; an alert names the move, its figures and their source
 // in words, a proposal's post sends readers to the chain and the forum in words (owner, 2026-10-29: govRecord), and
-// the profile links the site. Each kind of post has its own share of a UTC day (X_SHARES), so moves, crossings and
-// proposals never take one another's place, and a move older than X_MAX_AGE_MS when it is offered is not posted: the
-// account reads as live. kv `x.on` = '0' stops every post, the @namada reposts included (xSwitch), and @namada's posts
-// made while it was off are never reposted.
+// the profile links the site. Each kind of post has its own share of a UTC day (X_SHARES), so moves, crossings,
+// liquidity adds and proposals never take one another's place, and a move older than X_MAX_AGE_MS when it is offered
+// is not posted: the account reads as live. kv `x.on` = '0' stops every post, the @namada reposts included
+// (xSwitch), and @namada's posts made while it was off are never reposted.
 //
 // Each post is claimed once (`alert:x:` keys, swept with the other claims: auth.ts sweepAuth). An answer that is no
 // answer, a 5xx or a 429 gives the claim back, so the post is tried again (a proposal at the cron's next run: postOnce
@@ -40,7 +40,8 @@ const POST_URL = 'https://api.x.com/2/tweets';
 /** A call X does not answer within this long is given up. */
 export const X_TIMEOUT_MS = 5000;
 /**
- * The most posts a UTC day: about $0.24 a day at most (15 until 2026-11-01, when the hours' liquidity adds got their own
+ * The most posts a UTC day: about $0.24 a day at most for posts (the @namada reposts, REPOST_DAILY_MAX, are billed
+ * apart; 15 until 2026-11-01, when the hours' liquidity adds got their own
  * two; 17 until 2026-11-02, when the recap's one went).
  */
 export const X_DAILY_MAX = 16;

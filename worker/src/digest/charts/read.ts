@@ -15,8 +15,6 @@ import { Wave, type Prepared } from '../waves';
 
 // ----------------------------------------------------------------------------------------------- bounds
 
-/** A minute key's reading at T must be this recent to count as read now (the figures' MINUTE_BOUND_MS). */
-export const CHART_MINUTE_BOUND_MS = 10 * 60_000;
 /** The hourly rollup runs in the first 15 min of an hour and catches up 6 hours; a newest closed hour older than this is "behind". */
 export const HOURLY_ROLLUP_BOUND_MS = 3 * HOUR_MS;
 /** The hourly rollup writes a closed hour's row in the first 15 min of the next hour: a closed hour without a row
