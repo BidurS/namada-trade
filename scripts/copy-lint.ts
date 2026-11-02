@@ -136,7 +136,7 @@ export const MESSAGE_SOURCES: { file: string; names: Set<string> | null }[] = [
   // the Telegram bot's own messages (the alerts themselves are the cards above)
   { file: 'worker/src/sources/telegram.ts', names: new Set(['connectedMessage', 'testMessages', 'cardMessage', 'settingsButton', 'forumMessage', 'hourMessage']) },
   { file: 'worker/src/telegram-bot.ts', names: new Set(['WORDS', 'OFFICIAL', 'settingsButton', 'status']) },
-  { file: 'worker/src/sources/x.ts', names: new Set(['recapText', 'cardText', 'hourText']) },
+  { file: 'worker/src/sources/x.ts', names: new Set(['cardText', 'hourText']) },
   // the public posts' move words (X and the public Telegram channel)
   { file: 'worker/src/public-posts.ts', names: new Set(['sideWords', 'publicMoveOf', 'poolWords', 'publicWho', 'publicValue', 'publicWhy', 'publicRecord']) },
 ];

@@ -10,7 +10,7 @@ import { QUOTE_KEYS } from '../../shared/settle';
 import { namBalance, namTotalSupply, namTotalStake, namadaEpoch, namadaStatusAll, delegationsAt, answeringRpcs, listingHeads, QUICK, RpcBreaker, allNamBalances, allBonds, ListingTooLargeError, LISTING_MAX_VALUE_BYTES, type BalanceListing, type BondListing, type ReadOpts, type Rpc } from './sources/namada';
 import { fetchIntelChecked } from './sources/intel';
 import { sendTelegramForum, sendTelegramGov, sendTelegramHour, telegramRun, TG_CRON_MS, TG_CRON_SENDS } from './sources/telegram';
-import { postGovOnX, postHourCrossingOnX, postHourLiquidityOnX, postHourOnX, postRecapOnX, repostNamada } from './sources/x';
+import { postGovOnX, postHourCrossingOnX, postHourLiquidityOnX, postHourOnX, repostNamada } from './sources/x';
 import { namFloors, publicHour } from './public-posts';
 import { sendDiscordForumAlert, sendDiscordGovAlert, sendsAlerts, alertBudget, flushAlerts, sweepNoticeChannels, RUN_ALERT_POSTS, RUN_ALERT_WINDOW_MS, type GovContext } from './sources/discord';
 import { NAM, NAMADA, OSMOSIS } from './config';
@@ -251,15 +251,9 @@ async function syncIntelAndAlerts(env: Env, health: SourceHealth[]) {
       console.warn(`alerts: forum or governance ${why}`);
       health.push({ ...forumRow, at: Date.now(), note: `${forumRow.note}; forum or governance ${why}`.slice(0, 160) });
     }
-    // The day's recap on X, once, from 13:00 UTC (sources/x.ts), read from the overview the site answers (imported
-    // here, not at the top: api.ts imports this module).
+    // @namada's new posts, reposted on X (sources/x.ts). The daily recap is not posted on X (owner, 2026-11-02): the
+    // digest carries it on Discord and Telegram.
     await repostNamada(env).catch((e) => console.error('x: reposts', e));
-    await postRecapOnX(env, async () => {
-      const { app } = await import('./api');
-      const r = await app.request('/api/overview', {}, env);
-      if (!r.ok) throw new Error(`overview ${r.status}`);
-      return r.json();
-    });
     // The closed hour's move on X and on the public Telegram channel (public-posts.ts: its largest by dollars, from
     // HOUR_SETTLE_MS past the close), and its largest bridge crossing when the move is none, each once; the hour's
     // moves are read once, and only while one of them still has the hour to post.

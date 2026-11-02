@@ -3,7 +3,7 @@
 // at its settle, else NAM times its stored price), read from the stored moves once the hour has settled, from $100
 // and the chain's whale size, never a bot round trip, a rewards claim or a move whose dollars are not known, and
 // beside it the hour's largest bridge crossing when the move is none, under its own share; a quiet hour posts
-// nothing; an hour whose moves or settle quotes cannot be read waits; the moves never take the recap's place; a
+// nothing; an hour whose moves or settle quotes cannot be read waits; past the moves' share an hour is passed over; a
 // crossing is posted once across its two records; a post is built from the allowlist of a move's fields, so a memo, a
 // tag, a forum text or a bridge receiver that is no address (an object's own key names too) never reaches it; a forum
 // post reaches Telegram as its title and category alone, and a proposal reaches the channel as X posts it, as plain
@@ -16,7 +16,7 @@ import { readTo } from './hour-cover';
 import { BANNED } from './banned-words';
 import { rowToFlow } from '../worker/src/analytics';
 import { configureAlerts, moveCard, resetClaimMemory } from '../worker/src/sources/discord';
-import { hourText, postGovOnX, postHourCrossingOnX, postHourLiquidityOnX, postHourOnX, postRecapOnX, xLength, X_RECAP_HOUR_UTC, X_SHARES } from '../worker/src/sources/x';
+import { hourText, postGovOnX, postHourCrossingOnX, postHourLiquidityOnX, postHourOnX, xLength, X_SHARES } from '../worker/src/sources/x';
 import { forumMessage, hourMessage, sendTelegramForum, sendTelegramGov, sendTelegramHour, telegramRun } from '../worker/src/sources/telegram';
 import { saveSettings, defaultPrefs } from '../worker/src/settings';
 import {
@@ -364,7 +364,7 @@ describe('choosing the hour\'s move', () => {
     expect(s.tg).toHaveLength(1);
   });
 
-  it('the moves never take the recap\'s place: past the moves\' share an hour is passed over, and the recap still posts', async () => {
+  it('past the moves\' share of the day an hour is passed over, and not asked again', async () => {
     const db = indexed();
     for (let h = 0; h <= X_SHARES.move; h++) move(db, at(h, 30));
     expect(X_SHARES.move).toBeGreaterThanOrEqual(8);
@@ -374,10 +374,6 @@ describe('choosing the hour\'s move', () => {
     // that hour is done, not asked again each minute
     expect(await tick(db, at(X_SHARES.move + 1, 11), false)).toBe('skipped');
     expect(s.x).toHaveLength(X_SHARES.move);
-    t = at(X_RECAP_HOUR_UTC, 1);
-    await postRecapOnX(xEnv(db), async () => ({ generatedAt: t, price: { usd: { value: 0.00015 } } }), t, async () => null);
-    expect(s.x).toHaveLength(X_SHARES.move + 1);
-    expect(s.x.at(-1)).toMatch(/^NAM today/);
   });
 
   it('a crossing is posted once: its other record, an hour later, gives way to that hour\'s next move', async () => {

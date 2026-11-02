@@ -36,4 +36,4 @@ printf '%s' "$KEY_SECRET" | npx wrangler secret put X_API_SECRET
 printf '%s' "$TOKEN" | npx wrangler secret put X_ACCESS_TOKEN
 printf '%s' "$TOKEN_SECRET" | npx wrangler secret put X_ACCESS_SECRET
 unset KEY KEY_SECRET TOKEN TOKEN_SECRET
-echo "Done. Big moves, votes, forum news and the 13:00 UTC recap now post to X (at most 17 posts a day)."
+echo "Done. Big moves, bridge crossings, liquidity adds and votes now post to X (at most 16 posts a day)."

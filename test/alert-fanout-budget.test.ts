@@ -257,9 +257,6 @@ describe('a cron tick', () => {
   it('with the X keys set posts the proposal on X and none of the forum posts (owner, 2026-10-29)', async () => {
     const base = 883000, prop = 883900;
     const { db, env } = await seededTick('cx', 2, base, prop);
-    // from 13:00 UTC the tick also posts the day's recap (sources/x.ts postRecapOnX): today's is taken, so the run's
-    // posts on X are this tick's alerts whatever the hour
-    insert(db, 'kv', [{ key: `alert:x:recap:${new Date().toISOString().slice(0, 10)}`, value: '1', updated_at: NOW }]);
     network(base, 3, prop);
     const chain = globalThis.fetch;
     const tweets: string[] = [];
@@ -282,7 +279,6 @@ describe('a cron tick', () => {
   it('with the X keys set, a proposal X does not take (503) keeps its stored state and goes on X the next run, its Discord alert sent once', async () => {
     const base = 883500, prop = 883950;
     const { db, env } = await seededTick('cy', 2, base, prop);
-    insert(db, 'kv', [{ key: `alert:x:recap:${new Date().toISOString().slice(0, 10)}`, value: '1', updated_at: NOW }]);
     const hooks = network(base, 3, prop);
     const chain = globalThis.fetch;
     let status = 503;
@@ -314,7 +310,6 @@ describe('a cron tick', () => {
     vi.useFakeTimers({ now: Math.floor(NOW / 3_600_000) * 3_600_000 + 30 * 60_000, toFake: ['Date'], shouldAdvanceTime: true });
     const base = 884000, prop = 884900;
     const { db, env } = await seededTick('ch', 2, base, prop);
-    insert(db, 'kv', [{ key: `alert:x:recap:${new Date().toISOString().slice(0, 10)}`, value: '1', updated_at: NOW }]);
     // the Osmosis catch-up search read past the hour (public-posts.ts hourCovered), and the Namada scan to the head
     readTo(db, Date.now() + 3_600_000, { namadaCursor: 8_343_400 });
     // the test above claimed this hour as quiet in the isolate's memory; this test's database is new, so is its isolate

@@ -1,6 +1,6 @@
 // Automatic X posts (worker/src/sources/x.ts): the site's own moves (one a closed hour, and the hour's crossing:
-// test/public-posts.test.ts), votes and a daily recap (no forum posts), each posted once, each kind under its own share
-// of the day (the recap's share its own), within 280 of X's weighted characters, mentioning no one, signed with OAuth
+// test/public-posts.test.ts) and votes (no forum posts, and no daily recap from 2026-11-02), each posted once, each kind
+// under its own share of the day, within 280 of X's weighted characters, mentioning no one, signed with OAuth
 // 1.0a, and nothing at all while kv x.on is '0', with @namada's posts of that time never reposted after. Fetch is
 // stubbed: nothing reaches X.
 import { describe, it, expect, vi, afterEach, beforeEach } from 'vitest';
@@ -9,7 +9,7 @@ import { join } from 'node:path';
 import { createHmac } from 'node:crypto';
 import { testD1, insert, type TestD1 } from './d1-sqlite';
 import { configureAlerts, govCard, moveCard, resetClaimMemory } from '../worker/src/sources/discord';
-import { cardText, cutX, govRecord, oauthHeader, postGovOnX, postHourOnX, postOnce, postRecapOnX, recapChart, repostNamada, recapText, xLength, xOn, xSafe, X_DAILY_MAX, X_MAX_AGE_MS, X_ON_KEY, X_RECAP_HOUR_UTC, X_SHARES } from '../worker/src/sources/x';
+import { cardText, cutX, govRecord, oauthHeader, postGovOnX, postHourOnX, postOnce, repostNamada, xLength, xOn, xSafe, X_DAILY_MAX, X_MAX_AGE_MS, X_ON_KEY, X_SHARES } from '../worker/src/sources/x';
 import { publicHour } from '../worker/src/public-posts';
 import { readTo } from './hour-cover';
 import { rowToFlow } from '../worker/src/analytics';
@@ -42,7 +42,7 @@ beforeEach(() => {
   t = Date.UTC(2026, 9, 29, 9);
   vi.spyOn(Date, 'now').mockImplementation(() => t);
   configureAlerts('k', true);
-  // each test's database is new, so are the isolate's claims: two tests post the same day's recap
+  // each test's database is new, so are the isolate's claims: two tests may claim the same keys
   resetClaimMemory();
 });
 afterEach(() => { vi.unstubAllGlobals(); vi.restoreAllMocks(); });
@@ -162,31 +162,9 @@ describe('the text', () => {
     expect(crossing).not.toMatch(/claim-nam/);
   });
 
-  it('the recap gives only the figures it was given, with the day\'s one link', () => {
-    const full = recapText({ generatedAt: t, price: { usd: { value: 0.00102 }, change24h: -3.94 }, dex: { volume24hNam: 1234567, buys24h: 40, sells24h: 30 }, supply: { bonded: 600, shielded: 50, total: 1000 }, namada: { holders: 12345 } });
-    expect(full).toContain('Price $0.001020 (−3.9% 24h)');
-    expect(full).toContain('Staked 60.0% · Shielded 5.0%');
-    expect(full).toContain('https://namada.trade');
-    expect(xLength(full)).toBeLessThanOrEqual(280);
-    const thin = recapText({ generatedAt: t, price: { usd: null } });
-    expect(thin).not.toContain('Price');
-    expect(thin).not.toContain('undefined');
-  });
 });
 
-describe('the recap\'s picture', () => {
-  it('draws the digest\'s price chart from the hourly rows, and nothing when there are none', async () => {
-    const db = testD1();
-    expect(await recapChart(db as any, t)).toBeNull();
-    for (let h = 1; h <= 48; h++) {
-      await db.prepare('INSERT INTO metrics (key, ts, value) VALUES (?, ?, ?)').bind('price.usd.1h', t - h * 3_600_000, 0.001 + h * 0.00001).run();
-    }
-    await db.prepare('INSERT INTO metrics (key, ts, value) VALUES (?, ?, ?)').bind('price.usd', t - 60_000, 0.00101).run();
-    const png = await recapChart(db as any, t);
-    expect(png).not.toBeNull();
-    expect([...png!.slice(0, 8)]).toEqual([137, 80, 78, 71, 13, 10, 26, 10]);
-  });
-
+describe('a post\'s picture', () => {
   it('uploads the picture and attaches it; a picture X does not take leaves the post as text', async () => {
     const db = testD1();
     let uploads = 0, uploadOk = true;
@@ -245,11 +223,12 @@ describe('posting', () => {
     expect(s.posts).toHaveLength(0);
   });
 
-  it('each kind stops at its share of the day, the recap\'s share is its own, and the shares start again the next day', async () => {
-    // the hours' liquidity adds have their own two from 2026-11-01, the day's posts 17
-    expect(X_SHARES.move + X_SHARES.ibc + X_SHARES.lp + X_SHARES.gov + X_SHARES.recap).toBe(X_DAILY_MAX);
-    expect(X_DAILY_MAX).toBe(17);
-    expect(X_SHARES.recap).toBe(1);
+  it('each kind stops at its share of the day, and the shares start again the next day', async () => {
+    // the hours' liquidity adds have their own two from 2026-11-01; the recap is not posted on X from 2026-11-02 (owner:
+    // the digest carries it on Discord and Telegram), so it has no share and the day's posts are 16
+    expect(Object.keys(X_SHARES)).toEqual(['move', 'ibc', 'lp', 'gov']);
+    expect(X_SHARES.move + X_SHARES.ibc + X_SHARES.lp + X_SHARES.gov).toBe(X_DAILY_MAX);
+    expect(X_DAILY_MAX).toBe(16);
     const db = testD1();
     const s = x();
     for (let i = 0; i < X_SHARES.move + 3; i++) await postOnce(env(db), `alert:x:test:${i}`, 'move', () => `move ${i}`, `test ${i}`);
@@ -261,13 +240,7 @@ describe('posting', () => {
     for (let i = 0; i < X_SHARES.lp + 2; i++) await postOnce(env(db), `alert:x:lp:test:${i}`, 'lp', () => `liquidity ${i}`, `liquidity ${i}`);
     expect(s.posts).toHaveLength(X_SHARES.move + X_SHARES.ibc + X_SHARES.lp);
     for (let i = 0; i < X_SHARES.gov + 2; i++) await postOnce(env(db), `alert:x:gov:test:${i}`, 'gov', () => `gov ${i}`, `gov ${i}`);
-    expect(s.posts).toHaveLength(X_SHARES.move + X_SHARES.ibc + X_SHARES.lp + X_SHARES.gov);
-    // the moves, the crossings and the proposals spent theirs: the recap still has its place
-    t = Date.UTC(2026, 9, 29, X_RECAP_HOUR_UTC, 1);
-    await postRecapOnX(env(db), async () => ({ generatedAt: t, price: { usd: { value: 0.001 } } }), t, async () => null);
     expect(s.posts).toHaveLength(X_DAILY_MAX);
-    expect(s.posts.at(-1)).toMatch(/^NAM today/);
-    expect(await postOnce(env(db), 'alert:x:recap:extra', 'recap', () => 'a second recap', 'extra')).toBe('full');
     // a post a share refused is not claimed: it can go tomorrow
     t += 86_400_000;
     expect(await postOnce(env(db), `alert:x:test:${X_SHARES.move}`, 'move', () => 'again', 'again')).toBe('posted');
@@ -318,20 +291,6 @@ describe('posting', () => {
     expect(s.posts).toEqual(['m2']);
   });
 
-  it('posts the recap once a day from 13:00 UTC; an overview that cannot be read posts nothing and keeps the day open', async () => {
-    const db = testD1();
-    const s = x();
-    const overview = async () => ({ generatedAt: Date.now(), price: { usd: { value: 0.001 }, change24h: 1 }, namada: { holders: 10 } });
-    await postRecapOnX(env(db), overview);
-    expect(s.posts).toHaveLength(0);
-    t = Date.UTC(2026, 9, 29, X_RECAP_HOUR_UTC, 1);
-    await postRecapOnX(env(db), async () => { throw new Error('overview 500'); });
-    expect(s.posts).toHaveLength(0);
-    await postRecapOnX(env(db), overview);
-    await postRecapOnX(env(db), overview);
-    expect(s.posts).toHaveLength(1);
-    expect(s.posts[0]).toMatch(/^NAM today \(13:01 UTC\):/);
-  });
 });
 
 describe('reposting @namada', () => {
@@ -425,7 +384,7 @@ describe('the kill switch (kv x.on)', () => {
     expect(await xOn(broken)).toBe(false);
   });
 
-  it('at 0 stops the hour\'s move, a proposal, the recap and the @namada reposts, claiming nothing; back on, each goes', async () => {
+  it('at 0 stops the hour\'s move, a proposal and the @namada reposts, claiming nothing; back on, each goes', async () => {
     const db = testD1();
     const calls = anyX();
     setOn(db, '0');
@@ -437,8 +396,7 @@ describe('the kill switch (kv x.on)', () => {
     t = Date.UTC(2026, 9, 29, 9, 20);
     expect(await postHourOnX(env(db), hourAt(t), t)).toBe('skipped');
     expect(await postGovOnX(env(db), proposal(7))).toBe('off');
-    t = Date.UTC(2026, 9, 29, X_RECAP_HOUR_UTC, 20);
-    await postRecapOnX(env(db), async () => ({ generatedAt: t }), t, async () => null);
+    t = Date.UTC(2026, 9, 29, 13, 20);
     expect(await repostNamada(repostEnv, t)).toBe(0);
     expect(calls).toEqual([]);
     expect(db.raw.prepare("SELECT key FROM kv WHERE key LIKE 'alert:x:%'").all()).toEqual([]);
@@ -447,10 +405,8 @@ describe('the kill switch (kv x.on)', () => {
     t = Date.UTC(2026, 9, 29, 9, 20);
     expect(await postHourOnX(env(db), hourAt(t), t)).toBe('posted');
     expect(await postGovOnX(env(db), proposal(7))).toBe('posted');
-    t = Date.UTC(2026, 9, 29, X_RECAP_HOUR_UTC, 20);
-    await postRecapOnX(env(db), async () => ({ generatedAt: t }), t, async () => null);
-    await repostNamada(repostEnv, Date.UTC(2026, 9, 29, X_RECAP_HOUR_UTC, 30));
-    expect(calls.filter((u) => u === 'https://api.x.com/2/tweets')).toHaveLength(3);
+    await repostNamada(repostEnv, Date.UTC(2026, 9, 29, 13, 30));
+    expect(calls.filter((u) => u === 'https://api.x.com/2/tweets')).toHaveLength(2);
     expect(calls.some((u) => u.includes('/users/by/username/namada'))).toBe(true);
   });
 

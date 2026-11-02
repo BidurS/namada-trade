@@ -1,21 +1,22 @@
 // Posts on X (@ the owner's account), automatically: at most one move a closed UTC hour, the hour's largest by dollars
 // (public-posts.ts, the selector the public Telegram channel shares: from PUBLIC_POST_USD_MIN and the chain's whale
 // size, no bot round trips or rewards claims), and beside it the hour's largest bridge crossing when its move is no
-// crossing, new and changed governance proposals, and a daily recap at 13:00 UTC with the daily digest's price chart
-// (owner's choices, 2026-10-29). Forum topics and replies are not posted (owner, 2026-10-29): any forum account writes
-// them, links and bare domains included, and the post would carry them under the site's name.
+// crossing and its largest liquidity add, and new and changed governance proposals (owner's choices, 2026-10-29 and
+// 2026-11-01). The daily recap is not posted here (owner, 2026-11-02: the digest carries it on Discord and Telegram;
+// on X its link cost $0.20 of the account's $0.23 a day). Forum topics and replies are not posted (owner, 2026-10-29):
+// any forum account writes them, links and bare domains included, and the post would carry them under the site's name.
 //
 // A move's post is built from the selector's allowlist of its fields (public-posts.ts PublicMove), so no memo, label,
 // tag or bridge receiver text reaches X. The one outsider text posted is a proposal's title, through xSafe (cardText);
 // the card's author, abstract and link are not posted, and its record is govRecord's words.
 //
 // X's API is paid per call (https://docs.x.com/x-api/getting-started/pricing: $0.015 a post, $0.20 a post with a
-// link, checked 2026-10-29), so only the recap carries a link; an alert names the move, its figures and their source
+// link, checked 2026-10-29), so no post carries a link; an alert names the move, its figures and their source
 // in words, a proposal's post sends readers to the chain and the forum in words (owner, 2026-10-29: govRecord), and
 // the profile links the site. Each kind of post has its own share of a UTC day (X_SHARES), so moves, crossings and
-// proposals never take one another's place or the recap's, and a move older than X_MAX_AGE_MS when it is offered is
-// not posted: the account reads as live. kv `x.on` = '0' stops every post, the recap and the @namada reposts included
-// (xSwitch), and @namada's posts made while it was off are never reposted.
+// proposals never take one another's place, and a move older than X_MAX_AGE_MS when it is offered is not posted: the
+// account reads as live. kv `x.on` = '0' stops every post, the @namada reposts included (xSwitch), and @namada's posts
+// made while it was off are never reposted.
 //
 // Each post is claimed once (`alert:x:` keys, swept with the other claims: auth.ts sweepAuth). An answer that is no
 // answer, a 5xx or a 429 gives the claim back, so the post is tried again (a proposal at the cron's next run: postOnce
@@ -27,34 +28,32 @@
 // The keys are the owner's X app's (OAuth 1.0a, Read and Write): X_API_KEY, X_API_SECRET, X_ACCESS_TOKEN,
 // X_ACCESS_SECRET, set by scripts/x-connect.sh at hidden prompts. Without all four nothing is posted.
 import type { GovernanceProposal } from '../../../shared/types';
-import { SITE } from '../../../shared/site';
 import { kvSet } from '../db';
 import { holdsNumericHost, safeHttpUrl } from '../../../shared/flow-rules';
 import { alertsOn, claimDiscordAlert, fits, govCard, releaseClaims, type Card, type GovContext } from './discord';
 import { mdToPlain } from './telegram';
 import { claimTaken, hourClaims, hourKey, hourPick, partsCarried, publicRecord, publicTitle, publicValue, publicWho, publicWhy, type HourPart, type PublicHour, type PublicMove } from '../public-posts';
-import { CHART_MINUTE_BOUND_MS, readChartRows, shapePriceChart, type ChartContext } from '../digest/charts/read';
-import { isNotRead, priceChart, toPng } from '../digest/charts/charts';
 
 export interface XEnv { DB: D1Database; X_API_KEY?: string; X_API_SECRET?: string; X_ACCESS_TOKEN?: string; X_ACCESS_SECRET?: string }
 
 const POST_URL = 'https://api.x.com/2/tweets';
 /** A call X does not answer within this long is given up. */
 export const X_TIMEOUT_MS = 5000;
-/** The most posts a UTC day, the recap included: about $0.45 a day at most (15 until 2026-11-01, when the hours' liquidity adds got their own two). */
-export const X_DAILY_MAX = 17;
+/**
+ * The most posts a UTC day: about $0.24 a day at most (15 until 2026-11-01, when the hours' liquidity adds got their own
+ * two; 17 until 2026-11-02, when the recap's one went).
+ */
+export const X_DAILY_MAX = 16;
 /**
  * Each kind of post's share of X_DAILY_MAX, counted apart (`alert:x:day:<date>:<kind>`): the hours' moves (at most one
  * an hour, public-posts.ts), the hours' bridge crossings (HourPart 'ibc': one an hour at most, when the hour's move is
  * no crossing), the hours' liquidity adds (HourPart 'lp': one an hour at most, of PUBLIC_LP_NAM_MIN and up, when the
- * hour's move is not that add), the proposals, and the recap's one, which nothing else can take.
+ * hour's move is not that add), and the proposals.
  */
-export const X_SHARES = { move: 9, ibc: 2, lp: 2, gov: 3, recap: 1 } as const;
+export const X_SHARES = { move: 9, ibc: 2, lp: 2, gov: 3 } as const;
 export type XShare = keyof typeof X_SHARES;
 /** A move older than this when offered is not posted. */
 export const X_MAX_AGE_MS = 2 * 3_600_000;
-/** The recap's hour, UTC (the marketing pack's suggested time: mornings in both the US and Europe). */
-export const X_RECAP_HOUR_UTC = 13;
 /** X's limit, in its weighted characters (twitter-text: most Latin text weighs 1, other scripts and emoji 2). */
 export const X_MAX = 280;
 
@@ -64,10 +63,10 @@ export const postsOnX = (env: XEnv): boolean => alertsOn() && !!(env.X_API_KEY &
 /** The kill switch's kv key. */
 export const X_ON_KEY = 'x.on';
 /**
- * The kill switch: kv `x.on` holding '0' stops every post on X, the moves, the proposals, the recap and the @namada
- * reposts ('off'), and what was offered while it was off is not posted once it is on again; anything else, or no row,
- * leaves posting on ('on'). A read that fails ('unread') posts nothing this time, and claims nothing, so the post is
- * offered again (postOnce 'again': the hour and the recap at the next tick, a proposal at the cron's next run).
+ * The kill switch: kv `x.on` holding '0' stops every post on X, the moves, the proposals and the @namada reposts
+ * ('off'), and what was offered while it was off is not posted once it is on again; anything else, or no row, leaves
+ * posting on ('on'). A read that fails ('unread') posts nothing this time, and claims nothing, so the post is offered
+ * again (postOnce 'again': the hour at the next tick, a proposal at the cron's next run).
  */
 export async function xSwitch(db: D1Database): Promise<'on' | 'off' | 'unread'> {
   try {
@@ -291,7 +290,7 @@ export async function postOnce(env: XEnv, key: string | string[], share: XShare,
     if (!took) { await releaseClaims(env.DB, keys); return 'full'; }
     let body: string;
     try { body = await text(); } catch (e) {
-      // the text could not be read (the recap's overview): nothing was posted, so the claim and the day's post go back
+      // the text could not be built: nothing was posted, so the claim and the day's post go back
       console.error(`x: ${what} not built`, e);
       await releaseClaims(env.DB, keys);
       await giveBackDaily(env.DB, now, share);
@@ -382,62 +381,6 @@ export const postHourLiquidityOnX = (env: XEnv, hour: PublicHour, now = Date.now
 /** A proposal: its card's title (outsider text, xSafe in cardText), its votes and its record in words (govRecord). */
 export const postGovOnX = (env: XEnv, prop: GovernanceProposal, isNew: boolean, g: GovContext = {}) =>
   postOnce(env, `alert:x:gov:prop:${prop.id}:${prop.status}`, 'gov', () => cardText(govCard(prop, isNew, g), Date.now(), govRecord(prop)), `proposal ${prop.id} ${prop.status}`);
-
-// ---------------------------------------------------------------- the daily recap
-
-const nf = (n: number, d = 0) => Number(n).toLocaleString('en-US', { maximumFractionDigits: d, minimumFractionDigits: d });
-/** The overview's figures the recap reads (worker/src/api.ts GET /api/overview). */
-export interface RecapFigures {
-  generatedAt?: number;
-  price?: { usd?: { value?: number | null } | null; change24h?: number | null } | null;
-  supply?: { bonded?: number; shielded?: number; total?: number } | null;
-  dex?: { volume24hNam?: number; buys24h?: number; sells24h?: number } | null;
-  namada?: { holders?: number } | null;
-}
-/**
- * The recap: price and its day's change, Osmosis trading, the staked and shielded shares, holders, and the one link of
- * the day. A figure the overview did not give is left out, never guessed.
- */
-export function recapText(o: RecapFigures, now = Date.now()): string {
-  const at = new Date(o.generatedAt ?? now).toISOString().slice(11, 16);
-  const lines = [`NAM today (${at} UTC):`];
-  const price = o.price?.usd?.value, ch = o.price?.change24h;
-  if (price != null) lines.push(`• Price $${price.toFixed(6)}${ch != null ? ` (${ch >= 0 ? '+' : '−'}${nf(Math.abs(ch), 1)}% 24h)` : ''}`);
-  const d = o.dex;
-  if (d?.volume24hNam != null) lines.push(`• Osmosis 24h: ${nf(d.volume24hNam)} NAM traded${d.buys24h != null && d.sells24h != null ? `, ${d.buys24h} buys / ${d.sells24h} sells` : ''}`);
-  const s = o.supply;
-  if (s?.total && s.bonded != null && s.shielded != null) lines.push(`• Staked ${nf((s.bonded / s.total) * 100, 1)}% · Shielded ${nf((s.shielded / s.total) * 100, 1)}%`);
-  if (o.namada?.holders != null) lines.push(`• ${nf(o.namada.holders)} holders on Namada`);
-  lines.push('', `Every number with its source: ${SITE.origin}`);
-  return cutX(lines.join('\n'));
-}
-
-/**
- * The cron's tick: from X_RECAP_HOUR_UTC, the day's recap once (claimed by date), read from the overview the site
- * answers. A tick before that hour, or after the day's recap, does nothing.
- */
-export async function postRecapOnX(env: XEnv, overview: () => Promise<RecapFigures>, now = Date.now(), picture: () => Promise<Uint8Array | null> = () => recapChart(env.DB, now)): Promise<void> {
-  if (!postsOnX(env) || new Date(now).getUTCHours() < X_RECAP_HOUR_UTC) return;
-  await postOnce(env, `alert:x:recap:${day(now)}`, 'recap', async () => recapText(await overview(), now), `recap ${day(now)}`, picture);
-}
-
-/**
- * The recap's picture: the daily digest's price chart (digest/charts: the hourly quote and the executed hourly price
- * over its days to `now`), drawn from the same rows by the same code. Null when the price was not read in that window.
- */
-export async function recapChart(db: D1Database, now: number): Promise<Uint8Array | null> {
-  const last = await db.prepare("SELECT MAX(ts) ts FROM metrics WHERE key = 'price.usd'").first<{ ts: number | null }>().catch(() => null);
-  const at = last?.ts != null ? Number(last.ts) : null;
-  const ctx: ChartContext = {
-    now, kind: 'daily',
-    clock: { eNow: null, epochAt: null, startedAt: null, errorMs: null, epochMs: null, paramsAt: null },
-    listing: null, stakeNow: null,
-    quoteNow: at != null ? { at, live: now - at <= CHART_MINUTE_BOUND_MS } : null,
-  };
-  const shaped = shapePriceChart(await readChartRows(db, ctx), ctx);
-  if (isNotRead(shaped)) return null;
-  return (await toPng(priceChart(shaped.input))).png;
-}
 
 // ---------------------------------------------------------------- reposting @namada
 
