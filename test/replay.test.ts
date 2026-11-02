@@ -65,14 +65,24 @@ describe('alert rules vs. historical events', () => {
     expect(rows.length).toBe(data.events.length);
   });
 
-  it('fires on the known whale events, and never on the staking account\'s own balance transfers', () => {
+  it('fires on the known whale events, and leaves out the staking-account exploit and its repayment', () => {
     const whale = rows.filter((r) => r.type === 'whale_flow');
     expect(whale.length).toBeGreaterThan(0);
-    // The 331M of 31 Aug 2026 and the 100M "bonds" of 22 Sep were transfers of the staking account's own balance
-    // (docs/design/screener-plan.md 3.0): filed as pos_balance, they trip neither "NAM unstaked" nor "Large amount staked".
-    const pos = data.events.filter((e: any) => e.type === 'whale_flow' && e.flow.kind === 'pos_balance');
-    expect(pos.length).toBeGreaterThan(0);
-    for (const e of pos) expect(evaluateFlows([toFlow(e.flow)], DEFAULT_THRESHOLDS).filter((h) => h.ruleId === 'unlock' || h.ruleId === 'bond')).toEqual([]);
+    // The 331M of 31 Aug 2026 and the 330M of 22 Sep / 1 Oct were the staking-account exploit and its repayment
+    // (migrations/0019_exploit_labels.sql): scripts/events.ts keeps every move of those wallets out of the market
+    // events and out of every event's lead signals, so no replay figure counts them.
+    const EXPLOIT = new Set(['tnam1qry99h4faqtkleuuyecxzrswq7vgkj2hu5kg6dqp', 'osmo1lspwv8uknff8cxcl8e0n43fp805jeqvuvy2f6x',
+      'osmo1utxvhduk2es5ay6j2za93qlnvwnzt6xkjpau2m', 'tnam1qrk5pyvtzxjmykcqmhglssshdjf3njac2qvqmlse']);
+    const touches = (f: any) => EXPLOIT.has(f.from) || EXPLOIT.has(f.to);
+    for (const e of data.events) {
+      if (e.flow) expect(touches(e.flow)).toBe(false);
+      for (const s of e.leadSignals) expect(touches(s)).toBe(false);
+    }
+    // Filed as pos_balance, the exploit's own transfer out of the staking account trips neither "NAM unstaked" nor
+    // "Large amount staked" (docs/design/screener-plan.md 3.0).
+    const drain = { id: 'namada:6C1989767A6939F9A495E96C7232BFA00C5C20265C29C73EA40B69D2E7DA0EFC', chain: 'namada', ts: 1788219314259,
+      kind: 'pos_balance', amountNam: 331386682, from: 'tnam1qgqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqc8j2fp', to: 'tnam1qry99h4faqtkleuuyecxzrswq7vgkj2hu5kg6dqp' };
+    expect(evaluateFlows([toFlow(drain)], DEFAULT_THRESHOLDS).filter((h) => h.ruleId === 'unlock' || h.ruleId === 'bond')).toEqual([]);
     const big = data.events.find((e: any) => e.type === 'whale_flow' && e.flow.kind === 'withdraw');
     if (big) expect(evaluateFlows([toFlow(big.flow)], DEFAULT_THRESHOLDS).some((h) => h.ruleId === 'unlock')).toBe(true);
   });

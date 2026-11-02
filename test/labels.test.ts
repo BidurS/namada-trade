@@ -46,6 +46,9 @@ describe('category_plain', () => {
     expect(category_plain('backer')).toBe('Backer');
     expect(category_plain('pool')).toBe('Pool');
     expect(category_plain('watch')).toBe('Watch');
+    // the staking-account exploit of 2026-08-31 and its repayment (migrations/0019_exploit_labels.sql)
+    expect(category_plain('exploit')).toBe('Exploit');
+    expect(category_plain('exploit_repayment')).toBe('Exploit repayment');
     expect(category_plain(null)).toBeNull();
   });
 

@@ -39,21 +39,22 @@ describe('export-proof', () => {
     expect(p.priceMovesTested).toBe(ev.events.filter((e: any) => e.type === 'price_move').length);
     expect(p.reportDate).toBe(r.generated.slice(0, 10));
     const w = p.rewindExample!;
-    // the 331M of 31 Aug 2026 was the staking account's own balance moved in one transfer, not a withdrawal (screener-plan 3.0)
-    expect(w.kind).toBe('pos_balance');
-    expect(w.amountNam).toBe(331386682);
-    // the first alert is at 19:05 in the report; rewound one millisecond after it, that alert is visible
-    expect(new Date(w.firstAlertAt).toISOString().slice(0, 16)).toBe('2026-08-30T19:05');
+    // the 331M of 31 Aug 2026 was the staking-account exploit and is no market event (owner decision 37): the example
+    // is the largest withdrawal from staking an alert came before, 5,250,000 NAM on 19 Sep 2026 22:33 UTC, first alert 26.7 h before
+    expect(w.kind).toBe('withdraw');
+    expect(w.amountNam).toBe(5250000);
+    expect(w.eventId).not.toBe('whale_namada:6C1989767A6939F9A');
+    expect(new Date(w.firstAlertAt).toISOString().slice(0, 16)).toBe('2026-09-18T19:54');
     expect(w.rewindAt).toBe(w.firstAlertAt + 1);
     expect(w.firstAlertAt).toBeLessThan(w.at);
     expect(w.leadHours).toBeCloseTo((w.at - w.firstAlertAt) / 3600000, 1);
   });
 
   it('refuses a report that disagrees with events.json', async () => {
-    const md = (await readReport()).replace(/pos_balance 331,386,682/, 'pos_balance 331,000,000');
+    const md = (await readReport()).replace(/withdraw 5,250,000/, 'withdraw 5,200,000');
     expect(() => buildProof(parseReport(md), events())).toThrow(/move amount/);
     // and one that files the move under another kind
-    const md2 = (await readReport()).replace(/pos_balance 331,386,682/, 'withdraw 331,386,682');
+    const md2 = (await readReport()).replace(/withdraw 5,250,000/, 'pos_balance 5,250,000');
     expect(() => buildProof(parseReport(md2), events())).toThrow(/move amount/);
     expect(() => parseReport('# nothing here')).toThrow(/Generated/);
   });

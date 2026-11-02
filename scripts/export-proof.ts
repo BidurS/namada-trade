@@ -140,10 +140,11 @@ export function buildProof(r: Report, ev: EventsFile): Proof {
   if (priceRows.filter((x) => x.rules.length > 0).length !== r.flagged) throw new Error('report flag count does not match its table');
 
   // The Rewind example (owner decision 3): the largest move of NAM out of the staking account among the market
-  // events, and the first alert before it. Since 2026-10-20 the 331 million NAM of 31 Aug 2026 is filed as what it
-  // was, a transfer of the staking account's own balance ('pos_balance'), not a withdrawal by a holder; the
-  // sentence says which kind it is (Home, Palette).
+  // events that an alert came before, and that first alert. The 331 million NAM of 31 Aug 2026 it used to name was
+  // the staking-account exploit (owner, 2026-11-02; migrations/0019_exploit_labels.sql), which scripts/events.ts no
+  // longer counts as a market event; a move with no alert before it cannot show what an alert gave, so it is passed.
   const outs = market.filter((e) => e.type === 'whale_flow' && (e.flow?.kind === 'withdraw' || (e.flow?.kind === 'pos_balance' && e.flow?.from === POS)))
+    .filter((e) => r.rows.find((x) => x.id === e.id)?.firstAlert)
     .sort((a, b) => b.flow.amountNam - a.flow.amountNam);
   let example: Proof['rewindExample'] = null;
   if (outs.length) {

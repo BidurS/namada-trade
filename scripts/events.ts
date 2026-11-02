@@ -17,12 +17,22 @@ import { d1, iso } from './lib.ts';
 
 const H = 3600000;
 const LEAD = 48 * H;
+// The staking-account exploit of 2026-08-31 and its repayment (migrations/0019_exploit_labels.sql): moves of
+// exploited NAM and of its repayment are not market events, so neither the largest-moves markers nor the alert
+// replay counts them. They stay in the flows table and on the site under their labels.
+const EXPLOIT = `COALESCE(l1.category,'') NOT IN ('exploit','exploit_repayment') AND COALESCE(l2.category,'') NOT IN ('exploit','exploit_repayment')`;
 const INTERNAL = new Set([
   'tnam1qgqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqc8j2fp', // PoS
   'tnam1qcqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqvtr7x4', // IBC escrow
   'tnam1pcqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqzmefah', // MASP
   'tnam1pgqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqkhgajr', // PGF
 ]);
+
+// The owner's own addresses (private/trades.json, git-ignored; owner decision 10: never public). Their moves are
+// dropped here, after the read, so the addresses never enter a query, docs/events.json or anything built from it.
+const OWNER = new Set<string>(existsSync('private/trades.json')
+  ? (JSON.parse(readFileSync('private/trades.json', 'utf8')) as { address?: string }[]).map((t) => t.address ?? '').filter(Boolean) : []);
+const notOwner = (f: { from_addr: string | null; to_addr: string | null }) => !OWNER.has(f.from_addr ?? '') && !OWNER.has(f.to_addr ?? '');
 
 type Price = { ts: number; value: number };
 type Flow = { id: string; chain: string; ts: number; kind: string; from_addr: string | null; to_addr: string | null; amount_num: number; value_usd: number | null; meta: string | null; from_label: string | null; to_label: string | null };
@@ -44,7 +54,8 @@ function leadFlows(t: number): Flow[] {
     FROM flows f LEFT JOIN labels l1 ON l1.address=f.from_addr LEFT JOIN labels l2 ON l2.address=f.to_addr
     WHERE f.ts >= ${t - LEAD} AND f.ts < ${t} AND f.kind != 'rewards' AND f.kind != 'other'
       AND f.amount_num >= 5000
-    ORDER BY f.amount_num DESC LIMIT 40`);
+      AND ${EXPLOIT}
+    ORDER BY f.amount_num DESC LIMIT 80`).filter(notOwner).slice(0, 40);
 }
 
 // 1. price moves
@@ -61,7 +72,8 @@ const whales = d1<Flow & { from_label: string | null; to_label: string | null }>
   SELECT f.id, f.chain, f.ts, f.kind, f.from_addr, f.to_addr, f.amount_num, f.value_usd, f.meta, l1.label from_label, l2.label to_label
   FROM flows f LEFT JOIN labels l1 ON l1.address=f.from_addr LEFT JOIN labels l2 ON l2.address=f.to_addr
   WHERE f.kind NOT IN ('rewards','other') AND f.ts >= ${prices[0]?.ts ?? 0}
-  ORDER BY f.amount_num DESC LIMIT 12`);
+    AND ${EXPLOIT}
+  ORDER BY f.amount_num DESC LIMIT 40`).filter(notOwner).slice(0, 12);
 
 const events: any[] = [];
 for (const m of moves.slice(0, 10)) {
@@ -118,8 +130,10 @@ function sig(f: Flow) {
 // Base rate: how often is at least one alert-size flow present in the 48h before *any* price point?
 // If this is near 100%, "flagged ahead of the move" means little; the replay report shows both numbers.
 const MIN_ALERT_NAM = 10000;
-const alertFlows = d1<{ ts: number }>(`SELECT ts FROM flows WHERE amount_num >= ${MIN_ALERT_NAM} AND kind IN ('ibc_in','withdraw','buy','sell','unshield','bond')
-  AND (meta IS NULL OR meta NOT LIKE '%"arb":true%') AND ts >= ${prices[0].ts - LEAD} ORDER BY ts`).map((r) => r.ts);
+const alertFlows = d1<{ ts: number; from_addr: string | null; to_addr: string | null }>(`SELECT ts, from_addr, to_addr FROM flows WHERE amount_num >= ${MIN_ALERT_NAM} AND kind IN ('ibc_in','withdraw','buy','sell','unshield','bond')
+  AND (meta IS NULL OR meta NOT LIKE '%"arb":true%') AND ts >= ${prices[0].ts - LEAD}
+  AND NOT EXISTS (SELECT 1 FROM labels l WHERE l.address IN (flows.from_addr, flows.to_addr) AND l.category IN ('exploit','exploit_repayment'))
+  ORDER BY ts`).filter(notOwner).map((r) => r.ts);
 let armed = 0;
 for (const p of prices) if (alertFlows.some((t) => t >= p.ts - LEAD && t < p.ts)) armed++;
 const baseRate = prices.length ? armed / prices.length : null;

@@ -39,6 +39,9 @@ const CATEGORY_PLAIN: Record<string, string> = {
   ibc: 'Bridge account',
   module: 'Protocol account',
   cex: 'Exchange',
+  // the staking-account exploit of 2026-08-31 and its repayment (migrations/0019_exploit_labels.sql)
+  exploit: 'Exploit',
+  exploit_repayment: 'Exploit repayment',
 };
 
 const cap = (s: string) => (s ? s.charAt(0).toUpperCase() + s.slice(1) : s);

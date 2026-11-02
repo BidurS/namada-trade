@@ -353,7 +353,8 @@ describe('E2: user tags are bounded and never read as links', () => {
     for (const label of bad) expect((await post(db, t, { address: addr(1), label, category: 'watch' })).status, label).toBe(400);
     expect((await post(db, t, { address: addr(1), label: 'ok', note: 'go to https://x.invalid', category: 'watch' })).status).toBe(400);
     expect((await post(db, t, { address: NAMADA.internal.masp, label: 'mine', category: 'watch' })).status).toBe(409);
-    expect(db.raw.prepare('SELECT COUNT(*) n FROM labels').get().n).toBe(0);
+    // the migrations' curated rows (0019's exploit wallets) are there from the start; no tag was written
+    expect(db.raw.prepare("SELECT COUNT(*) n FROM labels WHERE source = 'user'").get().n).toBe(0);
     expect((await post(db, t, { address: addr(1), label: 'my whale (v2.0)', category: 'watch' })).status).toBe(200);
   });
   it('a wallet tags at most TAGS_PER_AUTHOR addresses; editing its own tag is never counted', async () => {

@@ -45,18 +45,18 @@ export interface Proof {
 
 export const PROOF: Proof = {
   "reportDate": "2026-11-02",
-  "reportGeneratedAt": 1793589060000,
+  "reportGeneratedAt": 1793635800000,
   "marketEventsTested": 22,
-  "pricePoints": 104,
+  "pricePoints": 216,
   "priceMovesFlagged": 10,
   "priceMovesTested": 10,
-  "medianLeadHours": 25,
+  "medianLeadHours": 28.2,
   "leadRangeHours": [
-    2,
-    47.4
+    15.1,
+    47.8
   ],
   "windowHours": 48,
-  "baseRatePct": 90,
+  "baseRatePct": 93,
   "minAlertNam": 10000,
   "thresholds": {
     "ibcInventory": 25000,
@@ -68,14 +68,14 @@ export const PROOF: Proof = {
     "liquidity": 100000
   },
   "rewindExample": {
-    "eventId": "whale_namada:6C1989767A6939F9A",
-    "kind": "pos_balance",
-    "amountNam": 331386682,
-    "at": 1788219314259,
-    "firstAlertAt": 1788116742844,
-    "firstAlertRule": "big_swap",
-    "leadHours": 28.5,
-    "rewindAt": 1788116742845,
-    "txHash": "6C1989767A6939F9A495E96C7232BFA00C5C20265C29C73EA40B69D2E7DA0EFC"
+    "eventId": "whale_namada:6B46718DF86FD594C",
+    "kind": "withdraw",
+    "amountNam": 5250000,
+    "at": 1789857194487,
+    "firstAlertAt": 1789761248834,
+    "firstAlertRule": "unlock",
+    "leadHours": 26.7,
+    "rewindAt": 1789761248835,
+    "txHash": "6B46718DF86FD594C6256233019C2802C642A5B069028FE224C49394E376DB3A"
   }
 };

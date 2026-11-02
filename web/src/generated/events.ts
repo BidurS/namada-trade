@@ -3,7 +3,7 @@
 // are not included (owner decision 10).
 
 /** When docs/events.json was built from the database (unix ms). */
-export const EVENTS_GENERATED_AT = 1792201181596;
+export const EVENTS_GENERATED_AT = 1793635804801;
 
 /** The largest hour-to-hour moves in the executed-swap price: chart markers. */
 export interface PriceMoveMarker {
@@ -31,206 +31,206 @@ export interface LargeFlowMarker {
 
 export const PRICE_MOVES: PriceMoveMarker[] = [
   {
-    "id": "price_2026-08-28T09",
-    "t0": 1787734800000,
-    "t1": 1787907600000,
-    "pct": -26.5,
-    "priceBefore": 0.0008660644612548421,
-    "priceAfter": 0.0006365938637324926
+    "id": "price_2026-08-19T19",
+    "t0": 1787140800000,
+    "t1": 1787166000000,
+    "pct": -36.9,
+    "priceBefore": 0.0008577264639388888,
+    "priceAfter": 0.0005410953458959297
   },
   {
-    "id": "price_2026-08-30T16",
-    "t0": 1788037200000,
-    "t1": 1788105600000,
-    "pct": -17.9,
-    "priceBefore": 0.0006241603483280911,
-    "priceAfter": 0.0005124954470917659
-  },
-  {
-    "id": "price_2026-09-12T07",
-    "t0": 1789138800000,
-    "t1": 1789196400000,
-    "pct": -20.2,
-    "priceBefore": 0.0006613406994168518,
-    "priceAfter": 0.000527711626291212
+    "id": "price_2026-08-19T21",
+    "t0": 1787166000000,
+    "t1": 1787173200000,
+    "pct": 38.8,
+    "priceBefore": 0.0005410953458959297,
+    "priceAfter": 0.0007510198098121328
   },
   {
     "id": "price_2026-09-19T11",
     "t0": 1789783200000,
     "t1": 1789815600000,
-    "pct": 35.7,
+    "pct": 34.7,
     "priceBefore": 0.00062831002834082,
-    "priceAfter": 0.0008526445617293982
+    "priceAfter": 0.0008462910973766018
   },
   {
-    "id": "price_2026-09-20T10",
-    "t0": 1789822800000,
-    "t1": 1789898400000,
-    "pct": 13.6,
-    "priceBefore": 0.000857921026830274,
-    "priceAfter": 0.0009742452316489279
+    "id": "price_2026-10-19T09",
+    "t0": 1792389600000,
+    "t1": 1792400400000,
+    "pct": 26.8,
+    "priceBefore": 0.0010349270915151524,
+    "priceAfter": 0.001311940568103995
   },
   {
-    "id": "price_2026-09-23T12",
-    "t0": 1790013600000,
-    "t1": 1790164800000,
-    "pct": 15.5,
-    "priceBefore": 0.0008026731196223698,
-    "priceAfter": 0.0009274137196648886
+    "id": "price_2026-10-19T18",
+    "t0": 1792411200000,
+    "t1": 1792432800000,
+    "pct": -30.8,
+    "priceBefore": 0.0013813014751558506,
+    "priceAfter": 0.0009558860908204113
   },
   {
-    "id": "price_2026-09-25T07",
-    "t0": 1790254800000,
-    "t1": 1790319600000,
-    "pct": -14.3,
-    "priceBefore": 0.0009690930075031612,
-    "priceAfter": 0.0008307863598778309
+    "id": "price_2026-10-19T20",
+    "t0": 1792432800000,
+    "t1": 1792440000000,
+    "pct": 26.2,
+    "priceBefore": 0.0009558860908204113,
+    "priceAfter": 0.0012067422897984565
   },
   {
-    "id": "price_2026-09-30T01",
-    "t0": 1790640000000,
-    "t1": 1790730000000,
-    "pct": 20.8,
-    "priceBefore": 0.0007150232996541442,
-    "priceAfter": 0.0008636022796343438
+    "id": "price_2026-10-21T14",
+    "t0": 1792587600000,
+    "t1": 1792591200000,
+    "pct": -85.5,
+    "priceBefore": 0.0011281160920439477,
+    "priceAfter": 0.0001640206145883375
   },
   {
-    "id": "price_2026-10-05T12",
-    "t0": 1791122400000,
-    "t1": 1791201600000,
-    "pct": 21.2,
-    "priceBefore": 0.0006763626462140748,
-    "priceAfter": 0.0008196618586247917
+    "id": "price_2026-10-21T15",
+    "t0": 1792591200000,
+    "t1": 1792594800000,
+    "pct": 112.2,
+    "priceBefore": 0.0001640206145883375,
+    "priceAfter": 0.00034807468395997847
   },
   {
-    "id": "price_2026-10-12T17",
-    "t0": 1791813600000,
-    "t1": 1791824400000,
-    "pct": -14.4,
-    "priceBefore": 0.0010799744300078302,
-    "priceAfter": 0.0009242450251142991
+    "id": "price_2026-10-21T18",
+    "t0": 1792602000000,
+    "t1": 1792605600000,
+    "pct": 64,
+    "priceBefore": 0.00040729712101840324,
+    "priceAfter": 0.0006681211257837332
+  },
+  {
+    "id": "price_2026-10-27T08",
+    "t0": 1793044800000,
+    "t1": 1793088000000,
+    "pct": -28.8,
+    "priceBefore": 0.0008201835425513161,
+    "priceAfter": 0.0005836829028812996
   }
 ];
 
 export const LARGE_FLOWS: LargeFlowMarker[] = [
   {
-    "id": "whale_namada:54966349077EC5639",
+    "id": "whale_namada:F4BE9CD91E6B680A0",
     "chain": "namada",
     "ts": 1787642341265,
     "kind": "transfer",
     "amountNam": 24219192,
-    "txHash": "54966349077EC5639A74B6AB3E9977DEBD1E407033105A1C9CFAA94A7D6DABF7",
+    "txHash": "F4BE9CD91E6B680A0D94ED5B8319FEFD43E415A27CFD10E6873FC69E903D348F",
     "pct24h": -1.1,
-    "pct72h": -27.3
+    "pct72h": -26.3
   },
   {
-    "id": "whale_namada:6C1989767A6939F9A",
+    "id": "whale_namada:CD3887C28933F3ADC",
     "chain": "namada",
-    "ts": 1788219314259,
-    "kind": "pos_balance",
-    "amountNam": 331386682,
-    "txHash": "6C1989767A6939F9A495E96C7232BFA00C5C20265C29C73EA40B69D2E7DA0EFC",
-    "pct24h": 10.3,
-    "pct72h": 10.8
+    "ts": 1789761248834,
+    "kind": "withdraw",
+    "amountNam": 5265682,
+    "txHash": "CD3887C28933F3ADC2B2CCBA367C7A49E7B4C0D27C0B5870F65F91296A9254D2",
+    "pct24h": 70.9,
+    "pct72h": 69.2
   },
   {
-    "id": "whale_namada:8CA6BBDD7B6D52B2A",
+    "id": "whale_namada:0B4F50FFBBE39D695",
     "chain": "namada",
-    "ts": 1788221505910,
+    "ts": 1789856971366,
+    "kind": "bond",
+    "amountNam": 2500000,
+    "txHash": "0B4F50FFBBE39D6953CF2C021495FEB0B9BBA0631B2D56B4E3FF0AB0B4ED819B",
+    "pct24h": -2.9,
+    "pct72h": 12.1
+  },
+  {
+    "id": "whale_namada:F52195AB230103F3C",
+    "chain": "namada",
+    "ts": 1789857167606,
+    "kind": "bond",
+    "amountNam": 2500000,
+    "txHash": "F52195AB230103F3C23D23DB1D3433B9823C7DC3AE4014619D95D1C5817D40DB",
+    "pct24h": -2.9,
+    "pct72h": 12.1
+  },
+  {
+    "id": "whale_namada:6B46718DF86FD594C",
+    "chain": "namada",
+    "ts": 1789857194487,
+    "kind": "withdraw",
+    "amountNam": 5250000,
+    "txHash": "6B46718DF86FD594C6256233019C2802C642A5B069028FE224C49394E376DB3A",
+    "pct24h": -2.9,
+    "pct72h": 12.1
+  },
+  {
+    "id": "whale_namada:2ADD06BD3B7D403E8",
+    "chain": "namada",
+    "ts": 1789857241971,
+    "kind": "bond",
+    "amountNam": 2500000,
+    "txHash": "2ADD06BD3B7D403E87C6FBFE932E1623AA74337ED7BA718CB8BE7F91F407951C",
+    "pct24h": -2.9,
+    "pct72h": 12.1
+  },
+  {
+    "id": "whale_namada:061AE0D18FE0E61D9",
+    "chain": "namada",
+    "ts": 1789857390510,
+    "kind": "bond",
+    "amountNam": 3200000,
+    "txHash": "061AE0D18FE0E61D9E068139DA281E826D0818A5A9A6C2858FEE23A042A4196E",
+    "pct24h": -2.9,
+    "pct72h": 12.1
+  },
+  {
+    "id": "whale_namada:73F34473799569B9E",
+    "chain": "namada",
+    "ts": 1792832591784,
     "kind": "shield",
-    "amountNam": 50000000,
-    "txHash": "8CA6BBDD7B6D52B2A4F52283F7555310C1E193BB059C4088ED70865BC5B8AD53",
-    "pct24h": 10.3,
-    "pct72h": 10.8
+    "amountNam": 5336700,
+    "txHash": "73F34473799569B9EB227693008275EFAF636C732963DBE367EF1C07F4B0B0A6",
+    "pct24h": 0.1,
+    "pct72h": -14.4
   },
   {
-    "id": "whale_osmosis:5E09118DB414150A",
-    "chain": "osmosis",
-    "ts": 1788350674348,
+    "id": "whale_namada:C9402B75D58A282AD",
+    "chain": "namada",
+    "ts": 1793543367662,
     "kind": "ibc_out",
-    "amountNam": 40001306,
-    "txHash": "5E09118DB414150A7EF91B1F56579DCCE0ABF093B26828B9E46859520B3EF525",
-    "pct24h": 12.6,
-    "pct72h": 7.5
+    "amountNam": 2300000,
+    "txHash": "C9402B75D58A282AD94049D7D10BD239D5ACA40E7FB2F902C4C92A436EBFCECD",
+    "pct24h": -6.9,
+    "pct72h": null
   },
   {
-    "id": "whale_osmosis:844177EE91643B21",
+    "id": "whale_osmosis:0CE000F67A64FC32",
     "chain": "osmosis",
-    "ts": 1788450507132,
-    "kind": "ibc_out",
-    "amountNam": 20000000,
-    "txHash": "844177EE91643B2131FD89CC3E53BC434FD892F69FF627F2A9FA86AAF2309C69",
-    "pct24h": -5.5,
-    "pct72h": -4
+    "ts": 1793543382770,
+    "kind": "ibc_in",
+    "amountNam": 2300000,
+    "txHash": "0CE000F67A64FC320E2E6EDFF76BB79010A49CBFA9B8C75D67A4D63127D737B2",
+    "pct24h": -6.9,
+    "pct72h": null
   },
   {
-    "id": "whale_namada:024B84A6711C72687",
+    "id": "whale_namada:A50B97AA03DC936EB",
     "chain": "namada",
-    "ts": 1788452196710,
-    "kind": "transfer",
-    "amountNam": 59000000,
-    "txHash": "024B84A6711C726874533EB26C4C7AFBAB1C23147DFC7643F3EFFE530C51CA5A",
-    "pct24h": -5.5,
-    "pct72h": -4
+    "ts": 1793606660603,
+    "kind": "unshield",
+    "amountNam": 4500000,
+    "txHash": "A50B97AA03DC936EB73FB73B3EAC5C47970B26A8FECC06948FBA49509E2F5063",
+    "pct24h": null,
+    "pct72h": null
   },
   {
-    "id": "whale_namada:3B9BD4D7C277F69D3",
+    "id": "whale_namada:FE56A2F79DEB8D2D6",
     "chain": "namada",
-    "ts": 1788452592318,
-    "kind": "transfer",
-    "amountNam": 100000000,
-    "txHash": "3B9BD4D7C277F69D38BE3918992F996E42020BFC0994F13DF3580E87151505BD",
-    "pct24h": -5.5,
-    "pct72h": -4
-  },
-  {
-    "id": "whale_namada:9E232C836A370C386",
-    "chain": "namada",
-    "ts": 1788456265563,
-    "kind": "transfer",
-    "amountNam": 125295685,
-    "txHash": "9E232C836A370C3866512E5098CFCE52C917797B2CBD8A5A25294FBFA8F9D8B3",
-    "pct24h": -5.5,
-    "pct72h": -4
-  },
-  {
-    "id": "whale_namada:59AA5A3380F104710",
-    "chain": "namada",
-    "ts": 1790097427433,
-    "kind": "pos_balance",
-    "amountNam": 99999900,
-    "txHash": "59AA5A3380F1047107C6FE92F7464B76B715C0E6DDD9E5FA2B9EE05A13056E9E",
-    "pct24h": 20.7,
-    "pct72h": -3.9
-  },
-  {
-    "id": "whale_namada:3B6C6C648886F5C2D",
-    "chain": "namada",
-    "ts": 1790097545268,
-    "kind": "pos_balance",
-    "amountNam": 100000000,
-    "txHash": "3B6C6C648886F5C2D2A3F767AE5CDD157A9B1E6AAFD0D9CF6FF582B71AD926DB",
-    "pct24h": 20.7,
-    "pct72h": -3.9
-  },
-  {
-    "id": "whale_namada:5F9E44142731CC939",
-    "chain": "namada",
-    "ts": 1790097625876,
-    "kind": "pos_balance",
-    "amountNam": 100000000,
-    "txHash": "5F9E44142731CC939DF6F4B02F2C08A82770F14B04A7A3F10A75B6F5A83F7DBE",
-    "pct24h": 20.7,
-    "pct72h": -3.9
-  },
-  {
-    "id": "whale_namada:192A229ECB1C195D1",
-    "chain": "namada",
-    "ts": 1790097706326,
-    "kind": "pos_balance",
-    "amountNam": 29386967,
-    "txHash": "192A229ECB1C195D1198D59D9FEACFF96D3D6BDB4DAC21FA4036E569F4DBF9A0",
-    "pct24h": 20.7,
-    "pct72h": -3.9
+    "ts": 1793610524629,
+    "kind": "unshield",
+    "amountNam": 15000000,
+    "txHash": "FE56A2F79DEB8D2D6BC9A800FFF913487F5971019A575ED61BE9FB311F2C197C",
+    "pct24h": null,
+    "pct72h": null
   }
 ];
