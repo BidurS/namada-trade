@@ -274,6 +274,9 @@ async function open(width: number, height: number, path = '/depth') {
   page.on('pageerror', (e) => errors.push(String(e)));
   await mockApi(page, origin);
   await page.goto(`${origin}${path}`, { waitUntil: 'domcontentloaded' });
+  // The halt bar (shared/halt.ts, web/src/app/HaltBanner.tsx) is site-wide and lasts only while the Namada network is
+  // halted: the page's own screens and first-screen budgets are measured without it.
+  await page.addStyleTag({ content: '.upd--halt { display: none !important }' });
   await page.locator('header.hdr').waitFor();
   await page.locator('main h1').first().waitFor({ timeout: 30_000 });
   return { page, ctx, errors };

@@ -773,7 +773,10 @@ async function postAll(targets: Target[], db: D1Database | undefined, what: stri
   if (!sending) {
     // A run that does not send alerts (sendsAlerts) posts nothing; what it would have posted is logged and recorded
     // as not sent, so a production Worker left without SEND_ALERTS shows in the health view instead of going quiet.
-    if (targets.length) {
+    // Posts held by ALERTS_PAUSED are logged and not recorded: the alert delivery row already says the alerts are
+    // paused, and a record would read as a failure for a day after the pause ends (cron.ts alertDeliveryRow).
+    if (targets.length && paused) console.log(`alerts: ${targets.length} posts for ${what} held (the alerts are paused)`);
+    else if (targets.length) {
       const label = `${what} (SEND_ALERTS is not yes)`;
       console.log(`alerts: ${targets.length} posts for ${label} not sent`);
       await recordSkipped(db, targets.length, label);
@@ -1002,9 +1005,16 @@ export async function sendDiscordOperator(webhookUrl: string, body: Record<strin
  * (`wrangler secret put SEND_ALERTS`, value yes; scripts/deploy-check.sh does not deploy without it). Any other run,
  * such as `wrangler dev` on a copy of the production database, posts nothing and never reads the users' settings: a
  * copy holds none of the claims production took after it and every user's settings as they were then, so it would
- * post again what production posted, to channels their owners have since changed or deleted.
+ * post again what production posted, to channels their owners have since changed or deleted. While ALERTS_PAUSED is set
+ * (a var in wrangler.jsonc: the Namada halt of 2026-11-02, shared/halt.ts) production posts none either: what comes
+ * meanwhile is claimed and not posted, as on a run without SEND_ALERTS, so nothing old is posted when the pause ends.
+ * The pause's one notice goes around it (worker/src/halt-notice.ts).
  */
-export const sendsAlerts = (env: { SEND_ALERTS?: string }): boolean => env.SEND_ALERTS === 'yes';
+export const sendsAlerts = (env: { SEND_ALERTS?: string; ALERTS_PAUSED?: string }): boolean => env.SEND_ALERTS === 'yes' && !env.ALERTS_PAUSED;
+/** Whether production's alerts are held by ALERTS_PAUSED: SEND_ALERTS is yes and the pause is set (sendsAlerts is then false). */
+export const alertsPausedIn = (env: { SEND_ALERTS?: string; ALERTS_PAUSED?: string }): boolean => env.SEND_ALERTS === 'yes' && !!env.ALERTS_PAUSED;
+/** The health note of a part held by the pause: it starts with "Off", so ops.ts offOnPurpose reads it as turned off on purpose. */
+export const PAUSED_NOTE = 'Off while the alerts are paused (ALERTS_PAUSED): nothing is claimed for it or posted.';
 
 let settingsKey: string | undefined;
 /**
@@ -1013,8 +1023,12 @@ let settingsKey: string | undefined;
  * directly (the tests).
  */
 let sending = true;
-/** The dispatcher needs the settings key and whether this run posts; the Worker sets both at each entry (index.ts, live-hub.ts). */
-export function configureAlerts(key: string | undefined, send = true) { settingsKey = key; sending = send; }
+/** Whether this run's alerts are held by ALERTS_PAUSED (alertsPausedIn), as its entry set it. */
+let paused = false;
+/** The dispatcher needs the settings key, whether this run posts and whether a pause holds it; the Worker sets them at each entry (index.ts, live-hub.ts). */
+export function configureAlerts(key: string | undefined, send = true, pause = false) { settingsKey = key; sending = send; paused = pause; }
+/** Whether this run's alerts are held by the pause (configureAlerts), not by a missing SEND_ALERTS. */
+export const alertsPaused = (): boolean => paused;
 /**
  * Whether this run posts alerts, as its entry set it (configureAlerts). The Settings test route asks it first, so a
  * Worker without SEND_ALERTS says that alerts are off instead of a refusal the page would put on the user's link.

@@ -58,6 +58,7 @@ import { SessionProvider } from './session';
 import { TabBar } from './TabBar';
 import { UpdateBanner } from './UpdateBanner';
 import { StaleBanner } from './StaleBanner';
+import { HaltBanner } from './HaltBanner';
 import { GUIDE_ROUTES } from '../../../shared/routes';
 
 export interface ScreenProps {
@@ -199,6 +200,7 @@ function Shell() {
     <div className="app">
       <a className="skip" href="#main">Skip to content</a>
       <Header />
+      <HaltBanner />
       <RewindBanner />
       <UpdateBanner />
       <StaleBanner />

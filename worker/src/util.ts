@@ -9,6 +9,8 @@ export interface Env {
   DISCORD_WEBHOOK_URL?: string;
   /** 'yes' in production only (a secret): any other run posts no alert (sources/discord.ts sendsAlerts) */
   SEND_ALERTS?: string;
+  /** Set (a var, wrangler.jsonc): every alert is held, whatever SEND_ALERTS says; it names the pause, a halt's id (shared/halt.ts), whose one notice is worker/src/halt-notice.ts */
+  ALERTS_PAUSED?: string;
   ACCESS_AUD?: string;
   /** 32 bytes base64; encrypts per-user settings at rest */
   SETTINGS_KEY?: string;

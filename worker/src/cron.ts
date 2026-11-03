@@ -34,6 +34,7 @@ import * as series from './series';
 import { prepareDigests, sendDigests, type DigestRun } from './digest/deliver';
 import { DIGEST_HEALTH_LOG_KV, HEALTH_LOG_PER_NAME } from './digest/operator';
 import { runOps } from './ops';
+import { postHaltNotice } from './halt-notice';
 import { refreshFlowCounts } from './flow-counts';
 
 const INDEXER = 'https://indexer.namada.net/api/v1';
@@ -53,8 +54,11 @@ export const ALERT_DELIVERY_HEALTH = 'Discord alert delivery';
  * made before the secret was put shows in the health view and in deploy-check.sh's health list from its first tick,
  * not only once a post that would have reached the operator's channel is dropped.
  */
-export function alertDeliveryOff(env: { SEND_ALERTS?: string }, now: number): SourceHealth | null {
+export function alertDeliveryOff(env: { SEND_ALERTS?: string; ALERTS_PAUSED?: string }, now: number): SourceHealth | null {
   if (sendsAlerts(env)) return null;
+  if (env.SEND_ALERTS === 'yes' && env.ALERTS_PAUSED) {
+    return { name: ALERT_DELIVERY_HEALTH, ok: false, at: now, note: 'Off on this Worker while the alerts are paused (ALERTS_PAUSED): no alert is posted to any channel.' };
+  }
   return { name: ALERT_DELIVERY_HEALTH, ok: false, at: now, note: 'Off on this Worker, SEND_ALERTS is not yes: no alert is posted to any channel.' };
 }
 
@@ -1698,6 +1702,9 @@ export async function runCron(env: Env) {
   // The channels on trial whose notice this tick posts again, beside the chain reads (sources/discord.ts
   // sweepNoticeChannels); it ends before the tick's lock is released.
   let trials: Promise<unknown> = Promise.resolve();
+  // The halt's one notice (halt-notice.ts), beside the chain reads; it ends before the tick's lock is released, so two
+  // ticks never post it at once.
+  const haltNotice = postHaltNotice(env).catch((e) => console.error('halt notice', e));
   try {
     await sweepAuth(env.DB);
     // A channel saved on while its connection notice did not reach it is on trial: one no post reached within a day
@@ -2313,6 +2320,7 @@ export async function runCron(env: Env) {
     // merged now.
     await intel;
     await trials;
+    await haltNotice;
     if (health.length > merged) await mergeHealth(env, health.slice(merged));
     // The operator's incidents (ops.ts): the tick's rows and checks judged once all are written, and the tick's
     // completion recorded (the live hub and /api/health read it). The lock expires TICK_LOCK_MS after it was taken,

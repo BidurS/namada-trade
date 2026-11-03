@@ -20,7 +20,7 @@ import { readStoredPools } from './pool-sizes';
 import { HubQuote, askQuoteService, storedQuoteReader } from './live-quote';
 import { priceRouteAt, stampPriceRoute } from './price-how';
 import { sendTelegramMove, telegramRun, TG_LIVE_MS, TG_LIVE_SENDS } from './sources/telegram';
-import { alarmBudget, configureAlerts, fanoutBudget, flushAlerts, isNamWhale, noteNotSent, offeredForAlerts, sendDiscordWhaleAlert, sendsAlerts, spentOut, FANOUT_DEADLINE_MS, UsersUnreadError, WEBHOOK_TIMEOUT_MS, type AlertBudget, type PendingAlert } from './sources/discord';
+import { alarmBudget, alertsPausedIn, configureAlerts, fanoutBudget, flushAlerts, isNamWhale, noteNotSent, offeredForAlerts, sendDiscordWhaleAlert, sendsAlerts, spentOut, FANOUT_DEADLINE_MS, UsersUnreadError, WEBHOOK_TIMEOUT_MS, type AlertBudget, type PendingAlert } from './sources/discord';
 import { fetchJson, HttpError, redact, registerSecrets, FETCH_TEXT_MAX_BYTES, ReadBudgetError, ResponseTooLargeError, type ReadBudget } from './util';
 import { watchCronStall, OPS_STALL_LOOK_MS } from './ops';
 
@@ -452,7 +452,7 @@ export class LiveHub extends DurableObject<Env> {
 
   constructor(ctx: DurableObjectState, env: Env) {
     super(ctx, env);
-    configureAlerts(env.SETTINGS_KEY, sendsAlerts(env));
+    configureAlerts(env.SETTINGS_KEY, sendsAlerts(env), alertsPausedIn(env));
     registerSecrets(env.KEPLR_KEY);
     // the cron's own read (the price list, else the route's spot), with the source name and note that say which
     this.quote = new HubQuote(askQuoteService, storedQuoteReader(env.DB));

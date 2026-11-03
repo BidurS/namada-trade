@@ -30,7 +30,7 @@
 import type { GovernanceProposal } from '../../../shared/types';
 import { kvSet } from '../db';
 import { holdsNumericHost, safeHttpUrl } from '../../../shared/flow-rules';
-import { alertsOn, claimDiscordAlert, fits, govCard, releaseClaims, type Card, type GovContext } from './discord';
+import { alertsOn, alertsPaused, claimDiscordAlert, fits, govCard, releaseClaims, type Card, type GovContext } from './discord';
 import { mdToPlain } from './telegram';
 import { claimTaken, hourClaims, hourKey, hourPick, partsCarried, publicRecord, publicTitle, publicValue, publicWho, publicWhy, type HourPart, type PublicHour, type PublicMove } from '../public-posts';
 
@@ -413,10 +413,15 @@ export const ownId = (env: XEnv) => /^(\d+)-/.exec(env.X_ACCESS_TOKEN ?? '')?.[1
  *
  * Each tick the switch reads off forgets where the posts stood (the cursor is deleted, and X is not asked), so the
  * first look after it is back on is a first look again: what @namada posted while it was off (a post the switch was
- * turned off for, say) is never reposted. A switch that cannot be read leaves the cursor as it is.
+ * turned off for, say) is never reposted. A switch that cannot be read leaves the cursor as it is. A tick while the
+ * alerts are paused (ALERTS_PAUSED, sources/discord.ts alertsPaused) forgets it the same way, so nothing @namada posted
+ * during the pause is reposted when it ends.
  */
 export async function repostNamada(env: XEnv, now = Date.now()): Promise<number> {
-  if (!postsOnX(env)) return 0;
+  if (!postsOnX(env)) {
+    if (alertsPaused()) await env.DB.prepare("DELETE FROM kv WHERE key = 'x.repost.since'").run().catch((e) => console.error('x: the repost cursor not cleared', e));
+    return 0;
+  }
   const on = await xSwitch(env.DB);
   if (on === 'off') await env.DB.prepare("DELETE FROM kv WHERE key = 'x.repost.since'").run().catch((e) => console.error('x: the repost cursor not cleared', e));
   if (on !== 'on' || Math.floor(now / 60_000) % REPOST_EVERY_MIN !== 0) return 0;

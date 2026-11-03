@@ -66,7 +66,11 @@
   "vars": {
     // Whale thresholds in NAM (user choice: 10k on both chains).
     "WHALE_OSMOSIS_NAM": "10000",
-    "WHALE_NAMADA_NAM": "10000"
+    "WHALE_NAMADA_NAM": "10000",
+    // Every alert held, on Discord, X and Telegram, while the Namada network is halted (owner, 2026-11-02): the halt's id
+    // (shared/halt.ts HALT.id), whose one notice the cron's tick posts once per place (worker/src/halt-notice.ts).
+    // Removed, with HALT.on turned off, when the network is back.
+    "ALERTS_PAUSED": "namada-halt-2026-11-02"
   }
 
   // Secrets (set with `wrangler secret put <NAME>`, locally in .dev.vars):

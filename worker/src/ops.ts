@@ -124,7 +124,7 @@ export interface CronStall { since: number; openedAt: number; toldAt: number | n
 /** A check's row as the judging reads it. */
 export interface OpsCheckRow { key: string; status: string; title: string; checked_at: number; every_ms?: number | null }
 /** What this module reads of the Worker's environment. */
-export interface OpsEnv { DB: D1Database; SEND_ALERTS?: string; DISCORD_WEBHOOK_URL?: string; TELEGRAM_BOT_TOKEN?: string; TELEGRAM_OWNER_CHAT?: string }
+export interface OpsEnv { DB: D1Database; SEND_ALERTS?: string; ALERTS_PAUSED?: string; DISCORD_WEBHOOK_URL?: string; TELEGRAM_BOT_TOKEN?: string; TELEGRAM_OWNER_CHAT?: string }
 
 export const emptyOps = (): OpsState => ({ v: 1, lastTickAt: null, watch: {}, open: {}, closing: [], remindedAt: null, reminds: 0, stallSince: null });
 

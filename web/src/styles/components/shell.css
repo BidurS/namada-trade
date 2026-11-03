@@ -185,6 +185,11 @@
   .upd__in { display: flex; align-items: center; justify-content: space-between; gap: var(--s-3); max-width: var(--max); min-height: 52px; margin-inline: auto; padding: 4px var(--s-2) 4px var(--gutter); font-size: var(--t-13); line-height: 18px; }
   .upd__btn { flex: none; display: inline-flex; align-items: center; min-height: 44px; padding: 0 16px; background: transparent; color: var(--ink); border: 1.5px solid var(--line-strong); border-radius: var(--r-pill); font: var(--w-medium) var(--t-13) / 16px var(--font-text); }
   .upd__btn:hover { background: var(--ink); color: var(--bg); border-color: var(--ink); }
+  /* the halt bar (HaltBanner): the Namada network is halted; a warning edge, the title in --warn, no button */
+  .upd--halt { border-bottom: 2px solid var(--warn); }
+  .upd--halt .upd__in { padding: 10px var(--gutter); }
+  .upd--halt strong { color: var(--warn); font-weight: var(--w-bold); }
+  .upd__src { color: var(--ink-2); }
 
   /* ---------- footer ---------- */
   .foot { padding-block: var(--s-7) var(--s-7); border-top: 1px solid var(--c-line); }

@@ -2,7 +2,7 @@ import { app } from './api';
 import { LiveHub } from './live-hub';
 import { runCron } from './cron';
 import { registerSecrets, type Env } from './util';
-import { configureAlerts, sendsAlerts } from './sources/discord';
+import { alertsPausedIn, configureAlerts, sendsAlerts } from './sources/discord';
 import { seoHtml, robotsTxt, sitemapXml, llmsTxt, classifyPath } from './seo';
 import { redirectLocation } from '../../shared/routes';
 import { cachedApi as cachedApiWith, inlineScriptHashes, pagePolicies, ENFORCE_SCRIPT_POLICY, wsLimited } from './http';
@@ -45,7 +45,7 @@ export { LiveHub };
 
 export default {
   async fetch(request: Request, env: Env, ctx: ExecutionContext): Promise<Response> {
-    configureAlerts(env.SETTINGS_KEY, sendsAlerts(env));
+    configureAlerts(env.SETTINGS_KEY, sendsAlerts(env), alertsPausedIn(env));
     registerSecrets(env.KEPLR_KEY);
     const url = new URL(request.url);
 
@@ -127,7 +127,7 @@ export default {
   },
 
   async scheduled(event: ScheduledEvent, env: Env, ctx: ExecutionContext): Promise<void> {
-    configureAlerts(env.SETTINGS_KEY, sendsAlerts(env));
+    configureAlerts(env.SETTINGS_KEY, sendsAlerts(env), alertsPausedIn(env));
     registerSecrets(env.KEPLR_KEY);
     ctx.waitUntil(runCron(env));
   },

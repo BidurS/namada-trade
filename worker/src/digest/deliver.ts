@@ -8,7 +8,7 @@
 // and nothing is built or claimed on a Worker that does not send alerts.
 import { DIGEST_HOUR_UTC } from '../../../shared/alerts';
 import type { SourceHealth } from '../../../shared/types';
-import { sendDiscordDigest, type AlertBudget, type DigestDelivery, type DigestOutcome, type WebhookPost } from '../sources/discord';
+import { alertsPaused, sendDiscordDigest, PAUSED_NOTE, type AlertBudget, type DigestDelivery, type DigestOutcome, type WebhookPost } from '../sources/discord';
 import type { StoredSettings } from '../settings';
 import { readAndBuildDigest, type DigestBuild, type DigestPost } from './build';
 import { DIGEST_LATE_NOTE_MS, ago, clock, dayMon, digestDueAt, digestKey, digestLabel, isoDate, lateNote, plural } from './message';
@@ -99,6 +99,8 @@ export async function missedYesterday(db: D1Database, now: number): Promise<Sour
 export interface DigestJob { kind: DigestKind; key: string; what: string; now: number; state: 'new' | 'open'; record: DigestRecord | null; build: Promise<DigestBuild | { error: string }> }
 export interface DigestRun { jobs: DigestJob[]; rows: SourceHealth[] }
 
+/** Why no digest is claimed or posted on this run: the pause (ALERTS_PAUSED, read as off on purpose) or no SEND_ALERTS. */
+const offNote = () => (alertsPaused() ? PAUSED_NOTE : 'Not sent: SEND_ALERTS is not yes on this Worker, so no digest is claimed or posted.');
 const errText = (e: unknown) => String((e as Error)?.message ?? e).replace(/\s+/g, ' ').slice(0, 120);
 const capFirst = (s: string) => s.charAt(0).toUpperCase() + s.slice(1);
 
@@ -113,7 +115,7 @@ export async function prepareDigests(db: D1Database, now: number, sends: boolean
   const jobs: DigestJob[] = [];
   const due = digestsDue(now);
   if (!sends) {
-    if (due.length) rows.push({ name: DIGEST_HEALTH, ok: false, at: now, note: 'Not sent: SEND_ALERTS is not yes on this Worker, so no digest is claimed or posted.' });
+    if (due.length) rows.push({ name: DIGEST_HEALTH, ok: false, at: now, note: offNote() });
     return { jobs, rows };
   }
   for (const kind of due) {
@@ -215,7 +217,7 @@ export async function sendDigests(db: D1Database, webhookUrl: string | undefined
     }
     const at = Date.now();
     if (r.state === 'off') {
-      health.push({ name: DIGEST_HEALTH, ok: false, at, note: 'Not sent: SEND_ALERTS is not yes on this Worker, so no digest is claimed or posted.' });
+      health.push({ name: DIGEST_HEALTH, ok: false, at, note: offNote() });
     } else if (r.state === 'done') {
       known.add(j.key);
       if (r.channels === 0 && j.state === 'new') {
