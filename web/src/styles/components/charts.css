@@ -184,7 +184,8 @@
   .pa-notes [data-num] { margin-right: var(--s-1); }
   .pa { container: pa / inline-size; display: grid; min-width: 0; margin-top: var(--s-2); }
   .pa__head { display: none; }
-  .pa__row { position: relative; display: grid; grid-template-columns: minmax(0, 1fr) auto; grid-template-areas: "id liq" "id share" "o24 here" "o7 here" "nam fee"; column-gap: var(--s-3); row-gap: 2px; padding: 14px 0 16px; border-top: 1px solid var(--c-line); min-width: 0; }
+  /* the right column is capped at half the row, so a long reason beside a missing depth wraps there instead of squeezing the pool name */
+  .pa__row { position: relative; display: grid; grid-template-columns: minmax(0, 1fr) fit-content(50%); grid-template-areas: "id liq" "id share" "o24 here" "o7 here" "nam fee"; column-gap: var(--s-3); row-gap: 2px; padding: 14px 0 16px; border-top: 1px solid var(--c-line); min-width: 0; }
   .pa__id { grid-area: id; display: grid; align-content: start; gap: 2px; min-width: 0; }
   .pa__pair { font-size: var(--t-15); line-height: 22px; font-weight: var(--w-medium); overflow-wrap: anywhere; }
   .pa__sub { display: block; font: var(--w-regular) var(--t-12) / 18px var(--font-code); color: var(--c-ink-2); overflow-wrap: anywhere; }
