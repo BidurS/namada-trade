@@ -1,6 +1,7 @@
 // Holder row status (W2, owner decision 7), shared by the worker (which sends `status` and
 // `statusNote` on every holder row) and the web app (which computes the same for a server that
 // predates W2, web/src/lib/compat.ts), so there is one rule.
+import { HALT } from './halt';
 import type { SourceStatus } from './types';
 
 const H = 3600000;
@@ -34,9 +35,11 @@ export interface HolderStatusInput {
  * - else `stale` when the spendable balance was last read from the chain more than 6 h ago (or never);
  * - else `live`.
  * A fresh chain read that differs from the estimate is not a row problem: it feeds the bonded-coverage check.
+ * While the network is halted (`halted`) no chain read can be fresh, so nothing conflicts: the estimate only adds up
+ * staking transactions, and a stake made at genesis was never one, so it would otherwise mark rows whose stake is right.
  */
-export function holderStatus(r: HolderStatusInput, now: number): { status: SourceStatus; statusNote: string | null } {
-  if (r.chain === 'namada' && r.bondedRead != null && r.bondedEstimated != null) {
+export function holderStatus(r: HolderStatusInput, now: number, halted: boolean = HALT.on): { status: SourceStatus; statusNote: string | null } {
+  if (!halted && r.chain === 'namada' && r.bondedRead != null && r.bondedEstimated != null) {
     const fresh = r.bondedVerifiedAt != null && now - r.bondedVerifiedAt <= BONDED_FRESH_MS;
     const diff = Math.abs(r.bondedEstimated - r.bondedRead);
     if (!fresh && diff > CONFLICT_NAM) {

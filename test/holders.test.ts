@@ -38,14 +38,19 @@ describe('holder status (owner decision 7)', () => {
     expect(r).toEqual({ status: 'live', statusNote: null });
   });
 
+  it('does not conflict while the network is halted: no chain read can be fresh, and the chain reading stands', () => {
+    const r = { ...base, bondedRead: 14662107.029992, bondedEstimated: 14562107.029992, bondedVerifiedAt: NOW - 25 * H };
+    expect(holderStatus(r, NOW, true)).toEqual({ status: 'live', statusNote: null });
+    expect(holderStatus({ ...r, verifiedAt: NOW - LIQUID_STALE_MS - 1 }, NOW, true).status).toBe('stale');
+  });
   it('conflicts only without a chain read newer than 24 h and with more than 1 NAM between estimate and last reading', () => {
-    const c = holderStatus({ ...base, bondedRead: 14662107.029992, bondedEstimated: 14562107.029992, bondedVerifiedAt: NOW - 25 * H }, NOW);
+    const c = holderStatus({ ...base, bondedRead: 14662107.029992, bondedEstimated: 14562107.029992, bondedVerifiedAt: NOW - 25 * H }, NOW, false);
     expect(c.status).toBe('conflict');
     expect(c.statusNote).toBe('Staked NAM: the last chain reading (14,662,107 NAM) and the estimate from staking history (14,562,107 NAM) differ by 100,000 NAM, and the stake has not been read from the chain in the last 24 hours.');
-    expect(holderStatus({ ...base, bondedRead: 100, bondedEstimated: 100.9, bondedVerifiedAt: NOW - 3 * D }, NOW).status).toBe('live');
-    expect(holderStatus({ ...base, bondedRead: 100, bondedEstimated: 102, bondedVerifiedAt: null }, NOW).status).toBe('conflict');
+    expect(holderStatus({ ...base, bondedRead: 100, bondedEstimated: 100.9, bondedVerifiedAt: NOW - 3 * D }, NOW, false).status).toBe('live');
+    expect(holderStatus({ ...base, bondedRead: 100, bondedEstimated: 102, bondedVerifiedAt: null }, NOW, false).status).toBe('conflict');
     // conflict outranks an old spendable balance
-    expect(holderStatus({ ...base, verifiedAt: null, bondedRead: 100, bondedEstimated: 102, bondedVerifiedAt: null }, NOW).status).toBe('conflict');
+    expect(holderStatus({ ...base, verifiedAt: null, bondedRead: 100, bondedEstimated: 102, bondedVerifiedAt: null }, NOW, false).status).toBe('conflict');
   });
 
   it('says so when the stake is only an estimate, without making the row old', () => {
