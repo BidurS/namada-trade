@@ -149,7 +149,7 @@ function pageParam(c: any): number | Response {
 app.get('/api/ask', async (c) => c.json(await askState({ db: c.env.DB, apiKey: c.env.ANTHROPIC_API_KEY, now: Date.now() })));
 // Nothing about a question is stored or logged; only the day's counts and the month's spend (worker/src/ask.ts).
 app.post('/api/ask', async (c) => {
-  const { http, answer } = await answerAsk(await jsonObject(c), { db: c.env.DB, apiKey: c.env.ANTHROPIC_API_KEY, now: Date.now(), ip: c.req.header('cf-connecting-ip'), origin: c.req.header('origin') });
+  const { http, answer } = await answerAsk(await jsonObject(c), { db: c.env.DB, apiKey: c.env.ANTHROPIC_API_KEY, now: Date.now(), ip: c.req.header('cf-connecting-ip'), origin: c.req.header('origin'), readWallet: async () => (await sessionFromRequest(c.env.DB, c.req.raw).catch(() => null))?.address ?? null });
   return c.json(answer, http as 200, { 'cache-control': 'no-store' });
 });
 

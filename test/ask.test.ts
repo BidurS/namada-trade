@@ -13,7 +13,7 @@ import { BANNED } from './banned-words';
 import { GUIDES } from '../shared/guides';
 import { GUIDE_META } from '../shared/guide-meta';
 import {
-  ASK_ADDRESS_DAY_CAP, ASK_DAY_CAP, ASK_DAY_KEY, addressTag, askOriginAllowed, ASK_MONTH_CAP_USD, ASK_SPEND_KEY, answerAsk, askState, usageUsd, type AskCall, type AskCallResult, type AskDeps, type AskParams, ASK_SELFTEST, runAskSelfTest, type AskSelfTestRow } from '../worker/src/ask';
+  ASK_CONNECTION_DAY_CAP, ASK_READER_DAY_CAP, ASK_WALLET_DAY_CAP, ASK_DAY_CAP, ASK_DAY_KEY, addressTag, walletTag, askOriginAllowed, ASK_MONTH_CAP_USD, ASK_SPEND_KEY, answerAsk, askState, usageUsd, type AskCall, type AskCallResult, type AskDeps, type AskParams, ASK_SELFTEST, runAskSelfTest, type AskSelfTestRow } from '../worker/src/ask';
 import { app } from '../worker/src/api';
 import { limiterFor, rateLimited } from '../worker/src/http';
 import { kvGetJson, kvSet } from '../worker/src/db';
@@ -126,23 +126,23 @@ describe('the caps', () => {
       const f = fake();
       return answerAsk({ question: 'What is NAM?' }, deps(db, (p, t) => { calls++; return f.call(p, t); }, { ip }));
     };
-    for (let i = 0; i < ASK_ADDRESS_DAY_CAP; i++) expect((await ask('203.0.113.9')).answer.status).toBe('answered');
-    expect(calls).toBe(ASK_ADDRESS_DAY_CAP * 2);
-    for (let i = 0; i < 3; i++) expect((await ask('203.0.113.9')).answer).toMatchObject({ status: 'resting', text: ASK_WORDS.restingAddress });
-    expect(calls).toBe(ASK_ADDRESS_DAY_CAP * 2);
-    expect((await kvGetJson<{ n: number }>(db, ASK_DAY_KEY))!.n).toBe(ASK_ADDRESS_DAY_CAP);
+    for (let i = 0; i < ASK_READER_DAY_CAP; i++) expect((await ask('203.0.113.9')).answer.status).toBe('answered');
+    expect(calls).toBe(ASK_READER_DAY_CAP * 2);
+    for (let i = 0; i < 3; i++) expect((await ask('203.0.113.9')).answer).toMatchObject({ status: 'limit', text: ASK_WORDS.limitReader });
+    expect(calls).toBe(ASK_READER_DAY_CAP * 2);
+    expect((await kvGetJson<{ n: number }>(db, ASK_DAY_KEY))!.n).toBe(ASK_READER_DAY_CAP);
     expect((await ask('203.0.113.10')).answer.status).toBe('answered');
-    expect((await kvGetJson<{ n: number }>(db, ASK_DAY_KEY))!.n).toBe(ASK_ADDRESS_DAY_CAP + 1);
+    expect((await kvGetJson<{ n: number }>(db, ASK_DAY_KEY))!.n).toBe(ASK_READER_DAY_CAP + 1);
   });
   it('an IPv6 connection is counted by its /64, so changing the last half of the address does not reset it', async () => {
     const db = await testD1();
-    for (let i = 0; i < ASK_ADDRESS_DAY_CAP; i++) await answerAsk({ question: 'What is NAM?' }, deps(db, fake().call, { ip: `2001:db8:1:2::${(i + 1).toString(16)}` }));
-    expect((await answerAsk({ question: 'What is NAM?' }, deps(db, fake().call, { ip: '2001:db8:1:2:ffff::1' }))).answer.status).toBe('resting');
+    for (let i = 0; i < ASK_READER_DAY_CAP; i++) await answerAsk({ question: 'What is NAM?' }, deps(db, fake().call, { ip: `2001:db8:1:2::${(i + 1).toString(16)}` }));
+    expect((await answerAsk({ question: 'What is NAM?' }, deps(db, fake().call, { ip: '2001:db8:1:2:ffff::1' }))).answer.status).toBe('limit');
   });
   it('the quota starts again on a new day', async () => {
     const db = await testD1();
     const tag = await addressTag('test-key', '2026-11-07', '203.0.113.9');
-    await kvSet(db, ASK_DAY_KEY, { day: '2026-11-07', n: 40, by: { [tag]: ASK_ADDRESS_DAY_CAP + 1 } });
+    await kvSet(db, ASK_DAY_KEY, { day: '2026-11-07', n: 40, by: { [tag]: ASK_READER_DAY_CAP + 1 } });
     expect((await answerAsk({ question: 'What is NAM?' }, deps(db, fake().call, { ip: '203.0.113.9' }))).answer.status).toBe('answered');
   });
   it('a row written before the quota existed keeps counting', async () => {
@@ -160,6 +160,48 @@ describe('the caps', () => {
     for (const ip of ['203.0.113.1', '203.0.113.2', '203.0.113.3']) expect((await answerAsk({ question: 'What is NAM?' }, deps(db, f.call, { ip }))).answer.text).toBe(ASK_WORDS.restingDay);
     expect(f.calls).toHaveLength(0);
     expect(await kvGetJson(db, ASK_DAY_KEY)).toEqual({ day: '2026-11-08', n: ASK_DAY_CAP + 1, by: {} });
+  });
+  it('a signed-in wallet gets the larger quota, and its own count', async () => {
+    const db = await testD1();
+    const ask = (w: string | null, ip = '203.0.113.9') => answerAsk({ question: 'What is NAM?' }, deps(db, fake().call, { ip, readWallet: async () => w }));
+    for (let i = 0; i < ASK_WALLET_DAY_CAP; i++) expect((await ask('tnam1wallet')).answer.status).toBe('answered');
+    expect((await ask('tnam1wallet')).answer).toMatchObject({ status: 'limit', text: ASK_WORDS.limitWallet });
+    expect((await ask('tnam1another')).answer.status).toBe('answered');
+    expect((await ask('tnam1wallet', '203.0.113.20')).answer.text).toBe(ASK_WORDS.limitWallet);
+    expect((await ask(null, '203.0.113.30')).answer.status).toBe('answered');
+  });
+  it('many wallets on one connection share the connection limit, since a wallet costs nothing to make', async () => {
+    const db = await testD1();
+    const ask = (i: number) => answerAsk({ question: 'What is NAM?' }, deps(db, fake().call, { ip: '203.0.113.9', readWallet: async () => `tnam1w${i}` }));
+    for (let i = 0; i < ASK_CONNECTION_DAY_CAP; i++) expect((await ask(i)).answer.status).toBe('answered');
+    expect((await ask(9999)).answer).toMatchObject({ status: 'limit', text: ASK_WORDS.limitConnection });
+    expect((await kvGetJson<{ n: number }>(db, ASK_DAY_KEY))!.n).toBe(ASK_CONNECTION_DAY_CAP);
+  });
+  it('a reader over the limit can sign in on the same connection and go on', async () => {
+    const db = await testD1();
+    const ask = (w: string | null) => answerAsk({ question: 'What is NAM?' }, deps(db, fake().call, { ip: '203.0.113.9', readWallet: async () => w }));
+    for (let i = 0; i < ASK_READER_DAY_CAP; i++) await ask(null);
+    expect((await ask(null)).answer.status).toBe('limit');
+    expect((await ask('tnam1wallet')).answer.status).toBe('answered');
+  });
+  it('the wallet is read only for a question about to be counted', async () => {
+    const db = await testD1();
+    const readWallet = vi.fn(async () => 'tnam1wallet');
+    await answerAsk({ question: 'What is NAM?' }, deps(db, fake().call, { shown: false, readWallet }));
+    await answerAsk({ question: 'Will NAM go up next month?' }, deps(db, fake().call, { readWallet }));
+    expect(readWallet).not.toHaveBeenCalled();
+    await answerAsk({ question: 'What is NAM?' }, deps(db, fake().call, { readWallet }));
+    expect(readWallet).toHaveBeenCalledTimes(1);
+  });
+  it('the review run is not held to a reader\'s quota', async () => {
+    expect(ASK_SELFTEST.length).toBeGreaterThan(ASK_READER_DAY_CAP);
+    expect(ASK_SELFTEST.length).toBeLessThanOrEqual(ASK_WALLET_DAY_CAP);
+  });
+  it('a wallet\'s tag cannot be read as the wallet and changes every day', async () => {
+    const a = await walletTag('k', '2026-11-08', 'tnam1wallet');
+    expect(a).toMatch(/^a[0-9a-f]{12}$/);
+    expect(a).not.toContain('tnam1');
+    expect(await walletTag('k', '2026-11-09', 'tnam1wallet')).not.toBe(a);
   });
   it('the tag cannot be read as the address and changes every day and with the key', async () => {
     const a = await addressTag('k', '2026-11-08', '203.0.113.9');
@@ -416,13 +458,14 @@ describe('nothing is kept', () => {
     const db = await testD1();
     const log = vi.spyOn(console, 'log').mockImplementation(() => {});
     const err = vi.spyOn(console, 'error').mockImplementation(() => {});
-    const r = await answerAsk({ question: SECRET }, deps(db, fake({ ...GOOD, answer: ANSWER }).call, { ip: '203.0.113.9' }));
+    const r = await answerAsk({ question: SECRET }, deps(db, fake({ ...GOOD, answer: ANSWER }).call, { ip: '203.0.113.9', readWallet: async () => 'tnam1zzsecretwallet' }));
     expect(r.answer.text).toBe(ANSWER);
     const rows = (await db.prepare('SELECT key, value FROM kv').all<{ key: string; value: string }>()).results;
     expect(rows.map((x) => x.key).sort()).toEqual([ASK_DAY_KEY, ASK_SPEND_KEY].sort());
     const stored = JSON.stringify(rows);
     expect(stored).not.toContain('zebra');
     expect(stored).not.toContain('203.0.113');
+    expect(stored).not.toContain('tnam1zzsecretwallet');
     expect(log).not.toHaveBeenCalled();
     expect(err).not.toHaveBeenCalled();
   });
@@ -443,10 +486,10 @@ describe('the review run while the chat is off', () => {
     const db = testD1() as unknown as D1Database;
     const env = { DB: db, ANTHROPIC_API_KEY: 'k' };
     await runAskSelfTest(env, NOW, { call, shown: false });
-    let rows = (await kvGetJson<AskSelfTestRow[]>(db, 'ask.selftest.2'))!;
+    let rows = (await kvGetJson<AskSelfTestRow[]>(db, 'ask.selftest.3'))!;
     expect(rows.map((r) => r.question)).toEqual(ASK_SELFTEST.slice(0, 2).map((t) => t.question));
     for (let i = 0; i < ASK_SELFTEST.length; i++) await runAskSelfTest(env, NOW, { call, shown: false });
-    rows = (await kvGetJson<AskSelfTestRow[]>(db, 'ask.selftest.2'))!;
+    rows = (await kvGetJson<AskSelfTestRow[]>(db, 'ask.selftest.3'))!;
     expect(rows).toHaveLength(ASK_SELFTEST.length);
     let calls = 0;
     await runAskSelfTest(env, NOW, { call: async (p, t) => { calls++; return call(p, t); }, shown: false });
@@ -457,7 +500,7 @@ describe('the review run while the chat is off', () => {
     const db = testD1() as unknown as D1Database;
     const bad: AskCall = async () => ({ text: JSON.stringify({ answer: 'SECRETWORD is 7777777.', pages: ['shielded'], answerable: true }), stopReason: 'end_turn', usage: { input: 1, output: 1, cacheWrite: 0, cacheRead: 0 } });
     await runAskSelfTest({ DB: db, ANTHROPIC_API_KEY: 'k' }, NOW, { call: bad, shown: false });
-    const rows = (await kvGetJson<AskSelfTestRow[]>(db, 'ask.selftest.2'))!;
+    const rows = (await kvGetJson<AskSelfTestRow[]>(db, 'ask.selftest.3'))!;
     expect(rows[0]).toMatchObject({ status: 'failed', reason: 'check: a number not in the context' });
     expect(JSON.stringify(rows)).not.toContain('SECRETWORD');
   });
@@ -466,7 +509,7 @@ describe('the review run while the chat is off', () => {
     const db = testD1() as unknown as D1Database;
     await runAskSelfTest({ DB: db, ANTHROPIC_API_KEY: 'k' }, NOW, { call, shown: true });
     await runAskSelfTest({ DB: db, ANTHROPIC_API_KEY: undefined }, NOW, { call, shown: false });
-    expect(await kvGetJson(db, 'ask.selftest.2')).toBeNull();
+    expect(await kvGetJson(db, 'ask.selftest.3')).toBeNull();
   });
 });
 
@@ -483,6 +526,11 @@ describe('a question from another site', () => {
   it('the site, its local run and a request with no Origin pass; a look-alike and a sandboxed page do not', () => {
     for (const o of ['https://namada.trade', 'https://www.namada.trade', 'http://localhost:5173', 'http://127.0.0.1:8787', null, undefined, '']) expect(askOriginAllowed(o)).toBe(true);
     for (const o of ['https://namada.trade.elsewhere.example', 'https://evilnamada.trade', 'null']) expect(askOriginAllowed(o)).toBe(false);
+  });
+  it('the chat sends the sign-in with a question, so a wallet gets its larger limit', () => {
+    const src = readFileSync(new URL('../web/src/screens/ask/Panel.tsx', import.meta.url), 'utf8');
+    expect(src).toContain("await authFetch('/api/ask'");
+    expect(src).not.toContain("await fetch('/api/ask'");
   });
   it('the route hands the address and the Origin to the check', () => {
     const src = readFileSync(new URL('../worker/src/api.ts', import.meta.url), 'utf8');
