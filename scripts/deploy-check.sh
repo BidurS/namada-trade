@@ -332,6 +332,14 @@ check "a caller alert size is a 400"     400 "$(curl -s -o /dev/null -w '%{http_
 check "a count the app never sends is a 400" 400 "$(curl -s -o /dev/null -w '%{http_code}' "$H/api/flows?count=x")"
 check "an unknown series key is 404"   404 "$(curl -s -o /dev/null -w '%{http_code}' "$H/api/series?key=no.such.key")"
 check "the tape answers"               200 "$(curl -s -o /dev/null -w '%{http_code}' "$H/api/series/trades?limit=60")"
+# the genesis cohorts and the shielded activity of 2026-11-07 (migrations 0023 and 0024): the cohorts answer with the
+# allocation table's state and a stamp whose status is one of the three; a key of each new series family answers (the
+# shielded transactions a day, and the cohort family that is resolved by pattern rather than by name); security.txt is plain text
+check "the genesis cohorts answer"     200 "$(curl -s -o /dev/null -w '%{http_code}' "$H/api/series/cohorts")"
+check "the cohorts carry the table's state and a stamp" 1 "$(curl -s "$H/api/series/cohorts" | python3 -c "import sys,json; d=json.load(sys.stdin); print(1 if isinstance(d['table']['loaded'], bool) and d['prov']['status'] in ('live','stale','missing') else 0)")"
+check "shielded transactions a day answer" 200 "$(curl -s -o /dev/null -w '%{http_code}' "$H/api/series?key=masp.txs_daily&from=$day&step=1d")"
+check "a cohort series answers"        200 "$(curl -s -o /dev/null -w '%{http_code}' "$H/api/series?key=cohort_daily.alloc.all.held&from=$day&step=1d")"
+check "security.txt is plain text"     1 "$(curl -s -o /dev/null -w '%{http_code} %{content_type}' "$H/.well-known/security.txt" | grep -c '^200 text/plain' || true)"
 check "search answers in groups"       1 "$(curl -s "$H/api/search?q=anoma" | python3 -c "import sys,json; d=json.load(sys.stdin); print(1 if 'groups' in d and all('group' in r for r in d['results']) else 0)")"
 check "rows-only moves take no count"  1 "$(curl -s "$H/api/flows?limit=10&count=none" | python3 -c "import sys,json; d=json.load(sys.stdin); print(1 if d['total'] is None and len(d['flows']) > 0 else 0)")"
 check "holders page 2 answers"         200 "$(curl -s -o /dev/null -w '%{http_code}' "$H/api/holders?chain=namada&by=total&page=2&limit=50")"

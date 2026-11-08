@@ -204,7 +204,7 @@ function LargeRow({ r }: { r: GenesisLargeAllocation }) {
         {r.sentTo.map((s) => (
           <span key={s.address} className="sp-coh__sent">
             <Num v={s.nam} fmt={fmtNamRule} unit="NAM" /> {W.sentTo} <AddrName address={s.address} label={s.labelPlain} withAddr source={s.labelSource} className="xaddr--sm" />
-            {s.sentOnTo != null ? <span className="sp-coh__on"> ({W.sentOn(`${fmtCount(s.sentOnTo)} ${s.sentOnTo === 1 ? 'address' : 'addresses'}`)})</span> : null}
+            {s.sentOnTo != null ? <span className="sp-coh__on"> ({W.sentOn(`${fmtCount(s.sentOnTo)} ${s.sentOnTo === 1 ? 'address' : 'addresses'}`, s.sentOnCut)})</span> : null}
           </span>
         ))}
         {r.sentToMore.addrs > 0 ? <span className="cap">{W.more(fmtNamRule(r.sentToMore.nam), `${fmtCount(r.sentToMore.addrs)} ${r.sentToMore.addrs === 1 ? 'address' : 'addresses'}`)}</span> : null}

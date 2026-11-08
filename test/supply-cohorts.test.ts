@@ -7,7 +7,7 @@ import { join } from 'node:path';
 import { lintFile, numLintFile } from '../scripts/copy-lint';
 import { COHORT_WORDS } from '../shared/copy';
 import { ALLOC_CATEGORIES, ALLOC_PLAIN } from '../shared/genesis';
-import { CHART_COHORTS, GENESIS_TABLE_SOURCE, chartKey, cohortLineParts, tableStamp } from '../web/src/screens/supply/cohorts';
+import { CHART_COHORTS, COHORTS_FAILED, COHORT_SOURCE as WEB_COHORT_SOURCE, GENESIS_TABLE_SOURCE, chartKey, cohortLineParts, tableStamp } from '../web/src/screens/supply/cohorts';
 import { plainSource } from '../web/src/lib/prov';
 import { COHORT_SOURCE, GENESIS_TABLE_SOURCE as WORKER_TABLE_SOURCE } from '../worker/src/series-api';
 import { BANNED } from './banned-words';
@@ -35,13 +35,13 @@ const response = (over: Partial<GenesisCohortsResponse> = {}): GenesisCohortsRes
 describe('the one sentence', () => {
   it('carries exactly the figures given and types none of its own (N2); every other sentence of the words has no digit and no banned word', () => {
     const t = COHORT_WORDS.line('61%', '58%', '70%', '44%', '63%', '1,234,568');
-    expect(t).toBe('Genesis cohorts hold 61% of their allocations: backers 58%, foundation 70%, team 44%, public sale 63%; 1,234,568 NAM of theirs has moved into the shielded pool.');
+    expect(t).toBe('The addresses funded at genesis hold 61% of their allocations; among them backers 58%, foundation 70%, team 44%, public sale 63%; 1,234,568 NAM of theirs has moved into the shielded pool since this site’s record began.');
     expect(t.replace(/61%|58%|70%|44%|63%|1,234,568/g, '')).not.toMatch(/\d/);
     const letters = [
       COHORT_WORDS.line('A', 'B', 'C', 'D', 'E', 'F'), COHORT_WORDS.heading, COHORT_WORDS.lead, COHORT_WORDS.notLoaded, COHORT_WORDS.noSnapshot,
       ...Object.values(COHORT_WORDS.columns), ...Object.values(COHORT_WORDS.chart), ...Object.values(COHORT_WORDS.scope),
       COHORT_WORDS.large.heading('N'), COHORT_WORDS.large.lead, COHORT_WORDS.large.holds, COHORT_WORDS.large.left, COHORT_WORDS.large.spendable, COHORT_WORDS.large.staked,
-      COHORT_WORDS.large.atGenesis('N'), COHORT_WORDS.large.shielded('N', 'M'), COHORT_WORDS.large.sentTo, COHORT_WORDS.large.sentOn('N'), COHORT_WORDS.large.more('N', 'A'),
+      COHORT_WORDS.large.atGenesis('N'), COHORT_WORDS.large.shielded('N', 'M'), COHORT_WORDS.large.sentTo, COHORT_WORDS.large.sentOn('N', false), COHORT_WORDS.large.sentOn('N', true), COHORT_WORDS.large.more('N', 'A'),
       COHORT_WORDS.large.none, COHORT_WORDS.large.cut('N'), COHORT_WORDS.large.rewound, COHORT_WORDS.large.notIndexed,
       ...Object.values(ALLOC_PLAIN),
     ];
@@ -50,7 +50,9 @@ describe('the one sentence', () => {
       expect(s, s).not.toMatch(BANNED);
     }
     expect(COHORT_WORDS.large.shielded('16,666,667', '3 moves')).toBe('16,666,667 NAM moved into the shielded pool (3 moves)');
-    expect(COHORT_WORDS.large.sentOn('12 addresses')).toBe('has since sent to 12 addresses');
+    expect(COHORT_WORDS.large.sentOn('12 addresses', false)).toBe('has since sent to 12 addresses');
+    // the onward read hit its cap: the count is a floor, and says so
+    expect(COHORT_WORDS.large.sentOn('12 addresses', true)).toBe('has since sent to 12 addresses or more');
     expect(COHORT_WORDS.large.more('400,000', '5 addresses')).toBe('and 400,000 NAM to 5 addresses more');
   });
 
@@ -89,6 +91,10 @@ describe('the stamps and the chart keys', () => {
 
   it('the source words the Worker writes have plain names on the stamp', () => {
     expect(WORKER_TABLE_SOURCE).toBe(GENESIS_TABLE_SOURCE);
+    expect(WEB_COHORT_SOURCE).toBe(COHORT_SOURCE);
+    // a phone whose cohorts request failed shows the missing figure under the snapshot's source, with the reason
+    expect(COHORTS_FAILED).toEqual({ source: COHORT_SOURCE, at: null, status: 'missing', note: 'The genesis cohorts did not load: the server did not answer.' });
+    expect(plainSource(COHORTS_FAILED)).toBe('Genesis file, holder index and flow index');
     expect(plainSource({ source: COHORT_SOURCE })).toBe('Genesis file, holder index and flow index');
     expect(plainSource({ source: GENESIS_TABLE_SOURCE })).toBe('Genesis file');
   });
