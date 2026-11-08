@@ -2,7 +2,8 @@
 // allocation cohort's columns as a daily series stamped with the genesis file's digest and the listings; /api/series/cohorts
 // serves the newest snapshot, the allocation table's provenance and the largest allocations with what each holds now and
 // what left it, naming a recipient by its label when one exists and otherwise by its address and how many addresses it has
-// since sent to; the empty, not-loaded and rewound states; the cache key; and every statement's plan.
+// since sent to (a floor when the onward read hit its cap); the empty, not-loaded and rewound states; the cache key; and every
+// statement's plan. The large allocations' holdings are stamped with the holder index's own listing record, not the snapshot's.
 import { describe, it, expect, vi, afterEach } from 'vitest';
 import { app } from '../worker/src/api';
 import { testD1, insert, type TestD1 } from './d1-sqlite';
@@ -22,6 +23,14 @@ const WHALE = pad(1), FOUNDATION = pad(2), SMALL = pad(3), VALIDATOR = pad(10), 
 /** the listings the 3 Nov snapshot's holdings were read from */
 const AS_OF = Date.UTC(2026, 10, 3, 0, 40), BAL_H = 8_517_945, BOND_H = 8_517_754;
 
+/** The holder index's own listing record (kv balance.listing / bond.listing): the balance listing completed at `balance`, the bond listing at `bond`. */
+function listings(db: TestD1, balance: number, bond: number) {
+  insert(db, 'kv', [
+    { key: 'balance.listing', value: JSON.stringify({ at: balance, completeAt: balance, height: BAL_H }), updated_at: balance },
+    { key: 'bond.listing', value: JSON.stringify({ at: bond, completeAt: bond, height: BOND_H }), updated_at: bond },
+  ]);
+}
+
 afterEach(() => { vi.useRealTimers(); });
 const at = (t: number) => vi.useFakeTimers({ now: t, toFake: ['Date'] });
 async function call<T = any>(db: TestD1, path: string): Promise<{ status: number; body: T }> {
@@ -34,9 +43,10 @@ function cohortRow(db: TestD1, day: string, category: string, r: { addrs: number
   insert(db, 'cohort_daily', [{ day, category, addrs: r.addrs, addrs_with_nam: r.with, spendable: r.sp, staked: r.st, as_of: asOf, shielded_out: r.out, alloc_nam: r.alloc, balance_height: BAL_H, bond_height: BOND_H }]);
 }
 
-/** The table, two snapshot days, the holder index and the flows of one backer of 20,000,000 NAM. */
+/** The table, two snapshot days, the holder index (its listings completed at AS_OF and ten minutes later) and the flows of one backer of 20,000,000 NAM. */
 function seed(db: TestD1) {
   insert(db, 'kv', [{ key: GENESIS_ALLOC_KV, value: JSON.stringify({ digest: GENESIS_DIGEST, url: GENESIS_URL, reviewedOn: '2026-10-19', writtenAt: NOW - 3 * D, n: 3 }), updated_at: NOW - 3 * D }]);
+  listings(db, AS_OF, AS_OF + 10 * 60_000);
   insert(db, 'genesis_alloc', [
     { address: WHALE, amount_num: 20_000_000, category: 'backer' },
     { address: FOUNDATION, amount_num: 50_000_000, category: 'foundation' },
@@ -85,7 +95,7 @@ function seed(db: TestD1) {
 }
 
 describe('GET /api/series: an allocation cohort\'s column as a daily series', () => {
-  it('serves the share held per day with the digest and the listings in its stamp, old when no day since the snapshot was written', async () => {
+  it('serves the share held per day with the table and the listings in its stamp, old when no day since the snapshot was written', async () => {
     at(NOW);
     const db = testD1();
     seed(db);
@@ -96,7 +106,9 @@ describe('GET /api/series: an allocation cohort\'s column as a daily series', ()
     expect(body.start).toBe(Date.UTC(2026, 10, 2));
     expect(body.prov.source).toBe(S.COHORT_SOURCE);
     expect(body.prov).toMatchObject({ at: AS_OF, status: 'stale' });
-    expect(body.prov.note).toContain(`Allocations from the genesis file's reviewed copy (sha256 ${GENESIS_DIGEST.slice(0, 12)}…); holdings as of the chain listings completed 3 Nov 2026 00:40 UTC (balances at block ${BAL_H}, bonds at block ${BOND_H}); snapshot of 2026-11-03.`);
+    // the series reads no kv row, so its note names no digest (the code's pinned one need not be the loaded table's): it points at the answer that states it
+    expect(body.prov.note).toContain(`Allocations from the loaded allocation table (its digest is on /api/series/cohorts); holdings as of the chain listings completed 3 Nov 2026 00:40 UTC (balances at block ${BAL_H}, bonds at block ${BOND_H}); snapshot of 2026-11-03.`);
+    expect(body.prov.note).not.toContain(GENESIS_DIGEST.slice(0, 12));
     expect(body.sources[0].startNote).toBe('The share of its NAM at genesis the cohort holds, spendable and staked, for early backers, once a day since 2 Nov 2026, from the allocation table, the holder index and the flow index; nothing earlier exists.');
     // the days since the snapshot are gaps with the writer's reason, not points
     expect(body.gaps.length).toBeGreaterThan(0);
@@ -144,7 +156,9 @@ describe('GET /api/series/cohorts', () => {
     expect(body.cohorts.find((c) => c.cohort === 'all')).toMatchObject({ plain: 'Every genesis allocation', heldNam: 6_000_000, allocNam: 70_000_100, shieldedOutNam: 110 });
     // four days on: old, with the reason and the snapshot's facts
     expect(body.prov).toMatchObject({ source: S.COHORT_SOURCE, at: AS_OF, status: 'stale' });
-    expect(body.prov.note).toMatch(/^The newest snapshot is of 2026-11-03: no day since has had both chain listings complete\. Allocations from the genesis file's reviewed copy/);
+    // the digest in the note is the loaded table's (kv genesis.alloc), the same the table block states
+    expect(body.prov.note).toMatch(/^The newest snapshot is of 2026-11-03: no day since has had both chain listings complete\. Allocations from the loaded allocation table \(sha256 /);
+    expect(body.prov.note).toContain(`(sha256 ${GENESIS_DIGEST.slice(0, 12)}…)`);
     // the largest allocations, largest first: the foundation's 50,000,000 (no holder row: holdings not read), then the backer
     expect(body.largeMinNam).toBe(15_000_000);
     expect(body.large.map((r) => r.address)).toEqual([FOUNDATION, WHALE]);
@@ -154,9 +168,9 @@ describe('GET /api/series/cohorts', () => {
     expect(w).toMatchObject({ labelPlain: 'Early backers (genesis)', cohort: 'backer', allocNam: 20_000_000, spendableNam: 5_000_000, stakedNam: 1_000_000, shieldedOutNam: 100, shieldedMoves: 2, movesRead: 6, movesCut: false });
     // the recipients: the labelled one by its label (no onward count), the unlabelled one by its address with how many it has since sent to (two: C and F; E was before, the pool is not an address it sent to)
     expect(w.sentTo).toEqual([
-      { address: VALIDATOR, labelPlain: 'Validator X', labelSource: 'valopers', nam: 1_000, moves: 2, sentOnTo: null },
-      { address: UNLABELLED, labelPlain: null, labelSource: null, nam: 500, moves: 1, sentOnTo: 2 },
-      { address: C, labelPlain: null, labelSource: null, nam: 20, moves: 1, sentOnTo: 0 },
+      { address: VALIDATOR, labelPlain: 'Validator X', labelSource: 'valopers', nam: 1_000, moves: 2, sentOnTo: null, sentOnCut: false },
+      { address: UNLABELLED, labelPlain: null, labelSource: null, nam: 500, moves: 1, sentOnTo: 2, sentOnCut: false },
+      { address: C, labelPlain: null, labelSource: null, nam: 20, moves: 1, sentOnTo: 0, sentOnCut: false },
     ]);
     expect(w.sentToMore).toEqual({ addrs: 1, nam: 10 });
     // every address the answer names is one the page shows: the allocations, their named recipients
@@ -164,9 +178,27 @@ describe('GET /api/series/cohorts', () => {
     expect([...named].sort()).toEqual([FOUNDATION, WHALE, VALIDATOR, UNLABELLED, C].sort());
     expect(JSON.stringify(body)).not.toContain(MASP);
     expect(JSON.stringify(body)).not.toContain(E);
+    // the holdings' stamp is the holder index's own listing record (the older of the two completions), not the snapshot's
     expect(body.holdingsProv).toMatchObject({ source: 'NamadaTrade holder index', at: AS_OF, status: 'stale' });
     expect(body.holdingsProv.note).toBe('Spendable and staked NAM as of the chain listings completed 3 Nov 2026 00:40 UTC.');
     expect(body.movesProv.source).toBeTruthy();
+  });
+
+  it('a recipient whose onward read hit its cap is marked: its count is a floor, judged on the rows read, not the distinct addresses', async () => {
+    at(NOW);
+    const db = testD1();
+    seed(db);
+    // the unlabelled recipient sends to one address COHORT_MOVES_MAX times after it received: the newest rows read are all those, so its
+    // earlier recipient is past the cut and the count, 1, is a floor
+    const rows = Array.from({ length: S.COHORT_MOVES_MAX }, (_, i) => ({
+      id: `namada:on${i}`, chain: 'namada', height: 10_000 + i, ts: NOW - 8 * D + i * 60_000, tx_hash: `ON${i}`, kind: 'transfer', from_addr: UNLABELLED, to_addr: F, amount_num: 1, meta: '{"innerTxHash":"X"}',
+    }));
+    insert(db, 'flows', rows);
+    const { body } = await call<GenesisCohortsResponse>(db, '/api/series/cohorts');
+    const w = body.large.find((r) => r.address === WHALE)!;
+    expect(w.sentTo.find((s) => s.address === UNLABELLED)).toEqual({ address: UNLABELLED, labelPlain: null, labelSource: null, nam: 500, moves: 1, sentOnTo: 1, sentOnCut: true });
+    // the labelled recipient and the one that sent nothing on are not cut
+    expect(w.sentTo.filter((s) => s.address !== UNLABELLED).map((s) => s.sentOnCut)).toEqual([false, false]);
   });
 
   it('says when the table is not loaded or no snapshot exists, and serves no large row under Rewind', async () => {
@@ -176,7 +208,7 @@ describe('GET /api/series/cohorts', () => {
     expect(empty).toMatchObject({ day: null, cohorts: [], large: [], table: { loaded: false, pinned: false, digest: null } });
     expect(empty.prov).toMatchObject({ status: 'missing', note: 'The allocation table is not loaded, so no cohort can be counted.' });
     expect(empty.holdingsProv).toMatchObject({ status: 'missing', note: 'The allocation table is not loaded.' });
-    // loaded, no snapshot yet
+    // loaded, no snapshot yet, and no listing complete: the holdings are not read and say so
     insert(db, 'kv', [{ key: GENESIS_ALLOC_KV, value: JSON.stringify({ digest: 'abc', reviewedOn: '2026-10-19', writtenAt: NOW - H, n: 1 }), updated_at: NOW - H }]);
     insert(db, 'genesis_alloc', [{ address: WHALE, amount_num: 20_000_000, category: 'backer' }]);
     const none = (await call<GenesisCohortsResponse>(db, '/api/series/cohorts')).body;
@@ -185,6 +217,17 @@ describe('GET /api/series/cohorts', () => {
     expect(none.large.map((r) => r.address)).toEqual([WHALE]);
     expect(none.large[0]).toMatchObject({ spendableNam: null, stakedNam: null, sentTo: [] });
     expect(none.holdingsProv).toMatchObject({ status: 'missing', note: 'No complete chain listing is on record.' });
+    // loaded, no snapshot yet, the holder index listed (the state right after the table is loaded on the halted chain): the
+    // holdings are served under the index's own listing time, the older completion, not as missing
+    listings(db, NOW - 3 * H, NOW - 2 * H);
+    insert(db, 'holders', [{ chain: 'namada', address: WHALE, balance: '5000000000000', balance_num: 5_000_000, updated_at: NOW - 3 * H, verified_at: NOW - 3 * H }]);
+    insert(db, 'stakes', [{ address: WHALE, bonded_num: 1_000_000, delegations: '[]', updated_at: NOW - 3 * H }]);
+    const listed = (await call<GenesisCohortsResponse>(db, '/api/series/cohorts')).body;
+    expect(listed.day).toBeNull();
+    expect(listed.listings).toEqual({ at: null, balanceHeight: null, bondHeight: null });
+    expect(listed.prov.status).toBe('missing');
+    expect(listed.large[0]).toMatchObject({ address: WHALE, spendableNam: 5_000_000, stakedNam: 1_000_000 });
+    expect(listed.holdingsProv).toEqual({ source: 'NamadaTrade holder index', at: NOW - 3 * H, status: 'live', note: 'Spendable and staked NAM as of the chain listings completed 7 Nov 2026 09:00 UTC.' });
     // rewound: the snapshot at or before then, no large rows (holdings are current)
     const db2 = testD1();
     seed(db2);

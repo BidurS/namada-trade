@@ -152,7 +152,7 @@ export function coinFallWords(fall: CoinFall, symbol: string, decimals: number, 
   const pct = fall.fromBase === 0n ? 100 : Number(((fall.fromBase - fall.toBase) * 10000n) / fall.fromBase) / 100;
   const to = fall.toBase === 0n ? '0' : coinAmountWords(fall.toBase, decimals);
   const quote = quoteAt != null ? `the site's quote at ${clock(quoteAt)}` : "the site's quote";
-  return `Shielded pool, ${symbol}: the pool's balance went from ${coinAmountWords(fall.fromBase, decimals)} to ${to} ${symbol} in block ${n0(fall.height)} (${clock(fall.ts)}), ${nf(pct, 1)}% of it. Before the block the balance was worth about ${n0(valueUsd)} US dollars at ${quote}.`;
+  return `Shielded pool, ${symbol}: the pool's balance went from ${coinAmountWords(fall.fromBase, decimals)} to ${to} ${symbol} in block ${n0(fall.height)} (${clock(fall.ts)}): a fall of ${nf(pct, 1)}%. Before the block the balance was worth about ${n0(valueUsd)} US dollars at ${quote}.`;
 }
 
 // ---------------------------------------------------------------- the daily rows (series.ts daily(), part 'shielded coins')

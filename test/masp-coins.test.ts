@@ -37,6 +37,7 @@ const H6966497 = 6_966_497;
 const TS = timeOf(H6966497);
 const USDC = 'tnam1pkl64du8p2d240my5umxm24qhrjsvh42ruc98f97';
 const STATOM = 'tnam1p5z5538v3kdk3wdx7r2hpqm4uq9926dz3ughcp7n';
+const OSMO = 'tnam1p5z8ruwyu7ha8urhq2l0dhpk2f5dv3ts7uyf2n75';
 const MASP = NAMADA.internal.masp;
 const all = (db: TestD1, sql: string, ...p: unknown[]) => db.raw.prepare(sql).all(...p).map((r: any) => ({ ...r }));
 const kvOf = (db: TestD1, key: string) => { const r = db.raw.prepare('SELECT value FROM kv WHERE key = ?').get(key); return r ? JSON.parse(r.value) : null; };
@@ -127,9 +128,9 @@ describe('the operator\'s line: the floor and the words', () => {
   });
   it('the words name the coin, both amounts, the share, the block and its time, and the value at the quote; nothing else', () => {
     const line = coinFallWords(fall, 'USDC (Noble)', 6, 150_355.823285, null);
-    expect(line).toBe("Shielded pool, USDC (Noble): the pool's balance went from 150,355.823285 to 0 USDC (Noble) in block 6,966,497 (2026-06-18 09:25 UTC), 100% of it. Before the block the balance was worth about 150,356 US dollars at the site's quote.");
+    expect(line).toBe("Shielded pool, USDC (Noble): the pool's balance went from 150,355.823285 to 0 USDC (Noble) in block 6,966,497 (2026-06-18 09:25 UTC): a fall of 100%. Before the block the balance was worth about 150,356 US dollars at the site's quote.");
     const half = coinFallWords({ ...fall, fromBase: 10_000_000_000n, toBase: 4_000_000_000n }, 'OSMO', 6, 1_800, Date.UTC(2026, 5, 18, 9, 24));
-    expect(half).toBe("Shielded pool, OSMO: the pool's balance went from 10,000 to 4,000 OSMO in block 6,966,497 (2026-06-18 09:25 UTC), 60% of it. Before the block the balance was worth about 1,800 US dollars at the site's quote at 2026-06-18 09:24 UTC.");
+    expect(half).toBe("Shielded pool, OSMO: the pool's balance went from 10,000 to 4,000 OSMO in block 6,966,497 (2026-06-18 09:25 UTC): a fall of 60%. Before the block the balance was worth about 1,800 US dollars at the site's quote at 2026-06-18 09:24 UTC.");
     for (const w of [line, half]) expect(w).not.toMatch(BANNED);
     expect(coinAmountWords(150355823285n, 6)).toBe('150,355.823285');
     expect(coinAmountWords(1n, 18)).toBe('0.000000000000000001');
@@ -198,13 +199,77 @@ describe('the daily job: part \'shielded coins\'', () => {
     expect(unknown).toHaveLength(1);
     expect(unknown[0].params.slice(2, 5)).toEqual([null, '7', null]);
   });
+  it('a valueless answer from every node is a failed read (sources/namada.ts maspCoinBalance): the row keeps the post-balance, said so, and no 0 is written', async () => {
+    const db = testD1();
+    seedCoins(db, { [USDC]: { base: '150355823285', height: 6_966_000, at: NOW - D, ts: TS - H } });
+    const valueless = async () => { throw new Error('abci /shell/value/#tnam1pyqqq…/#tnam1pkl64…/balance/#tnam1pcqqq…: B answered without a value'); };
+    const r = (await daily(env(db), NOW, { health: [], maspRewards: rewards, validators: async () => [], coinBalance: valueless }))!;
+    expect(r.ran).not.toContain('shielded coins');
+    expect(r.waiting).toContain('shielded coins: 1 of 1 coins could not be read from the chain, so their rows carry the last post-balance; asked again next hour');
+    expect(all(db, 'SELECT token, base, basis, height, provider FROM masp_coins_daily')).toEqual([{ token: USDC, base: '150355823285', basis: 'post-balance', height: 6_966_000, provider: null }]);
+    expect(all(db, 'SELECT value FROM metrics WHERE key = ?', coinDailyKey('USDC (Noble)'))).toEqual([{ value: 150_355.823285 }]);
+    expect(all(db, 'SELECT COUNT(*) n FROM metrics WHERE key LIKE ? AND value = 0', 'masp.coin.%')[0].n).toBe(0);
+  });
+  it('each hour\'s round starts after the coin the last round ended at, so a coin behind one that takes the tick\'s time is still asked', async () => {
+    const db = testD1();
+    seedCoins(db, { [USDC]: { base: '1', height: 1, at: NOW - D, ts: TS }, [STATOM]: { base: '2', height: 1, at: NOW - D, ts: TS }, [OSMO]: { base: '3', height: 1, at: NOW - D, ts: TS } });
+    const asked: string[] = [];
+    const slow = async (token: string) => { asked.push(token); return { base: '9', height: 8_517_986, provider: 'StakeAndRelax' }; };
+    // the tick runs out after the first read: the other two coins are not asked this hour
+    const late = () => asked.length >= 1;
+    const r = (await daily(env(db), NOW, { health: [], maspRewards: rewards, validators: async () => [], coinBalance: slow, late }))!;
+    expect(asked).toEqual([USDC]);
+    expect(r.waiting).toContain('shielded coins: 2 of 3 coins could not be read from the chain, so their rows carry the last post-balance; asked again next hour');
+    expect(all(db, 'SELECT token, basis FROM masp_coins_daily ORDER BY token').map((x) => [x.token, x.basis])).toEqual([[STATOM, 'post-balance'], [OSMO, 'post-balance'], [USDC, 'read']].sort());
+    expect(kvOf(db, 'jobs.daily')).toMatchObject({ coinsTried: Math.floor(NOW / H) * H, coinsFrom: USDC });
+    // the next hour starts at the second coin and wraps round to the first
+    asked.length = 0;
+    const again = (await daily(env(db), NOW + H, { health: [], maspRewards: rewards, validators: async () => [], coinBalance: slow }))!;
+    expect(asked).toEqual([STATOM, OSMO, USDC]);
+    expect(again.ran).toContain('shielded coins');
+    expect(all(db, 'SELECT basis FROM masp_coins_daily').every((x) => x.basis === 'read')).toBe(true);
+  });
 });
 
 // ---------------------------------------------------------------- the hub, on the real block
 
-const hubOf = (db: TestD1) => Object.assign(Object.create(LiveHub.prototype), {
-  env: { DB: db }, sessions: new Set(), lastPriceUsd: null, namadaHeight: 0, quote: new HubQuote(async () => null, async () => null),
+const hubOf = (db: TestD1, env: Record<string, unknown> = {}) => Object.assign(Object.create(LiveHub.prototype), {
+  env: { DB: db, ...env }, sessions: new Set(), lastPriceUsd: null, namadaHeight: 0, quote: new HubQuote(async () => null, async () => null),
 }) as any;
+
+/** The node's answers for one block at H6966497: its status, the block list and `results` as its block_results; anything else (a webhook) answers 204 and is recorded in `posts`. */
+function nodeFor(results: unknown, posts: { url: string; body: unknown }[] = []) {
+  vi.stubGlobal('fetch', vi.fn(async (u: string, init?: RequestInit) => {
+    const url = new URL(String(u));
+    if (url.pathname === '/status') return Response.json({ result: { node_info: { network: NAMADA.chainId }, sync_info: { latest_block_height: String(H6966497), latest_block_time: new Date().toISOString(), catching_up: false, earliest_block_height: '1' } } });
+    if (url.pathname === '/blockchain') {
+      const lo = Number(url.searchParams.get('minHeight')), hi = Math.min(Number(url.searchParams.get('maxHeight')), H6966497);
+      const metas = [];
+      for (let h = hi; h >= lo; h--) metas.push({ header: { chain_id: NAMADA.chainId, height: String(h), time: new Date(TS - (H6966497 - h) * 6000).toISOString() }, num_txs: '0' });
+      return Response.json({ result: { last_height: String(H6966497), block_metas: metas } });
+    }
+    if (url.pathname === '/block_results') return Number(url.searchParams.get('height')) === H6966497 ? Response.json(results) : Response.json({ result: { height: url.searchParams.get('height'), end_block_events: [] } });
+    if (url.hostname === 'discord.com') { posts.push({ url: String(u), body: typeof init?.body === 'string' ? JSON.parse(init.body) : init?.body }); return new Response(null, { status: 204 }); }
+    throw new Error(`not served: ${url.pathname}`);
+  }));
+  return posts;
+}
+const webhookPosts = () => (fetch as any).mock.calls.map((c: any[]) => String(c[0])).filter((u: string) => !/\/(status|blockchain|block_results)/.test(u));
+
+/** A block_results answer whose one transfer takes 6,000 OSMO out of the pool, leaving 4,000 (the chain's post-balance). */
+const OSMO_FALL_RESULTS = { result: { height: String(H6966497), txs_results: [], end_block_events: [{ type: 'token/transfer', attributes: [
+  { key: 'hash', value: 'CC' }, { key: 'token-event-descriptor', value: 'transfer-from-wasm' },
+  { key: 'source-accounts', value: JSON.stringify([[[`internal-address/${MASP}`, OSMO], '6000000000']]) },
+  { key: 'target-accounts', value: JSON.stringify([[['implicit-address/tnam1qr4l8egaskk09460llz0qctac7sgemynpu8c7vvd', OSMO], '6000000000']]) },
+  { key: 'post-balances', value: JSON.stringify([[[`internal-address/${MASP}`, OSMO], '4000000000'], [['implicit-address/tnam1qr4l8egaskk09460llz0qctac7sgemynpu8c7vvd', OSMO], '6000000000']]) },
+] }] } };
+const OPERATOR_HOOK = 'https://discord.com/api/webhooks/9/operator';
+/** The stored 10,000 OSMO in the pool, and the site's quote of OSMO a minute before the block (0.18 dollars: 1,800 before the fall, over the floor). */
+function seedOsmoFall(db: TestD1) {
+  db.raw.prepare("INSERT OR REPLACE INTO kv (key, value, updated_at) VALUES ('namada.cursor', ?, 0)").run(String(H6966497 - 1));
+  db.raw.prepare('INSERT OR REPLACE INTO kv (key, value, updated_at) VALUES (?, ?, 0)').run(MASP_COINS_KV, JSON.stringify({ [OSMO]: { base: '10000000000', height: 6_966_000, at: 1, ts: TS - H } }));
+  db.raw.prepare('INSERT INTO metrics (ts, key, value) VALUES (?, ?, ?)').run(TS - 60_000, QUOTE_KEYS.OSMO, 0.18);
+}
 
 describe('the live hub records the pool\'s coins and its newest scanned block', () => {
   it('scanning block 6,966,497 writes the coin\'s post-balance to kv masp.coins with the fall from the stored balance, the masp_seen row with the block\'s time, and kv namada.scanned', async () => {
@@ -231,7 +296,27 @@ describe('the live hub records the pool\'s coins and its newest scanned block', 
     expect(kvOf(db, SCANNED_KV)).toMatchObject({ height: H6966497, ts: TS });
     expect(all(db, 'SELECT kind, from_addr, amount_num, counter_denom FROM flows')).toEqual([{ kind: 'unshield', from_addr: MASP, amount_num: 150_355.823285, counter_denom: 'USDC (Noble)' }]);
     // no operator post without the send gate: nothing was fetched from a webhook
-    const posted = (fetch as any).mock.calls.map((c: any[]) => String(c[0])).filter((u: string) => !/\/(status|blockchain|block_results)/.test(u));
-    expect(posted).toEqual([]);
+    expect(webhookPosts()).toEqual([]);
+  });
+  it('with the send gate on, a fall of a coin quoted on this site worth the floor before it is one line to the operator\'s hook, priced at the stored quote of the block\'s minute, and the entry says it was posted', async () => {
+    const db = testD1();
+    seedOsmoFall(db);
+    const posts = nodeFor(OSMO_FALL_RESULTS);
+    await hubOf(db, { SEND_ALERTS: 'yes', DISCORD_WEBHOOK_URL: OPERATOR_HOOK }).scanNamada();
+    const fall: CoinFall = { token: OSMO, fromBase: 10_000_000_000n, toBase: 4_000_000_000n, height: H6966497, ts: TS };
+    const words = coinFallWords(fall, 'OSMO', 6, 1_800, TS - 60_000);
+    expect(words).toContain('a fall of 60%');
+    expect(posts.map((p) => p.url)).toEqual([OPERATOR_HOOK]);
+    expect(String((posts[0].body as { content: string }).content)).toContain(words);
+    expect(webhookPosts()).toEqual([OPERATOR_HOOK]);
+    expect(kvOf(db, MASP_COINS_KV)[OSMO]).toMatchObject({ base: '4000000000', height: H6966497, ts: TS, fell: { fromBase: '10000000000', toBase: '4000000000', height: H6966497, ts: TS, posted: true } });
+  });
+  it('while the alerts are paused the same fall is kept on the entry and not posted', async () => {
+    const db = testD1();
+    seedOsmoFall(db);
+    nodeFor(OSMO_FALL_RESULTS);
+    await hubOf(db, { SEND_ALERTS: 'yes', ALERTS_PAUSED: '1', DISCORD_WEBHOOK_URL: OPERATOR_HOOK }).scanNamada();
+    expect(webhookPosts()).toEqual([]);
+    expect(kvOf(db, MASP_COINS_KV)[OSMO]).toMatchObject({ base: '4000000000', fell: { fromBase: '10000000000', toBase: '4000000000', height: H6966497, posted: false } });
   });
 });

@@ -5,8 +5,11 @@
 // next one, as the epoch read does (test/review-g-epoch-answer.test.ts); with every node answering so the read fails
 // and is stored as not read, never as 0. A holder's balance still reads a missing key as 0: a fresh address has none.
 // The mint rule's keys are read at the block it judges, and a node's answer for another block is refused the same way.
+// The shielded pool's balance of another coin (maspCoinBalance, 2026-11-08) is read from the same storage with the
+// coin's address in NAM's place and refuses a valueless answer the same way: the chain writes the key with the value 0
+// when a balance reaches 0, so no value is a node without the key, never a 0 to store.
 import { describe, it, expect, vi, afterEach } from 'vitest';
-import { namBalance, namProtocolBalance, namTotalSupply, namadaEpochRead, mintKeysAt, decString, AbciCodeError, RpcBreaker, QUICK } from '../worker/src/sources/namada';
+import { namBalance, namProtocolBalance, namTotalSupply, namadaEpochRead, maspCoinBalance, mintKeysAt, decString, AbciCodeError, RpcBreaker, QUICK } from '../worker/src/sources/namada';
 import { NAMADA } from '../worker/src/config';
 import { app } from '../worker/src/api';
 import { testD1, insert } from './d1-sqlite';
@@ -92,6 +95,28 @@ describe('a protocol balance answered without a value', () => {
   it("the epoch read names the node's block, so the mint rule can tell it was read with the minted total", async () => {
     nodes(() => answer(u64(2738), '8516658'));
     expect(await namadaEpochRead({ ...QUICK, rpcs })).toEqual({ epoch: 2738, height: 8516658, provider: 'A' });
+  });
+});
+
+describe("the shielded pool's balance of another coin", () => {
+  // Noble USDC's token address on Namada (the parser's token table)
+  const USDC = 'tnam1pkl64du8p2d240my5umxm24qhrjsvh42ruc98f97';
+  it("asks the multitoken balance key with the coin's address in NAM's place and the pool as owner, and decodes the amount exactly", async () => {
+    const asked = nodes(() => answer(u256(4_990_513_672n)));
+    expect(await maspCoinBalance(USDC, { ...QUICK, rpcs })).toEqual({ base: '4990513672', height: 8516662, provider: 'A' });
+    expect(asked.map((a) => a.path)).toEqual([`/shell/value/#${NAMADA.multitoken}/#${USDC}/balance/#${NAMADA.internal.masp}`]);
+  });
+  it('an address that is not a token address is refused before any node is asked', async () => {
+    const asked = nodes(() => answer(u256(1n)));
+    await expect(maspCoinBalance('not-a-token', { ...QUICK, rpcs })).rejects.toThrow('not a token address');
+    expect(asked).toEqual([]);
+  });
+  it('a valueless answer is refused at its node and the next node is read; from every node it is a failed read, never 0', async () => {
+    const asked = nodes((node) => (node === 'A' ? NO_VALUE : answer(u256(0n))));
+    expect(await maspCoinBalance(USDC, { ...QUICK, rpcs })).toEqual({ base: '0', height: 8516662, provider: 'B' });
+    expect(asked.map((a) => a.node)).toEqual(['A', 'B']);
+    nodes(() => NO_VALUE);
+    await expect(maspCoinBalance(USDC, { ...QUICK, rpcs })).rejects.toThrow('B answered without a value');
   });
 });
 

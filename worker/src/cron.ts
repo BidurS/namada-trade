@@ -3401,12 +3401,18 @@ export async function checkFlips(db: D1Database, stmts: Stmt[], now: number): Pr
  * from 2026-11-08, 'idle' when the cursor stands at the chain's newest block and has not moved for NAMADA_CURSOR_STALE_MS:
  * the chain made no block to index (the halt of 2 November), which is nothing of this site's to judge (rule 3 of the
  * release program: a check with nothing new to judge says idle, never fail). A cursor at the head that is fresh is 'ok'.
+ * A quiet cursor with no head read this tick (no node answered its status) is 'idle' too, with the reason
+ * ('head-not-read'): the index cannot be placed against a chain whose height was not read, and the node outage is the
+ * rpc_consensus row's to say; a fresh cursor with no head is still 'ok', as before.
  */
 export function namadaIndexLagRow(c: { height: number; at: number } | null | undefined, headHeight: number | null | undefined, now: number): { status: 'ok' | 'warn' | 'fail' | 'idle'; detail: Record<string, unknown> } {
   const lag = c && headHeight ? Math.max(0, headHeight - c.height) : null;
   const quiet = c ? now - c.at > NAMADA_CURSOR_STALE_MS : true;
   const detail: Record<string, unknown> = { cursorHeight: c?.height ?? null, cursorWrittenAt: c?.at ?? null, rpcHeight: headHeight ?? null, lagBlocks: lag };
   if (!c) return { status: 'fail', detail };
+  if (!headHeight && quiet) {
+    return { status: 'idle', detail: { ...detail, judged: false, notJudged: 'head-not-read', note: 'no Namada node answered its height this tick, so the index cannot be placed against the chain' } };
+  }
   if (lag === 0 && quiet) {
     return { status: 'idle', detail: { ...detail, judged: false, notJudged: 'no-new-blocks', note: `the index stands at the chain's newest block ${c.height.toLocaleString('en-US')}, written ${fmtUtcLong(c.at)}; no block since to index` } };
   }

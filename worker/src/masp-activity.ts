@@ -31,6 +31,12 @@ const MASP = NAMADA.internal.masp;
 /** The shielded transactions of one UTC day by block (masp_seen_ts index): ?1 the day's start, ?2 its end (unix ms). */
 export const MASP_SEEN_DAY_SQL = `SELECT height, COUNT(*) n FROM masp_seen WHERE ts >= ?1 AND ts < ?2 GROUP BY height`;
 /**
+ * The time of the first shielded transaction recorded with a time (masp_seen_ts index, one seek; the rows from before
+ * migration 0024 carry none): where this site's record begins. A day ending at or before it has no recorded block and
+ * is never written, so the days before the record (the halt's, among them) are gaps alike, never 0.
+ */
+export const MASP_SEEN_FIRST_SQL = `SELECT MIN(ts) AS first FROM masp_seen WHERE ts IS NOT NULL`;
+/**
  * The NAM legs touching the pool in one UTC day (the pool on either end: the planner reads flows_from and flows_to by
  * the pool's address and the day's time range, test/masp-activity.test.ts holds the plan; older twins left out; the
  * coin told from meta in code). A part of the 4 to 515 Namada rows a day on production (2026-10-20).

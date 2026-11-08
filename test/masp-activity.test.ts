@@ -6,7 +6,7 @@
 import { describe, it, expect } from 'vitest';
 import { daily, isoDay } from '../worker/src/series';
 import {
-  maspActivityOf, maspActivityStmts, readMaspActivityDay, dayScanned, scannedOf, MASP_SEEN_DAY_SQL, MASP_LEGS_DAY_SQL, MASP_ACTIVITY_KEYS, SCANNED_KV,
+  maspActivityOf, maspActivityStmts, readMaspActivityDay, dayScanned, scannedOf, MASP_SEEN_DAY_SQL, MASP_SEEN_FIRST_SQL, MASP_LEGS_DAY_SQL, MASP_ACTIVITY_KEYS, SCANNED_KV,
   type LegDayRow, type SeenDayRow,
 } from '../worker/src/masp-activity';
 import { maspSeenOf, maspSeenStmts } from '../worker/src/masp-seen';
@@ -133,6 +133,30 @@ describe('the daily job: part \'shielded activity\'', () => {
     // the next tick does the part no more
     const r2 = await daily(env(db), NOW + 60_000, { health, maspRewards: rewards, validators: async () => [] });
     expect(r2?.ran ?? []).not.toContain('shielded activity');
+  });
+  it('a day ending at or before the first recorded block is not written, so the days before the record (a halt\'s among them) are gaps alike, never 0', async () => {
+    const db = testD1();
+    // the record begins with one shielded transaction at 02:00 on 8 Nov (a row without a time is from before the record)
+    await runStmts(db, maspSeenStmts([
+      { height: 8_600_001, blockIndex: 0, batchIndex: 0, kind: 'transfer', ts: YESTERDAY + 2 * H },
+      { height: 8_598_000, blockIndex: 0, batchIndex: 0, kind: 'transfer', ts: undefined },
+    ]));
+    const scanned = (ts: number) => db.raw.prepare("INSERT OR REPLACE INTO kv (key, value, updated_at) VALUES (?, ?, ?)").run(SCANNED_KV, JSON.stringify({ height: 8_600_900, ts, at: NOW }), NOW);
+    const health: SourceHealth[] = [];
+    // 8 Nov's job, the scan past 7 Nov's end: 7 and 6 Nov end before the first recorded block and are not written, not as 0
+    scanned(YESTERDAY + 3 * H);
+    const r1 = (await daily(env(db), NOW - D, { health, maspRewards: rewards, validators: async () => [] }))!;
+    expect(r1.ran).toContain('shielded activity');
+    expect(all(db, 'SELECT * FROM masp_activity_daily')).toEqual([]);
+    expect(all(db, 'SELECT * FROM metrics WHERE key LIKE ?', 'masp.txs%')).toEqual([]);
+    // 9 Nov's job, the scan past 8 Nov's end: 8 Nov, the first day the record covers, is written; 7 Nov is still not
+    scanned(TODAY + 10 * 60_000);
+    const r2 = (await daily(env(db), NOW, { health, maspRewards: rewards, validators: async () => [] }))!;
+    expect(r2.ran).toContain('shielded activity');
+    expect(all(db, 'SELECT day, txs, blocks FROM masp_activity_daily ORDER BY day')).toEqual([{ day: isoDay(YESTERDAY), txs: 1, blocks: 1 }]);
+    expect(all(db, 'SELECT ts, value FROM metrics WHERE key = ? ORDER BY ts', MASP_ACTIVITY_KEYS.txs)).toEqual([{ ts: YESTERDAY, value: 1 }]);
+    // the first read is the index's one seek
+    expect(all(db, `EXPLAIN QUERY PLAN ${MASP_SEEN_FIRST_SQL}`).map((r) => r.detail).join(' | ')).toMatch(/masp_seen_ts/);
   });
   it('the day\'s reads search their indexes (masp_seen_ts; the pool\'s two address indexes by time), never a scan of flows', () => {
     const db = testD1();

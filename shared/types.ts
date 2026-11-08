@@ -1689,6 +1689,8 @@ export interface GenesisSentTo {
   moves: number;
   /** how many addresses it has itself sent NAM to since it first received from the allocation; null when it carries a label */
   sentOnTo: number | null;
+  /** the onward read hit its cap of rows (COHORT_MOVES_MAX newest transfers), so `sentOnTo` is a floor, not the whole count */
+  sentOnCut: boolean;
 }
 
 /** One of the largest genesis allocations: what it holds now and what left it, in the flow index's words. */

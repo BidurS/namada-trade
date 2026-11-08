@@ -380,6 +380,8 @@ export function checkDetail(c: Check): string | null {
     case 'namada_index_lag': {
       // 2026-11-08: while the chain makes no block (the halt), the index stands at its newest block and the row is idle.
       if (d.notJudged === 'no-new-blocks') return 'at the chain\'s newest block: no new block to index';
+      // no node answered its height this tick: the index cannot be placed against the chain (the node row says which failed)
+      if (d.notJudged === 'head-not-read') return 'no Namada node answered its height: the index cannot be placed against the chain';
       const x = detailNum(d.lagBlocks);
       return x == null ? null : `${plural(Math.abs(x), 'block', 'blocks')} behind`;
     }
