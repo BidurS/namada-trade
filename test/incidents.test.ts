@@ -3,6 +3,7 @@
 // give (test/fixtures/namada_blockchain_*.json, namada-rpc.stakeandrelax.net on 2026-11-07, which namada-rpc.polkachu.com
 // agreed with to the millisecond); the halt of 2 November is the HALT row; and the chart markers never stand before
 // the price history (web/src/screens/trade/model.ts incidentMarks).
+import { TIMELINE_SHOWN } from '../shared/copy';
 import { describe, it, expect } from 'vitest';
 import { readFileSync, existsSync } from 'node:fs';
 import { join } from 'node:path';
@@ -162,5 +163,17 @@ describe('the chart markers', () => {
     expect(incidentDays({ date: '2026-09-01', end: '2026-09-14' })).toBe('1 Sep to 14 Sep 2026');
     expect(incidentDays({ date: '2026-09-22', end: '2026-10-01' })).toBe('22 Sep to 1 Oct 2026');
     expect(incidentDays({ date: '2025-12-20', end: '2026-01-03' })).toBe('20 Dec 2025 to 3 Jan 2026');
+  });
+});
+
+describe('the owner\'s call of 2026-11-08 (owner-decisions row 39)', () => {
+  it('the timeline is hidden: the section and the markers render nothing while the rows and words stay', () => {
+    expect(TIMELINE_SHOWN).toBe(false);
+    const tl = readFileSync(new URL('../web/src/screens/shielded/Timeline.tsx', import.meta.url), 'utf8');
+    expect(tl).toContain('if (!TIMELINE_SHOWN || !wide) return null;');
+    for (const f of ['../web/src/screens/trade/index.tsx', '../web/src/screens/shielded/index.tsx']) {
+      const src = readFileSync(new URL(f, import.meta.url), 'utf8');
+      expect(src, f).toMatch(/TIMELINE_SHOWN (&& wide )?\? incidentMarks\(/);
+    }
   });
 });

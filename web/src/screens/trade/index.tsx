@@ -26,7 +26,7 @@ import type { Stamp } from '../../ui/index';
 import { fmtCount, fmtNamRule, fmtPctSigned, fmtUtcClock } from '../../lib/format';
 import { ageOutStamps } from '../../lib/prov';
 import { INCIDENTS, PRICE_MOVES } from '../../generated/events';
-import { TIMELINE_WORDS } from '../../../../shared/copy';
+import { TIMELINE_SHOWN, TIMELINE_WORDS } from '../../../../shared/copy';
 import { HISTORY_ALL_DAYS, historyCapReached } from '../../../../shared/history';
 import type { Reading, Side, TicketMode } from './model';
 import { DEFAULT_SIZE, PRESET_SIZES, depthOf, fromQuote, fromTable, incidentMarks, markerEvents, parseAmount, quoteKey, serviceAnswered, tablePoints } from './model';
@@ -161,7 +161,7 @@ export default function TradeScreen({ route }: ScreenProps) {
   const marks = useMemo(() => {
     if (!wide || !history.data) return [];
     const since = history.data.executedStart ?? history.data.executed[0]?.t ?? null;
-    return incidentMarks(INCIDENTS, since);
+    return TIMELINE_SHOWN ? incidentMarks(INCIDENTS, since) : [];
   }, [wide, history.data]);
 
   // the same for the record of what was bought and sold

@@ -2,9 +2,10 @@
 // INCIDENTS (scripts/incidents.ts, reviewed by hand), newest last, each row with its day, its plain words, the pages of
 // this site it concerns and the sources a reader can open. From 1024 px only, an open list under its heading; under
 // 1024 px nothing is rendered (a phone's screen gains no line for it, as the chart markers are drawn from 1024 px
-// only). A row still running carries "Ongoing".
+// only). A row still running carries "Ongoing". Nothing is rendered at all while shared/copy.ts TIMELINE_SHOWN is
+// false (the owner's call of 2026-11-08).
 import { INCIDENTS, type Incident } from '../../generated/events';
-import { TIMELINE_WORDS } from '../../../../shared/copy';
+import { TIMELINE_SHOWN, TIMELINE_WORDS } from '../../../../shared/copy';
 import { routeByPath } from '../../../../shared/routes';
 import { Link } from '../../app/index';
 import { Icon, Tag, useMinWidth } from '../../ui';
@@ -49,7 +50,7 @@ function Row({ r }: { r: Incident }) {
 
 export function Timeline() {
   const wide = useMinWidth(1024);
-  if (!wide) return null;
+  if (!TIMELINE_SHOWN || !wide) return null;
   return (
     <section className="ipg-sec shd-tl" aria-labelledby="shd-tl-h" id="timeline">
       <div className="ipg-sec__head">

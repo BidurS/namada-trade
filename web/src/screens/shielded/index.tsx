@@ -40,7 +40,7 @@ import { lin, nearestIndex } from '../../ui/chartMath';
 import { useSize } from '../../ui/useSize';
 import { FLOW_WINDOWS, FLOW_WINDOW_DEFAULT, PAIR, PAIR_WORDS, SERIES_DAYS, SLICE, flowSums, flowTakeaway, flowWindow, pairFor, slicesIn } from './flow';
 import { INCIDENTS } from '../../generated/events';
-import { TIMELINE_WORDS } from '../../../../shared/copy';
+import { TIMELINE_SHOWN, TIMELINE_WORDS } from '../../../../shared/copy';
 import { incidentMarks } from '../trade/model';
 import { Timeline } from './Timeline';
 
@@ -176,7 +176,7 @@ export default function ShieldedScreen({ route }: ScreenProps) {
   const firstDaily = trend[0]?.ts ?? null;
   // dated events on Namada as markers on the trend, desktop only, from the trend's first reading on (nothing is marked where no reading is)
   const wide = useMinWidth(1024);
-  const marks = useMemo(() => (wide ? incidentMarks(INCIDENTS, firstDaily) : []), [wide, firstDaily]);
+  const marks = useMemo(() => (TIMELINE_SHOWN && wide ? incidentMarks(INCIDENTS, firstDaily) : []), [wide, firstDaily]);
   // where the readings switch from one a day to the recent, more frequent ones (from the data itself)
   const switchAt = (() => {
     for (let i = 1; i < trend.length; i++) if (trend[i].ts - trend[i - 1].ts < 20 * 3_600_000) return trend[i - 1].ts;

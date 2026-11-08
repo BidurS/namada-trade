@@ -389,6 +389,14 @@ export const SUPPLY_WORDS = {
   dated: (day: string) => `Static, dated ${day}`,
 } as const;
 
+/**
+ * Whether the incidents timeline is shown: the "What happened on Namada" section of the Shielded page and the dotted
+ * markers it explains on the Trade price chart and the Shielded trend. Hidden on the owner's word of 2026-11-08
+ * ("hide it for now, will add later if needed"; docs/design/owner-decisions.md row 39): the rows (scripts/incidents.ts),
+ * their tests and the generated file stay, so showing it again is this one flag.
+ */
+export const TIMELINE_SHOWN = false;
+
 /** The incidents timeline's words (web/src/generated/events.ts INCIDENTS; the Shielded page and the chart markers). */
 export const TIMELINE_WORDS = {
   heading: 'What happened on Namada',
