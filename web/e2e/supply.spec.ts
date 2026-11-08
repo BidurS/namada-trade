@@ -251,7 +251,16 @@ test.describe('once', () => {
   test.beforeEach(({}, info) => test.skip(onlyIn(info.project.name), 'viewport-independent: runs in 375x812'));
 
   test('the plain paragraphs from shared/copy.ts are visible (seo-requirements 3)', async ({ page }) => {
+    // On a phone the second paragraph ("What this page shows") is replaced by the NAM-since-genesis sentence (release 2,
+    // 2026-11-07: a phone screen gains no line, and that paragraph restates the page); from 1024 px both are shown. So at
+    // 375 the first paragraph is visible, the second is absent and the since-genesis section stands in its place; at 1280
+    // both paragraphs are visible.
+    const [first, about] = BODY.supply.paras;
     await gotoRoute(page, '/supply');
+    await expect(page.getByText(first, { exact: true })).toBeVisible();
+    await expect(page.getByText(about, { exact: true })).toHaveCount(0);
+    await expect(page.locator('main .sp-gen .ipg-prose').first()).toBeVisible({ timeout: 30_000 });
+    await page.setViewportSize({ width: 1280, height: 800 });
     for (const p of BODY.supply.paras) await expect(page.getByText(p, { exact: true })).toBeVisible();
   });
 

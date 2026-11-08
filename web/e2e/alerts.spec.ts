@@ -3,11 +3,15 @@
 // rewound page asks every /api with at= and offers no "since your last visit".
 // Account calls are mocked (page.route) so no test session ever reaches the proxied server.
 import type { Page } from '@playwright/test';
+import { alertRules } from '../../shared/alerts';
 import { BODY } from '../../shared/copy';
 import { ROUTES } from '../../shared/routes';
 import { REWIND_AT, animationsIn, apiUrls, expect, gotoRoute, isExempt, isLiveOnly, layoutAudit, onlyIn, test, trackRequests } from './helpers';
 
 const ROUTE = ROUTES.find((r) => r.id === 'alerts')!;
+/** The rules the page lists are the product's own (shared/alerts.ts RULES, seven since the exit_bridge rule of 2026-10-30 and the
+    liquidity rule of 2026-11-01): the specs assert each rule by its id and title and never a count typed here. */
+const RULES = alertRules();
 const BANNED = /\b(SQS|IBC|DEX|PoS|MASP|ABCI|RPC|cron|webhooks?|npm|D[1-7])\b|Loading…/;
 
 /** A test session (made up here) and mocked account calls. Nothing goes to the server. */
@@ -42,7 +46,7 @@ test.describe('alerts, every viewport', () => {
   test('one h1, no overflow, no table, 44 px targets, text at least 11 px', async ({ page }) => {
     await gotoRoute(page, '/alerts');
     await expect(page.locator('.al-read .hero-n__v [data-num]')).toBeVisible({ timeout: 30_000 });
-    await expect(page.locator('.al-rules .swrow')).toHaveCount(5, { timeout: 30_000 });
+    await expect(page.locator('.al-rules .swrow')).toHaveCount(RULES.length, { timeout: 30_000 });
     await expect(page.locator('.al-hits .al-list, .al-hits .empty')).toBeVisible({ timeout: 30_000 });
     const a = await layoutAudit(page, 'main');
     expect(a.overflowX, `scrollWidth ${a.scrollWidth} > ${a.innerWidth}`).toBe(false);
@@ -70,13 +74,14 @@ test.describe('alerts, once', () => {
     await expect(page.locator('[data-decision="D7"]')).toHaveCount(1);
     await expect(page.locator('.al-read .hero-n__v [data-num]')).toHaveText(/^\d[\d,]*$/, { timeout: 30_000 });
     await expect(page.locator('.al-read .chip')).toContainText('Flow index');
+    // one row per rule of shared/alerts.ts, each named by the rule's own title, each locked
     const rows = page.locator('.al-rules .swrow');
-    await expect(rows).toHaveCount(5, { timeout: 30_000 });
-    for (const title of ['NAM bridged to Osmosis', 'NAM unstaked', 'Large trade', 'NAM left the shielded set', 'Large amount staked']) await expect(rows.filter({ hasText: title })).toHaveCount(1);
-    await expect(page.locator('.al-rules .swrow__lock')).toHaveCount(5);
+    await expect(rows).toHaveCount(RULES.length, { timeout: 30_000 });
+    for (const r of RULES) await expect(rows.filter({ hasText: r.title }), r.id).toHaveCount(1);
+    await expect(page.locator('.al-rules .swrow__lock')).toHaveCount(RULES.length);
     for (const sw of await page.locator('.al-rules [role="switch"]').all()) await expect(sw).toBeDisabled();
     // each size has its dollar value, derived from the price, in the panel's one SourceLine scope
-    await expect(page.locator('.al-rules .swrow__d [data-num]')).toHaveCount(5);
+    await expect(page.locator('.al-rules .swrow__d [data-num]')).toHaveCount(RULES.length);
     await expect(page.locator('.al-rules .srcb')).toHaveAttribute('data-scope', /Alert sizes/);
     // where alerts go: one line, one action
     await expect(page.locator('.al-deliv .btn, .al-deliv .link')).toHaveCount(1);
