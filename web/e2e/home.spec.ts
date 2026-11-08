@@ -4,7 +4,9 @@
 // API sends and what the page shows rather than fixed numbers.
 import fs from 'node:fs';
 import type { Check, Holder, QuoteCurveResponse } from '../../shared/types';
+import { ALERT_WINDOW_DAYS } from '../../shared/alerts';
 import { BODY } from '../../shared/copy';
+import { HALT } from '../../shared/halt';
 import { ROUTES } from '../../shared/routes';
 import { PROOF } from '../src/generated/proof';
 import { REWIND_AT, animationsIn, apiUrls, expect, gotoRoute, isExempt, isLiveOnly, layoutAudit, onlyIn, test, trackRequests } from './helpers';
@@ -69,10 +71,15 @@ test.describe('Home, once', () => {
     await gotoRoute(page, '/');
     await loaded(page);
     const tabbar = (await page.locator('nav.tabbar').boundingBox())?.y ?? 812;
+    // While the Namada network is halted (shared/halt.ts HALT.on), the halt bar (web/src/app/HaltBanner.tsx) takes the top of
+    // the first screen; it is never hidden here. Its measured height is allowed for, so the check still asks what it asked
+    // before the halt: that the hero's first screen, bar aside, ends above the tab bar.
+    const bar = HALT.on ? ((await page.locator('.upd--halt').boundingBox())?.height ?? 0) : 0;
+    if (HALT.on) expect(bar, 'the halt bar is shown while HALT.on').toBeGreaterThan(0);
     for (const sel of ['main h1', '.home .hero .hero-n__v', '.home .hero .delta', '.home .hero .chip', '.home .hero .btn--primary', '.home .hero .facts', '.home .hero .ruler']) {
       const box = await page.locator(sel).first().boundingBox();
       expect(box, sel).not.toBeNull();
-      expect(box!.y + box!.height, `${sel} ends above the tab bar`).toBeLessThanOrEqual(tabbar + 1);
+      expect(box!.y + box!.height - bar, `${sel} ends above the tab bar (the halt bar's ${bar} px allowed for)`).toBeLessThanOrEqual(tabbar + 1);
     }
   });
 
@@ -210,15 +217,19 @@ test.describe('Home, once', () => {
   });
 
   test('no earlier alert: only a full search says "none on record"; a failed or 30-day search says what it knows', async ({ page }) => {
-    // an older server (no `last` field): the page reads the last 30 days itself
+    // an older server (no `last` field): the page reads the last 30 days itself. The page asks /api/alerts/recent for one of
+    // the shared windows by `days` (shared/alerts.ts ALERT_WINDOW_DAYS: 1, 7 or 31; api.ts fetchAlertsRecent), never by
+    // `since`, so the mock tells the 30-day read from the 24-hour one by the widest `days`.
     let wide: 'fail' | 'empty' | 'none' = 'fail';
+    const WIDEST = ALERT_WINDOW_DAYS[ALERT_WINDOW_DAYS.length - 1];
     await page.route(/\/api\/alerts\/recent/, (r) => {
       const u = new URL(r.request().url());
-      const since = Number(u.searchParams.get('since'));
+      const days = Number(u.searchParams.get('days') ?? '1');
       const now = Date.now();
-      const isWide = since > 0 && since < now - 29 * 86_400_000;
+      const since = now - days * 86_400_000;
+      const isWide = days === WIDEST;
       if (wide === 'none') return r.fulfill({ json: { since: now - 86_400_000, until: now, hits: [], last: null } }); // a current server that searched everything
-      if (!isWide) return r.fulfill({ json: { since: since || now - 86_400_000, until: now, hits: [] } });
+      if (!isWide) return r.fulfill({ json: { since, until: now, hits: [] } });
       return wide === 'fail' ? r.fulfill({ status: 503, body: 'unavailable' }) : r.fulfill({ json: { since, until: now, hits: [] } });
     });
     const empty = page.locator('section:has(> #home-changed) .empty');
@@ -315,8 +326,14 @@ test.describe('Home, once', () => {
     });
     await gotoRoute(page, '/');
     const facts = page.locator('.home .hero .scope-facts');
-    await expect(facts.locator('.srcb')).toContainText(/2\.8\sdays/, { timeout: 30_000 });
-    await expect(facts.locator('.srcb')).toHaveAttribute('data-status', /old|none|disagree/);
+    // The strip's one SourceLine spans three figures (holders, shielded share, Osmosis share) and prints the youngest and the
+    // oldest age of the three (lib/prov.ts ageRange), so the 2.8-day holder reading shows in the line only when it is one of
+    // those two; the supply figures' age is live data (the chain's state at the halt is days old while HALT.on). Asserted:
+    // the line carries an age in the site's units and reads old, and the count's stamp is the fixture's.
+    const line = facts.locator('.srcb');
+    await expect(line).toContainText(/\d\s(s|min|h|days?)\s·\sold$/, { timeout: 30_000 });
+    await expect(line).toHaveAttribute('data-status', 'old');
+    await expect(facts.locator('.fact', { hasText: 'holders on Namada' }).locator('[data-num]')).toHaveAttribute('data-status', 'old');
   });
 
   test('trust: the static proof block shows its date; the rewind example links /supply?at=<first alert>', async ({ page }) => {

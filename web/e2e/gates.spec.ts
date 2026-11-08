@@ -12,6 +12,7 @@
 import AxeBuilder from '@axe-core/playwright';
 import type { Page, Route } from '@playwright/test';
 import { BODY, NOT_FOUND } from '../../shared/copy';
+import { depthLeadShort } from '../../shared/depth';
 import { ROUTES } from '../../shared/routes';
 import type { Overview, SearchResponse } from '../../shared/types';
 import { REWIND_AT, animationsIn, apiUrls, expect, gotoRoute, isExempt, isLiveOnly, layoutAudit, onlyIn, test, trackRequests } from './helpers';
@@ -528,6 +529,10 @@ test.describe('G10 data honesty', () => {
               const groups = [n.closest('.num'), n.closest('[data-prov-group]'), n.closest('.hero-n'), ref ? document.getElementById(ref) : null];
               const own = groups.some((g) => g && [...g.querySelectorAll('[data-prov]')].some(seen)) || !!n.closest('button.hprice');
               if (own) continue;
+              // a dated public event on the Shielded page's timeline (web/src/screens/shielded/Timeline.tsx): the row's own
+              // source line names where the event is recorded; the day is not a reading with a time of its own
+              const src = n.closest('.shd-tl__row')?.querySelector('.shd-tl__src');
+              if (src && seen(src) && (src.textContent ?? '').trim()) continue;
               let ok = false;
               for (let s = n.closest('[data-prov-scope]'); s && !ok; s = s.parentElement?.closest('[data-prov-scope]') ?? null) {
                 ok = [...s.querySelectorAll('.srcb')].some((b) => seen(b) && !!(b as HTMLElement).dataset.scope);
@@ -699,7 +704,12 @@ test('SEO: every BODY paragraph and section heading is visible text on its route
     await gotoRoute(page, r.path);
     await settled(page);
     const text = (await page.locator('main').innerText()).replace(/\s+/g, ' ');
-    for (const para of copy.paras) expect(text, `${r.path}: "${para.slice(0, 50)}…"`).toContain(para.replace(/\s+/g, ' '));
+    // /depth under 1024 px shows the one-line lead the owner chose (shared/depth.ts depthLeadShort, 2026-10-31) in place of
+    // the first BODY paragraph: that line is accepted as the paragraph's visible text on a phone; the second paragraph is
+    // still asked for as written
+    const vw = page.viewportSize()?.width ?? 0;
+    const shown = (para: string) => (r.id === 'depth' && vw < 1024 && para === copy.paras[0] ? depthLeadShort('NAM') : para).replace(/\s+/g, ' ');
+    for (const para of copy.paras) expect(text, `${r.path}: "${para.slice(0, 50)}…"`).toContain(shown(para));
     for (const s of copy.sections ?? []) {
       await expect(page.locator('main').getByRole('heading', { name: s.h2, exact: true }), `${r.path}: ${s.h2}`).toBeVisible();
       for (const para of s.paras) expect(text, `${r.path}: "${para.slice(0, 50)}…"`).toContain(para.replace(/\s+/g, ' '));

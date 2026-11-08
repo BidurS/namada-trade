@@ -6,6 +6,8 @@
 // (production serves neither before the deploy that adds them); the price chart runs on production data.
 import fs from 'node:fs';
 import type { Page } from '@playwright/test';
+import { DAY_MS, HISTORY_FETCH_DAYS } from '../../shared/history';
+import { SERIES_MAX_POINTS, SERIES_STEP_MS } from '../../shared/types';
 import { expect, gotoRoute, layoutAudit, onlyIn, test } from './helpers';
 
 const SNAP = JSON.parse(fs.readFileSync(new URL('../../docs/design/data/snapshot.json', import.meta.url), 'utf8'));
@@ -250,8 +252,13 @@ test.describe('charts, at 375 px', () => {
     const caps = chart.locator(':scope > .cap:not(.c-starts)');
     await expect(caps).toContainText(/of the [\d,]+ hours since \d+ \w+ had/);
     await expect(caps).not.toContainText('bucketed');
-    await chart.getByRole('radio', { name: '90d' }).click();
-    await expect(caps).toContainText('a gap is not an hour without a trade', { timeout: 30_000 });
+    // A thinned range is one the series route answers in steps longer than an hour: the finest of 1h, 6h, 1d that keeps the
+    // window within SERIES_MAX_POINTS (web/src/screens/trade/series.ts seriesStepFor). 90 days are 2,160 hourly steps and
+    // still hourly, so the first thinned range is 1y (6-hour steps); the pill is found from the constants, not typed.
+    const thinned = (['90d', '1y', 'all'] as const).find((r) => (HISTORY_FETCH_DAYS[r] * DAY_MS) / SERIES_STEP_MS['1h'] > SERIES_MAX_POINTS)!;
+    await chart.getByRole('radio', { name: thinned === 'all' ? 'All' : thinned }).click();
+    await expect(caps).toContainText('At this range the server keeps at most one point per', { timeout: 30_000 });
+    await expect(caps).toContainText('a gap is not an hour without a trade');
     await expect(caps).not.toContainText(/hours since/);
     await expect(chart.locator('.chartsec__title .cap')).toContainText('middle price of one hour’s trades');
     const text = await wordsIn(page, '.tk-chart');

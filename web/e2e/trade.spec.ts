@@ -7,6 +7,7 @@ import fs from 'node:fs';
 import type { Page } from '@playwright/test';
 import AxeBuilder from '@axe-core/playwright';
 import { BODY } from '../../shared/copy';
+import { fmtDayMonthYear } from '../../shared/format';
 import { routeById } from '../../shared/routes';
 import { REWIND_AT, VIEWPORTS, apiUrls, expect, gotoRoute, isExempt, isLiveOnly, layoutAudit, onlyIn, test, trackRequests } from './helpers';
 import type {
@@ -175,9 +176,12 @@ test.describe('once', () => {
     await expect(page.locator('.pools .scope__old')).toContainText('its last answer, from 2 min ago');
   });
 
+  // The chart reads its series from /api/series?key=… (web/src/screens/trade/data.ts chartFromSeries) since the screener work;
+  // the older /api/metrics/history is read only after /api/series answered "not served" once. The two failure tests below fail
+  // the series route, whose path is '/api/series' with a query (not /api/series/changes or /volume).
   test('a failed price history says so with Try again, never "No trades in this window" and never an endless skeleton', async ({ page }) => {
     let down = true;
-    await page.route(/\/api\/metrics\/history/, (r) => (down ? r.fulfill({ status: 503, body: 'unavailable' }) : r.continue()));
+    await page.route(/\/api\/series\?/, (r) => (down ? r.fulfill({ status: 503, body: 'unavailable' }) : r.continue()));
     const errors: string[] = [];
     page.on('pageerror', (e) => errors.push(String(e)));
     await gotoRoute(page, '/trade');
@@ -192,13 +196,13 @@ test.describe('once', () => {
     await chart.getByRole('button', { name: 'Try again' }).click();
     await expect(chart.locator('.chartsec')).toBeVisible({ timeout: 30_000 });
     await expect(chart.locator('#h-chart')).not.toHaveText('The price history did not load');
-    expect(errors.filter((e) => /metrics\/history/.test(e)), 'no uncaught rejection from the history request').toEqual([]);
+    expect(errors.filter((e) => /api\/series/.test(e)), 'no uncaught rejection from the series requests').toEqual([]);
   });
 
   test('a failed price-history refresh keeps the chart, marked old with the time it was fetched', async ({ page }) => {
     await page.clock.install();
     let down = false;
-    await page.route(/\/api\/metrics\/history/, (r) => (down ? r.fulfill({ status: 503, body: 'unavailable' }) : r.continue()));
+    await page.route(/\/api\/series\?/, (r) => (down ? r.fulfill({ status: 503, body: 'unavailable' }) : r.continue()));
     await gotoRoute(page, '/trade');
     const chart = page.locator('.tk-chart');
     await expect(chart.locator('.chartsec')).toBeVisible({ timeout: 30_000 });
@@ -258,7 +262,8 @@ test.describe('once', () => {
     const urls = apiUrls(reqs, new URL(page.url()).origin);
     expect(urls.filter((u) => isLiveOnly(u.pathname)).map(String)).toEqual([]);
     expect(urls.filter((u) => !isExempt(u.pathname) && u.searchParams.get('at') !== String(REWIND_AT)).map(String)).toEqual([]);
-    expect(urls.some((u) => u.pathname === '/api/metrics/history')).toBe(true);
+    // the chart's series are asked for (the series route, with at=; checked above), so the list is not trivially empty
+    expect(urls.some((u) => u.pathname === '/api/series')).toBe(true);
     // picking a size does not ask for a quote either
     await page.locator('.pre', { hasText: '10,000' }).click();
     await expect(page.locator('.tk-field input')).toHaveValue('10,000');
@@ -427,14 +432,26 @@ test.describe('what was bought and sold, the cap and the jump', () => {
 
   test('"All" is a cap: the price chart says so only when the history runs into it', async ({ page }) => {
     const now = Date.now();
-    await page.route(/\/api\/metrics\/history/, (r) => {
+    // Every series the chart asks /api/series for (data.ts chartFromSeries: the executed and quoted prices, then the hourly
+    // volume or the pool price) answers with a point in every step from the request's own `from` (the UTC day
+    // HISTORY_FETCH_DAYS[range] days back, series.ts seriesWindow) to now, so "All" runs into the cap and 90d does not.
+    await page.route(/\/api\/series\?/, (r) => {
       const u = new URL(r.request().url());
-      const hours = Number(u.searchParams.get('hours'));
-      const from = now - hours * H;
-      const step = hours > 400 * 24 ? DAY : 6 * H;
-      const history = [];
-      for (let t = from + step / 2; t <= now; t += step) history.push({ ts: t, value: 0.001 + ((t / step) % 9) * 0.00001 });
-      return r.fulfill({ json: { history, bucketMs: step } });
+      const key = u.searchParams.get('key') ?? '';
+      const step = (u.searchParams.get('step') ?? '1h') as SeriesStep;
+      const ms = STEP[step];
+      const fromS = u.searchParams.get('from') ?? '';
+      const from = /^\d+$/.test(fromS) ? Number(fromS) : dayStart(fromS);
+      const price = key !== 'dex.swaps_1h.nam';
+      const points: SeriesSample[] = [];
+      for (let t = Math.ceil(from / ms) * ms; t < now; t += ms) points.push(price ? { t, v: 0.001 + ((t / ms) % 9) * 0.00001 } : { t, v: 500 });
+      const source = price ? 'fixture price' : 'fixture volume';
+      const body: SeriesResponse = {
+        key, from, to: now, step, stepMs: ms, agg: price ? 'last' : 'sum', unit: price ? 'usd_per_nam' : 'nam', points,
+        sources: [{ source, from: points[0]?.t ?? null, to: points[points.length - 1]?.t ?? null, start: from, startNote: 'fixture', backfilled: false }],
+        start: from, sparse: false, coverage: { steps: points.length, withPoint: points.length }, gaps: [], prov: fresh(source, now), asOf: now,
+      };
+      return r.fulfill({ json: body });
     });
     await gotoRoute(page, '/trade');
     const chart = page.locator('.tk-chart .chartsec').first();
@@ -827,7 +844,9 @@ test.describe('screener basics, served (route mocks), at 375', () => {
 
   test('24h with 3 trade hours: 3 dots, 2 of them joined, 3 bars and 21 empty slots, the band, and the start dates under the chart', async ({ page }) => {
     const now = Date.now();
-    await mockSeries(page, { now, execStart: Date.parse('2026-08-11T12:00:00Z') });
+    // the quoted series starts 5.5 days before now (the fixture's default, passed here so the sentence's date is computed, not typed)
+    const quotedStart = now - 5.5 * DAY;
+    await mockSeries(page, { now, execStart: Date.parse('2026-08-11T12:00:00Z'), quotedStart });
     await gotoRoute(page, '/trade');
     const chart = page.locator('.tk-chart .chartsec').first();
     await expect(chart.locator('#h-chart')).toBeVisible({ timeout: 30_000 });
@@ -845,7 +864,7 @@ test.describe('screener basics, served (route mocks), at 375', () => {
     await expect(chart.locator(':scope > .cap').first()).toContainText(/only 3 of the 24 hours since \d+ \w+ had one/);
     await expect(chart.locator('.key')).toContainText('Bars under the chart: NAM traded in each hour; an empty slot is an hour without a trade');
     await expect(chart.locator('.key')).toContainText('Shaded: the lowest and highest quote in each hour');
-    await expect(chart.locator('.c-starts')).toHaveText(/^Recorded since: executed price 11 Aug 2026 \(filled in once from stored trades\); quoted price \d+ Oct 2026; NAM traded per hour 11 Aug 2026 \(filled in once from stored trades\)\. Nothing is drawn before a series begins\.$/);
+    await expect(chart.locator('.c-starts')).toHaveText(`Recorded since: executed price 11 Aug 2026 (filled in once from stored trades); quoted price ${fmtDayMonthYear(quotedStart)}; NAM traded per hour 11 Aug 2026 (filled in once from stored trades). Nothing is drawn before a series begins.`);
     // the scope lists the bars; the readout says what traded in the hour it reads
     await expect(chart.locator('.srcb')).toHaveAttribute('data-scope', /NAM traded per hour/);
     await box.focus();
@@ -1055,7 +1074,9 @@ test.describe('screener basics, empty answers (route mocks), at 375', () => {
     await expect(page.locator('.tk-buyers .tk-paid__r [data-num]').first()).toHaveText('—');
     await expect(page.locator('.tk-tape .empty')).toContainText('No trade on record yet.');
     await expect(page.locator('.tk-tape .tr')).toHaveCount(0);
-    for (const sel of ['.tk-head', '.tk-buyers', '.tk-tape']) await expect(page.locator(sel)).not.toContainText(/\$0(\.0+)?\b/);
+    // never a stand-in zero ("$0", "$0.00"); the header's live NAM price is a real figure under a dollar ("$0.000633") and is
+    // not one, so a dollar zero followed by more digits is not matched
+    for (const sel of ['.tk-head', '.tk-buyers', '.tk-tape']) await expect(page.locator(sel)).not.toContainText(/\$0(\.0+)?(?![\d.])/);
   });
 });
 

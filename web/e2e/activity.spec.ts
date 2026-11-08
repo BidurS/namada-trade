@@ -505,6 +505,24 @@ async function listReady(page: Page, row = '.hrow') {
   await expect(page.locator('main .act-scope')).not.toHaveAttribute('aria-busy', 'true', { timeout: 30_000 });
 }
 
+/**
+ * The scroll offset once the router's restore has settled (web/src/app/router.ts restoreScroll keeps placing the page
+ * while the list loads, then stops): the list is ready and the offset has not moved for 300 ms.
+ */
+async function settledScrollY(page: Page, row = '.hrow'): Promise<number> {
+  await listReady(page, row);
+  let y = await page.evaluate(() => Math.round(window.scrollY));
+  await expect
+    .poll(async () => {
+      const a = await page.evaluate(() => Math.round(window.scrollY));
+      await page.waitForTimeout(300);
+      y = await page.evaluate(() => Math.round(window.scrollY));
+      return y - a;
+    }, { timeout: 10_000 })
+    .toBe(0);
+  return y;
+}
+
 test.describe('list controls', () => {
   test('Go to rank 1,204 lands on ?page=25 with that row focused, highlighted and in view under the sticky stack (375, 1280)', async ({ page }, info) => {
     test.skip(!['375x812', '1280x800'].includes(info.project.name), 'runs at 375 and 1280');
@@ -572,21 +590,23 @@ test.describe('list controls', () => {
     expect(y1).toBeGreaterThan(500);
     await foot.getByRole('link', { name: 'Next page' }).click();
     await expect(page).toHaveURL(/\/holders\?page=2$/);
-    await listReady(page);
+    // Each offset is read once the restore has settled (settledScrollY): Back and Forward while a restore was still placing
+    // the page read an offset in flight and made this test flaky (2026-11-08, forward read 80 px more than the page was left at).
+    const y2 = await settledScrollY(page);
     await expect(page.locator('main .act-holders .hrow').first().locator('.hrow__rk')).toHaveText('51');
     await expect(page).toHaveTitle(`Holders, page 2 · ${SITE.name}`);
-    const y2 = await page.evaluate(() => Math.round(window.scrollY));
     expect(y2).toBeLessThan(y1);
     await page.goBack();
     await expect(page).toHaveURL(/\/holders$/);
     await expect(page.locator('main .act-holders .hrow').first().locator('.hrow__rk')).toHaveText('1', { timeout: 30_000 });
-    await expect.poll(() => page.evaluate(() => Math.round(window.scrollY)), { timeout: 10_000 }).toBeGreaterThanOrEqual(y1 - 2);
-    expect(Math.abs((await page.evaluate(() => Math.round(window.scrollY))) - y1)).toBeLessThanOrEqual(2);
+    const back = await settledScrollY(page);
+    expect(Math.abs(back - y1), 'Back restores the offset the page was left at').toBeLessThanOrEqual(2);
     await expect(page).not.toHaveTitle(/page/);
     // Forward: page 2 again, at the offset it was left at
     await page.goForward();
     await expect(page).toHaveURL(/\/holders\?page=2$/);
-    await expect.poll(() => page.evaluate(() => Math.round(window.scrollY)), { timeout: 10_000 }).toBeLessThanOrEqual(y2 + 2);
+    const fwd = await settledScrollY(page);
+    expect(Math.abs(fwd - y2), 'Forward restores the offset page 2 was left at').toBeLessThanOrEqual(2);
     await expect(page).toHaveTitle(`Holders, page 2 · ${SITE.name}`);
   });
 
