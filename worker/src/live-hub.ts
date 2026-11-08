@@ -11,8 +11,10 @@ import { blockHasBond, parseNamadaBonds } from './parse/namada-bond';
 import type { PosParse } from './parse/namada-pos';
 import { feePayersOf } from './parse/namada-tx';
 import { maspSeenOf, maspSeenStmts } from './masp-seen';
+import { SCANNED_KV, type Scanned } from './masp-activity';
+import { MASP_COINS_KV, COIN_FALL_FLOOR_USD, MASP_COIN_QUOTE, coinFallWords, coinOf, fallValueUsd, maspCoinsOf, mergeMaspCoins } from './masp-coins';
 import { blockMetas, blockResults, blockTxs, chainHead, headBound, headSince, namadaStatusAll, HEAD_AGREE_BLOCKS, HEAD_BOUND_BLOCK_MS, HEAD_VOTE_MAX_AGE_MS, RpcBreaker, LIVE_READ, type HeadVote, type ReadOpts, type Rpc } from './sources/namada';
-import type { NamadaBlock } from './parse/namada';
+import type { NamadaBlock, MaspCoinSeen } from './parse/namada';
 import { runBatch, stmt, kvGet, kvGetJson, kvSet } from './db';
 import { admitAmong } from './ws-admit';
 import { clientOfRequest, type Client } from './client-key';
@@ -23,8 +25,8 @@ import { priceRouteAt, stampPriceRoute } from './price-how';
 import { sendTelegramMove, telegramRun, TG_LIVE_MS, TG_LIVE_SENDS } from './sources/telegram';
 import { alarmBudget, alertsPausedIn, configureAlerts, fanoutBudget, flushAlerts, isNamWhale, noteNotSent, offeredForAlerts, sendDiscordWhaleAlert, sendsAlerts, spentOut, FANOUT_DEADLINE_MS, UsersUnreadError, WEBHOOK_TIMEOUT_MS, type AlertBudget, type PendingAlert } from './sources/discord';
 import { fetchJson, HttpError, redact, registerSecrets, FETCH_TEXT_MAX_BYTES, ReadBudgetError, ResponseTooLargeError, type ReadBudget } from './util';
-import { watchCronStall, OPS_STALL_LOOK_MS } from './ops';
-import { publicMeta } from './analytics';
+import { watchCronStall, OPS_STALL_LOOK_MS, OPS_SWITCH_KV, opsSending, tellOperator } from './ops';
+import { publicMeta, metricAt } from './analytics';
 
 /** Moves found late (by the catch-up search, or by a Namada scan that was behind) alert only when they happened within this window. */
 export const LATE_ALERT_MAX_AGE_MS = 24 * 3600_000;
@@ -1402,6 +1404,12 @@ export class LiveHub extends DurableObject<Env> {
             if (masp.seen.length) {
               try { await runBatch(this.env.DB, maspSeenStmts(masp.seen)); } catch (e) { console.error(`Namada block ${h}: its shielded transactions could not be recorded in masp_seen:`, e); }
             }
+            // The pool's balance of every other coin the block's events gave (masp-coins.ts, kv masp.coins), and the
+            // operator's line when one fell to 0 or by half in this block. A write that fails costs this block's word on
+            // the coins, never the block: the daily job reads each stored coin from the chain anyway.
+            if (Object.keys(parsed.maspCoins).length) {
+              try { await this.noteMaspCoins(parsed.maspCoins, h, blk.ts); } catch (e) { console.error(`Namada block ${h}: the pool's coins could not be recorded in kv masp.coins:`, e); }
+            }
           }
         }
       } catch (e) {
@@ -1419,8 +1427,43 @@ export class LiveHub extends DurableObject<Env> {
       }
     }
     if (done > written) await kvSet(this.env.DB, 'namada.cursor', String(done));
+    // The newest block scanned and its own time (kv namada.scanned): the daily job counts a day's shielded transactions
+    // only once this is past the day's end (masp-activity.ts). One write per tick that read a block; a write that
+    // fails leaves the last one, which only delays the count.
+    if (done > lastScanned && times.has(done)) {
+      await kvSet(this.env.DB, SCANNED_KV, { height: done, ts: times.get(done)!, at: Date.now() } satisfies Scanned).catch((e) => console.error('kv namada.scanned not written:', e));
+    }
     // What the scan read while the head was agreed on (lastAgreed.read): blocks up to it are not read again.
     if (at.agreed && this.lastAgreed) this.lastAgreed.read = done;
+  }
+
+  /**
+   * The pool's coins after one block (masp-coins.ts): the stored map merged with what the block's events gave, written
+   * back; for each fall the rule names (to 0, or by half or more in the block) of a coin quoted on this site whose pool
+   * balance before the fall was worth COIN_FALL_FLOOR_USD or more at the site's quote for the block's minute, one line
+   * to the operator's channels alone (ops.ts tellOperator, under the operator's own send gate), kept on the coin's
+   * entry whether posted or not. A coin the token table or the quote list does not know is stored and never posted.
+   */
+  private async noteMaspCoins(seen: Record<string, MaspCoinSeen>, height: number, ts: number): Promise<void> {
+    const now = Date.now();
+    const prev = maspCoinsOf(await kvGetJson<unknown>(this.env.DB, MASP_COINS_KV));
+    const { next, falls } = mergeMaspCoins(prev, seen, height, ts, now);
+    for (const f of falls) {
+      const c = coinOf(f.token);
+      const q = c ? MASP_COIN_QUOTE[c.symbol] : undefined;
+      if (!c || !q) continue;
+      let usdEach: number | null = null, quoteAt: number | null = null;
+      if ('stable' in q) usdEach = 1;
+      else { const m = await metricAt(this.env.DB, q.metric, ts); if (m) { usdEach = m.value; quoteAt = m.ts; } }
+      const value = fallValueUsd(f, c.decimals, usdEach);
+      if (value == null || value < COIN_FALL_FLOOR_USD) continue;
+      const words = coinFallWords(f, c.symbol, c.decimals, value, quoteAt);
+      const switchRaw = await kvGet(this.env.DB, OPS_SWITCH_KV).catch(() => null);
+      const posted = opsSending(this.env, switchRaw) ? await tellOperator(this.env, [words], 'shielded pool coin fall').catch((e) => { console.error('shielded pool coin fall: not posted', e); return false; }) : false;
+      const entry = next[f.token];
+      if (entry?.fell) entry.fell.posted = posted;
+    }
+    await kvSet(this.env.DB, MASP_COINS_KV, next);
   }
 
   /**

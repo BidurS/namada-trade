@@ -7,6 +7,7 @@
 //   GET /api/series/volume?at=                      VolumeResponse        executed volume per window, with its definition
 //   GET /api/series/pairs                           PairsResponse         the NAM pools with the Osmosis data API's volume
 //   GET /api/series/trades?before=&maker=&min=&limit=&at=  TradesResponse  the tape, keyset paged, repeats folded
+//   GET /api/series/cohorts?at=                     GenesisCohortsResponse the genesis cohorts' newest snapshot and the largest allocations
 //   GET /api/series/values?at=                      ValuesResponse        all NAM and spendable NAM at today's price,
 //                                                                         each with its definition (never "market cap")
 //
@@ -22,7 +23,7 @@ import { asOfOf, refuse, route } from './api-route';
 import { parseBeforeParam, clampLimit, LIMIT_MIN } from '../../shared/paging';
 import { isWholeAddress } from '../../shared/search-grammar';
 import { readPoolsRow } from './pool-sizes';
-import { readSeries, readChanges, readVolume, readPairs, readTrades, readValues, SeriesInputError } from './series-api';
+import { readSeries, readChanges, readVolume, readPairs, readTrades, readValues, readGenesisCohorts, SeriesInputError } from './series-api';
 
 export const seriesApp = new Hono<{ Bindings: Env }>();
 
@@ -34,6 +35,7 @@ export const SERIES_PARAMS = {
   '/api/series/pairs': [],
   '/api/series/trades': ['before', 'maker', 'min', 'limit', 'at'],
   '/api/series/values': ['at'],
+  '/api/series/cohorts': ['at'],
 } as const satisfies Record<string, readonly string[]>;
 type Route = keyof typeof SERIES_PARAMS;
 
@@ -82,6 +84,11 @@ seriesApp.get('/trades', route('/api/series/trades', async (c) => {
   // `before`: a cursor from a previous page or a plain unix-ms time; anything else is the head page (shared/paging.ts).
   const limit = Math.min(TRADES_LIMIT_MAX, Math.max(LIMIT_MIN, clampLimit(p.limit)));
   return readTrades(c.env.DB, { before: parseBeforeParam(p.before), maker, min, limit }, asOf, replay);
+}));
+
+seriesApp.get('/cohorts', route('/api/series/cohorts', async (c) => {
+  const { asOf, replay } = asOfOf(params(c, '/api/series/cohorts').at);
+  return readGenesisCohorts(c.env.DB, asOf, replay);
 }));
 
 seriesApp.get('/values', route('/api/series/values', async (c) => {

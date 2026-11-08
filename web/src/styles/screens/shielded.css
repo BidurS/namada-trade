@@ -61,6 +61,11 @@
   .shd-flow .key__i { display: flex; align-items: baseline; gap: 0; min-width: 0; }
   .shd-flow .key__sw { flex: none; position: relative; top: 1px; }
   .shd-flow .cstats dt { text-wrap: pretty; }
+  /* the shielded transactions a day under the flow chart (desktop only): every transaction, the inside part over it */
+  .shd-act { margin-top: var(--s-5); }
+  .shd-act__box { height: 120px; }
+  .shd-act__all, .shd-act__sw--all { fill: var(--c-ink-2); background: var(--c-ink-2); }
+  .shd-act__inside, .shd-act__sw--inside { fill: var(--shielded); background: var(--shielded); }
 
   /* a move out the server paired with a move in: the tag, then the dwell, the candidates and the confidence */
   .mor__pt { display: grid; gap: 2px; flex-basis: 100%; margin-top: 2px; }

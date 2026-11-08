@@ -2,12 +2,12 @@ import type {
   Overview, AddressReport, SearchResult, PoolInfo, PriceQuote, QuoteCurveResponse, Check, IntelResponse,
   Pressure, BlindSpot, OrderflowResponse, AlertRuleInfo, Provenance, SourceHealth, UserSettings, SessionInfo,
   FlowsResponse, HoldersResponse, AlertsRecentResponse, Flow, Holder, HoldersBy, SearchResponse, NotServedBody,
-  SeriesResponse, SeriesStep, PriceChangesResponse, VolumeResponse, PairsResponse, TradesResponse, ValuesResponse,
+  SeriesResponse, SeriesStep, PriceChangesResponse, VolumeResponse, PairsResponse, TradesResponse, ValuesResponse, GenesisCohortsResponse,
 } from '../../shared/types';
 
 export type {
   FlowsResponse, HoldersResponse, AlertsRecentResponse, OrderflowResponse, SearchResponse,
-  SeriesResponse, PriceChangesResponse, VolumeResponse, PairsResponse, TradesResponse, ValuesResponse,
+  SeriesResponse, PriceChangesResponse, VolumeResponse, PairsResponse, TradesResponse, ValuesResponse, GenesisCohortsResponse,
 };
 
 import type { DepthChangesResponse, DepthHeatResponse, DepthHistoryResponse, DepthOwnersApiResponse, DepthQuoteResponse, DepthResponse } from '../../shared/depth';
@@ -459,6 +459,8 @@ export const fetchPriceChanges = (asOf: number | null, opts: RequestOpts = {}) =
 export const fetchVolume = (asOf: number | null, opts: RequestOpts = {}) => get<VolumeResponse>(`/api/series/volume${at(asOf)}`, opts);
 /** The NAM pools: router depth and the Osmosis data API's volume per pool. Live only (no `at`). */
 export const fetchPairs = (opts: RequestOpts = {}) => get<PairsResponse>('/api/series/pairs', opts);
+/** The genesis cohorts' newest daily snapshot and the largest allocations with what each holds now and what left it. */
+export const fetchGenesisCohorts = (asOf: number | null, opts: RequestOpts = {}) => get<GenesisCohortsResponse>(`/api/series/cohorts${at(asOf)}`, opts);
 /** All NAM and spendable NAM at today's price, each with its definition and inputs (never "market cap"). */
 export const fetchValues = (asOf: number | null, opts: RequestOpts = {}) => get<ValuesResponse>(`/api/series/values${at(asOf)}`, opts);
 

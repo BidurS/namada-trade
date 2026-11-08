@@ -14,11 +14,11 @@
 // tab is visible and when it becomes visible again (parts.ts useLiveLoad); a refresh that fails
 // keeps them, marked old with the reason.
 import { useMemo, useState } from 'react';
-import type { Pressure } from '../../../../shared/types';
+import type { GenesisCohortsResponse, Pressure } from '../../../../shared/types';
 import { BODY } from '../../../../shared/copy';
 import type { ScreenProps } from '../../app/index';
 import { useOverview, useReplay, useSession } from '../../app/index';
-import { fetchPressure } from '../../api';
+import { fetchGenesisCohorts, fetchPressure } from '../../api';
 import { ageOutStamps, unbondingStamp, type Stamp } from '../../lib/prov';
 import { Derived, Fact, HeroNumber, Notice, Num, ProvChip, ProvDot, Segmented, Skeleton, SkeletonBlock, Term, derive, useMinWidth, useUiNow, type FactItem } from '../../ui';
 import { NBSP, fmtCount, fmtDateline, fmtNamRule, fmtNamSigned, fmtPctRule, fmtUsdRule } from '../../lib/format';
@@ -29,6 +29,7 @@ import { Movers } from './Movers';
 import { UNLOCKS_ID, Unlocks, windowWords, type UnlockFilter } from './Unlocks';
 import { Votes } from './Votes';
 import { SinceGenesis } from './SinceGenesis';
+import { GenesisCohorts } from './GenesisCohorts';
 import { epochMs, unbondStates, unbondSums, unbondingAllOf, waitingAll } from './unbonds';
 
 /** The stamp of a figure whose request failed: no data, and why. */
@@ -52,6 +53,9 @@ export default function SupplyScreen({ route }: ScreenProps) {
   const [days, setDays] = useState<WindowDays>(7);
   const [ulFilter, setUlFilter] = useState<UnlockFilter>('all');
   const load = useLiveLoad<Pressure>(at, String(days), () => fetchPressure(at, days));
+  // the genesis cohorts' newest daily snapshot (one request, refreshed every 10 minutes): the phone's one sentence and
+  // the desktop's Genesis cohorts section
+  const cohorts = useLiveLoad<GenesisCohortsResponse>(at, 'cohorts', () => fetchGenesisCohorts(at), 10 * 60_000);
   // after a failed refresh the figures stay, every stamp marked old with the reason
   const data = useMemo(
     () => (load.data && load.refreshFailedAt ? ageOutStamps(load.data, refreshFailedNote(load.fetchedAt)) : load.data),
@@ -270,7 +274,7 @@ export default function SupplyScreen({ route }: ScreenProps) {
         <div className={`wrap ipg-grid${busy && data ? ' is-busy' : ''}`}>
           {data ? (
             <>
-              <ReadyToSell data={data} overview={o} isMine={isMine} />
+              <ReadyToSell data={data} overview={o} isMine={isMine} wide={wide} />
               <Movers data={data} isMine={isMine} />
               <Unlocks data={data} overview={o} isMine={isMine} filter={ulFilter} setFilter={setUlFilter} states={states!} />
               <Votes data={data} />
@@ -300,7 +304,9 @@ export default function SupplyScreen({ route }: ScreenProps) {
           )}
           {/* NAM since genesis: current figures, so not on a rewound page. A phone shows its one sentence in place of the
               "What this page shows" paragraph (the least informative line here: it restates the page); a desktop shows both. */}
-          {!rewound ? <SinceGenesis overview={o} wide={wide} /> : null}
+          {!rewound ? <SinceGenesis overview={o} wide={wide} cohorts={cohorts.data} /> : null}
+          {/* the genesis cohorts: the sentence, the share held over time, the cohorts and the largest allocations, from 1024 px */}
+          {wide ? <GenesisCohorts data={cohorts.data} failed={cohorts.failed} at={at} /> : null}
           {wide || rewound ? (
             <section className="ipg-sec ipg-col--full ipg-about" aria-labelledby="sp-about-h">
               <h2 id="sp-about-h" className="h2">What this page shows</h2>

@@ -934,6 +934,9 @@ describe('query plans: every statement the routes run', () => {
     ...(['buy', 'sell'] as const).flatMap((k) => [false, true].flatMap((maker) => [false, true].flatMap((min) => [false, true].map((tie): [string, string] => [`tradesSql(${k}, maker ${maker}, min ${min}, tie ${tie})`, S.tradesSql(k, { maker, min, tie })])))),
     ['makerCountSql(buy, 3)', S.makerCountSql('buy', 3)], ['makerCountSql(sell, 3)', S.makerCountSql('sell', 3)], ['smallBuysSql(3)', S.smallBuysSql(3)],
     ['TRADES_START_SQL', S.TRADES_START_SQL], ['VALUES_SQL', S.VALUES_SQL], ['POOL_RANGE_SQL', S.POOL_RANGE_SQL], ['POOL_START_SQL', S.POOL_START_SQL],
+    // the genesis cohorts (migration 0023): the cohort_daily primary key, the allocation table's amount index, the flows_from index
+    ['COHORT_RANGE_SQL', S.COHORT_RANGE_SQL], ['COHORT_START_SQL', S.COHORT_START_SQL], ['COHORT_NEWEST_SQL', S.COHORT_NEWEST_SQL], ['COHORT_DAY_SQL', S.COHORT_DAY_SQL],
+    ['COHORT_LARGE_SQL', S.COHORT_LARGE_SQL], ['COHORT_SHIELDED_SQL', S.COHORT_SHIELDED_SQL], ['COHORT_TRANSFERS_SQL', S.COHORT_TRANSFERS_SQL], ['COHORT_SENT_ON_SQL', S.COHORT_SENT_ON_SQL], ['labelsSql(3)', S.labelsSql(3)],
   ];
 
   it('each is a SEARCH on an index or primary key: no temporary B-tree, no SCAN of a table', () => {

@@ -18,7 +18,8 @@ import {
   type SwapRow, type DayFlowRow,
 } from '../worker/src/series';
 
-import { SERIES_READS, ROLLUP_HOUR_SQL, ROLLUP_KEYS, DAY_FLOWS_SQL, SWAP_HOUR_SQL, BUCKETS } from '../worker/src/series-sql';
+import { SERIES_READS, ROLLUP_HOUR_SQL, ROLLUP_KEYS, DAY_FLOWS_SQL, SWAP_HOUR_SQL, BUCKETS, ALLOC_COHORTS_SQL, ALLOC_SHIELDED_SQL } from '../worker/src/series-sql';
+import { ALLOC_CATEGORIES, GENESIS_ALLOC_KV, GENESIS_DIGEST } from '../shared/genesis';
 import type { PoolInfo, SourceHealth } from '../shared/types';
 
 const fx = (n: string) => JSON.parse(readFileSync(new URL(`./fixtures/${n}`, import.meta.url), 'utf8'));
@@ -710,6 +711,102 @@ describe('daily(): each part on its own', () => {
     expect(r.ran).toEqual([]);
     const closing = Date.UTC(2026, 9, 21, 1, 14);
     expect((await daily(env(s.db), closing, { health: [], maspRewards: rewards, listingTick: true, validators: async () => VALIDATORS }))!.ran).toHaveLength(5);
+  });
+});
+
+// ---------------------------------------------------------------- daily: the allocation cohorts (migration 0023)
+
+/**
+ * The allocation table over the seed: two backers (one not in the holder index at all), one allocation per other cohort,
+ * three public-sale wallets (one with an emptied row), a protocol account's allocation (left out) and a row of a cohort
+ * the site does not know (left out); the kv marker the script writes; and shield moves of which one is counted per
+ * rule: a NAM shield before the listings (counted), one after them (not yet), one of another coin (never), an older twin
+ * and its re-filed row (the re-filed one), and a plain transfer (not a shield).
+ */
+function seedAlloc(s: Seed, marker = true) {
+  const rows: [string, number, string][] = [
+    [tnam(0), 20_000_000, 'backer'], [tnam(5000), 20_000_000, 'backer'], [tnam(1), 50_000_000, 'foundation'], [tnam(2), 1_000_000, 'team'],
+    [tnam(3), 1, 'validators'], [tnam(4), 5_000_000, 'ecosystem'], [tnam(6), 100, 'public_completed'], [tnam(7), 100, 'public_completed'], [tnam(301), 100, 'public_completed'],
+    [tnam(8), 55_000_000, 'public_future'], [POS, 1, 'foundation'], [tnam(9), 7, 'other'],
+  ];
+  for (const [address, amount_num, category] of rows) insert(s.db, 'genesis_alloc', [{ address, amount_num, category }]);
+  if (marker) insert(s.db, 'kv', [{ key: GENESIS_ALLOC_KV, value: JSON.stringify({ digest: GENESIS_DIGEST, n: rows.length, writtenAt: NOW - D }), updated_at: NOW - D }]);
+  s.db.raw.prepare("UPDATE kv SET value = json_set(value, '$.height', 8517945) WHERE key = 'balance.listing'").run();
+  s.db.raw.prepare("UPDATE kv SET value = json_set(value, '$.height', 8517754) WHERE key = 'bond.listing'").run();
+  const flow = (id: string, from: string, to: string, kind: string, amount_num: number, ts: number, meta: string | null, tx_hash = id) =>
+    insert(s.db, 'flows', [{ id: `namada:${id}`, chain: 'namada', height: 100, ts, tx_hash, kind, from_addr: from, to_addr: to, amount_num, meta }]);
+  flow('s1', tnam(0), MASP, 'shield', 100, NOW - 5 * H, '{"innerTxHash":"S1"}');
+  flow('s2', tnam(0), MASP, 'shield', 50, NOW - 30 * 60000, '{"innerTxHash":"S2"}'); // after the listings: not in this snapshot
+  flow('s3', tnam(1), MASP, 'shield', 999, NOW - 5 * H, '{"tokenSymbol":"USDC","innerTxHash":"S3"}'); // another coin
+  flow('s4old', tnam(2), MASP, 'shield', 30, NOW - 6 * H, null, 'OLDHASH'); // the older twin of s4
+  flow('s4', tnam(2), MASP, 'shield', 30, NOW - 6 * H + 1000, '{"innerTxHash":"OLDHASH","source":"refile"}');
+  flow('t1', tnam(0), tnam(1), 'transfer', 1_000, NOW - 5 * H, '{"innerTxHash":"T1"}');
+  flow('s5', tnam(6), MASP, 'shield', 10, NOW - 7 * H, '{"innerTxHash":"S5"}');
+}
+
+describe('daily(): the allocation cohorts', () => {
+  const run = (s: Seed, at = NOW) => daily(env(s.db), at, { health: [], maspRewards: rewards, validators: async () => VALIDATORS });
+  const allocRows = (s: Seed) => Object.fromEntries(all(s.db, "SELECT * FROM cohort_daily WHERE category LIKE 'alloc.%'").map((r) => [r.category, r]));
+
+  it('writes one row per cohort and one for all of them: the holder index\'s spendable and staked, the NAM at genesis, the shield moves to the listings\' time, the listings\' blocks', async () => {
+    const s = seed();
+    seedAlloc(s);
+    const r = (await run(s))!;
+    expect(r.ran).toContain('snapshot genesis cohorts');
+    const rows = allocRows(s);
+    expect(Object.keys(rows).sort()).toEqual([...ALLOC_CATEGORIES.map((c) => `alloc.${c}`), 'alloc.all'].sort());
+    const sp = (a: string) => s.spendable.get(a) ?? 0, st = (a: string) => s.staked.get(a) ?? 0;
+    const asOf = NOW - 2 * H; // the older listing (the bond listing)
+    expect(rows['alloc.backer']).toEqual({
+      day: '2026-10-21', category: 'alloc.backer', addrs: 2, addrs_with_nam: 1, spendable: sp(tnam(0)), staked: st(tnam(0)), as_of: asOf,
+      shielded_out: 100, alloc_nam: 40_000_000, balance_height: 8517945, bond_height: 8517754,
+    });
+    expect(rows['alloc.team']).toMatchObject({ addrs: 1, spendable: sp(tnam(2)), staked: st(tnam(2)), shielded_out: 30, alloc_nam: 1_000_000 });
+    expect(rows['alloc.foundation']).toMatchObject({ addrs: 1, shielded_out: 0, alloc_nam: 50_000_000 }); // the protocol account's allocation is left out; the other coin's shield is not NAM
+    expect(rows['alloc.public_completed']).toMatchObject({ addrs: 3, addrs_with_nam: 2, spendable: sp(tnam(6)) + sp(tnam(7)), shielded_out: 10, alloc_nam: 300 });
+    expect(rows['alloc.validators']).toMatchObject({ addrs: 1, alloc_nam: 1, shielded_out: 0 });
+    expect(rows['alloc.public_future']).toMatchObject({ addrs: 1, alloc_nam: 55_000_000 });
+    const cohorts = ALLOC_CATEGORIES.map((c) => rows[`alloc.${c}`]);
+    const sum = (k: string) => cohorts.reduce((a, x) => a + x[k], 0);
+    expect(rows['alloc.all']).toEqual({
+      day: '2026-10-21', category: 'alloc.all', addrs: 10, addrs_with_nam: sum('addrs_with_nam'), spendable: sum('spendable'), staked: sum('staked'), as_of: asOf,
+      shielded_out: 140, alloc_nam: 151_000_301, balance_height: 8517945, bond_height: 8517754,
+    });
+    // the unknown cohort 'other' got no row; the labels' cohorts are still written beside these
+    expect(all(s.db, "SELECT category FROM cohort_daily WHERE category NOT LIKE 'alloc.%' ORDER BY category").map((x) => x.category)).toEqual(['backer', 'foundation', 'genesis', 'none']);
+    // the SQL behind it: the cohort pass and the shield sum by cohort, as the writer read them
+    expect(all(s.db, ALLOC_COHORTS_SQL).map((x) => x.category).sort()).toEqual([...ALLOC_CATEGORIES, 'other'].sort());
+    expect(Object.fromEntries(all(s.db, ALLOC_SHIELDED_SQL, MASP, asOf).map((x) => [x.category, x.nam]))).toEqual({ backer: 100, team: 30, public_completed: 10 });
+    // the day is done: a second tick writes nothing, and the closing tick's count of parts is six with the table loaded
+    expect(await run(s, NOW + 60000)).toBeNull();
+    expect(r.ran).toHaveLength(6);
+  });
+
+  it('without the kv marker the part is not the day\'s work: nothing is written, nothing said, and the day finishes', async () => {
+    const s = seed();
+    seedAlloc(s, false);
+    const r = (await run(s))!;
+    expect(r.ran).not.toContain('snapshot genesis cohorts');
+    expect(r.waiting.some((w) => w.startsWith('snapshot genesis cohorts'))).toBe(false); // said by /api/series/cohorts, not on every tick
+    expect(allocRows(s)).toEqual({});
+    expect(await run(s, NOW + 60000)).toBeNull();
+  });
+
+  it('waits with the Namada snapshot while the listings are not fresh, and reads the table only then', async () => {
+    const s = seed();
+    seedAlloc(s);
+    s.db.raw.prepare("UPDATE kv SET value = json_set(value, '$.completeAt', ?) WHERE key = 'bond.listing'").run(NOW - 7 * H);
+    const q0 = s.db.queries;
+    const r = (await run(s))!;
+    expect(r.waiting).toContain('snapshot genesis cohorts: the older listing is 7.0 h old');
+    expect(r.ran).not.toContain('snapshot genesis cohorts');
+    expect(allocRows(s)).toEqual({});
+    expect(s.db.queries - q0).toBeGreaterThan(0);
+    // the listing completes: the next tick in the window writes the rows
+    s.db.raw.prepare("UPDATE kv SET value = json_set(value, '$.completeAt', ?) WHERE key = 'bond.listing'").run(NOW - 2 * H);
+    const r2 = (await run(s, NOW + 60000))!;
+    expect(r2.ran).toEqual(['snapshot namada', 'snapshot genesis cohorts']);
+    expect(Object.keys(allocRows(s))).toHaveLength(8);
   });
 });
 

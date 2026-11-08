@@ -10,46 +10,15 @@
 import { createHash } from 'node:crypto';
 import { INTERNAL_LABELS } from '../worker/src/config';
 import { stmt, type Stmt } from '../worker/src/db';
+import { GENESIS_DIGEST, GENESIS_URL, genesisDigestRows, parseGenesisToml, type GenesisAllocations } from '../shared/genesis';
 
-export type GenesisAllocations = Record<string, { amount: number; categories: string[]; name: string | null }>;
-
-export const GENESIS_URL = 'https://raw.githubusercontent.com/namada-net/namada-mainnet-genesis/main/genesis/balances.toml';
-
-/**
- * sha256 of the reviewed allocations (genesisDigest): the parse cached in scripts/out/namada/genesis.json on
- * 2026-10-19, 70,830 NAM allocations that sum to the 1,000,000,000 NAM genesis supply. Its 269 backer, 21 foundation
- * and 64 named entries are the counts of the genesis labels on production (read 2026-10-23). To take a different
- * file, review what changed and pin its digest here in a commit.
- */
-export const GENESIS_DIGEST = '449f6f2a66a09d13bf0083926de70b2d9d8782c5665dfbd2d2344bd871f683cb';
-
-/** The [token.NAM] lines of balances.toml: amount per address, with the comment's categories and name. */
-export function parseGenesisToml(txt: string): GenesisAllocations {
-  const out: GenesisAllocations = {};
-  let inNam = false;
-  for (const line of txt.split('\n')) {
-    const sec = line.match(/^\s*\[(.+)\]\s*$/);
-    if (sec) { inNam = sec[1].trim() === 'token.NAM'; continue; }
-    if (!inNam) continue;
-    const m = line.match(/^\s*(tnam1[0-9a-z]+)\s*=\s*"([\d.]+)"\s*(#.*)?$/);
-    if (!m) continue;
-    const comment = m[3] ?? '';
-    const cats = [...(comment.match(/categories:\s*\[([^\]]*)\]/)?.[1] ?? '').matchAll(/'([^']+)'/g)].map((x) => x[1]);
-    const name = comment.match(/\(name:\s*([^)]+)\)/)?.[1]?.trim() ?? null;
-    const prev = out[m[1]];
-    out[m[1]] = {
-      amount: (prev?.amount ?? 0) + Number(m[2]),
-      categories: [...new Set([...(prev?.categories ?? []), ...cats])],
-      name: name ?? prev?.name ?? null,
-    };
-  }
-  return out;
-}
+// The file's address, the pinned digest and the parser live in shared/genesis.ts since the allocation table
+// (scripts/genesis-alloc.ts, migration 0023) reads the same file under the same pin; re-exported so callers keep one import.
+export { GENESIS_DIGEST, GENESIS_URL, parseGenesisToml, type GenesisAllocations };
 
 /** sha256 over every allocation in address order: address, amount, categories and name. */
 export function genesisDigest(gen: GenesisAllocations): string {
-  const rows = Object.keys(gen).sort().map((a) => [a, gen[a].amount, gen[a].categories, gen[a].name]);
-  return createHash('sha256').update(JSON.stringify(rows)).digest('hex');
+  return createHash('sha256').update(JSON.stringify(genesisDigestRows(gen))).digest('hex');
 }
 
 /** The allocations when they are the reviewed copy; otherwise an error that names the digest found. */

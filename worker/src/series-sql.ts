@@ -8,7 +8,7 @@
 // snapshot aggregates (HOLDER_COHORTS_*, COHORT_*) are whole-table passes by nature and run once a day in the cron,
 // never on a request.
 import { HOLDERS_UNION, INTERNAL_ADDRS, OSMOSIS_PASS_KV, OSMOSIS_READ_AT_SQL, notPool, stakeNum } from './holders';
-import { NOT_LEGACY_TWIN } from './flows-query';
+import { NAM_AMOUNT, NOT_LEGACY_TWIN } from './flows-query';
 
 const H = 3600000;
 
@@ -119,6 +119,30 @@ export const COHORT_LABELLED_SQL = `SELECT l.category, COUNT(*) addrs, SUM(CASE 
     WHERE l.source = 'genesis' AND l.category IN (${COHORT_CATEGORIES.map((c) => `'${c}'`).join(',')})
       AND l.address NOT IN (${INTERNAL_ADDRS.map((a) => `'${a}'`).join(',')})) l
   GROUP BY l.category`;
+
+/**
+ * The allocation cohorts (migration 0023 genesis_alloc, shared/genesis.ts ALLOC_CATEGORIES): every genesis allocation by
+ * cohort with what its address holds now (spendable from holders, staked by the list's stake rule) and the cohort's
+ * NAM at genesis, protocol accounts left out as the size cohorts leave them out. A pass over the table once a day:
+ * 70,830 rows and two primary-key lookups each. Nothing when the table is not loaded.
+ */
+export const ALLOC_COHORTS_SQL = `SELECT g.category, COUNT(*) addrs, SUM(CASE WHEN sp + st > 0 THEN 1 ELSE 0 END) addrs_with_nam, SUM(sp) spendable, SUM(st) staked, SUM(alloc) alloc_nam FROM (
+    SELECT g.category, g.amount_num alloc, COALESCE(h.balance_num, 0) sp, ${stakeNum('s.')} st FROM genesis_alloc g
+    LEFT JOIN holders h ON h.chain = 'namada' AND h.address = g.address LEFT JOIN stakes s ON s.address = g.address
+    WHERE g.address NOT IN (${INTERNAL_ADDRS.map((a) => `'${a}'`).join(',')})) g
+  GROUP BY g.category`;
+
+/**
+ * NAM each cohort's addresses have sent into the shielded pool since this site's record began, up to ?2 (the
+ * listings' time): flows of kind shield to the pool (?1), NAM only, older twins left out. The shield rows on the
+ * flows_kind index (2,934 on production, 2026-11-07), each joined to the allocation table by primary key; once a day.
+ */
+export const ALLOC_SHIELDED_SQL = `SELECT g.category, SUM(f.amount_num) nam, COUNT(*) n FROM flows f JOIN genesis_alloc g ON g.address = f.from_addr
+  WHERE f.kind = 'shield' AND f.chain = 'namada' AND f.to_addr = ?1 AND f.ts <= ?2 AND ${NAM_AMOUNT} AND ${NOT_LEGACY_TWIN}
+  GROUP BY g.category`;
+
+/** One cohort_daily row per allocation cohort and one for all of them (series.allocCohortStmts), with the 0023 columns. */
+export const ALLOC_COHORT_ROW_SQL = `INSERT OR REPLACE INTO cohort_daily (day, category, addrs, addrs_with_nam, spendable, staked, as_of, shielded_out, alloc_nam, balance_height, bond_height) VALUES (?,?,?,?,?,?,?,?,?,?,?)`;
 
 /** 'none' (every other Namada holder) is the Namada size lines' totals minus the labelled cohorts' holders (series.noneCohort): no second pass. */
 export const HOLDER_COHORT_ROW_SQL = `INSERT OR REPLACE INTO holder_cohorts_daily (day, chain, bucket, holders, nam, spendable, staked, as_of) VALUES (?,?,?,?,?,?,?,?)`;

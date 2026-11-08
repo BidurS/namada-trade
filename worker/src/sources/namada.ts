@@ -494,6 +494,18 @@ export async function namProtocolBalance(owner: string, opts: ReadOpts = {}) {
 }
 
 /**
+ * The shielded pool's balance of a coin other than NAM (base units as the chain writes them, exact as a string), read
+ * from the multitoken balance key with the coin's own token address in NAM's place (masp-coins.ts, the daily
+ * confirmation of each coin kv masp.coins names). A key with no value reads as 0: the pool holds none of the coin now.
+ * The daily job asks for every stored coin once a day, so a read that fails is tried again next hour, never every tick.
+ */
+export async function maspCoinBalance(token: string, opts: ReadOpts = {}) {
+  if (!/^tnam1[02-9ac-hj-np-z]{10,}$/.test(token)) throw new Error('masp coin balance: not a token address');
+  const r = await abci(`/shell/value/#${NAMADA.multitoken}/#${token}/balance/#${NAMADA.internal.masp}`, opts);
+  return { base: decodeU256LE(r.value).toString(), height: r.height, provider: r.provider };
+}
+
+/**
  * The minted total of NAM (base units), with the node and block that answered. The chain always holds it, so an
  * answer without a value is refused at its node and the next node is asked, as for namProtocolBalance.
  */

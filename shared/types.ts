@@ -1658,3 +1658,75 @@ export interface ValueFigure {
 }
 /** GET /api/series/values?at=: all NAM and spendable NAM at today's price, each with its definition and inputs. */
 export interface ValuesResponse { asOf: number; fdv: ValueFigure; spendable: ValueFigure }
+
+// ---------------------------------------------------------------- GET /api/series/cohorts (the genesis cohorts, migration 0023)
+
+/** One allocation cohort on the newest snapshot day (cohort_daily, category 'alloc.<cohort>'; 'all' is every allocation). */
+export interface GenesisCohortRow {
+  /** shared/genesis.ts AllocCategory, or 'all' */
+  cohort: string;
+  plain: string;
+  addrs: number;
+  addrsWithNam: number;
+  spendableNam: number;
+  stakedNam: number;
+  /** spendable + staked */
+  heldNam: number;
+  /** NAM the cohort's addresses sent into the shielded pool since this site's record began, to the snapshot's time; null on a row written without it */
+  shieldedOutNam: number | null;
+  /** the cohort's NAM at genesis */
+  allocNam: number;
+  /** heldNam / allocNam, in percent; null when the allocation is 0 */
+  heldSharePct: number | null;
+}
+
+/** An address a large allocation sent NAM to in plain transfers (the flow index), named only as the page shows it. */
+export interface GenesisSentTo {
+  address: string;
+  labelPlain: string | null;
+  labelSource: string | null;
+  nam: number;
+  moves: number;
+  /** how many addresses it has itself sent NAM to since it first received from the allocation; null when it carries a label */
+  sentOnTo: number | null;
+}
+
+/** One of the largest genesis allocations: what it holds now and what left it, in the flow index's words. */
+export interface GenesisLargeAllocation {
+  address: string;
+  labelPlain: string | null;
+  labelSource: string | null;
+  cohort: string;
+  allocNam: number;
+  /** from the holder index; null when the index has no row for it */
+  spendableNam: number | null;
+  stakedNam: number | null;
+  /** NAM it sent into the shielded pool since this site's record began, and in how many moves */
+  shieldedOutNam: number;
+  shieldedMoves: number;
+  /** its largest recipients of plain transfers, then the rest together; `movesCut`: counted over the newest `movesRead` moves only */
+  sentTo: GenesisSentTo[];
+  sentToMore: { addrs: number; nam: number };
+  movesRead: number;
+  movesCut: boolean;
+}
+
+export interface GenesisCohortsResponse {
+  asOf: number;
+  /** the newest snapshot day ('YYYY-MM-DD') at or before asOf; null when none is written */
+  day: string | null;
+  /** the listings the snapshot's holdings were read from */
+  listings: { at: number | null; balanceHeight: number | null; bondHeight: number | null };
+  /** the allocation table as loaded (kv genesis.alloc): the genesis file's digest, the day the copy was reviewed, and whether it is the pinned copy */
+  table: { loaded: boolean; digest: string | null; reviewedOn: string | null; url: string; allocations: number | null; loadedAt: number | null; pinned: boolean };
+  cohorts: GenesisCohortRow[];
+  /** the snapshot's stamp: the listings' time, stale when no day since has been written */
+  prov: Provenance;
+  /** the allocations of `largeMinNam` NAM or more, largest first (empty under Rewind: holdings are current, not as of then) */
+  large: GenesisLargeAllocation[];
+  largeMinNam: number;
+  /** the holder index's stamp for the large rows' holdings */
+  holdingsProv: Provenance;
+  /** the flow index's Namada coverage for what left them */
+  movesProv: Provenance;
+}

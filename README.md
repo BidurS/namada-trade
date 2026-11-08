@@ -105,6 +105,13 @@ npm run backfill:history -- pos       # bond / unbond requests since genesis fro
 npm run db:apply scripts/out/history/<file>.sql
 ```
 
+The genesis allocation table (migration 0023, `genesis_alloc`) is loaded once from the public genesis balances file, held to the reviewed copy pinned in `shared/genesis.ts`; the daily job then writes the genesis cohorts (`cohort_daily`, rows `alloc.*`) from it, and the Supply page shows them:
+
+```bash
+node --experimental-strip-types scripts/genesis-alloc.ts   # writes scripts/out/genesis_alloc.sql: 70,830 allocations in 356 statements, about 5.8 MB
+npm run db:apply -- scripts/out/genesis_alloc.sql          # batched; about 65 commands
+```
+
 A block time or a block's events count as exact only when two nodes give the same answer (`scripts/chain-agree.ts`); the MASP step's rows name those nodes (`meta.blockBy`, `meta.tsBy`), and a block cached from one node's answer is asked of another node once. A block with no MASP NAM transfer, from which nothing is stored, may come from one node, but only as the first answer for its height and only at a height that neither the indexer nor `flows` says holds such a transfer.
 
 ## Proof
