@@ -252,6 +252,13 @@ for i in 1 2 3 4 5; do out=$(npx wrangler d1 execute namada-trade-db --remote --
 echo "$out" | python3 -c "
 import sys,json; r=json.load(sys.stdin)[0]['results'][0]; print('0018 table and index:', r)
 sys.exit(0 if r['tables'] == 1 and r['n'] == 1 else 1)" || stop "migration 0018 is not in place: not deploying"
+# 0020 (a data migration: the June-drain wallet's curated label, the 0019 note kept to the chain's facts, the one indexer bond
+# row the chain rejected removed): the Worker does not depend on it, so a skipped apply would show nowhere but the labels; its
+# own closing checks, read-only
+for i in 1 2 3 4 5; do out=$(npx wrangler d1 execute namada-trade-db --remote --json --command "SELECT (SELECT COUNT(*) FROM labels WHERE source='curated') curated, (SELECT COUNT(*) FROM flows WHERE id LIKE 'namada:8D515657%') rows" 2>&1) && ! echo "$out" | grep -q 7403 && break; echo "retrying (Cloudflare 7403)"; sleep 6; done
+echo "$out" | python3 -c "
+import sys,json; r=json.load(sys.stdin)[0]['results'][0]; print('0020 curated labels and the removed row:', r)
+sys.exit(0 if r['curated'] == 5 and r['rows'] == 0 else 1)" || stop "migration 0020 is not in place: not deploying"
 # the depth archive bucket (wrangler.jsonc r2_buckets DEPTH_R2): wrangler refuses to upload a Worker bound to a bucket
 # that does not exist, so the bucket is created once by hand before the first deploy of the binding (the code tolerates
 # the binding missing; the deploy does not)

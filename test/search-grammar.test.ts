@@ -69,7 +69,8 @@ describe('the plan table, row by row (section 4.1)', () => {
     ['trades', { kind: 'dex' }, ['Trades and pool moves']],
     ['crossings', { kind: 'ibc' }, ['Bridge crossings only']],
     ['added to pool', { kind: 'lp_add' }, ['Added to pool only']],
-    ['staking account balance', { kind: 'pos_balance' }, ['Staking account balance only']],
+    ['staking account transfers', { kind: 'pos_balance' }, ['Staking account transfers only']],
+    ['staking account transfer', { kind: 'pos_balance' }, ['Staking account transfers only']],
     // chain
     ['namada', { chain: 'namada' }, ['On Namada']],
     ['osmosis', { chain: 'osmosis' }, ['On Osmosis']],

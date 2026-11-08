@@ -14,11 +14,11 @@
 // a trade's settle price (what its trader got or paid, fees in: shared/settle.ts), else its NAM times the price stored
 // with it, with that price's source. A move whose dollars are not known is never valued at a guess: it does not qualify.
 //
-// The post is built from an allowlist of the move's fields (PublicMove): its kind, chain and NAM (the title the site
-// writes, shared/flow-words.ts moveTitle), its pools (digits only), the dollars with where they come from, each side
-// as a protocol account's name or a short real address (util.ts isRealAddress: the checksum too), the time and the
-// block. Nothing an outsider wrote reaches it: no memo, no label or tag, no forum text, no bridge receiver that is not
-// an address. The other public posts must carry some outsider text (a proposal's title, a forum topic's title and its
+// The post is built from an allowlist of the move's fields (PublicMove): its kind, chain and NAM, and the way it went
+// when the title names it (the title the site writes, shared/flow-words.ts moveTitle), its pools (digits only), the
+// dollars with where they come from, each side as a protocol account's name or a short real address (util.ts
+// isRealAddress: the checksum too), the time and the block. Nothing an outsider wrote reaches it: no memo, no label or
+// tag, no forum text, no bridge receiver that is not an address. The other public posts must carry some outsider text (a proposal's title, a forum topic's title and its
 // category); plainOutsider keeps it to plain words: no link, no bare domain, no mention, no hidden character.
 import type { Chain, Flow, FlowKind, GovernanceProposal } from '../../shared/types';
 import { alsoCoinsText, DEFAULT_THRESHOLDS, INTERNAL_ADDRESSES, isInternal, isLpRebalance } from '../../shared/alerts';
@@ -85,6 +85,8 @@ export interface PublicMove {
   intoShielded: boolean;
   /** a bridge refund (the title says so) */
   refund: boolean;
+  /** a staking account transfer's way, into the account or out of it (the title says so); null for any other move */
+  posWay: 'in' | 'out' | null;
   /** the pools a trade or a pool move went through, digits only */
   pools: string[];
   /** a pool move's other coins, from the chain's own amounts (meta.alsoCoins: a known symbol and a number only), in words; null for none */
@@ -145,6 +147,7 @@ export function publicMoveOf(f: Flow, floors: NamFloors, settle: Flow['settle'] 
     id: f.id, crossing: crossingOf(f), kind: f.kind, chain: f.chain, nam: f.amount, bridge: crossing,
     intoShielded: dest === 'namada' && f.to === INTERNAL_ADDRESSES.masp,
     refund: isIbcRefund(f),
+    posWay: f.kind !== 'pos_balance' ? null : f.to === INTERNAL_ADDRESSES.pos ? 'in' : f.from === INTERNAL_ADDRESSES.pos ? 'out' : null,
     pools,
     alsoCoins: f.kind === 'lp_add' || f.kind === 'lp_remove' ? alsoCoinsText(f.meta as Record<string, unknown> | null | undefined) : null,
     rebalance: isLpRebalance(f),
@@ -296,7 +299,9 @@ export const partsCarried = (voice: string, hour: Pick<PublicHour, 'key'>, pick:
 
 /** The title, in the site's words (moveTitle), from the allowlisted fields alone. */
 export function publicTitle(m: PublicMove): string {
-  return moveTitle({ kind: m.kind, chain: m.chain, amount: m.nam, to: m.intoShielded ? INTERNAL_ADDRESSES.masp : null, meta: m.refund ? { ibcTimeoutRefund: true } : null });
+  const to = m.intoShielded ? INTERNAL_ADDRESSES.masp : m.posWay === 'in' ? INTERNAL_ADDRESSES.pos : null;
+  const from = m.posWay === 'out' ? INTERNAL_ADDRESSES.pos : null;
+  return moveTitle({ kind: m.kind, chain: m.chain, amount: m.nam, to, from, meta: m.refund ? { ibcTimeoutRefund: true } : null });
 }
 
 /** "pool 3005", "pools 3005, 3368 and 3009", "pools 3005, 3368, 3009 and 2 more". */

@@ -39,7 +39,8 @@ const CATEGORY_PLAIN: Record<string, string> = {
   ibc: 'Bridge account',
   module: 'Protocol account',
   cex: 'Exchange',
-  // the staking-account exploit of 2026-08-31 and its repayment (migrations/0019_exploit_labels.sql)
+  // the staking-account exploit of 2026-08-31 and its repayment (migrations/0019_exploit_labels.sql), and the
+  // shielded-pool drain of 2026-06-18 (migrations/0020_drain_labels.sql)
   exploit: 'Exploit',
   exploit_repayment: 'Exploit repayment',
 };

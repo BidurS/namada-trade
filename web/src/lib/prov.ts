@@ -6,7 +6,7 @@
 // name appears only in the sheet, under "Technical name".
 import type { ReactNode } from 'react';
 import type { Check, Pressure, Provenance, SourceStatus, Sourced } from '../../../shared/types';
-import { ageOf, fmtCount, fmtDayMonthYear, fmtMonthYear, fmtNamRule, fmtPctRule, fmtSharePct, fmtUtcClock, fmtUtcLong } from './format';
+import { MINUS, ageOf, fmtCount, fmtDayMonthYear, fmtMonthYear, fmtNamRule, fmtPctRule, fmtSharePct, fmtUtcClock, fmtUtcLong } from './format';
 import { DEPTH_CHECK_TITLES } from '../../../shared/depth-checks';
 
 export type Status = SourceStatus;
@@ -167,6 +167,9 @@ export const CHECK_TITLES: Record<string, string> = {
   supply_cross_source: 'Total supply is the same in two sources',
   price_vs_execution: 'The quoted price matches what trades paid',
   stake_within_staking_account: 'What is staked fits in the staking account',
+  // the mint rule and the balance listing's sum (worker/src/cron.ts mintRuleNext, listingSumCheck)
+  supply_mint_rule: "All NAM minted changes only as an epoch starts, and only by what that epoch's inflation adds",
+  balances_sum_to_minted: 'The NAM balances add up to all NAM minted',
   namada_index_lag: "This site's Namada records keep up with the chain",
   osmosis_index: "This site's Osmosis records are listening and caught up",
   osmosis_stream_share: 'Osmosis moves reach this site as they happen',
@@ -183,6 +186,72 @@ const detailNum = (v: unknown): number | null => {
   return Number.isFinite(n) ? n : null;
 };
 const plural = (n: number, one: string, many: string) => `${fmtCount(n)} ${Math.abs(n) === 1 ? one : many}`;
+/**
+ * An exact NAM amount from base units (a string of digits, as the checks that judge to the base unit send them), all
+ * six decimals kept: "1,148,754,488.433455", "0.000012", "−19,961.144868"; null when it is not one. Never a float.
+ */
+const exactNam = (base: unknown): string | null => {
+  if (typeof base !== 'string' || !/^-?\d+$/.test(base)) return null;
+  const neg = base.startsWith('-');
+  const digits = (neg ? base.slice(1) : base).replace(/^0+(?=\d)/, '').padStart(7, '0');
+  const whole = digits.slice(0, -6).replace(/\B(?=(\d{3})+(?!\d))/g, ',');
+  return `${neg && /[1-9]/.test(digits) ? MINUS : ''}${whole}.${digits.slice(-6)}`;
+};
+/** An epoch number as the chain names it ("2738", no grouping). */
+const epochNo = (n: number | null): string => (n == null ? '—' : String(Math.round(n)));
+/** A base-unit string without its sign. */
+const unsigned = (base: unknown): unknown => (typeof base === 'string' ? base.replace(/^-/, '') : base);
+/** Why the mint rule did not judge a minute (worker/src/cron.ts MintNotJudged), in words. */
+const MINT_NOT_JUDGED: Record<string, string> = {
+  'minted-not-read': 'the total of all NAM was not read',
+  'epoch-not-read': 'the epoch was not read',
+  'different-blocks': 'the total and the epoch came from different blocks',
+  older: 'the answer was older than the last one judged',
+  'step-not-read': "the chain's record of the new epoch's inflation was not read",
+};
+/** One epoch step of the mint rule, from the detail (its amounts are base-unit strings). */
+interface MintStepDetail { epoch: number; height: number; grewBase: string; stakingBase: string; shieldedBase: string; fits?: boolean }
+const mintStepOf = (v: unknown): MintStepDetail | null => {
+  const o = v && typeof v === 'object' ? (v as Record<string, unknown>) : null;
+  const epoch = detailNum(o?.epoch), height = detailNum(o?.height);
+  return o && epoch != null && height != null && exactNam(o.grewBase) != null && exactNam(o.stakingBase) != null ? { ...(o as unknown as MintStepDetail), epoch, height } : null;
+};
+/**
+ * What an epoch step added, as the line says it: the staking inflation alone, or with the rest, which the chain records
+ * no figure for: only that it is within the shielded pool's own rise, where shielded rewards are credited.
+ */
+const mintStepWords = (s: MintStepDetail): string => {
+  const shielded = exactNam(s.shieldedBase);
+  return shielded != null && /[1-9]/.test(s.shieldedBase)
+    ? `${exactNam(s.stakingBase)} NAM of staking inflation the chain recorded and ${shielded} NAM more, within the shielded pool's own rise, where shielded rewards are credited`
+    : 'exactly the staking inflation the chain recorded';
+};
+/** The node or nodes a broken mint rule rests on: "node A", "nodes A and B"; null when the detail names none. */
+const mintNodes = (...names: unknown[]): string | null => {
+  const set = [...new Set(names.filter((x): x is string => typeof x === 'string' && x !== ''))];
+  return set.length === 0 ? null : set.length === 1 ? `node ${set[0]}` : `nodes ${set[0]} and ${set[1]}`;
+};
+/**
+ * A span the mint rule did not judge exactly (worker/src/cron.ts MintRuleState.unjudged), after "Not judged": a gap
+ * of epochs, public funding minting, or more than the staking inflation on a shielded-reward epoch that the shielded
+ * pool's own change over the same blocks cannot account for. null when the detail is not one of these.
+ */
+const mintSpanWords = (u: Record<string, unknown> | null): string | null => {
+  const v = u?.verdict && typeof u.verdict === 'object' ? (u.verdict as Record<string, unknown>) : null;
+  if (!u || !v) return null;
+  const from = detailNum(u.fromHeight), to = detailNum(u.toHeight);
+  if (v.kind === 'gap') {
+    const n = detailNum(v.epochs);
+    return n == null ? null : `across ${plural(n, 'epoch', 'epochs')}${from != null && to != null ? `: no reading between blocks ${fmtCount(from)} and ${fmtCount(to)}` : ''}`;
+  }
+  const at = epochNo(detailNum(u.toEpoch));
+  if (v.kind === 'public-funding') return `exactly as epoch ${at} started: public funding mints NAM too, on a base this check does not compute`;
+  const st = v.kind === 'shielded-unchecked' ? mintStepOf(v.step) : null;
+  if (!st || exactNam(st.shieldedBase) == null || from == null || to == null) return null;
+  const rise = exactNam((v.step as Record<string, unknown>).maspRiseBase);
+  const pool = rise == null ? `was not read at both blocks (${fmtCount(from)} and ${fmtCount(to)})` : `changed by ${rise} NAM between blocks ${fmtCount(from)} and ${fmtCount(to)}`;
+  return `exactly as epoch ${at} started: all NAM minted grew by ${exactNam(st.grewBase)} NAM, ${exactNam(st.shieldedBase)} NAM more than the staking inflation the chain recorded, while the shielded pool's NAM, where shielded rewards are credited, ${pool}`;
+};
 /**
  * The share of moves found late as the stream-share line shows it, from the counts: one decimal, but a share under the
  * pass line never reads as the line or over it (4.97% is "4.97%", two decimals cut, not "5.0%"), and a share that is
@@ -282,8 +351,73 @@ export function checkDetail(c: Check): string | null {
       return `${plural(a + b, 'crossing', 'crossings')} on one chain only${from != null ? `, judging only crossings since ${fmtUtcLong(from)}: there were too many records to pair 14 days` : ''}`;
     }
     case 'stake_within_staking_account': {
+      // Split by the last bond listing when the worker sends it (cron.ts stakeSplit, from 2026-11-02): what it lists as
+      // unstaking, its bonds still waiting to start, and the rest, which no listing names. The parts are as of the
+      // listing's block, so the line names it.
       const x = detailNum(d.notStakedNam);
-      return x == null ? null : `${fmtNamRule(x)} NAM in the staking account is not staked: unstaking, ready to withdraw, or unclaimed rewards`;
+      if (x == null) return null;
+      const u = detailNum(d.unstakingNam), rest = detailNum(d.restNam), h = detailNum(d.listingHeight);
+      if (u == null || rest == null || h == null) return `${fmtNamRule(x)} NAM in the staking account is not staked: unstaking, ready to withdraw, or unclaimed rewards`;
+      const w = detailNum(d.waitingNam) ?? 0;
+      const waiting = w >= 1 ? `, ${fmtNamRule(w)} in bonds still waiting to start` : '';
+      return `${fmtNamRule(x)} NAM in the staking account is not staked: ${fmtNamRule(u)} unstaking or ready to withdraw (the chain's bond listing at block ${fmtCount(h)})${waiting}, and ${fmtNamRule(rest)} neither staked nor unstaking, which the bond listing does not name (unclaimed rewards are held here)`;
+    }
+    case 'supply_mint_rule': {
+      // The minted total judged every minute against the last reading the rule held for (worker/src/cron.ts
+      // mintRuleNext): unchanged within an epoch, and at an epoch's start grown by what the chain recorded. A rule broken
+      // in the last day is said first, as the answers of the node or nodes it rests on, with both blocks; a span not
+      // judged exactly in the last day is said after the minute's own line. Never more than what was compared.
+      const epoch = detailNum(d.epoch), height = detailNum(d.height);
+      const step = mintStepOf(d.lastStep);
+      const b = d.broke && typeof d.broke === 'object' ? (d.broke as Record<string, unknown>) : null;
+      if (b) {
+        const v = (b.verdict && typeof b.verdict === 'object' ? b.verdict : {}) as Record<string, unknown>;
+        const bs = mintStepOf(v.step);
+        const nodes = mintNodes(b.fromProvider, b.provider);
+        const whose = `the answers${nodes ? ` of ${nodes}` : ''} for all NAM minted`;
+        const span = `blocks ${fmtCount(detailNum(b.fromHeight))} to ${fmtCount(detailNum(b.toHeight))}`;
+        const what = v.kind === 'changed' && exactNam(v.byBase) != null ? `${whose} changed by ${exactNam(v.byBase)} NAM within epoch ${epochNo(detailNum(b.toEpoch))} (${span}), though all NAM minted changes only as an epoch starts`
+          : v.kind === 'step-off' && bs ? `${whose} grew by ${exactNam(bs.grewBase)} NAM as epoch ${epochNo(bs.epoch)} started (${span}), not the ${exactNam(bs.stakingBase)} NAM of staking inflation the chain recorded`
+          : null;
+        if (what) return `On ${fmtUtcLong(detailNum(b.at))} ${what}; read again every minute`;
+      }
+      const u = d.unjudged && typeof d.unjudged === 'object' ? (d.unjudged as Record<string, unknown>) : null;
+      const span = mintSpanWords(u);
+      if (d.verdict === 'gap' || d.verdict === 'public-funding' || d.verdict === 'shielded-unchecked') return span ? `Not judged ${span}` : null;
+      const line = ((): string | null => {
+        switch (d.verdict) {
+          case 'same':
+            if (epoch == null || height == null) return null;
+            return `Unchanged within epoch ${epochNo(epoch)} (block ${fmtCount(height)})${step && step.epoch === epoch && step.fits !== false ? `; as the epoch started it grew by ${exactNam(step.grewBase)} NAM, ${mintStepWords(step)}` : ''}`;
+          case 'step':
+            return step ? `Grew by ${exactNam(step.grewBase)} NAM as epoch ${epochNo(step.epoch)} started (read at block ${fmtCount(step.height)}): ${mintStepWords(step)}` : null;
+          case 'first':
+            return height == null ? null : `First reading at block ${fmtCount(height)}; the next minute is judged against it`;
+          case 'pending':
+            return height == null ? null : `The reading at block ${fmtCount(height)} does not fit the one before; the next minute decides`;
+          case 'not-judged': {
+            const why = typeof d.why === 'string' ? MINT_NOT_JUDGED[d.why] : undefined;
+            const last = detailNum(d.judgedAt);
+            return `Not judged this minute${why ? `: ${why}` : ''}${last != null ? `; last judged ${fmtUtcLong(last)}` : ''}`;
+          }
+          default:
+            return null;
+        }
+      })();
+      const at = detailNum(u?.at);
+      return line && span && at != null ? `${line}; on ${fmtUtcLong(at)}, not judged ${span}` : line;
+    }
+    case 'balances_sum_to_minted': {
+      // Every balance in the chain's balance listing against the minted total the same answer carries, to the base
+      // unit (worker/src/cron.ts listingSumCheck), hourly. A difference is said as one, with its block and node.
+      const h = detailNum(d.height);
+      const block = h != null ? `block ${fmtCount(h)}` : null;
+      if (d.judged !== true) return d.notJudged === 'not-read' ? 'Not added up: the balances could not be read at the last try' : `Not added up: the last answer${block ? ` (${block})` : ''} could not be used`;
+      const minted = exactNam(d.mintedBase), off = exactNam(unsigned(d.diffBase));
+      if (minted == null || off == null) return null;
+      const n = detailNum(d.balances);
+      if (!/[1-9]/.test(String(d.diffBase))) return `${n != null ? `${plural(n, 'balance', 'balances')} add` : 'The balances add'} up to ${minted} NAM, exactly all NAM minted${block ? ` (${block})` : ''}`;
+      return `The balances differ from all NAM minted (${minted} NAM) by ${off} NAM${block ? ` at ${block}` : ''}${typeof d.provider === 'string' ? ` (node ${d.provider})` : ''}; read again next hour`;
     }
     case 'osmosis_index':
       return typeof d.streaming === 'boolean' ? (d.streaming ? 'listening' : 'not listening') : null;

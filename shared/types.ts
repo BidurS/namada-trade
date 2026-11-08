@@ -1,3 +1,4 @@
+import type { NetworkStatus } from './halt';
 // API contract shared by the Worker and the web UI.
 import type { Settle } from './settle';
 
@@ -7,9 +8,10 @@ export type FlowKind =
   | 'buy' | 'sell' | 'transfer' | 'ibc_in' | 'ibc_out'
   | 'bond' | 'unbond' | 'withdraw' | 'rewards' | 'shield' | 'unshield'
   | 'lp_add' | 'lp_remove' | 'pgf' | 'other'
-  /** A transparent transfer of the staking account's own balance (descriptor `transfer-from-wasm`, either side the
-   *  staking account): not a holder staking or unstaking, and the chain's total stake does not move with it
-   *  (docs/design/screener-plan.md 3.0). */
+  /** NAM moved out of or into the staking account by a transparent transfer (descriptor `transfer-from-wasm`, either
+   *  side the staking account): not a holder staking or unstaking, and the chain's total stake does not move with it
+   *  (docs/design/screener-plan.md 3.0). The 9 such rows on mainnet by 2026-11-02 are the 2026-08-31 drain of the
+   *  staking account and its repayment (migrations/0019). */
   | 'pos_balance';
 
 export interface Flow {
@@ -379,6 +381,8 @@ export interface PoolInfo {
 
 export interface Overview {
   generatedAt: number;
+  /** The Namada network's status while it is halted (shared/halt.ts networkStatus), else null. */
+  network?: NetworkStatus | null;
   /** When set, every number is computed as of this time (replay). */
   asOf: number | null;
   price: {
@@ -501,11 +505,6 @@ export interface OnDeckEntry {
    * within 48h before bridging, the upstream Namada origin (2-hop attribution).
    */
   hopOriginNamada?: { address: string; label: string | null; labelPlain: string | null; labelSource?: string | null } | null;
-  /**
-   * When NAM arrived on Osmosis from the MASP (shielded IBC out) and matches a prior MASP shield leg within 24h
-   * by amount conservation and low anonymity-set entropy, the probabilistic turnstile origin.
-   */
-  passthroughFrom?: { address: string; dwellMs: number; anonymitySetK: number; confidence: 'high' | 'medium' | 'low' } | null;
   /** Empirical Bayesian dump hazard score in [0, 1] based on this entity's prior sell propensity and origin cohort. */
   dumpHazardScore?: number;
 }
@@ -691,6 +690,11 @@ export interface Pressure {
 
 // ---------------------------------------------------------------- blind spot (D5)
 
+/**
+ * A move out of the shielded pool matched by amount and time to an earlier move in (worker/src/analytics.ts
+ * matchMaspPassthroughs), as the matcher holds it, with the move in's sender, amount and time and the amount difference.
+ * GET /api/blindspot sends each match as a MaspPassthroughPair, without those four.
+ */
 export interface MaspPassthroughLink {
   inTs: number;
   outTs: number;
@@ -704,6 +708,9 @@ export interface MaspPassthroughLink {
   anonymitySetK: number;
   confidence: 'high' | 'medium' | 'low';
 }
+
+/** A match as GET /api/blindspot sends it (worker/src/analytics.ts publicPair): without the move in's sender, amount and time, and without the amount difference. */
+export type MaspPassthroughPair = Omit<MaspPassthroughLink, 'inFrom' | 'inAmount' | 'inTs' | 'relDiff'>;
 
 export interface MaspPulseBucket {
   ts: number;
@@ -741,8 +748,8 @@ export interface BlindSpot {
   ibcShielded7d: number;
   /** the largest recent moves out of the pool to an address (unshields and bridge crossings out), 30 days */
   unshields: Flow[];
-  /** Probabilistic timing/amount-correlated MASP round-trips (<24h dwell time) in the last 7 days */
-  passthroughs7d?: MaspPassthroughLink[];
+  /** Probabilistic timing/amount-correlated MASP round-trips (<24h dwell time) in the last 7 days, sent without the move in's sender and amount */
+  passthroughs7d?: MaspPassthroughPair[];
   /** Total NAM that entered and exited the MASP as a matched <24h turnstile passthrough in the last 7 days */
   turnstileNam7d?: number;
   /** Share of 7d MASP activity that remained sticky (not rapid round-trip transit), in [0, 100] */

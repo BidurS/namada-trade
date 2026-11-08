@@ -95,13 +95,14 @@ export const stmt = {
    * A curated label (auto, genesis, valopers). It never replaces a user tag, except a pool label: the quote service
    * listing the address as a NAM pool is the proof, the holder list leaves pools out by this row's category alone
    * (holders.ts notPool, LISTED), and a pool's address can be tagged before its first label is written, so a tag
-   * written first must give way (security review, 2026-10-22). The tag's author goes with it.
+   * written first must give way (security review, 2026-10-22). The tag's author goes with it. It never replaces a
+   * label a migration wrote by hand (source 'curated', migrations 0019 and 0020): only another migration changes one.
    */
   label: (address: string, chain: string, label: string, category: string, source: string, note: string | null, at: number): Stmt => ({
     sql: `INSERT INTO labels (address,chain,label,category,source,note,updated_at) VALUES (?,?,?,?,?,?,?)
           ON CONFLICT(address) DO UPDATE SET label=excluded.label, category=excluded.category,
             source=excluded.source, note=excluded.note, updated_at=excluded.updated_at, author=NULL
-          WHERE labels.source != 'user' OR excluded.category = 'pool'`,
+          WHERE labels.source != 'curated' AND (labels.source != 'user' OR excluded.category = 'pool')`,
     params: [address, chain, label, category, source, note, at],
   }),
   /**

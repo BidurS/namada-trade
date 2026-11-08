@@ -663,6 +663,12 @@ async function pos() {
 }
 
 // ------------------------------------------------------------------ 6. unbond-gap
+/** Rows a migration removed because the chain did not apply their request, though the indexer lists it as applied. */
+const NOT_APPLIED = new Set([
+  // migrations/0020_drain_labels.sql
+  'namada:8D515657565D2D26ABE13CCA578DACAF537B481F97FBEA556763D19195E77322:pos',
+]);
+
 // Bond and unbond requests between the end of the indexer pull (RPC index start) and the first block each live
 // decoder read (parse/namada-unbond.ts, parse/namada-bond.ts). That block is the `firstHeight` the decoder recorded in
 // its kv row (namada.unbonds.live, namada.bonds.live; live-hub.ts LiveUnbondStatus) when it was deployed: the scan
@@ -682,8 +688,9 @@ async function pos() {
 // 2026-10-23 four unbond requests of 123,780 NAM and three bond requests of 1,499,999 NAM in block 7,770,519 were
 // missing this way and were restored from the chain's own blocks), a request the indexer does not list, and a
 // validator's request for its own stake (no source in the indexer's data). What it can take wrongly: the indexer's
-// "applied" is not always the chain's, which also asks the validity predicates (block 8,202,488's bond of 0.00001 NAM
-// from the staking account itself is "applied" there, and the chain's PoS VP rejected it).
+// "applied" is not always the chain's, which also asks the validity predicates (block 8,202,488's bond is "applied"
+// there, and a validity predicate rejected it). A request a migration took out for that reason (NOT_APPLIED) is left
+// out, so a run over its height does not write the row back.
 // A time is the block's own only for a request of 100,000 NAM or more, else interpolated between block anchors. For a
 // complete list, read the chain's blocks instead (the restore tools did, from the nodes' tx index).
 // History comes newest-first, so most addresses cost one request.
@@ -739,13 +746,15 @@ async function unbondGap() {
   const POS = 'tnam1qgqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqc8j2fp';
   const lines: string[] = [];
   for (const it of list) {
+    const id = `namada:${it.tx.id.toUpperCase()}:pos`;
+    if (NOT_APPLIED.has(id)) { log(`unbond-gap: ${id} left out: the chain did not apply it (NOT_APPLIED)`); continue; }
     let d: any; try { d = JSON.parse(it.tx.data); } catch { continue; }
     const amt = Number(BigInt(d.amount || '0')) / 1e6;
     if (!(amt > 0) || !d.source) continue;
     const ts = exact.get(it.blockHeight) ?? interp(it.blockHeight);
     const meta = { source: 'namada-indexer', txKind: it.tx.kind, validator: d.validator, wrapper: it.tx.wrapperId, tsSource: exact.has(it.blockHeight) ? 'block' : 'interpolated' };
     const [fromA, toA] = it.tx.kind === 'bond' ? [d.source, POS] : [POS, d.source];
-    lines.push(`INSERT OR IGNORE INTO flows (id,chain,height,ts,tx_hash,kind,from_addr,to_addr,amount_num,meta) VALUES (${q(`namada:${it.tx.id.toUpperCase()}:pos`)},'namada',${it.blockHeight},${ts},${q(it.tx.id.toUpperCase())},${q(it.tx.kind)},${q(fromA)},${q(toA)},${amt},${q(JSON.stringify(meta))});`);
+    lines.push(`INSERT OR IGNORE INTO flows (id,chain,height,ts,tx_hash,kind,from_addr,to_addr,amount_num,meta) VALUES (${q(id)},'namada',${it.blockHeight},${ts},${q(it.tx.id.toUpperCase())},${q(it.tx.kind)},${q(fromA)},${q(toA)},${amt},${q(JSON.stringify(meta))});`);
   }
   writeChunks('06_unbond_gap', lines);
 }

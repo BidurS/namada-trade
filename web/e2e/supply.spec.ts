@@ -145,6 +145,7 @@ function deepFixture(live: any) {
     deck({ address: 'osmo1fixturehighaaaaaaaaaaaaaaaaaaaaaaaaaaa', bridgedIn: 1000, soldSince: 400, soldCounted: 400, sentBackCounted: 0, remaining: 600, dumpHazardScore: 0.7, priorSells30d: 8_174 }),
     deck({ address: 'osmo1fixturelowbbbbbbbbbbbbbbbbbbbbbbbbbbbb', bridgedIn: 500, soldCounted: 0, sentBackCounted: 0, remaining: 500, dumpHazardScore: 0.2,
       linkedNamada: 'tnam1qfixtureburnercccccccccccccccccccccccccc', hopOriginNamada: { address: 'tnam1qfixtureorigindddddddddddddddddddddddd', label: null, labelPlain: null },
+      // a field older servers declared and never filled: the row never shows it
       passthroughFrom: { address: 'tnam1qfixtureshieldeeeeeeeeeeeeeeeeeeeeeeeee', dwellMs: 3_600_000, anonymitySetK: 3, confidence: 'medium' } }),
   ];
   const pipelineSummary = { cohorts: { genesisBackersNam: 0, maspTurnstileNam: 500, burnerHopNam: 0, transparentNam: 1000 }, highHazardRemainingNam: 600 };
@@ -490,7 +491,7 @@ test.describe('once', () => {
     await expect(rows.nth(0).locator('.rts__tags')).toContainText('Sold 8,174 NAM in the 30 days before the window');
     await expect(rows.nth(1)).not.toContainText('Selling estimate');
     await expect(rows.nth(1)).toContainText('likely through a middle address, from');
-    await expect(rows.nth(1)).toContainText('Likely out of the shielded set less than a day after going in (one of 3 moves of that size it could match)');
+    await expect(rows.nth(1)).not.toContainText('out of the shielded set less than a day after going in');
     await expect(page.locator('main')).not.toContainText(JUDGING);
     // a server that does not send the split: said, not hidden
     await page.unroute('**/api/pressure?*');

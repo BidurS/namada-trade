@@ -90,7 +90,11 @@ export const OSMOSIS = {
 
 export const NAMADA = {
   chainId: 'namada.5f5de2dd1b88cba30586420',
-  /** Ordered by preference. Both have full history (earliest block 1) and tx_index on. */
+  /**
+   * Ordered by preference. Both keep every block (/status earliest block 1, so block_results and blocks read back to
+   * genesis), but their event index starts much later: block_search answers from block 7,679,994 on 5ElementsNodes and
+   * 7,914,171 on Papadritta, tx_search from 7,682,174 and 7,914,248 (read 2026-11-02), and nothing below.
+   */
   rpcs: [
     { provider: '5ElementsNodes', url: 'https://rpc-namada.5elementsnodes.com' },
     { provider: 'Papadritta', url: 'https://rpc.papadritta.com' },

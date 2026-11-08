@@ -2,7 +2,8 @@
 // sendsAlerts, ALERTS_PAUSED) and what it says in the health view, and the one notice posted once per place
 // (worker/src/halt-notice.ts).
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { HALT, HALT_NOTICE } from '../shared/halt';
+import { HALT, HALT_NOTICE, HALT_FACT_SOURCE, networkStatus } from '../shared/halt';
+import { app } from '../worker/src/api';
 import { configureAlerts, sendsAlerts, alertsPausedIn, PAUSED_NOTE } from '../worker/src/sources/discord';
 import { alertDeliveryOff } from '../worker/src/cron';
 import { offOnPurpose } from '../worker/src/ops';
@@ -65,6 +66,20 @@ describe('the halt words', () => {
     expect(xLength(HALT_NOTICE)).toBeLessThanOrEqual(280);
     expect(xSafe(HALT_NOTICE)).toBe(HALT_NOTICE);
     expect(HALT_NOTICE).not.toMatch(/https?:|@|#/);
+  });
+
+  it('the status a script or a language model reads is the same words: networkStatus() while HALT.on, null otherwise', () => {
+    const s = networkStatus();
+    if (HALT.on) expect(s).toEqual({ halted: true, id: HALT.id, title: HALT.title, said: HALT.said, source: HALT.source, here: HALT.here });
+    else expect(s).toBeNull();
+    expect(HALT_FACT_SOURCE).toBe("the chain's state at the halt");
+  });
+
+  it('/api/overview carries the status as `network`, so a client that never renders the page still learns of the halt', async () => {
+    const res = await app.request('/api/overview', {}, { DB: testD1() } as any);
+    expect(res.status).toBe(200);
+    const o = (await res.json()) as { network?: unknown };
+    expect(o.network).toEqual(networkStatus());
   });
 });
 

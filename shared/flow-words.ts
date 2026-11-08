@@ -63,9 +63,11 @@ export const partyPreposition = (kind: FlowKind | string): string =>
 /**
  * What a move is called, amount first: "791,848 NAM sold on Osmosis", "1,500,000 NAM bridged to Osmosis", "25,100 NAM
  * started unstaking", "290 OSMO moved out of the shielded set to Osmosis". A move in another coin keeps its own symbol
- * (meta.tokenSymbol); amounts follow the site's rule (fmtNamRule: no cents from 1,000 up).
+ * (meta.tokenSymbol); amounts follow the site's rule (fmtNamRule: no cents from 1,000 up). A transfer of the staking
+ * account's NAM ('pos_balance') is named by its direction, "331,386,682 NAM moved out of the staking account", from
+ * whichever side of it is the staking account; a caller that gives neither side gets both directions in the words.
  */
-export function moveTitle(f: MoveLike & Pick<Flow, 'amount' | 'to'>): string {
+export function moveTitle(f: MoveLike & Pick<Flow, 'amount' | 'to'> & Partial<Pick<Flow, 'from'>>): string {
   const coin = isOtherCoin(f) ? String(f.meta!.tokenSymbol) : 'NAM';
   const amt = `${fmtNamRule(f.amount)} ${coin}`;
   const dest = bridgeDest(f.kind, f.chain);
@@ -84,7 +86,10 @@ export function moveTitle(f: MoveLike & Pick<Flow, 'amount' | 'to'>): string {
     case 'lp_add': return `${amt} added to a pool`;
     case 'lp_remove': return `${amt} removed from a pool`;
     case 'pgf': return `${amt} of public funding paid`;
-    case 'pos_balance': return `${amt} moved within the staking account`;
+    case 'pos_balance':
+      return f.to === INTERNAL_ADDRESSES.pos ? `${amt} moved into the staking account`
+        : f.from === INTERNAL_ADDRESSES.pos ? `${amt} moved out of the staking account`
+        : `${amt} moved into or out of the staking account`;
     case 'transfer': return `${amt} transferred on ${chain}`;
     default: return isIbcRefund(f) ? `${amt} refunded by the bridge` : isBotFlow(f) ? `${amt} bot round trip on Osmosis` : `${amt} moved on ${chain}`;
   }
@@ -97,7 +102,8 @@ export const listWords = (parts: string[]): string =>
 /**
  * An earlier move in the past tense, with its amount words ("49,491 and 99,221 NAM"), as a list of what an address did
  * before says it: "sold 49,491 and 99,221 NAM", "received 1,500,000 NAM from Namada", "bridged 300,000 NAM to Osmosis".
- * `received`: the address was that move's receiver; `many`: the amounts are of several moves.
+ * `received`: the address was that move's receiver; `many`: the amounts are of several moves. The address is the
+ * person a move names (partyOf), never the staking account, so the other side of a 'pos_balance' move is that account.
  */
 export function pastWords(m: Pick<Flow, 'kind' | 'chain'> & { meta?: Record<string, unknown> | null }, received: boolean, amt: string, many = false): string {
   const dest = bridgeDest(m.kind, m.chain);
@@ -114,6 +120,7 @@ export function pastWords(m: Pick<Flow, 'kind' | 'chain'> & { meta?: Record<stri
     case 'lp_add': return `added ${amt} to a pool`;
     case 'lp_remove': return `removed ${amt} from a pool`;
     case 'pgf': return received ? `received ${amt} of public funding` : `paid ${amt} of public funding`;
+    case 'pos_balance': return received ? `received ${amt} from the staking account` : `moved ${amt} into the staking account`;
     case 'transfer': return `${received ? 'received' : 'sent'} ${amt} in ${many ? 'transfers' : 'a transfer'}`;
     default: return isIbcRefund(m) ? `got ${amt} back from the bridge` : `moved ${amt}`;
   }

@@ -7,7 +7,7 @@
 // the server's own confidence in each link. The slice length, the pairing rule and the windows are stated
 // here, once, because the response does not carry them yet (the worker's `pulseBucketMs`, `windowMs` and
 // `maxRelDiff` defaults); the screen never types them into JSX.
-import type { MaspPassthroughLink, MaspPulseBucket } from '../../../../shared/types';
+import type { MaspPassthroughPair, MaspPulseBucket } from '../../../../shared/types';
 import type { SeriesRange } from '../../ui';
 
 const H = 3_600_000;
@@ -85,12 +85,12 @@ export function flowTakeaway(sums: FlowSums, windowWords: string): { n: number |
 }
 
 /** The server's confidence in a pair, in words a holder can read (it is a link by amount and time, never a certainty). */
-export const PAIR_WORDS: Record<MaspPassthroughLink['confidence'], string> = {
+export const PAIR_WORDS: Record<MaspPassthroughPair['confidence'], string> = {
   high: 'a close match',
   medium: 'a likely match',
   low: 'a loose match',
 };
 
 /** The pair, if any, whose move out is this row (same destination, within a minute). */
-export const pairFor = (pairs: MaspPassthroughLink[] | undefined, to: string | null, ts: number): MaspPassthroughLink | undefined =>
+export const pairFor = (pairs: MaspPassthroughPair[] | undefined, to: string | null, ts: number): MaspPassthroughPair | undefined =>
   to ? pairs?.find((p) => p.outTo === to && Math.abs(p.outTs - ts) < 60_000) : undefined;

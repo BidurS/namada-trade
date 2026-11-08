@@ -12,12 +12,14 @@ import { PRICE_HOW_KEY, priceHowAt, storedPriceNote, storedPriceSource, type Pri
 import { MINUTE_STALE_MS, NOT_KNOWN_KEY, NOT_READ, NOT_STORED, POOLS_SOURCE, POOLS_STALE_MS, PRICED_KEY, notKnownThenWords, poolsTotal, readPoolsRow, readStoredCurve, routerCapNote, storedCurve, storedPoolsProv, storedTotalProv } from './pool-sizes';
 import { OSMOSIS_GAP_NOTE, OSMOSIS_GAP_UNTIL, osmosisGapCounts, reachesOsmosisGap, withOsmosisGap } from '../../shared/osmosis-gap';
 import { namBalance, namadaEpoch, delegationsAt, QUICK, type ReadOpts } from './sources/namada';
+import { withCoinName } from './parse/namada';
 import { fetchIntel } from './sources/intel';
 import { alertsOn, sendDiscordPreview, sendDiscordTestPost, testExample, testPostHeld, INVALID_WINDOW_MS, type TestPostAnswer, type WebhookPost } from './sources/discord';
 import { previewPosts } from './digest/deliver';
 import { forgetTelegramUsers, sendFollowing, sendsTelegram, tgSend, testMessages, chatGone } from './sources/telegram';
 import { createLinkCode, handleUpdate, revokeLinkCode, secretMatches, WEBHOOK_MAX_BYTES } from './telegram-bot';
 import { fmtAddr } from '../../shared/format';
+import { networkStatus } from '../../shared/halt';
 import { stmt, TAGS_PER_AUTHOR, TAGS_PER_DAY, kvGet, kvSet, kvGetJson } from './db';
 import { toNam, chainOf, publicNote } from './util';
 import { OSMOSIS, INTERNAL_LABELS } from './config';
@@ -274,6 +276,8 @@ app.get('/api/overview', async (c) => {
   const overview: Overview = {
     generatedAt: now,
     asOf: replay ? asOf : null,
+    // the halt, for a client that reads the JSON and never sees the page's bar (a language model, a script)
+    network: networkStatus(),
     price: { usd: priceUsd, swap1h, change24h },
     supply: {
       total: totalSupply, bonded: totalStake, posBalance, unstaking, pgf: mv('supply.pgf'), shielded: mv('supply.masp_shielded'),
@@ -1197,7 +1201,8 @@ async function searchRecords(db: D1Database, p: Parsed, limit: number): Promise<
   const by = new Map<string, any>();
   for (const r of rows) by.set(r.id, r);
   return [...by.values()].map((r): Hit => {
-    const meta = safeParseJson(r.meta, null) as Record<string, unknown> | null;
+    // a Namada coin named as the token table names it now, as rowToFlow names it
+    const meta = withCoinName(safeParseJson(r.meta, null) as Record<string, unknown> | null);
     const hashes = [r.tx_hash, meta?.wrapper, meta?.innerTxHash].filter((h): h is string => typeof h === 'string').map((h) => h.toUpperCase());
     const match: SearchMatch = hashes.includes(p.hash!) ? 'exact' : 'start';
     const value = explorerHashOf({ txHash: r.tx_hash, meta });

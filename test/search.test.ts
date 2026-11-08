@@ -125,7 +125,8 @@ describe('GET /api/search', () => {
     expect(names[2].category_plain).toMatch(/^Tag by tnam1q/);
     expect(group(await search(db, 'zondax'), 'names')[0]).toMatchObject({ title: 'Zondax', match: 'exact', href: `/holders?addr=${ZONDAX}` });
     expect(group(await search(db, 'early'), 'names').map((n) => n.title)).toEqual(['Early backers (genesis)']);
-    expect(group(await search(db, 'shielded pool'), 'names').map((n) => n.value)).toEqual([NAMADA.internal.masp]);
+    // the whole name first, then the wallet whose curated label names the pool's drain of 2026-06-18 (migration 0020)
+    expect(group(await search(db, 'shielded pool'), 'names').map((n) => n.value)).toEqual([NAMADA.internal.masp, 'tnam1qqmr0e209af2eqr0n4w6fq44a6udrhvcvqraa8h4']);
     expect(group(await search(db, 'ondax'), 'names')).toEqual([]);
   });
 

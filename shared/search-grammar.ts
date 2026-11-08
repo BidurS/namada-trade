@@ -122,7 +122,7 @@ export const KIND_CHIP: Record<ParsedKind, string> = {
   lp_add: 'Added to pool only',
   lp_remove: 'Removed from pool only',
   pgf: 'Public funding only',
-  pos_balance: 'Staking account balance only',
+  pos_balance: 'Staking account transfers only',
   ibc_in: 'Bridge, arriving side only',
   ibc_out: 'Bridge, leaving side only',
   dex: 'Trades and pool moves',
@@ -147,7 +147,8 @@ const KIND_WORDS: Record<string, ParsedKind> = {
 
 /** Phrases for a kind, longest first. */
 const KIND_PHRASES: { words: string[]; kind: ParsedKind }[] = [
-  { words: ['staking', 'account', 'balance'], kind: 'pos_balance' },
+  { words: ['staking', 'account', 'transfers'], kind: 'pos_balance' },
+  { words: ['staking', 'account', 'transfer'], kind: 'pos_balance' },
   { words: ['added', 'to', 'pool'], kind: 'lp_add' },
   { words: ['removed', 'from', 'pool'], kind: 'lp_remove' },
   { words: ['shielded', 'in'], kind: 'shield' },

@@ -31,17 +31,69 @@ export interface NamadaParsed {
 
 type Entry = [[string, string], string];
 
-const NAMADA_TOKENS: Record<string, { symbol: string; decimals: number }> = {
+/** A coin on Namada: the name the site gives it, its decimals, and, for a coin from another chain, its IBC trace. */
+export interface NamadaToken { symbol: string; decimals: number; trace?: string }
+
+/**
+ * Every coin on Namada by token address: the 16 that indexer.namada.net /chain/token lists (2026-11-02), NAM and 15
+ * coins from other chains. A coin from another chain is named by its IBC trace, and its address is the first 20 bytes
+ * of the trace's sha256 (test/namada-tokens.test.ts derives each address from the trace written here; the indexer
+ * writes the three alloyed traces in lower case, and the chain hashes them as written here).
+ *
+ * Decimals: the chain's own denomination of each coin from another chain is 0 (/vp/token/denomination, 2026-11-02),
+ * so its amounts are the base units of the coin it came from and the decimals are that coin's: Namada's chain registry
+ * (github.com/namada-net/namada-chain-registry, namada/assetlist.json) for the coins it lists, and the Osmosis asset
+ * list (OSMOSIS.assetlist) for the five that came through Osmosis and are not in it (USDC via Osmosis, OM, allBTC,
+ * allSOL, allETH). NAM's denomination on chain is 6.
+ *
+ * Both USDCs are Noble's: one sent from Noble straight to Namada (channel-5), one through Osmosis (channel-1, then
+ * Osmosis's channel-750 to Noble), so they are told apart by the way they came.
+ */
+export const NAMADA_TOKENS: Readonly<Record<string, NamadaToken>> = {
   [NAM.namadaToken]: { symbol: 'NAM', decimals: 6 },
-  tnam1p5z8ruwyu7ha8urhq2l0dhpk2f5dv3ts7uyf2n75: { symbol: 'OSMO', decimals: 6 },
-  tnam1p443nycjk2w0q3al3vfnw3gw7w4qga07psfqnjtm: { symbol: 'USDC', decimals: 6 },
-  tnam1pkg30gnt4q0zn7j00r6hms4ajrxn6f5ysyyl7w9m: { symbol: 'ATOM', decimals: 6 },
-  tnam1p4px8sw3am4qvetj7eu77gftm4fz4hcw2ulpldc7: { symbol: 'stOSMO', decimals: 6 },
-  tnam1p5hpxyzdpyjdmdt5axx0q8sl6tvfzdmehse9ca7z: { symbol: 'allBTC', decimals: 8 },
+  tnam1p5z8ruwyu7ha8urhq2l0dhpk2f5dv3ts7uyf2n75: { symbol: 'OSMO', decimals: 6, trace: 'transfer/channel-1/uosmo' },
+  tnam1pkl64du8p2d240my5umxm24qhrjsvh42ruc98f97: { symbol: 'USDC (Noble)', decimals: 6, trace: 'transfer/channel-5/uusdc' },
+  tnam1p443nycjk2w0q3al3vfnw3gw7w4qga07psfqnjtm: { symbol: 'USDC (via Osmosis)', decimals: 6, trace: 'transfer/channel-1/transfer/channel-750/uusdc' },
+  tnam1pkg30gnt4q0zn7j00r6hms4ajrxn6f5ysyyl7w9m: { symbol: 'ATOM', decimals: 6, trace: 'transfer/channel-2/uatom' },
+  tnam1p5z5538v3kdk3wdx7r2hpqm4uq9926dz3ughcp7n: { symbol: 'stATOM', decimals: 6, trace: 'transfer/channel-0/stuatom' },
+  tnam1p4px8sw3am4qvetj7eu77gftm4fz4hcw2ulpldc7: { symbol: 'stOSMO', decimals: 6, trace: 'transfer/channel-0/stuosmo' },
+  tnam1pklj3kwp0cpsdvv56584rsajty974527qsp8n0nm: { symbol: 'TIA', decimals: 6, trace: 'transfer/channel-3/utia' },
+  tnam1ph6xhf0defk65hm7l5ursscwqdj8ehrcdv300u4g: { symbol: 'stTIA', decimals: 6, trace: 'transfer/channel-0/stutia' },
+  tnam1pk288t54tg99umhamwx998nh0q2dhc7slch45sqy: { symbol: 'UM', decimals: 6, trace: 'transfer/channel-4/upenumbra' },
+  tnam1phv4vcuw2ftsjahhvg65w4ux8as09tlysuhvzqje: { symbol: 'NYM', decimals: 6, trace: 'transfer/channel-6/unym' },
+  tnam1pk6pgu4cpqeu4hqjkt6s724eufu64svpqgu52m3g: { symbol: 'NTRN', decimals: 6, trace: 'transfer/channel-7/untrn' },
+  tnam1pkfnp8vx0rdrsxyagq5ffle60hv4jwag7g06h7gx: { symbol: 'OM', decimals: 6, trace: 'transfer/channel-1/transfer/channel-85077/uom' },
+  tnam1p5hpxyzdpyjdmdt5axx0q8sl6tvfzdmehse9ca7z: { symbol: 'allBTC', decimals: 8, trace: 'transfer/channel-1/factory/osmo1z6r6qdknhgsc0zeracktgpcxf43j6sekq07nw8sxduc9lg0qjjlqfu25e3/alloyed/allBTC' },
+  tnam1pk9mqcwc8q497enfp9pgrx7x7kxfqz9etu0ur067: { symbol: 'allSOL', decimals: 9, trace: 'transfer/channel-1/factory/osmo1n3n75av8awcnw4jl62n3l48e6e4sxqmaf97w5ua6ddu4s475q5qq9udvx4/alloyed/allSOL' },
+  tnam1phtm05yrtdw24jjjzzvnnn4svnvpa0qf3v9zggvm: { symbol: 'allETH', decimals: 18, trace: 'transfer/channel-1/factory/osmo1k6c8jln7ejuqwtqmay3yvzrg3kueaczl96pk067ldg8u835w0yhsw27twm/alloyed/allETH' },
 };
 
-function tokenMeta(tokenAddr: string) {
-  return NAMADA_TOKENS[tokenAddr] || { symbol: tokenAddr.slice(0, 8) + '…', decimals: 6 };
+/**
+ * A coin missing from NAMADA_TOKENS keeps its amount in the chain's own units (denomination 0 for a coin from another
+ * chain: the base units of the coin it came from), and its name says so: no number of decimals is guessed for it.
+ */
+export function tokenMeta(tokenAddr: string): NamadaToken {
+  return NAMADA_TOKENS[tokenAddr] || { symbol: `units of ${tokenAddr.slice(0, 8)}…`, decimals: 0 };
+}
+
+/** The name builds before 2026-11-02 gave a coin missing from the table, whose amount they read with 6 decimals. */
+const olderUnknownName = (tokenAddr: string) => `${tokenAddr.slice(0, 8)}…`;
+
+/**
+ * A stored row's meta with its coin named as NAMADA_TOKENS names it now, read when the row is read, so a row written
+ * before its coin was in the table shows the coin's name with no write to the store (27 rows of Noble USDC were stored
+ * as "tnam1pkl…" on 2026-11-02). Only when the row's amount is in the units the table gives: the decimals the row was
+ * read with (meta.tokenDecimals; a row from before that key, with the table's own decimals, or with 6 under the older
+ * name of a coin missing from the table). Anything else is returned as stored, and NAM rows have no coin to name.
+ */
+export function withCoinName<M extends Record<string, unknown> | null | undefined>(meta: M): M {
+  const addr = meta?.tokenAddress;
+  const stored = meta?.tokenSymbol;
+  if (typeof addr !== 'string' || typeof stored !== 'string') return meta;
+  const t = NAMADA_TOKENS[addr];
+  if (!t || t.symbol === stored) return meta;
+  const readWith = typeof meta!.tokenDecimals === 'number' ? meta!.tokenDecimals : stored === olderUnknownName(addr) ? 6 : t.decimals;
+  return readWith === t.decimals ? ({ ...meta, tokenSymbol: t.symbol } as M) : meta;
 }
 
 function toTokenUnits(raw: bigint, decimals = 6): number {
@@ -112,11 +164,12 @@ const INTERNAL = new Set<string>(Object.values(I));
 /**
  * The kind of one token/transfer event. The staking account's own balance moved by a wasm transfer (descriptor
  * `transfer-from-wasm`, either side the staking account) is 'pos_balance', not a bond or a withdrawal: on
- * 2026-08-31 such a transfer moved 331,386,682 NAM out of the staking account and on 22 Sep and 1 Oct the same
- * amount came back, while the chain's total stake never moved and the receiving address had no bond
- * (docs/design/screener-plan.md 3.0). Holders' own bonds and unbonds are recorded from the indexer and the live bond
- * and unbond decoders (namada-bond.ts, namada-unbond.ts: a bond moves NAM to the staking account with no event);
- * the chain's staking logic moves NAM with its own descriptors (pos-claim-rewards, pos-withdraw-token).
+ * 2026-08-31 such transfers moved 332,386,683 NAM out of the staking account (the drain migrations/0019 labels) and on
+ * 22 Sep and 1 Oct the same amount came back (its repayment), while the chain's total stake never moved and the
+ * receiving address had no bond (docs/design/screener-plan.md 3.0). Holders' own bonds and unbonds are recorded from
+ * the indexer and the live bond and unbond decoders (namada-bond.ts, namada-unbond.ts: a bond moves NAM to the staking
+ * account with no event); the chain's staking logic moves NAM with its own descriptors (pos-claim-rewards,
+ * pos-withdraw-token).
  */
 export function classify(descriptor: string, from: string | null, to: string | null): Flow['kind'] {
   if (descriptor === 'pos-claim-rewards') return 'rewards';
@@ -299,12 +352,14 @@ export function parseNamadaBlock(block: NamadaBlock, priceUsd: number | null, fe
    * is a flow of its own). Which target paid gas:
    * - the wrapper's fee payer, when it is given (`feePayers`, the key in the wrapper's header): its leg is the fee,
    *   whatever its size next to the others, and no leg is when it is not a target (the fee was paid from elsewhere);
-   * - otherwise the events alone, which never name it (the chain emits no event for the fee itself, and a
-   *   masp/fee-payment event of the same inner transaction is there for 19 of the 2,491 fee-shaped pool transfers in
-   *   the 70,908 blocks of scripts/out/history/masp_blocks): the smallest target, when it is the only one that can be
-   *   the fee. When another can too (303 of the 2,491), none is read as the fee and each is a flow of its own, the
-   *   gas payer's an unshield to it: the smallest is not always the gas payer (block 4,349,059: 0.0625 NAM to an
-   *   account that held exactly that afterwards, the gas payer, and 0.000001 to one that already held NAM), and a
+   * - otherwise the events alone, which never name it. A masp/fee-payment event marks an inner transaction whose fee
+   *   the pool paid, but names no account (its attributes: hash, height, indexed-tx, inner-tx-hash, section), and this
+   *   parser does not read it. The event is there for a pool fee leg with one target; of the 2,491 fee-shaped pool
+   *   transfers with more than one target in the 70,908 blocks of scripts/out/history/masp_blocks (to block
+   *   7,172,196), 19 carry it. Read from the targets alone, the fee is the smallest target, when it is the only one
+   *   that can be the fee. When another can too (303 of the 2,491), none is read as the fee and each is a flow of its
+   *   own, the gas payer's an unshield to it: the smallest is not always the gas payer (block 4,349,059: 0.0625 NAM to
+   *   an account that held exactly that afterwards, the gas payer, and 0.000001 to one that already held NAM), and a
    *   fee read off the wrong leg hides the recipient's receipt.
    * The limit left without the wrapper: the one target that can be the fee is read as the fee even when the fee was
    * paid from elsewhere, so up to MASP_FEE_CAP_NAM per transfer can be filed as a fee and not as the receipt of the
@@ -426,6 +481,8 @@ export function parseNamadaBlock(block: NamadaBlock, priceUsd: number | null, fe
           descriptor: 'ibc-masp',
           tokenSymbol: tMeta.symbol,
           tokenAddress: tokenAddr,
+          // the decimals the amount was read with (tokenMeta), so a later name for the coin is given only to an amount in its units (withCoinName)
+          tokenDecimals: tMeta.decimals,
           innerTxHash: innerTxHash || undefined,
         },
       });
@@ -493,6 +550,7 @@ export function parseNamadaBlock(block: NamadaBlock, priceUsd: number | null, fe
           descriptor,
           tokenSymbol: tMeta.symbol,
           tokenAddress: tokenAddr,
+          tokenDecimals: tMeta.decimals,
           // The pool's fee under the key pool accounting reads (the same as on a NAM unshield): it is NAM that left
           // the pool. Not `feeNam`: older builds wrote that for every NAM source of the event, whoever sent it.
           ...(feeUnits !== null ? { maspFeeNam: toNam(feeUnits) } : {}),

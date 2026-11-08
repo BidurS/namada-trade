@@ -64,6 +64,8 @@ const S = {
   shieldedSync: { publisher: 'Namada docs', title: 'Shielded sync', url: 'https://docs.namada.net/users/shielded-accounts/shielded-sync' },
   maspKeys: { publisher: 'Namada docs', title: 'Shielded key management', url: 'https://docs.namada.net/users/shielded-accounts/masp-keys' },
   poolIncentives: { publisher: 'Namada specs', title: 'Shielded pool incentives', url: 'https://specs.namada.net/modules/masp/shielded-pool-incentives' },
+  // mint_rewards: the reward NAM is credited to the shielded pool's own address (credit_tokens to address::MASP)
+  maspRewardsCode: { publisher: 'Namada on GitHub', title: 'Shielded token code: minting shielded rewards', url: 'https://github.com/namada-net/namada/blob/main/crates/shielded_token/src/storage.rs' },
   feesDocs: { publisher: 'Namada docs', title: 'Fees on Namada', url: 'https://docs.namada.net/users/fees' },
   genesisBalances: { publisher: 'Namada on GitHub', title: 'Mainnet genesis: balances', url: 'https://github.com/namada-net/namada-mainnet-genesis/blob/main/genesis/balances.toml' },
   genesisParams: { publisher: 'Namada on GitHub', title: 'Mainnet genesis: parameters', url: 'https://github.com/namada-net/namada-mainnet-genesis/blob/main/genesis/parameters.toml' },
@@ -291,7 +293,7 @@ const shieldedPool: Guide = {
       h2: 'How do shielded rewards work?',
       paras: [
         { t: 'Namada pays shielded rewards in NAM to everyone keeping eligible assets in the pool, and the assets do not need to be locked; governance adds assets to the eligible list or removes them, and sets each asset\'s reward settings.', src: ['shieldedRewards', 'poolIncentives', 'namadilloShield'] },
-        { t: 'Each asset\'s rate comes from a controller that aims at a target amount of that asset in the pool, so the rate is highest when little of the asset is shielded. The rewards are newly minted NAM, held in a shielded rewards pool until they are paid.', src: ['poolIncentives', 'namadilloShield'] },
+        { t: 'Each asset\'s rate comes from a controller that aims at a target amount of that asset in the pool, so the rate is highest when little of the asset is shielded. The rewards are newly minted NAM, added to the shielded pool\'s own NAM balance.', src: ['poolIncentives', 'namadilloShield', 'maspRewardsCode'] },
         { t: 'Namadillo\'s docs describe rewards arriving every day, and namada.net says they are added to your shielded account automatically; the amounts Namadillo shows in advance are estimates.', src: ['namadilloShield', 'start'] },
         { t: 'Rewards compound while the assets stay shielded. They are claimed through the convert circuit, which happens when assets are converted to the current period, as they must be before they leave the pool.', src: ['poolIncentives'] },
       ],
@@ -329,7 +331,7 @@ const shieldedPool: Guide = {
     },
   ],
   related: ['/shielded', '/guides/what-is-namada', '/guides/how-to-buy-nam', '/guides/nam-supply-and-inflation', '/faq'],
-  sources: pick('shieldedDocs', 'specsMasp', 'privacyDocs', 'shieldedRewards', 'poolIncentives', 'namadilloShield', 'blogMaspCc', 'blogShielding', 'maspLedger', 'shieldingDocs',
+  sources: pick('shieldedDocs', 'specsMasp', 'privacyDocs', 'shieldedRewards', 'poolIncentives', 'maspRewardsCode', 'namadilloShield', 'blogMaspCc', 'blogShielding', 'maspLedger', 'shieldingDocs',
     'shieldedTransfers', 'unshieldingDocs', 'namadilloUnshield', 'shieldedSync', 'addresses', 'maspKeys', 'start', 'feesDocs'),
 };
 
@@ -371,7 +373,7 @@ const namSupply: Guide = {
       id: 'shielded-minting',
       h2: 'How do shielded rewards add NAM?',
       paras: [
-        { t: 'Namada also mints NAM to reward people who keep eligible assets in the shielded pool: the minted NAM is held in a shielded rewards pool and paid out per asset by controllers aiming at target amounts that governance configures.', src: ['poolIncentives'] },
+        { t: 'Namada also mints NAM to reward people who keep eligible assets in the shielded pool: the minted NAM is added to the pool\'s own NAM balance, and controllers that aim at target amounts set by governance decide what each asset earns.', src: ['poolIncentives', 'maspRewardsCode'] },
       ],
       see: [{ to: '/shielded', label: 'The shielded pool now' }],
     },
@@ -413,7 +415,7 @@ const namSupply: Guide = {
     },
   ],
   related: ['/guides/how-to-stake-nam', '/guides/how-namada-governance-works', '/guides/how-the-shielded-pool-works', '/staking', '/'],
-  sources: pick('inflationSpecs', 'pgfDocs', 'poolIncentives', 'genesisBalances', 'blogGenesis', 'mainnets', 'blogLive', 'genesisParams', 'blogComplete', 'delegators',
+  sources: pick('inflationSpecs', 'pgfDocs', 'poolIncentives', 'maspRewardsCode', 'genesisBalances', 'blogGenesis', 'mainnets', 'blogLive', 'genesisParams', 'blogComplete', 'delegators',
     'rewardDistribution', 'blogCubic', 'feeSpecs', 'govOnChain', 'govCode', 'cubicSlashing', 'shieldedRewards', 'governancePage', 'operatorStaking'),
 };
 

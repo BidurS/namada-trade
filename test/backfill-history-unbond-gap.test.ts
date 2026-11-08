@@ -163,3 +163,21 @@ describe('unbond-gap: where the live decoders started', () => {
     expect(r.logs.some((l) => l.includes('bond requests in [100, 1000)') && l.includes('has not decoded anything yet'))).toBe(true);
   });
 });
+
+describe('unbond-gap: a row a migration took out stays out', () => {
+  // migrations/0020_drain_labels.sql removed the bond row of this request: the chain did not apply it, though the
+  // indexer lists it as applied (scripts/backfill-history.ts NOT_APPLIED)
+  const GONE = '8d515657565d2d26abe13cca578dacaf537b481f97fbea556763d19195e77322';
+  const flows = () => [row('X0', 100, 'transfer', null), row('L1', 400, 'unbond', { source: 'namada-rpc', txKind: 'unbond' })];
+
+  it('a run over its height does not write it back; the requests around it are written as before', async () => {
+    const r = await runGap(flows(), { listed: [hist(GONE, 'bond', 300, 1), hist('d1', 'bond', 600, 50), hist('b1', 'unbond', 200, 30)] });
+    expect(r.ids.sort()).toEqual(['B1', 'D1']);
+    expect(r.logs.some((l) => l.includes(`namada:${GONE.toUpperCase()}:pos left out`))).toBe(true);
+  });
+
+  it('control: the same request under another id is written', async () => {
+    const r = await runGap(flows(), { listed: [hist('e9', 'bond', 300, 1), hist('d1', 'bond', 600, 50), hist('b1', 'unbond', 200, 30)] });
+    expect(r.ids.sort()).toEqual(['B1', 'D1', 'E9']);
+  });
+});

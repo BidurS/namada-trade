@@ -7,7 +7,7 @@ import * as depth from './depth/index';
 import { KV_KEYS as DEPTH_KV } from './depth/sql';
 import { PRICE_HOW_KEY, priceHealth, priceHowAt, priceHowStmt, storedPriceSource, type PriceHowLog } from './price-how';
 import { QUOTE_KEYS } from '../../shared/settle';
-import { namBalance, namTotalSupply, namTotalStake, namadaEpoch, namadaStatusAll, delegationsAt, answeringRpcs, listingHeads, QUICK, RpcBreaker, allNamBalances, allBonds, ListingTooLargeError, LISTING_MAX_VALUE_BYTES, type BalanceListing, type BondListing, type ReadOpts, type Rpc } from './sources/namada';
+import { namProtocolBalance, namTotalSupply, namTotalStake, namadaEpochRead, mintKeysAt, namadaStatusAll, delegationsAt, answeringRpcs, listingHeads, QUICK, RpcBreaker, allNamBalances, allBonds, ListingTooLargeError, LISTING_MAX_VALUE_BYTES, type BalanceListing, type BondListing, type MintKeys, type ReadOpts, type Rpc } from './sources/namada';
 import { fetchIntelChecked } from './sources/intel';
 import { sendTelegramForum, sendTelegramGov, sendTelegramHour, telegramRun, TG_CRON_MS, TG_CRON_SENDS } from './sources/telegram';
 import { postGovOnX, postHourCrossingOnX, postHourLiquidityOnX, postHourOnX, repostNamada } from './sources/x';
@@ -35,6 +35,7 @@ import { prepareDigests, sendDigests, type DigestRun } from './digest/deliver';
 import { DIGEST_HEALTH_LOG_KV, HEALTH_LOG_PER_NAME } from './digest/operator';
 import { runOps } from './ops';
 import { postHaltNotice } from './halt-notice';
+import { CHECK_STALE_MS } from './digest/freshness';
 import { refreshFlowCounts } from './flow-counts';
 
 const INDEXER = 'https://indexer.namada.net/api/v1';
@@ -448,6 +449,287 @@ export function ibcConservation(escrowNam: number, osmosisNam: number, stuckNam:
   const over = driftNam >= IBC_TOLERANCE_NAM ? 'escrow' : driftNam <= -IBC_TOLERANCE_NAM ? 'osmosis' : null;
   const status = over == null ? 'ok' : over === 'escrow' ? 'warn' : -driftNam < IBC_FAIL_NAM ? 'warn' : 'fail';
   return { status, over, rawGapNam, driftNam };
+}
+
+// ---------------------------------------------------------------- the mint rule (supply_mint_rule)
+//
+// The minted total of NAM changes only at an epoch's first block, by what the chain records there (sources/namada.ts
+// mintKeysAt): the staking inflation (last_inflation_amount), the public-funding and steward inflation (their rates),
+// and, when the epoch starts a shielded-reward epoch, the shielded rewards credited to the shielded pool's own NAM.
+// This rule judges how the minted total itself changes, which supply_integrity does not. Each tick's reading (the
+// minted total and the epoch, from one node at one block) is judged against the last reading the rule held for
+// (`anchor`). A reading that does not fit waits a tick (`pending`): when the next one fits the anchor, it is not
+// counted; when the next one does not fit either, the rule broke between the anchor and it, and the row says so for
+// MINT_RULE_HOLD_MS. A span the rule cannot judge exactly (a gap of epochs, public funding minting, shielded rewards
+// the pool's rise cannot bound) is no break: the row says it was not judged, as 'warn', for MINT_RULE_HOLD_MS too.
+// 'warn' only for now (owner rule of 2026-11-02: a new check never 'fail's at first).
+// Backtest: test/fixtures/mint_rule_backtest.json, the 26,276 minute rows of epochs 2,664 to 2,738.
+
+/** The rule's state: the reading it held for, one waiting a tick, its last judgement and step (MintRuleState). */
+export const MINT_RULE_KV = 'supply.mint_rule';
+/** The row is written every tick (the cron runs each minute, wrangler.jsonc). */
+export const MINT_RULE_EVERY_MS = 60_000;
+/** A broken rule, or a span not judged exactly, stays 'warn' this long after the reading that found it, so it is not lost a minute later. */
+export const MINT_RULE_HOLD_MS = 24 * 3600_000;
+/**
+ * The most the reads of an epoch step's record (sources/namada.ts mintKeysAt) may take of a tick; they end
+ * LISTING_RESERVE_MS before the tick's deadline at the latest, as the stake sample's do.
+ */
+export const MINT_KEYS_PHASE_MS = 12_000;
+/** After a failed read of a step's record the next tick to try again is this much later (each try is four reads). */
+export const MINT_KEYS_RETRY_MS = 5 * 60_000;
+/** When the reads of a step's record must end, started `now` in a tick that ends at `deadlineAt`; null when that has passed. */
+export function mintKeysPhaseEnd(deadlineAt: number, now: number): number | null {
+  const end = Math.min(deadlineAt - LISTING_RESERVE_MS, now + MINT_KEYS_PHASE_MS);
+  return end > now ? end : null;
+}
+/** A tick that cannot judge keeps the last judgement's status while it is younger than this (how long a check's result counts as current), 'warn' after. */
+export const MINT_RULE_UNJUDGED_MS = CHECK_STALE_MS;
+export const MINT_RULE_TITLE = "Minted supply changes only at an epoch's first block, by what the chain records there: the staking inflation (last_inflation_amount), public-funding inflation (its rates) and, on a shielded-reward epoch, shielded rewards no larger than the shielded pool's rise (not judged exactly when the rise cannot bound them)";
+
+/** One tick's minted total and epoch, read from one node at one block (base units as strings, for the JSON state). */
+export interface MintReading {
+  epoch: number; mintedBase: string; height: number; provider: string; at: number;
+  /** the shielded pool's and the staking account's NAM, when this tick read them at the same block from the same node */
+  maspBase: string | null; posBase: string | null;
+}
+
+/** An epoch step: what the minted total grew by between two readings, and what the chain recorded for it. */
+export interface MintStep {
+  epoch: number; fromHeight: number; height: number; provider: string;
+  mintedBeforeBase: string; grewBase: string;
+  /** the staking inflation the chain recorded (last_inflation_amount), and the rest, taken as shielded rewards (0 when none) */
+  stakingBase: string; shieldedBase: string;
+  /** the epoch starts a shielded-reward epoch (epoch % masp_epoch_multiplier == 0) */
+  shieldedEpoch: boolean;
+  /** the shielded pool's and the staking account's NAM rise over the same two readings; null when either was not read with them */
+  maspRiseBase: string | null; posRiseBase: string | null;
+  /**
+   * Recorded beside the rule, not judged yet (shadow): the staking account rose by the staking inflation, which is
+   * minted into it at the step's block. A bond, a withdrawal or a rewards claim between the two readings moves it
+   * too, so a difference is no break. null when its rise was not read with both readings.
+   */
+  posRiseMatches: boolean | null;
+  /** the step is what the chain recorded */
+  fits: boolean;
+}
+
+/** What judging a reading against the anchor found. */
+export type MintVerdict =
+  | { kind: 'same' }
+  | { kind: 'step'; step: MintStep }
+  /** the minted total changed within an epoch */
+  | { kind: 'changed'; byBase: string }
+  /** at an epoch step, by another amount than the chain recorded */
+  | { kind: 'step-off'; step: MintStep; why: string }
+  /** more than one epoch since the anchor: the chain keeps only the last epoch's amount */
+  | { kind: 'gap'; epochs: number }
+  /** public funding mints too: its amount is not judged exactly */
+  | { kind: 'public-funding'; pgfRate: string; stewardRate: string }
+  /**
+   * on a shielded-reward epoch, more than the staking inflation, by more than the shielded pool's rise over the same
+   * readings can be checked to hold (a move out of the pool between them lowers the rise; a pool read at another
+   * block has none): the rest may be shielded rewards, so the step is not judged exactly
+   */
+  | { kind: 'shielded-unchecked'; step: MintStep }
+  /** a reading from before the anchor (a node behind) */
+  | { kind: 'older' }
+  /** the chain's record of the step could not be read */
+  | { kind: 'keys'; why: string };
+
+/** Why a tick did not judge, as the public line names it (web/src/lib/prov.ts); the detail's `note` has the specifics. */
+export type MintNotJudged = 'minted-not-read' | 'epoch-not-read' | 'different-blocks' | 'older' | 'step-not-read';
+
+export interface MintRuleState {
+  anchor: MintReading | null;
+  pending: MintReading | null;
+  /** the last tick that judged a reading (fit or not) */
+  judgedAt: number | null;
+  /** the last epoch step judged */
+  lastStep: MintStep | null;
+  /** the last two readings the rule broke between, and what was found */
+  broke: { at: number; from: MintReading; to: MintReading; verdict: MintVerdict } | null;
+  /** the last span the rule could not judge exactly (a gap of epochs, public funding minting, shielded rewards it cannot bound) */
+  unjudged: { at: number; fromEpoch: number; toEpoch: number; fromHeight: number; toHeight: number; verdict: MintVerdict } | null;
+  /** when a read of a step's record last failed (the next try waits MINT_KEYS_RETRY_MS); null once one is read */
+  keysFailedAt?: number | null;
+}
+
+/**
+ * This tick's reading for the mint rule, or why there is none (with the specifics): the minted total and the epoch
+ * must come from one node at one block, since /shell/epoch answers only for a node's latest block. The shielded
+ * pool's and the staking account's NAM go with it only when read at that block from that node too.
+ */
+export function mintReadingOf(
+  total: { supply: bigint; height: number; provider: string } | null,
+  epoch: { epoch: number; height: number; provider: string } | null,
+  masp: { balance: bigint; height: number; provider: string } | null,
+  pos: { balance: bigint; height: number; provider: string } | null,
+  now: number,
+): MintReading | { why: MintNotJudged; note: string } {
+  if (!total) return { why: 'minted-not-read', note: 'the minted total was not read this tick' };
+  if (!epoch) return { why: 'epoch-not-read', note: 'the epoch was not read this tick' };
+  if (total.height !== epoch.height || total.provider !== epoch.provider || !(total.height > 0)) {
+    return { why: 'different-blocks', note: `the minted total (block ${total.height}, ${total.provider}) and the epoch (block ${epoch.height}, ${epoch.provider}) were not read at one block from one node` };
+  }
+  const same = (r: { height: number; provider: string } | null) => !!r && r.height === total.height && r.provider === total.provider;
+  return {
+    epoch: epoch.epoch, mintedBase: total.supply.toString(), height: total.height, provider: total.provider, at: now,
+    maspBase: same(masp) ? masp!.balance.toString() : null, posBase: same(pos) ? pos!.balance.toString() : null,
+  };
+}
+
+/** Whether judging `r` needs the chain's record of an epoch step (mintKeysAt at r's block): one epoch after the anchor. */
+export function mintKeysWanted(prev: MintRuleState | null | undefined, r: MintReading): boolean {
+  return !!prev?.anchor && r.epoch === prev.anchor.epoch + 1 && r.height >= prev.anchor.height;
+}
+
+/**
+ * Whether this tick reads the step's record: 'read' when judging `r` needs it, 'wait' when it does but the last read
+ * failed less than MINT_KEYS_RETRY_MS ago (the anchor stays in the epoch before until one is read, so every tick of
+ * the new epoch would otherwise read the four keys again), null when it is not needed.
+ */
+export function mintKeysDue(prev: MintRuleState | null | undefined, r: MintReading, now: number): 'read' | 'wait' | null {
+  if (!mintKeysWanted(prev, r)) return null;
+  const failed = prev?.keysFailedAt;
+  return failed != null && now - failed < MINT_KEYS_RETRY_MS ? 'wait' : 'read';
+}
+
+/**
+ * Judge a reading against the anchor. Within an epoch the minted total may not change at all. One epoch on, it may grow
+ * by the staking inflation the chain recorded, plus, on a shielded-reward epoch, shielded rewards no larger than the
+ * shielded pool's own rise over the same two readings (the rewards are credited to it; a shield in between can only
+ * make the rise larger). When the rise cannot bound the rest (a move out of the pool in between makes it smaller, and
+ * a pool not read with both readings gives none), the step is not judged exactly: no wait would help, as the anchor
+ * stays the same. With public funding minting (either rate above 0) the step is not judged exactly either: its base
+ * is not this rule's.
+ */
+export function judgeMint(anchor: MintReading, r: MintReading, keys: MintKeys | { error: string } | null): MintVerdict {
+  if (r.height < anchor.height || r.epoch < anchor.epoch) return { kind: 'older' };
+  const grew = BigInt(r.mintedBase) - BigInt(anchor.mintedBase);
+  const epochs = r.epoch - anchor.epoch;
+  if (epochs === 0) return grew === 0n ? { kind: 'same' } : { kind: 'changed', byBase: grew.toString() };
+  if (epochs > 1) return { kind: 'gap', epochs };
+  if (!keys || 'error' in keys) return { kind: 'keys', why: keys?.error ?? 'not read' };
+  if (keys.pgfRate !== '0' || keys.stewardRate !== '0') return { kind: 'public-funding', pgfRate: keys.pgfRate, stewardRate: keys.stewardRate };
+  const rise = (a: string | null, b: string | null) => (a != null && b != null ? BigInt(b) - BigInt(a) : null);
+  const maspRise = rise(anchor.maspBase, r.maspBase);
+  const posRise = rise(anchor.posBase, r.posBase);
+  const shieldedEpoch = r.epoch % keys.maspEpochMultiplier === 0;
+  const extra = grew - keys.lastInflationBase;
+  const step = (shielded: bigint, fits: boolean): MintStep => ({
+    epoch: r.epoch, fromHeight: anchor.height, height: r.height, provider: r.provider,
+    mintedBeforeBase: anchor.mintedBase, grewBase: grew.toString(), stakingBase: keys.lastInflationBase.toString(), shieldedBase: shielded.toString(),
+    shieldedEpoch, maspRiseBase: maspRise?.toString() ?? null, posRiseBase: posRise?.toString() ?? null,
+    posRiseMatches: posRise == null ? null : posRise === keys.lastInflationBase, fits,
+  });
+  if (extra === 0n) return { kind: 'step', step: step(0n, true) };
+  if (extra > 0n && shieldedEpoch) {
+    if (maspRise != null && extra <= maspRise) return { kind: 'step', step: step(extra, true) };
+    return { kind: 'shielded-unchecked', step: step(extra, false) };
+  }
+  const why = extra < 0n ? 'less than the staking inflation the chain recorded'
+    : 'more than the staking inflation the chain recorded, at an epoch that credits no shielded rewards';
+  return { kind: 'step-off', step: step(0n, false), why };
+}
+
+/** A verdict for the row's detail: its kind and amounts, never the readings whole. */
+function verdictDetail(v: MintVerdict | null | undefined): Record<string, unknown> | null {
+  if (!v) return null;
+  if (v.kind === 'step' || v.kind === 'step-off' || v.kind === 'shielded-unchecked') return { kind: v.kind, step: v.step, ...(v.kind === 'step-off' ? { why: v.why } : {}) };
+  return { ...v };
+}
+
+/**
+ * One tick of the mint rule: the next state, the row's status and its detail. `input` is this tick's reading or why
+ * there is none (mintReadingOf); `keys` the chain's record of the step when mintKeysDue asked for it, or why it is
+ * not here (`tried` when a read was made and failed: the next try waits MINT_KEYS_RETRY_MS). Statuses: 'ok' when the
+ * reading fits; 'warn' when the rule broke, or across a span it could not judge exactly (a gap of epochs, public
+ * funding minting, shielded rewards the pool's rise cannot bound), each held for MINT_RULE_HOLD_MS. A tick that
+ * cannot judge (a reading that waits a tick among them) keeps the last judgement's status while that judgement is
+ * younger than MINT_RULE_UNJUDGED_MS, so the row does not switch on such ticks; 'idle' before the first judgement;
+ * 'warn' once the last judgement (or the first reading) is older.
+ */
+export function mintRuleNext(
+  prev: MintRuleState | null | undefined,
+  input: MintReading | { why: MintNotJudged; note: string },
+  keys: MintKeys | { error: string; tried?: boolean } | null,
+  now: number,
+): { state: MintRuleState; status: 'ok' | 'warn' | 'idle'; detail: Record<string, unknown> } {
+  const s: MintRuleState = { anchor: null, pending: null, judgedAt: null, lastStep: null, broke: null, unjudged: null, keysFailedAt: null, ...prev };
+  if (s.broke && !(now - s.broke.at < MINT_RULE_HOLD_MS)) s.broke = null;
+  if (s.unjudged && !(now - s.unjudged.at < MINT_RULE_HOLD_MS)) s.unjudged = null;
+  if (keys && 'error' in keys) { if (keys.tried) s.keysFailedAt = now; } else if (keys) s.keysFailedAt = null;
+  const r = 'why' in input ? null : input;
+  const detail = (extra: Record<string, unknown>) => ({
+    everyMs: MINT_RULE_EVERY_MS,
+    ...extra,
+    epoch: r?.epoch ?? s.anchor?.epoch ?? null, height: r?.height ?? null, provider: r?.provider ?? null, mintedBase: r?.mintedBase ?? null,
+    judgedAt: s.judgedAt, lastStep: s.lastStep,
+    broke: s.broke ? {
+      at: s.broke.at, fromEpoch: s.broke.from.epoch, toEpoch: s.broke.to.epoch, fromHeight: s.broke.from.height, toHeight: s.broke.to.height,
+      fromProvider: s.broke.from.provider, provider: s.broke.to.provider, verdict: verdictDetail(s.broke.verdict),
+    } : null,
+    unjudged: s.unjudged ? { ...s.unjudged, verdict: verdictDetail(s.unjudged.verdict) } : null,
+  });
+  // A break or a span not judged exactly, within MINT_RULE_HOLD_MS: the row says it ('warn') whatever this tick found.
+  const held = () => !!(s.broke || s.unjudged);
+  const waitStatus = (): 'ok' | 'warn' | 'idle' => {
+    if (held()) return 'warn';
+    const since = s.judgedAt ?? s.anchor?.at ?? null;
+    if (since != null && !(now - since < MINT_RULE_UNJUDGED_MS)) return 'warn';
+    return s.judgedAt == null ? 'idle' : 'ok';
+  };
+  if (!r) return { state: s, status: waitStatus(), detail: detail({ verdict: 'not-judged', why: 'why' in input ? input.why : null, note: 'why' in input ? input.note : null }) };
+  if (!s.anchor) {
+    s.anchor = r;
+    return { state: s, status: waitStatus(), detail: detail({ verdict: 'first', note: 'the first reading: the next tick is judged against it' }) };
+  }
+  const v = judgeMint(s.anchor, r, keys);
+  if (v.kind === 'older' || v.kind === 'keys') {
+    const note = v.kind === 'older' ? `this tick's reading (block ${r.height}) is older than the last one held (block ${s.anchor.height})` : `the chain's record of the step to epoch ${r.epoch} was not read: ${v.why}`;
+    return { state: s, status: waitStatus(), detail: detail({ verdict: 'not-judged', why: v.kind === 'older' ? 'older' : 'step-not-read', note }) };
+  }
+  if (v.kind === 'gap' || v.kind === 'public-funding' || v.kind === 'shielded-unchecked') {
+    s.unjudged = { at: now, fromEpoch: s.anchor.epoch, toEpoch: r.epoch, fromHeight: s.anchor.height, toHeight: r.height, verdict: v };
+    s.anchor = r; s.pending = null; s.judgedAt = now;
+    const what = v.kind === 'gap' ? { epochs: v.epochs } : v.kind === 'public-funding' ? { pgfRate: v.pgfRate, stewardRate: v.stewardRate } : {};
+    return { state: s, status: 'warn', detail: detail({ verdict: v.kind, ...what }) };
+  }
+  if (v.kind === 'same' || v.kind === 'step') {
+    const dropped = s.pending;
+    s.anchor = r; s.pending = null; s.judgedAt = now;
+    if (v.kind === 'step') s.lastStep = v.step;
+    const note = dropped ? `the reading at block ${dropped.height} did not fit and this one does: it is not counted` : undefined;
+    return { state: s, status: held() ? 'warn' : 'ok', detail: detail({ verdict: v.kind, note }) };
+  }
+  // It does not fit: the first time it waits a tick, the second time the rule broke.
+  if (!s.pending) {
+    s.pending = r;
+    return { state: s, status: waitStatus(), detail: detail({ verdict: 'pending', note: `the reading at block ${r.height} does not fit the one at block ${s.anchor.height}: the next tick decides`, pending: verdictDetail(v) }) };
+  }
+  s.broke = { at: now, from: s.anchor, to: r, verdict: v };
+  if (v.kind === 'step-off') s.lastStep = v.step;
+  s.anchor = r; s.pending = null; s.judgedAt = now;
+  return { state: s, status: 'warn', detail: detail({ verdict: v.kind }) };
+}
+
+/** The minted total before the last epoch step, when that step started the anchor's epoch (the shadow rules below take it as the epoch before's). */
+export function mintedEpochBefore(s: MintRuleState | null | undefined): bigint | null {
+  return s?.lastStep && s.anchor && s.lastStep.epoch === s.anchor.epoch ? BigInt(s.lastStep.mintedBeforeBase) : null;
+}
+
+/**
+ * What supply_cross_source would say under the tighter rule it is shadowed with (recorded in its detail, not yet its
+ * status): 'ok' only when the other source equals this site's minted total of this epoch or of the epoch before (an
+ * outside source can lag an epoch step; to the base unit), 'warn' otherwise, 'fail' from 1% as now.
+ */
+export const CROSS_SOURCE_SHADOW_RULE = "ok only when equal to this site's minted total of this epoch or the epoch before, to the base unit; warn otherwise; fail from 1%";
+export function crossSourceShadow(otherBase: bigint, mintedBase: bigint, beforeBase: bigint | null): { status: 'ok' | 'warn' | 'fail'; matched: 'this epoch' | 'the epoch before' | null } {
+  if (otherBase === mintedBase) return { status: 'ok', matched: 'this epoch' };
+  if (beforeBase != null && otherBase === beforeBase) return { status: 'ok', matched: 'the epoch before' };
+  const off = mintedBase > 0n ? fracOff(otherBase, mintedBase) : 1;
+  return { status: off < 0.01 ? 'warn' : 'fail', matched: null };
 }
 
 /**
@@ -1134,9 +1416,18 @@ export const MAX_REASONABLE_HEIGHT = 1_000_000_000;
 /** How far behind the tick's head a listing's node may be (100 blocks, about ten minutes) and how far "ahead" (node skew) before its answer is refused. */
 export const MAX_LISTING_HEIGHT_DRIFT = 100;
 export const MAX_LISTING_HEIGHT_AHEAD = 100;
-/** The balances in a listing add up to the minted key it carries exactly (checked to the base unit on 2026-10-20); one part in a million is allowed. */
+/**
+ * The balances in a listing add up to the minted key it carries exactly (checked to the base unit on 2026-10-20); one
+ * part in a million is allowed. The balances_sum_to_minted row judges the same sum strictly (listingSumCheck) and
+ * records whether the gate would refuse the listing at no tolerance; the gate keeps this one, so a key layout the
+ * parser does not know can never freeze every holder figure.
+ */
 export const LISTING_SUM_TOLERANCE = 1e-6;
-/** The listing's minted key must match the tick's own supply read (a different node, a few blocks apart) within this fraction. */
+/**
+ * The listing's minted key must match the tick's own supply read (a different node, a few blocks apart) within this
+ * fraction. A few blocks apart the minted total is the same unless an epoch began between the reads, so the tighter
+ * rule the balances_sum_to_minted row records beside it (listingSupplyShadow) allows only that.
+ */
 export const LISTING_SUPPLY_TOLERANCE = 0.001;
 /** The bond listing's net sum must be within this fraction of the tick's total-stake read (bonds in the pipeline run it a little over). */
 export const LISTING_STAKE_TOLERANCE = 0.02;
@@ -1162,6 +1453,8 @@ export interface ListingContext {
   headTop?: number | null;
   /** this tick's minted-supply read (base units), checked against the balance listing's minted key */
   supplyBase?: bigint | null;
+  /** the minted total before the epoch step that started this epoch (mintedEpochBefore), for the tighter supply rule recorded in balances_sum_to_minted */
+  beforeStepBase?: bigint | null;
   /** this tick's total-stake read (NAM), checked against the bond listing's net sum */
   stakeNam?: number | null;
 }
@@ -1233,8 +1526,9 @@ function heightGate(what: string, height: number, headHeight: number | null | un
  * supply read (LISTING_SUPPLY_TOLERANCE), and the answer may not have shrunk below LISTING_SHRINK_FLOOR of the
  * previous one's keys. An empty or short answer (a borsh Vec of 0 parses) fails here, never in the rows.
  */
-export function balanceGate(listing: (BalanceListing & { height: number; provider?: string }) | null | undefined, ctx: ListingContext & { prev?: BalanceListingRecord | null } = {}): { ok: boolean; reason?: string; sumBase: bigint; mintedBase: bigint; smaller?: { count: number; provider: string } } {
-  const no = (reason: string, sumBase = 0n, mintedBase = 0n) => ({ ok: false, reason, sumBase, mintedBase });
+export function balanceGate(listing: (BalanceListing & { height: number; provider?: string }) | null | undefined, ctx: ListingContext & { prev?: BalanceListingRecord | null } = {}): { ok: boolean; reason?: string; sumBase: bigint; mintedBase: bigint; summed: boolean; smaller?: { count: number; provider: string } } {
+  // `summed`: the gate got as far as adding the balances up (sumBase and mintedBase are then the listing's own)
+  const no = (reason: string, sumBase = 0n, mintedBase = 0n, summed = false) => ({ ok: false, reason, sumBase, mintedBase, summed });
   if (!listing || listing.entries.size === 0) return no('the balance listing is empty');
   const h = heightGate('balance listing', listing.height, ctx.headHeight, ctx.prev?.completeAt ? ctx.prev.height : null, ctx.headByNodes, ctx.headTop);
   if (h) return no(h);
@@ -1246,14 +1540,65 @@ export function balanceGate(listing: (BalanceListing & { height: number; provide
   for (const v of listing.entries.values()) sumBase += BigInt(v);
   for (const v of listing.internal.values()) sumBase += BigInt(v);
   const off = fracOff(sumBase, mintedBase);
-  if (off > LISTING_SUM_TOLERANCE) return no(`the balances in the listing add up to ${n0(Math.round(Number(sumBase) / 1e6))} NAM, ${(off * 100).toFixed(off < 0.0001 ? 4 : 2)}% off the minted total (${n0(Math.round(Number(mintedBase) / 1e6))} NAM)`, sumBase, mintedBase);
+  if (off > LISTING_SUM_TOLERANCE) return no(`the balances in the listing add up to ${n0(Math.round(Number(sumBase) / 1e6))} NAM, ${(off * 100).toFixed(off < 0.0001 ? 4 : 2)}% off the minted total (${n0(Math.round(Number(mintedBase) / 1e6))} NAM)`, sumBase, mintedBase, true);
   if (ctx.supplyBase != null && ctx.supplyBase > 0n) {
     const offSupply = fracOff(mintedBase, ctx.supplyBase);
-    if (offSupply > LISTING_SUPPLY_TOLERANCE) return no(`the listing's minted total (${n0(Math.round(Number(mintedBase) / 1e6))} NAM) is ${(offSupply * 100).toFixed(2)}% off this tick's supply read (${n0(Math.round(Number(ctx.supplyBase) / 1e6))} NAM)`, sumBase, mintedBase);
+    if (offSupply > LISTING_SUPPLY_TOLERANCE) return no(`the listing's minted total (${n0(Math.round(Number(mintedBase) / 1e6))} NAM) is ${(offSupply * 100).toFixed(2)}% off this tick's supply read (${n0(Math.round(Number(ctx.supplyBase) / 1e6))} NAM)`, sumBase, mintedBase, true);
   }
   const short = shrinkRefusal(listing.keys, listing.provider, ctx.prev ? { ...ctx.prev, count: ctx.prev.keys } : null, ctx.headTop ?? ctx.headHeight, ctx.headByNodes);
-  if (short) return { ...no(`the listing has ${n0(listing.keys)} keys, under ${LISTING_SHRINK_FLOOR * 100}% of the last one's ${n0(ctx.prev!.keys)}`, sumBase, mintedBase), smaller: short.smaller };
-  return { ok: true, sumBase, mintedBase };
+  if (short) return { ...no(`the listing has ${n0(listing.keys)} keys, under ${LISTING_SHRINK_FLOOR * 100}% of the last one's ${n0(ctx.prev!.keys)}`, sumBase, mintedBase, true), smaller: short.smaller };
+  return { ok: true, sumBase, mintedBase, summed: true };
+}
+
+/**
+ * What the gate's supply rule would say under the tighter rule it is shadowed with (balances_sum_to_minted's detail):
+ * the listing's minted key equal to this tick's supply read, or to the minted total before this epoch's step (the
+ * listing read before the step's block, the supply read after). A listing read after a step this tick's supply read
+ * came before would be refused by it; the step's amount is not known before the next tick, and it is rare (one block in
+ * an epoch of about 3,000). null without a supply read.
+ */
+export function listingSupplyShadow(mintedBase: bigint, supplyBase: bigint | null | undefined, beforeStepBase: bigint | null | undefined): { says: 'apply' | 'refuse'; matched: 'this tick' | 'the epoch before' | null } | null {
+  if (supplyBase == null || !(supplyBase > 0n)) return null;
+  if (mintedBase === supplyBase) return { says: 'apply', matched: 'this tick' };
+  if (beforeStepBase != null && mintedBase === beforeStepBase) return { says: 'apply', matched: 'the epoch before' };
+  return { says: 'refuse', matched: null };
+}
+
+/** The balances_sum_to_minted row is written when a balance listing is read (hourly), and says so (digest/freshness.ts checkStaleMs). */
+export const LISTING_SUM_EVERY_MS = BALANCE_LISTING_MS;
+export const LISTING_SUM_TITLE = "The NAM balances in the chain's balance listing (holders and protocol accounts) add up to the listing's minted key, to the base unit";
+
+/**
+ * The balances_sum_to_minted row: the sum of every balance in a listing against the minted key the same answer
+ * carries, to the base unit. 'ok' only when they are equal, 'warn' at any difference (the gate still applies a listing
+ * within LISTING_SUM_TOLERANCE), 'idle' when the listing was not read or the gate stopped before adding it up. The
+ * detail records what the gate's two rules say now and what their tighter forms would say (shadow, not yet in force).
+ */
+export function listingSumCheck(
+  listing: (BalanceListing & { height: number; provider?: string }) | null,
+  gate: ReturnType<typeof balanceGate> | null,
+  ctx: ListingContext,
+  now: number,
+  why?: string,
+): Stmt {
+  const base = { everyMs: LISTING_SUM_EVERY_MS, height: listing?.height ?? null, provider: listing?.provider ?? null };
+  if (!listing || !gate?.summed) {
+    return stmt.check('balances_sum_to_minted', 'idle', LISTING_SUM_TITLE, { ...base, judged: false, notJudged: listing ? 'not-used' : 'not-read', note: (why ?? gate?.reason ?? 'the balance listing was not read').slice(0, 160) }, now);
+  }
+  const diff = gate.sumBase - gate.mintedBase;
+  const allowed = (gate.mintedBase * BigInt(Math.round(LISTING_SUM_TOLERANCE * 1e9))) / 1_000_000_000n;
+  const supply = listingSupplyShadow(gate.mintedBase, ctx.supplyBase, ctx.beforeStepBase);
+  return stmt.check('balances_sum_to_minted', diff === 0n ? 'ok' : 'warn', LISTING_SUM_TITLE, {
+    ...base, judged: true,
+    balances: listing.entries.size + listing.internal.size, sumBase: gate.sumBase.toString(), mintedBase: gate.mintedBase.toString(), diffBase: diff.toString(),
+    applied: gate.ok, ...(gate.ok ? {} : { note: gate.reason?.slice(0, 160) }),
+    gate: { sumTolerance: LISTING_SUM_TOLERANCE, sumAllowsBase: allowed.toString(), supplyTolerance: LISTING_SUPPLY_TOLERANCE },
+    shadow: {
+      // the gate's sum rule at no tolerance, and its supply rule as listingSupplyShadow
+      sumExact: diff === 0n ? 'apply' : 'refuse',
+      supply: supply ? { ...supply, supplyBase: ctx.supplyBase!.toString(), beforeStepBase: ctx.beforeStepBase?.toString() ?? null } : null,
+    },
+  }, now);
 }
 
 /**
@@ -1292,6 +1637,12 @@ export function bondGate(listing: (BondListing & { height: number; provider?: st
   return { ok: true };
 }
 
+/** The balances_sum_to_minted row, with its status change logged first (as the tick's checks are); a failed write costs only the row. */
+async function writeListingSum(db: D1Database, row: Stmt, now: number): Promise<void> {
+  await appendHealthLog(db, await checkFlips(db, [row], now), now).catch(() => {});
+  await runBatch(db, [row]).catch((e) => console.error('balances_sum_to_minted', e));
+}
+
 /**
  * Read every NAM balance from the chain and reconcile the Namada holder rows with it: rows whose stored balance
  * differs (or that are new and hold NAM, or were last written by another source) are written with the listing's
@@ -1300,7 +1651,7 @@ export function bondGate(listing: (BondListing & { height: number; provider?: st
  * tick, after re-reading the listing (the diff is recomputed, so nothing is written twice or lost); the zeroing
  * counts against the same cap. Zero balances the chain lists are not given rows (26,404 of 90,777 keys on
  * 2026-10-20 held nothing). A listing the gate refuses (balanceGate: a lagging node, a short answer) changes
- * nothing and is said so.
+ * nothing and is said so. Every read writes the balances_sum_to_minted row (listingSumCheck), applied or not.
  */
 export async function runBalanceListing(env: Env, health: SourceHealth[], now: number, read: ReadOpts, list: BalanceLister = allNamBalances, cap = LISTING_WRITE_CAP, ctx: ListingContext = {}): Promise<BalanceListingRecord | null> {
   const name = 'Namada RPC (balance listing)';
@@ -1312,12 +1663,15 @@ export async function runBalanceListing(env: Env, health: SourceHealth[], now: n
   } catch (e) {
     const why = listingReadFailure('balance', e);
     health.push({ name, ok: false, at: now, note: why.note });
+    await writeListingSum(env.DB, listingSumCheck(null, null, ctx, now, why.note), now);
     // The record remembers the failure (the next try waits LISTING_RETRY_MS); a pass already complete stays complete.
     const failed: BalanceListingRecord = { ...(prev ?? { at: 0, completeAt: null, height: 0, provider: '', keys: 0, holders: 0, totalNam: 0, bytes: 0, written: 0, zeroed: 0, remaining: 0, ticks: 0, durationMs: 0, spansAt: null, extendedAt: null }), failedAt: now, error: why.error, failures: (prev?.failures ?? 0) + 1 };
     await kvSet(env.DB, 'balance.listing', failed).catch(() => {});
     return failed;
   }
   const gate = balanceGate(listing, { ...ctx, prev });
+  // Whether the listing is applied or not, its sum is judged in a row of its own.
+  await writeListingSum(env.DB, listingSumCheck(listing, gate, ctx, now), now);
   if (!gate.ok) {
     // Refused: the rows stay as they are and the pass stays where it was; the record and the sheet say why.
     const error = `Not applied: ${gate.reason}`;
@@ -1635,6 +1989,25 @@ export async function stakesFigures(db: D1Database, now: number, changed: boolea
 }
 
 /**
+ * The NAM in the staking account that is not staked, split by the last bond listing (stake_within_staking_account's
+ * detail): what it lists as unstaking or withdrawable (unbondingNam, net of slashing) less what of that still counts
+ * as stake (this tick's total stake over the listing's bonds: an unbond counts as stake until its pipeline ends), its
+ * bonds still waiting to start (the listing's bonds over this tick's total stake), and the rest, neither staked nor
+ * unstaking, which the listing does not name (unclaimed rewards are held here). Only the net of the two pipelines is
+ * seen, so at most one of them is above 0. The listing's block goes with it, as the parts are from its block and the
+ * balance from this tick's. Nothing when the listing is three of its intervals old or more (bondedCoverageCheck's
+ * rule), has no unbonding figure, or the parts do not fit the NAM not staked (withdrawals since).
+ */
+export function stakeSplit(posNam: number, stakeNam: number, bond: BondListingRecord | null | undefined, now: number): { unstakingNam: number; waitingNam: number; restNam: number; listingHeight: number; listingAt: number } | Record<string, never> {
+  if (!bond || !(bond.at > 0) || !(now - bond.at < 3 * BOND_LISTING_MS) || bond.unbondingNam == null || !(bond.height > 0)) return {};
+  const waitingNam = Math.max(0, bond.totalNam - stakeNam);
+  const unstakingNam = bond.unbondingNam - Math.max(0, stakeNam - bond.totalNam);
+  const restNam = posNam - stakeNam - unstakingNam - waitingNam;
+  if (!(unstakingNam >= 0) || !(restNam >= 0)) return {};
+  return { unstakingNam, waitingNam, restNam, listingHeight: bond.height, listingAt: bond.at };
+}
+
+/**
  * The bonded-coverage check: the bond listing's sum, net of slashing, against the chain's total stake. The listing
  * runs slightly above the total stake (bonds in the pipeline are listed before they count), so it passes within
  * 2% when its last pass is complete and recent. The detail carries what the UI reads (coveragePct, stakers,
@@ -1748,22 +2121,25 @@ export async function runCron(env: Env) {
           ...keplr, signal: slice.signal, resume: true, from: passOn ? osmoPass!.key : null, pagesBefore: passOn ? osmoPass!.pages : 0,
         })).finally(slice.done)
       : Promise.resolve(null);
-    const [osmoSupplyRes, price, poolRes, idxBlock, idxSupply, totalRes, posRes, stakeRes, ibcRes, maspRes, pgfRes, epoch] = await Promise.all([
+    const [osmoSupplyRes, price, poolRes, idxBlock, idxSupply, totalRes, posRes, stakeRes, ibcRes, maspRes, pgfRes, epochRes] = await Promise.all([
       probe(health, 'Keplr Osmosis REST (supply)', () => fetchOsmosisSupplyBase(env.KEPLR_KEY, keplr)),
       fetchNamPrice(),
       fetchNamPools(),
       // Independent source: indexer.namada.net vs RPC (height) and vs ABCI (minted supply)
       probe(health, 'Namada indexer (indexer.namada.net)', () => fetchJson<any>(`${INDEXER}/chain/block/latest`, { timeoutMs: 8000, retries: 1, signal })),
       fetchJson<any>(`${INDEXER}/chain/token-supply?address=${NAM.namadaToken}`, { timeoutMs: 8000, retries: 1, signal }).catch(() => null),
-      // 2. Namada supply partition via ABCI. A failed read is recorded as missing, never as 0.
+      // 2. Namada supply partition via ABCI. A failed read is recorded as missing, never as 0: the minted total and the
+      //    four protocol balances always exist on the chain, so a node that answers one without a value is refused and
+      //    the next node asked (namProtocolBalance, namTotalSupply).
       probe(health, 'Namada RPC (minted supply)', () => namTotalSupply(nread)),
-      probe(health, 'Namada RPC (PoS balance)', () => namBalance(NAMADA.internal.pos, nread)),
+      probe(health, 'Namada RPC (PoS balance)', () => namProtocolBalance(NAMADA.internal.pos, nread)),
       probe(health, 'Namada RPC (total stake)', () => namTotalStake(nread)),
-      probe(health, 'Namada RPC (IBC escrow)', () => namBalance(NAMADA.internal.ibc, nread)),
-      probe(health, 'Namada RPC (MASP balance)', () => namBalance(NAMADA.internal.masp, nread)),
-      probe(health, 'Namada RPC (PGF balance)', () => namBalance(NAMADA.internal.pgf, nread)),
-      probe(health, 'Namada RPC (epoch)', () => namadaEpoch(nread)),
+      probe(health, 'Namada RPC (IBC escrow)', () => namProtocolBalance(NAMADA.internal.ibc, nread)),
+      probe(health, 'Namada RPC (MASP balance)', () => namProtocolBalance(NAMADA.internal.masp, nread)),
+      probe(health, 'Namada RPC (PGF balance)', () => namProtocolBalance(NAMADA.internal.pgf, nread)),
+      probe(health, 'Namada RPC (epoch)', () => namadaEpochRead(nread)),
     ]);
+    const epoch = epochRes?.epoch ?? null;
     // The chain listing this tick reads (5a/5d), if one is due, starts now, right after the quick reads above have
     // shown the breaker which node answers: a node can take 30 s to stream the 12 MB balance answer (5ElementsNodes
     // did on 2026-10-20 while Papadritta took 3.5 s), so the read gets the rest of the tick, not what the checks
@@ -1936,11 +2312,41 @@ export async function runCron(env: Env) {
         'Supply partition: locked + escrowed ≤ minted',
         { totalMinted: totalNam, allocatedOrLocked: sumAccounted, transparentLiquid: totalNam - sumAccounted, pctLocked: ((sumAccounted / totalNam) * 100).toFixed(2) + '%' }, now));
     }
+    // The mint rule (supply_mint_rule, above mintRuleNext): this tick's minted total against the last reading the rule
+    // held for. The chain's record of an epoch step is read only on a tick that sees a new epoch, at its reading's
+    // block, and after a failed read not again for MINT_KEYS_RETRY_MS (mintKeysDue). A state that could not be read is
+    // not replaced: the row is not written, and goes quiet.
+    const mintPrev = await kvGetJson<MintRuleState>(env.DB, MINT_RULE_KV).catch(() => undefined);
+    let mintState: MintRuleState | null = null;
+    if (mintPrev !== undefined) {
+      const reading = mintReadingOf(totalRes, epochRes, maspRes, posRes, now);
+      const due = 'why' in reading ? null : mintKeysDue(mintPrev, reading, now);
+      let keys: MintKeys | { error: string; tried?: boolean } | null = null;
+      if (due === 'wait') keys = { error: `the last read failed; it is read again ${MINT_KEYS_RETRY_MS / 60_000} minutes after that` };
+      else if (due === 'read' && !('why' in reading)) {
+        // four single-key reads, about four ticks a day, in a phase of their own so a slow node costs at most
+        // MINT_KEYS_PHASE_MS, ending LISTING_RESERVE_MS before the deadline so the listing keeps its turn
+        const endAt = mintKeysPhaseEnd(deadlineAt, Date.now());
+        if (late() || endAt == null) keys = { error: 'the tick ran out of time before the step could be read' };
+        else {
+          const phase = phaseSignal(signal, endAt);
+          try {
+            keys = await mintKeysAt(reading.height, { ...nread, rpcs: preferProvider(rpcs, reading.provider), signal: phase.signal }).catch((e) => ({ error: publicNote(String(e)).slice(0, 160), tried: true }));
+          } finally { phase.done(); }
+        }
+      }
+      const m = mintRuleNext(mintPrev, reading, keys, now);
+      mintState = m.state;
+      checkStmts.push(stmt.check('supply_mint_rule', m.status, MINT_RULE_TITLE, m.detail, now), stmt.kvSet(MINT_RULE_KV, JSON.stringify(m.state), now));
+    }
+    const beforeStepBase = mintedEpochBefore(mintState);
+
     if (posNam != null && stakeNam != null) {
-      // The staking account always holds at least what is staked; the rest is on its way out.
+      // The staking account always holds at least what is staked; the rest is on its way out. The last bond listing
+      // splits the rest (stakeSplit), at that listing's block.
       checkStmts.push(stmt.check('stake_within_staking_account', stakeNam <= posNam + 1 ? 'ok' : 'fail',
         'Total stake ≤ staking account balance (the rest is unstaking, withdrawable or unclaimed rewards)',
-        { totalStakeNam: stakeNam, posBalanceNam: posNam, notStakedNam: posNam - stakeNam }, now));
+        { totalStakeNam: stakeNam, posBalanceNam: posNam, notStakedNam: posNam - stakeNam, ...stakeSplit(posNam, stakeNam, bondPrev, now) }, now));
     }
 
     // Live unbond decoder (LiveHub alarm): last outcome recorded in kv by liveUnbonds(). The row's time is the last
@@ -2002,22 +2408,25 @@ export async function runCron(env: Env) {
     // The second source is the outside indexer; when it does not answer (on 2026-10-19 its token-supply answer
     // turned to null for hours), a second Namada node, so the check keeps running instead of going quiet.
     if (totalNam != null) {
-      let other: { label: string; nam: number } | null = null;
+      let other: { label: string; nam: number; base: bigint } | null = null;
       // The indexer's figure is used only as a whole number of base units (it answered a JSON number on 2026-10-22): a
       // decimal, an exponent or an object would make BigInt throw and end the tick, so the second node is asked instead.
       const idxTotal = idxSupply?.totalSupply;
-      if (idxTotal && /^\d+$/.test(String(idxTotal))) other = { label: 'Namada indexer (indexer.namada.net)', nam: Number(BigInt(idxTotal)) / 1e6 };
+      if (idxTotal && /^\d+$/.test(String(idxTotal))) other = { label: 'Namada indexer (indexer.namada.net)', nam: Number(BigInt(idxTotal)) / 1e6, base: BigInt(idxTotal) };
       else {
         // A node that already failed a read this tick is not asked again: a hung node would cost a full timeout.
         const rest = rpcs.filter((r) => r.provider !== totalRes?.provider && breaker.failures(r.provider) === 0);
         const r2 = rest.length && !late() ? await namTotalSupply({ ...nread, rpcs: rest }).catch(() => null) : null;
-        if (r2) other = { label: `Namada node ${r2.provider}`, nam: toNam(r2.supply) };
+        if (r2) other = { label: `Namada node ${r2.provider}`, nam: toNam(r2.supply), base: r2.supply };
       }
       if (other) {
         const diff = Math.abs(other.nam - totalNam);
+        // The tighter rule (crossSourceShadow) is recorded beside the status, which keeps its 0.1% and 1% lines for now.
+        const shadow = totalRes ? crossSourceShadow(other.base, totalRes.supply, beforeStepBase) : null;
         checkStmts.push(stmt.check('supply_cross_source', diff / totalNam < 0.001 ? 'ok' : diff / totalNam < 0.01 ? 'warn' : 'fail',
           `Minted supply: ${other.label} vs Namada node ${totalRes?.provider ?? ''}`.trim(),
-          { other: other.nam, otherSource: other.label, abci: totalNam, abciSource: `Namada node ${totalRes?.provider ?? ''}`.trim(), diffNam: diff }, now));
+          { other: other.nam, otherSource: other.label, abci: totalNam, abciSource: `Namada node ${totalRes?.provider ?? ''}`.trim(), diffNam: diff,
+            ...(shadow ? { shadow: { ...shadow, otherBase: other.base.toString(), mintedBase: totalRes!.supply.toString(), beforeStepBase: beforeStepBase?.toString() ?? null, rule: CROSS_SOURCE_SHADOW_RULE } } : {}) }, now));
       }
     }
 
@@ -2184,7 +2593,7 @@ export async function runCron(env: Env) {
     // 5d. Spendable balances: the balance listing, when it was the listing due this tick.
     if (balRead) {
       listingOpen = null;
-      await runBalanceListing(env, health, now, lread, started(balRead), LISTING_WRITE_CAP, { headHeight: listingHead.head, headByNodes: listingHead.byNodes, headTop: listingHead.top, supplyBase: totalRes?.supply ?? null });
+      await runBalanceListing(env, health, now, lread, started(balRead), LISTING_WRITE_CAP, { headHeight: listingHead.head, headByNodes: listingHead.byNodes, headTop: listingHead.top, supplyBase: totalRes?.supply ?? null, beforeStepBase });
     } else if (balWhy) listingSkipped(health, 'Namada RPC (balance listing)', 'balance', balPrev, BALANCE_LISTING_MS, now, balWhy);
     // 5e. A listing that has not landed for LISTING_OVERDUE_INTERVALS of its intervals is said so every tick, on the
     //     ticks that do not read it too (its last row would otherwise sit in the sheet with its age growing). A

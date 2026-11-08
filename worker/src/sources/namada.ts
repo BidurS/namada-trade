@@ -335,11 +335,14 @@ export class RpcBreaker {
   order(list: readonly Rpc[]): Rpc[] { return [...list].sort((a, b) => this.failures(a.provider) - this.failures(b.provider)); }
 }
 
-/** The node answered, with an error code: an answer about the query (no such bond, no such path), not a failure. */
+/**
+ * The node answered, with an error code: an answer about the query (no such bond, no such path), not a failure. `said`
+ * is the path as the message names it (abci: its addresses cut, so a health note keeps the reason).
+ */
 export class AbciCodeError extends Error {
   readonly path: string;
   readonly code: number;
-  constructor(path: string, code: number, info: string) { super(`abci ${path} code ${code}: ${info}`); this.path = path; this.code = code; }
+  constructor(path: string, code: number, info: string, said = path) { super(`abci ${said} code ${code}: ${info}`); this.path = path; this.code = code; }
 }
 
 /** What an ABCI answer's response holds (result.response). */
@@ -349,13 +352,20 @@ interface AbciResponse { code?: number | string; value?: string | null; height?:
  * One ABCI query, asked of each node in turn (the breaker's order when one is given). `opts.rpcs` given empty (the
  * cron's answeringRpcs when every node names another chain) leaves no node to ask. `accept`, when given, is asked of
  * each node's response: a reason it gives refuses that node's answer as no answer, so the node is put last and the
- * next node is asked (an epoch answer that is not an epoch, namadaEpoch).
+ * next node is asked (an epoch answer that is not an epoch, namadaEpoch; a protocol balance without a value,
+ * namProtocolBalance). `height`, when given, asks for the state at that block (Namada answers a key's value at a past
+ * block within the nodes' state window, about 3,600 blocks; /shell/epoch does not take one), and an answer for
+ * another block is refused at its node the same way.
  */
-async function abci(path: string, opts: ReadOpts = {}, accept?: (resp: AbciResponse) => string | null) {
+async function abci(path: string, opts: ReadOpts = {}, accept?: (resp: AbciResponse) => string | null, height?: number) {
+  const at = height != null ? `&height=${height}` : '';
   const run = (b: string) =>
-    fetchJson(`${b}/abci_query?path=${encodeURIComponent(`"${path}"`)}`, { timeoutMs: opts.timeoutMs ?? 15000, retries: opts.retries, signal: opts.signal });
+    fetchJson(`${b}/abci_query?path=${encodeURIComponent(`"${path}"`)}${at}`, { timeoutMs: opts.timeoutMs ?? 15000, retries: opts.retries, signal: opts.signal });
   const base = opts.rpcs ?? RPCS;
   const list = opts.breaker ? opts.breaker.order(base) : base;
+  // the path as every error below names it, each address cut to its first ten characters (the protocol accounts stay
+  // apart), so a health note's 160 characters keep the reason after a balance key's three addresses
+  const said = path.replace(/tnam1[02-9ac-hj-np-z]{10,}/g, (a) => `${a.slice(0, 10)}…`);
   let value: any, provider = '';
   let lastErr: unknown;
   for (const r of list) {
@@ -364,9 +374,10 @@ async function abci(path: string, opts: ReadOpts = {}, accept?: (resp: AbciRespo
       const v = await run(r.url);
       // An answer without a response (a JSON-RPC error, a proxy's page) is no answer: the next node is asked, as
       // rpcRead and abciListing do. An answer with an error code is an answer and is returned as one below.
-      if (!v?.result?.response) throw new Error(`abci ${path}: answer without a response`);
-      const refused = accept?.(v.result.response);
-      if (refused) throw new Error(`abci ${path}: ${r.provider} ${refused}`);
+      if (!v?.result?.response) throw new Error(`abci ${said}: answer without a response`);
+      const answered = Number(v.result.response.height || 0);
+      const refused = accept?.(v.result.response) ?? (height != null && answered !== height ? `answered for block ${answered}, not ${height}` : null);
+      if (refused) throw new Error(`abci ${said}: ${r.provider} ${refused}`);
       value = v; provider = r.provider; break;
     } catch (e) {
       lastErr = e;
@@ -374,9 +385,9 @@ async function abci(path: string, opts: ReadOpts = {}, accept?: (resp: AbciRespo
       if (!opts.signal?.aborted) opts.breaker?.failed(r.provider);
     }
   }
-  if (!provider) throw lastErr ?? new Error(list.length ? `abci ${path}: deadline passed` : `abci ${path}: no node on this chain to ask`);
+  if (!provider) throw lastErr ?? new Error(list.length ? `abci ${said}: deadline passed` : `abci ${said}: no node on this chain to ask`);
   const resp = value.result.response;
-  if (resp.code && resp.code !== 0) throw new AbciCodeError(path, Number(resp.code), String(resp.info || resp.log || ''));
+  if (resp.code && resp.code !== 0) throw new AbciCodeError(path, Number(resp.code), String(resp.info || resp.log || ''), said);
   return { value: resp.value as string | null, height: Number(resp.height || 0), provider };
 }
 
@@ -431,15 +442,52 @@ async function abciListing(path: string, opts: ReadOpts = {}): Promise<ListingAn
   throw new Error(message);
 }
 
-/** Live NAM balance (base units) of a Namada address */
+/** The NAM balance key of an owner. */
+const namBalanceKey = (owner: string) => `/shell/value/#${NAMADA.multitoken}/#${NAM.namadaToken}/balance/#${owner}`;
+
+/**
+ * Why an answer is not a value of `bytes` bytes, or null when it is: no value (Namada answers a key it holds nothing
+ * for with code 0, no value and "No value found for key …", which decodes to 0), or a value of another length. An
+ * error code is not judged here: abci throws it as an answer about the query.
+ */
+const notBytes = (bytes: number, what: string) => (resp: AbciResponse): string | null => {
+  if (resp.code && Number(resp.code) !== 0) return null;
+  if (!resp.value) return 'answered without a value';
+  let n = -1;
+  try { n = atob(resp.value).length; } catch { /* not base64 */ }
+  return n === bytes ? null : `answered a value that is not ${what}`;
+};
+/** A token::Amount: 32 bytes little-endian. */
+const notAnAmount = notBytes(32, 'an amount');
+
+/**
+ * Live NAM balance (base units) of a Namada address. A key with no value reads as 0: an address that never held NAM
+ * has none. The protocol accounts and the minted total are read with namProtocolBalance and namTotalSupply instead.
+ */
 export async function namBalance(owner: string, opts: ReadOpts = {}) {
-  const r = await abci(`/shell/value/#${NAMADA.multitoken}/#${NAM.namadaToken}/balance/#${owner}`, opts);
+  const r = await abci(namBalanceKey(owner), opts);
   return { balance: decodeU256LE(r.value), height: r.height, provider: r.provider };
 }
 
+/**
+ * The NAM balance (base units) of a protocol account (the staking account, the bridge escrow, the shielded pool,
+ * public funding), which the chain always holds. An answer without a value, or with one that is not an amount, is
+ * refused at its node, so the next node is asked; when every node answers so the read fails and the cron stores
+ * the balance as not read, never as 0 (a 0 would raise the transparent NAM it derives from these four, cron.ts
+ * supply.liquid, while the partition check still passed).
+ */
+export async function namProtocolBalance(owner: string, opts: ReadOpts = {}) {
+  const r = await abci(namBalanceKey(owner), opts, notAnAmount);
+  return { balance: decodeU256LE(r.value), height: r.height, provider: r.provider };
+}
+
+/**
+ * The minted total of NAM (base units), with the node and block that answered. The chain always holds it, so an
+ * answer without a value is refused at its node and the next node is asked, as for namProtocolBalance.
+ */
 export async function namTotalSupply(opts: ReadOpts = {}) {
-  const r = await abci(`/shell/value/#${NAMADA.multitoken}/#${NAM.namadaToken}/balance/minted`, opts);
-  return { supply: decodeU256LE(r.value), provider: r.provider };
+  const r = await abci(`/shell/value/#${NAMADA.multitoken}/#${NAM.namadaToken}/balance/minted`, opts, notAnAmount);
+  return { supply: decodeU256LE(r.value), height: r.height, provider: r.provider };
 }
 
 /**
@@ -472,8 +520,16 @@ function notAnEpoch(resp: AbciResponse): string | null {
  * the stake sample need it) while the other node has it.
  */
 export async function namadaEpoch(opts: ReadOpts = {}) {
+  return (await namadaEpochRead(opts)).epoch;
+}
+
+/**
+ * The chain's current epoch as namadaEpoch reads it, with the node and block that answered: the cron's mint rule
+ * judges a minted total only against an epoch read at the same block (/shell/epoch answers only for the latest block).
+ */
+export async function namadaEpochRead(opts: ReadOpts = {}) {
   const r = await abci('/shell/epoch', opts, notAnEpoch);
-  return decodeU64LE(r.value);
+  return { epoch: decodeU64LE(r.value), height: r.height, provider: r.provider };
 }
 
 /** Borsh `Address` tag → bech32 discriminant (Established=1, Implicit=0, Internal=2). */
@@ -857,4 +913,80 @@ export async function allBonds(opts: ReadOpts = {}): Promise<BondListing & Listi
   if (!r.value) throw new Error(`bond listing: empty answer from ${r.provider}`);
   if (!(r.height > 0)) throw new Error(`bond listing: answer without a height from ${r.provider}`);
   return { ...parseBondListing(r.value), height: r.height, provider: r.provider, readMs: r.readMs };
+}
+
+// ---------------------------------------------------------------- what the chain records of an epoch's mint
+//
+// The keys the cron's mint rule (cron.ts mintRuleNext) compares a step of the minted total with, read at the block it
+// judges. In Namada's source (proof_of_stake rewards.rs apply_inflation, governance pgf/inflation.rs, the shell's
+// finalize_block) the minted total changes only at an epoch's first block: by the staking inflation, which it writes
+// to the staking account's last_inflation_amount; by the public-funding and steward inflation, each its rate × the
+// effective supply ÷ epochs per year (both rates read 0 on 2026-11-02); and, when the epoch also starts a
+// shielded-reward epoch (epoch % masp_epoch_multiplier == 0), by the shielded rewards credited to the shielded pool's
+// own NAM. Each key answered rpc-namada.5elementsnodes.com at a past block on 2026-11-02.
+
+/** Namada's parameters account (InternalAddress::Parameters), from the enum table both readers share. */
+function parametersAddress(): string {
+  const v = INTERNAL_ADDRESSES.find((a) => a.name === 'Parameters');
+  if (!v) throw new Error('the internal address table has no Parameters account');
+  const raw = new Uint8Array(21);
+  raw[0] = v.raw;
+  return encodeAddress(raw);
+}
+
+/** An error code from one node, refused there so the next node is asked (a node may not keep the block asked for). */
+const orCode = (f: (resp: AbciResponse) => string | null) => (resp: AbciResponse): string | null =>
+  resp.code && Number(resp.code) !== 0 ? `answered code ${resp.code}${resp.info || resp.log ? `: ${String(resp.info || resp.log).slice(0, 80)}` : ''}` : f(resp);
+/** A borsh Dec (I256): 32 bytes. */
+const notADec = notBytes(32, 'a decimal');
+/** A borsh u64 above 0: 8 bytes. */
+const notACount = (resp: AbciResponse): string | null => notBytes(8, 'a whole number')(resp) ?? (decodeU64LE(resp.value) > 0 ? null : 'answered 0');
+
+/**
+ * A borsh Dec (I256: 32 bytes little-endian, two's complement) with Namada's 12 decimal places (core dec.rs
+ * POS_DECIMAL_PRECISION), as a decimal string ("0", "0.0275").
+ */
+export function decString(b64: string | null): string {
+  let v = decodeU256LE(b64);
+  const neg = v >> 255n === 1n;
+  if (neg) v = (1n << 256n) - v;
+  const s = v.toString().padStart(13, '0');
+  const frac = s.slice(-12).replace(/0+$/, '');
+  return `${neg ? '-' : ''}${s.slice(0, -12)}${frac ? `.${frac}` : ''}`;
+}
+
+/** What the chain records at a block about the mint at the start of that block's epoch (mintKeysAt). */
+export interface MintKeys {
+  /** the staking inflation minted at the epoch's first block (<staking account>/last_inflation_amount), base units */
+  lastInflationBase: bigint;
+  /** the public-funding and steward inflation rates (<public funding>/pgf_inflation_rate, steward_inflation_rate), decimals */
+  pgfRate: string;
+  stewardRate: string;
+  /** epochs to a shielded-reward epoch (<parameters>/masp_epoch_multiplier) */
+  maspEpochMultiplier: number;
+  /** the block every key was read at, and the node that answered the inflation amount */
+  height: number;
+  provider: string;
+}
+
+/**
+ * The mint keys at `height`, one after another (four single-key reads; the cron reads them only on a tick that sees
+ * a new epoch). A node that answers for another block, with an error code (it no longer keeps the block) or with a
+ * value of the wrong shape is refused there and the next node is asked; when no node answers, the read fails, and
+ * the mint rule says the step was not read. Never a guess: every figure is the chain's.
+ */
+export async function mintKeysAt(height: number, opts: ReadOpts = {}): Promise<MintKeys> {
+  const pgf = NAMADA.internal.pgf;
+  const inflation = await abci(`/shell/value/#${NAMADA.internal.pos}/last_inflation_amount`, opts, orCode(notAnAmount), height);
+  const pgfRate = await abci(`/shell/value/#${pgf}/pgf_inflation_rate`, opts, orCode(notADec), height);
+  const stewardRate = await abci(`/shell/value/#${pgf}/steward_inflation_rate`, opts, orCode(notADec), height);
+  const multiplier = await abci(`/shell/value/#${parametersAddress()}/masp_epoch_multiplier`, opts, orCode(notACount), height);
+  return {
+    lastInflationBase: decodeU256LE(inflation.value),
+    pgfRate: decString(pgfRate.value),
+    stewardRate: decString(stewardRate.value),
+    maspEpochMultiplier: decodeU64LE(multiplier.value),
+    height,
+    provider: inflation.provider,
+  };
 }

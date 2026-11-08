@@ -61,7 +61,7 @@ export const GUIDE_META: GuideMeta[] = [
     h1: 'How does Namada\'s shielded pool work, and what are shielded rewards?',
     title: 'How Namada\'s shielded pool and rewards work',
     description: 'What the shielded pool hides and what stays public, how shielding and unshielding work, what viewing keys are for, and how shielded rewards are paid.',
-    updated: '2026-10-24',
+    updated: '2026-11-07',
   },
   {
     slug: 'how-namada-governance-works',
@@ -77,7 +77,7 @@ export const GUIDE_META: GuideMeta[] = [
     h1: 'Where does new NAM come from?',
     title: 'NAM supply, inflation and rewards explained',
     description: 'How much NAM existed at launch, where new NAM comes from (staking rewards, public goods funding, shielded rewards) and which settings can change it.',
-    updated: '2026-10-24',
+    updated: '2026-11-07',
   },
 ];
 

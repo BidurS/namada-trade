@@ -221,7 +221,6 @@ function RtsRow({ e, now, price, mine }: { e: OnDeckEntry; now: number; price: n
   const name = e.labelPlain ?? null;
   const linked = e.linkedLabelPlain ?? null;
   const est = sellsMost(e);
-  const pt = e.passthroughFrom ?? null;
   const hasTags = e.priorSells30d > 0 || est || mine;
   return (
     <div className="rts__row" role="row">
@@ -238,11 +237,6 @@ function RtsRow({ e, now, price, mine }: { e: OnDeckEntry; now: number; price: n
           {e.hopOriginNamada ? (
             <span className="rts__link">
               <AddrName address={e.hopOriginNamada.address} label={e.hopOriginNamada.labelPlain ?? null} prefix="likely through a middle address, from" withAddr className="xaddr--sm xaddr--mono" />
-            </span>
-          ) : null}
-          {pt ? (
-            <span className="rts__via">
-              {pt.confidence === 'low' ? 'Possibly' : 'Likely'} out of the shielded set less than a day after going in (one of <Num v={pt.anonymitySetK} fmt={fmtCount} /> {pt.anonymitySetK === 1 ? 'move' : 'moves'} of that size it could match)
             </span>
           ) : null}
         </span>

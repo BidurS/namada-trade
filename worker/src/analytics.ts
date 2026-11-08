@@ -1,7 +1,7 @@
 // Decision-level queries over D1 (see docs/decisions.md). Every function takes `asOf` so the same
 // code serves the live UI and replay mode.
 import type {
-  AlertHit, BlindSpot, ChainParams, Flow, GovernanceProposal, IntelResponse, MaspPassthroughLink, MaspPulseBucket, MoverEntry, OnDeckEntry,
+  AlertHit, BlindSpot, ChainParams, Flow, GovernanceProposal, IntelResponse, MaspPassthroughLink, MaspPassthroughPair, MaspPulseBucket, MoverEntry, OnDeckEntry,
   OrderflowBucket, OrderflowResponse, Pressure, Provenance, Sourced, SupplyCohortBreakdown, UnbondMaturityBucket, UnbondTermStructure, UnlockEntry,
 } from '../../shared/types';
 import type { BondListing } from './sources/namada';
@@ -16,6 +16,7 @@ import { fetchJson } from './util';
 import { INTERNAL_LABELS } from './config';
 import { label_plain, labelAuthorShort } from './labels';
 import { chunks } from './holders';
+import { withCoinName } from './parse/namada';
 
 const H = 3600000, D = 86400000;
 /** Supply's "Unstaking and restaking" list: moves of at least this many NAM over this many days (sent with the response). */
@@ -29,11 +30,15 @@ export function safeParseJson(str: string | null | undefined, fallback: any = {}
 }
 
 export function rowToFlow(r: any): Flow {
-  const meta = safeParseJson(r.meta, null);
+  const stored = safeParseJson(r.meta, null);
+  // A Namada coin's name as the token table gives it now (parse/namada.ts withCoinName), the row's counter_denom with
+  // it when that was the same name: a row stored before its coin was in the table is never rewritten for it.
+  const meta = withCoinName(stored);
+  const counterDenom = meta !== stored && r.counter_denom === stored.tokenSymbol ? meta.tokenSymbol : r.counter_denom;
   return {
     id: r.id, chain: r.chain, height: r.height, ts: r.ts, txHash: r.tx_hash, explorerHash: explorerHashOf({ txHash: r.tx_hash, meta }), kind: r.kind,
     from: r.from_addr, to: r.to_addr, amount: r.amount_num,
-    counterDenom: r.counter_denom, counterAmount: r.counter_amount, poolId: r.pool_id,
+    counterDenom, counterAmount: r.counter_amount, poolId: r.pool_id,
     priceUsd: r.price_usd, valueUsd: r.value_usd, meta,
     fromLabel: r.from_label || (r.from_addr ? INTERNAL_LABELS[r.from_addr]?.label ?? null : null),
     toLabel: r.to_label || (r.to_addr ? INTERNAL_LABELS[r.to_addr]?.label ?? null : null),
@@ -999,9 +1004,8 @@ export async function pressure(db: D1Database, asOf: number, replay: boolean, wi
   const early = (label: string | null | undefined, source: string | null | undefined) => source === 'genesis' || (source !== 'user' && EARLY.test(label ?? ''));
   for (const e of onDeck) {
     if ((e.dumpHazardScore ?? 0) >= SELLS_MOST_CUT) highHazardRemainingNam += e.remaining;
-    // The receiver's own tag, or a matched pass through the shielded set, decides for all it got.
+    // The receiver's own tag decides for all it got.
     if (early(e.label, e.labelSource)) { genesisBackersNam += e.bridgedIn; continue; }
-    if (e.passthroughFrom) { maspTurnstileNam += e.bridgedIn; continue; }
     // Otherwise each Namada sender's own NAM into it (its crossings in the window) goes to that sender's cohort, so
     // NAM from untagged senders is never counted as a tagged largest sender's, nor the reverse.
     let fromSenders = 0;
@@ -1117,6 +1121,13 @@ export function matchMaspPassthroughs(
   }
   return links.sort((a, b) => b.outTs - a.outTs);
 }
+
+/**
+ * A match as GET /api/blindspot sends it: without the move in's sender, amount and time, and without the amount
+ * difference. The page needs only the move out, the time between, the size of the set the match was chosen from and
+ * the confidence, so the answer carries no more than the page shows (review of 2026-11-07).
+ */
+export const publicPair = ({ inFrom: _inFrom, inAmount: _inAmount, inTs: _inTs, relDiff: _relDiff, ...pair }: MaspPassthroughLink): MaspPassthroughPair => pair;
 
 /**
  * Every NAM leg into or out of the shielded pool, once. Namada records: shield / unshield, and bridge crossings
@@ -1245,7 +1256,7 @@ export async function blindSpot(db: D1Database, asOf: number, replay: boolean): 
     lastBridgeAt: bridgeLegs.length ? Math.max(...bridgeLegs.map((l) => l.ts)) : null,
     ibcShielded7d: bridgeIn7d + bridgeOut7d,
     unshields: (unshieldRows.results || []).map(rowToFlow),
-    passthroughs7d,
+    passthroughs7d: passthroughs7d.map(publicPair),
     turnstileNam7d,
     stickySharePct7d,
     pulseSeries,

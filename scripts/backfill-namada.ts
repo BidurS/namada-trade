@@ -1,7 +1,8 @@
 /**
  * Full-history Namada backfill (runs locally, resumable).
  *
- *   npx tsx scripts/backfill-namada.ts scan      # 1. scan every block with token/transfer events (genesis -> head)
+ *   npx tsx scripts/backfill-namada.ts scan      # 1. scan every block with token/transfer events (genesis -> head);
+ *                                                #    refused when a node's event index starts after block 1
  *   npx tsx scripts/backfill-namada.ts genesis   # 2. load genesis allocations (+ names/categories as labels), held to
  *                                                #    the reviewed copy pinned in scripts/genesis-labels.ts
  *   npx tsx scripts/backfill-namada.ts verify    # 3. live ABCI balance for EVERY known address (double-check)
@@ -16,7 +17,7 @@ import { parseNamadaBlock } from '../worker/src/parse/namada';
 import { blockResults, namBalance, namadaStatus, transferHeights } from '../worker/src/sources/namada';
 import { inlineSql, stmt } from '../worker/src/db';
 import { INTERNAL_LABELS, NAMADA } from '../worker/src/config';
-import { toNam } from '../worker/src/util';
+import { fetchJson, toNam, FETCH_TEXT_MAX_BYTES } from '../worker/src/util';
 import { checkGenesis, fetchGenesis, genesisLabelStmts, type GenesisAllocations } from './genesis-labels';
 
 const OUT = join(import.meta.dirname, 'out', 'namada');
@@ -44,13 +45,45 @@ async function pool<T>(items: T[], n: number, fn: (t: T) => Promise<void>) {
 }
 
 // ------------------------------------------------------------------ 1. scan
+/** `from`: the block the scan started at; `indexFrom`: where the nodes' event index started then (indexFloor). */
+interface ScanProgress { nextFrom: number; head: number; blocks: number; flows: number; from?: number; indexFrom?: number }
+
+/**
+ * The lowest block in a node's event index. A node can keep every block (its /status says earliest block 1) and
+ * index events only from much later: block_search then answers nothing below that, which would read as blocks with
+ * no transfer. The block index holds every block it indexed under block.height, so its first entry is the floor.
+ */
+async function indexFloor(rpc: { provider: string; url: string }): Promise<number> {
+  const q = encodeURIComponent('"block.height>=1"');
+  const r = await fetchJson(`${rpc.url}/block_search?query=${q}&page=1&per_page=1&order_by="asc"`, { timeoutMs: 120000, retries: 2, maxBytes: FETCH_TEXT_MAX_BYTES });
+  const header = r?.result?.blocks?.[0]?.block?.header;
+  const h = Number(header?.height);
+  if (header?.chain_id !== NAMADA.chainId || !Number.isSafeInteger(h) || h < 1) throw new Error(`${rpc.provider}: block_search lists no indexed block of ${NAMADA.chainId}`);
+  return h;
+}
+
 async function scan() {
   const st = await namadaStatus();
-  const progress = readJson('progress.json', { nextFrom: 1, head: 0, blocks: 0, flows: 0 });
+  const progress = readJson<ScanProgress>('progress.json', { nextFrom: 1, head: 0, blocks: 0, flows: 0 });
+  // transferHeights may ask any node of config.ts NAMADA.rpcs, so every node's index must reach the blocks still to scan.
+  const floors = await Promise.all(NAMADA.rpcs.map(async (r) => {
+    try { return { provider: r.provider, floor: await indexFloor(r) }; }
+    catch (e) { throw new Error(`scan: where ${r.provider}'s event index starts could not be read (${String(e).slice(0, 200)}); the scan needs every node's. Nothing was scanned.`); }
+  }));
+  const floor = Math.max(...floors.map((f) => f.floor));
+  const where = floors.map((f) => `${f.provider} from block ${f.floor}`).join(', ');
+  if (progress.from == null && progress.nextFrom > 1) {
+    throw new Error(`scan: ${P('progress.json')} was written by a scan that did not check where the nodes' event index starts, so it may have read unindexed blocks as blocks with no transfer. Remove it, balances.json and the .ndjson files beside it to scan again. Nothing was scanned.`);
+  }
+  if (progress.nextFrom < floor) {
+    throw new Error(`scan: the scan is at block ${progress.nextFrom}, but the nodes index events only from later (${where}): block_search answers nothing below block ${floor}, which would read as blocks with no transfer. Nothing was scanned; config.ts NAMADA.rpcs needs nodes whose index starts by block ${progress.nextFrom}.`);
+  }
+  progress.from ??= progress.nextFrom;
+  progress.indexFrom ??= floor;
   const head = st.height;
   progress.head = head;
   const balances: Record<string, { balance: string; height: number }> = readJson('balances.json', {});
-  log(`scan from ${progress.nextFrom} to head ${head} (provider ${st.provider})`);
+  log(`scan from ${progress.nextFrom} to head ${head} (provider ${st.provider}; event index ${where})`);
 
   while (progress.nextFrom <= head) {
     const lo = progress.nextFrom;
@@ -60,7 +93,9 @@ async function scan() {
     for (;;) {
       const r = await transferHeights(lo, hi, page, 100);
       heights.push(...r.blocks);
-      if (heights.length >= r.total || r.blocks.length === 0) break;
+      if (heights.length >= r.total) break;
+      // A page with no block before the count is reached is not the window's end: the rest of it was not listed.
+      if (r.blocks.length === 0) throw new Error(`scan: block_search ${lo}-${hi} answered page ${page} with no block after ${heights.length} of ${r.total}; the window was not written.`);
       page++;
     }
     const results: ReturnType<typeof parseNamadaBlock>[] = new Array(heights.length);
@@ -92,7 +127,9 @@ async function scan() {
     const pct = ((hi / head) * 100).toFixed(1);
     log(`[${pct}%] ${lo}-${hi}: ${heights.length} blocks, ${flowsN} flows | totals: ${progress.blocks} blocks, ${progress.flows} flows, ${Object.keys(balances).length} accounts`);
   }
-  log('scan complete');
+  // A chain with transfers whose index lists none is an empty index, not an empty chain.
+  if (progress.blocks === 0) throw new Error(`scan: block_search listed no block with a transfer from block ${progress.from} to ${head}: the index answered nothing, so the scan is not complete.`);
+  log(`scan complete: ${progress.blocks} blocks with transfers from block ${progress.from} to ${head} (event index from block ${progress.indexFrom})`);
 }
 
 // ------------------------------------------------------------------ 2. genesis

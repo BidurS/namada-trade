@@ -157,12 +157,29 @@ describe('2. MASP Turnstile & Timing/Amount Correlation Linker', () => {
     expect(bs.unshields7d).toBe(99_990);
     expect(bs.passthroughs7d).toHaveLength(1);
     expect(bs.passthroughs7d?.[0]).toMatchObject({
-      inFrom: 'tnam1qwhale',
       outTo: 'osmo1dumper',
       confidence: 'high',
     });
     expect(bs.turnstileNam7d).toBe(99_990);
     expect(bs.stickySharePct7d).toBeCloseTo((1 - 99_990 / 400_000) * 100, 3);
+  });
+
+  it('GET /api/blindspot sends each pair without the move in\'s sender or amount, and keeps the figures the page reads', async () => {
+    const db = testD1();
+    insert(db, 'flows', [
+      { id: 'n1', chain: 'namada', height: 100, ts: NOW - 4 * H, tx_hash: 'T1', kind: 'shield', from_addr: 'tnam1qshieldsender', to_addr: MASP, amount_num: 100_000, meta: null },
+      { id: 'n2', chain: 'namada', height: 110, ts: NOW - 3 * H, tx_hash: 'T2', kind: 'ibc_out', from_addr: MASP, to_addr: 'osmo1receiver', amount_num: 99_990, meta: null },
+    ]);
+    const res = await app.request(`/api/blindspot?at=${NOW}`, {}, { DB: db } as any);
+    expect(res.status).toBe(200);
+    const text = await res.text();
+    expect(text).not.toContain('tnam1qshieldsender');
+    const bs = JSON.parse(text);
+    expect(bs.passthroughs7d).toHaveLength(1);
+    expect(Object.keys(bs.passthroughs7d[0]).sort()).toEqual(['anonymitySetK', 'confidence', 'dwellMs', 'outAmount', 'outTo', 'outTs']);
+    expect(bs.passthroughs7d[0]).toMatchObject({ outTo: 'osmo1receiver', outAmount: 99_990, dwellMs: H, anonymitySetK: 1, confidence: 'high' });
+    expect(bs.turnstileNam7d).toBe(99_990);
+    expect(bs.pulseSeries.reduce((a: number, b: { turnstileNam: number }) => a + b.turnstileNam, 0)).toBe(99_990);
   });
 });
 

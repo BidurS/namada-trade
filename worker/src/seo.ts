@@ -16,6 +16,7 @@ import { PRICED_KEY } from './pool-sizes';
 import { NAM_DEPTH } from './depth/config';
 import { DEPTH_OFFSETS_PCT, DEPTH_PLAIN_SOURCE, OFFSET_10_INDEX, bidQuotable, sellQuotable, type DepthResponse } from '../../shared/depth';
 import { fmtNamRule, fmtPctRule, fmtUsdRule } from '../../shared/format';
+import { HALT, HALT_FACT_SOURCE, networkStatus } from '../../shared/halt';
 
 export type { FactKey };
 export { BODY };
@@ -31,7 +32,7 @@ type Facts = Partial<Record<FactKey, Fact>>;
 /** The figures the server-rendered pages state, each with its source and time (cached 2 minutes at the edge). */
 export async function facts(env: Env): Promise<Facts> {
   const cache = caches.default;
-  const key = new Request(`${SITE.origin}/__seo/facts-v6`);
+  const key = new Request(`${SITE.origin}/__seo/facts-v7`);
   const hit = await cache.match(key).catch(() => null);
   if (hit) return hit.json();
   const db = env.DB;
@@ -53,11 +54,13 @@ export async function facts(env: Env): Promise<Facts> {
     db.prepare('SELECT value FROM kv WHERE key = ?1').bind(KV_KEYS.latest).first<{ value: string }>().then((r) => (r?.value ? (JSON.parse(r.value) as DepthResponse) : null)).catch(() => null),
   ]);
   const pct = (n: number) => (total ? `${((n / total.value) * 100).toFixed(1)}% of all NAM` : '');
+  // While the network is halted a Namada figure's stamp says so beside its time: the reading is days old for a reason.
+  const namadaNodes = HALT.on ? `Namada nodes, ${HALT_FACT_SOURCE}` : 'Namada nodes';
   const f: Facts = {};
   if (price) f.price = { text: `NAM price: $${price.value.toFixed(6)}`, at: price.ts, source: 'Osmosis router quote' };
-  if (total) f.supply = { text: `All NAM in existence: ${num(total.value)} NAM`, at: total.ts, source: 'Namada nodes' };
-  if (bonded) f.staked = { text: `Staked with validators: ${num(bonded.value)} NAM${total ? `, ${pct(bonded.value)}` : ''}`, at: bonded.ts, source: 'Namada nodes' };
-  if (shielded) f.shielded = { text: `In the shielded pool: ${num(shielded.value)} NAM${total ? `, ${pct(shielded.value)}` : ''}`, at: shielded.ts, source: 'Namada nodes' };
+  if (total) f.supply = { text: `All NAM in existence: ${num(total.value)} NAM`, at: total.ts, source: namadaNodes };
+  if (bonded) f.staked = { text: `Staked with validators: ${num(bonded.value)} NAM${total ? `, ${pct(bonded.value)}` : ''}`, at: bonded.ts, source: namadaNodes };
+  if (shielded) f.shielded = { text: `In the shielded pool: ${num(shielded.value)} NAM${total ? `, ${pct(shielded.value)}` : ''}`, at: shielded.ts, source: namadaNodes };
   if (osmosis) f.osmosis = { text: `Held on Osmosis (wallets and pools): ${num(osmosis.value)} NAM${total ? `, ${pct(osmosis.value)}` : ''}`, at: osmosis.ts, source: 'Osmosis bank' };
   // A total from the pools' reserves has its count stored beside it; one without (stored before) was the router's own.
   const sized = priced != null && priced.ts === liquidity?.ts;
@@ -119,13 +122,29 @@ const S = {
   // 44 px targets: 16 px line + 2 × 14 px padding, at least 44 px wide
   a: 'color:#f5f5f5;text-decoration:underline;text-underline-offset:3px;display:inline-block;line-height:16px;padding:14px 0;min-width:44px',
   small: 'font-size:13px;line-height:1.5;color:#a8a8a8;margin:16px 0 0',
+  // the network status, first in the page: the halt bar's warning edge (--warn #ff9d00 on black, 10.1:1), no button
+  halt: 'margin:0 0 28px;padding:0 0 14px;border-bottom:2px solid #ff9d00',
+  haltTitle: 'color:#ff9d00;font-weight:700',
 };
 
 /**
  * The paper twin for <html data-theme="light"> (set before first paint by web/index.html), appended to <head>
  * so the server-rendered page matches the theme the app will mount in: --bg #f4f4f2, --ink #000, --ink-2 #4d4d4d.
  */
-export const SSR_LIGHT_CSS = `<style>html[data-theme="light"] #ssr{background:#f4f4f2!important;color:#000!important}html[data-theme="light"] #ssr :is(h1,h2,p,ul,a){color:#000!important}html[data-theme="light"] #ssr .ssr-2{color:#4d4d4d!important}</style>`;
+export const SSR_LIGHT_CSS = `<style>html[data-theme="light"] #ssr{background:#f4f4f2!important;color:#000!important}html[data-theme="light"] #ssr :is(h1,h2,p,ul,a){color:#000!important}html[data-theme="light"] #ssr .ssr-2{color:#4d4d4d!important}html[data-theme="light"] #ssr .ssr-halt{border-color:#a84a07!important}html[data-theme="light"] #ssr .ssr-halt strong{color:#a84a07!important}</style>`;
+
+/**
+ * The network status for a reader without JavaScript (a crawler, a language model, a text browser, a reader whose
+ * scripts failed): the words of the halt bar the app shows once it mounts (web/src/app/HaltBanner.tsx, shared/halt.ts),
+ * first in every server-rendered page, so the Namada figures' old stamps below it are explained. Empty when the
+ * network is not halted.
+ */
+export function haltHtml(): string {
+  const s = networkStatus();
+  if (!s) return '';
+  return `<section class="ssr-halt" aria-label="Namada network status" style="${S.halt}"><p style="${S.p};margin:0"><strong style="${S.haltTitle}">${esc(s.title)}.</strong> ${esc(s.said)} <small class="ssr-2" style="${S.stamp}">(${esc(s.source)})</small> ${esc(s.here)}</p></section>
+`;
+}
 
 function factList(keys: FactKey[], f: Facts | null, shown: Set<FactKey>): string {
   const items = keys.filter((k) => !shown.has(k)).map((k) => [k, f?.[k]] as const).filter((x): x is readonly [FactKey, Fact] => !!x[1]);
@@ -150,7 +169,7 @@ export function pageHtml(route: RouteDef, f: Facts | null): string {
     ? guideListHtml()
     : (body?.sections ?? []).map((s) => `<section><h2 style="${S.h2}">${esc(s.h2)}</h2>\n${paras(s.paras)}\n${factList(s.facts ?? [], f, shown)}</section>`).join('\n');
   return `<div id="ssr" style="${S.root}"><div style="${S.wrap}">
-<h1 style="${S.h1}">${esc(route.h1)}</h1>
+${haltHtml()}<h1 style="${S.h1}">${esc(route.h1)}</h1>
 ${paras(body?.paras ?? [route.description])}
 ${factList(body?.facts ?? [], f, shown)}
 ${sections}
@@ -187,7 +206,7 @@ ${s.see?.length ? `<p style="${S.p}">${s.see.map((x) => `<a href="${x.to}" style
   const sources = list.map((x) => `<li id="src-${x.n}" style="${S.li}"><a href="${esc(x.source.url)}" rel="noopener" style="${S.a}">${esc(x.source.publisher)}: ${esc(x.source.title)}</a></li>`).join('');
   const related = g.related.map((p) => routeByPath(p)).filter((r): r is RouteDef => !!r);
   return `<div id="ssr" style="${S.root}"><div style="${S.wrap}">
-<p class="ssr-2" style="${S.stamp}">Guide · checked against its sources on ${esc(route.updated ?? '')}</p>
+${haltHtml()}<p class="ssr-2" style="${S.stamp}">Guide · checked against its sources on ${esc(route.updated ?? '')}</p>
 <h1 style="${S.h1}">${esc(route.h1)}</h1>
 ${gparas(g.lead, num)}
 ${sections}
@@ -204,7 +223,7 @@ ${navHtml()}
 
 export function notFoundHtml(): string {
   return `<div id="ssr" style="${S.root}"><div style="${S.wrap}">
-<h1 style="${S.h1}">${esc(NOT_FOUND.h1)}</h1>
+${haltHtml()}<h1 style="${S.h1}">${esc(NOT_FOUND.h1)}</h1>
 <p style="${S.p}">${esc(NOT_FOUND.lead)}</p>
 ${navHtml()}
 <p class="ssr-2" style="${S.small}">${esc(SITE.disclaimer)}</p>
@@ -287,7 +306,8 @@ export async function seoHtml(env: Env, req: Request, res: Response): Promise<Re
   const canonical = canonicalOf(route);
   const indexable = !!found && route.index && !isListView(url.searchParams);
   const description = found ? route.description : SITE.description;
-  const inner = !found ? notFoundHtml() : route.guide ? guideHtml(route) : route.index ? pageHtml(route, f) : null;
+  // every page is rendered, the one non-indexed page (settings) too: a reader without JavaScript gets its words and the status
+  const inner = !found ? notFoundHtml() : route.guide ? guideHtml(route) : pageHtml(route, f);
   const article = !!found && !!route.guide;
   const v = SITE.verify;
   const head = `
@@ -335,7 +355,9 @@ export function robotsTxt(): Response {
   // slash: '/api/me' would also block '/api/metrics/history', the price chart's data. test/routes.test.ts checks
   // that no rule covers a public read path. The two lists' numbered pages are left out: each one a crawler opens
   // costs the server a walk to that page (the first page and the list itself stay crawlable).
-  const body = `User-agent: *
+  const body = `# Every agent is welcome under these rules: search engines, language models and scripts alike.
+# The pages are readable without JavaScript, /llms.txt describes the site, and /api/overview is the figures as JSON.
+User-agent: *
 Allow: /
 Disallow: /activity?*page=
 Disallow: /holders?*page=
@@ -388,12 +410,18 @@ export async function sitemapXml(env: Env | null): Promise<Response> {
 export function llmsTxt(): Response {
   const line = (r: RouteDef) => `- [${r.label}](${canonicalOf(r)}): ${r.description}`;
   const pages = ROUTES.filter((r) => r.index && !r.guide && r.id !== 'guides');
+  const status = networkStatus();
+  const statusSection = status ? `
+## Status
+
+- ${status.title}. ${status.said} (${status.source}) ${status.here} In the HTML as served, the figures read from Namada nodes (all NAM, staked, in the shielded pool) are the chain's state at the halt and say so beside their time; /api/overview carries the status as \`network\`.
+` : '';
   const body = `# ${SITE.name}
 
 > ${SITE.description} ${SITE.disclaimer}
 
-Every figure on the pages below states its source and the time it was read; the sources are Namada nodes, indexer.namada.net and the Osmosis router. The guides explain Namada in plain words and cite Namada's own documentation for every claim. The site is read-only: it never trades or holds funds.
-
+Every figure on the pages below states its source and the time it was read; the sources are Namada nodes, indexer.namada.net and the Osmosis router. The guides explain Namada in plain words and cite Namada's own documentation for every claim. The site is read-only: it never trades or holds funds. Every page is readable without JavaScript: the figures, their sources and times are in the HTML as served.
+${statusSection}
 ## Pages
 
 ${pages.map(line).join('\n')}
@@ -405,8 +433,9 @@ ${GUIDE_ROUTES.map(line).join('\n')}
 
 ## Data
 
-- [Overview (JSON)](${SITE.origin}/api/overview): the figures behind the home page, each with its source and time
+- [Overview (JSON)](${SITE.origin}/api/overview): the figures behind the home page, each with its source and time, the site's cross-checks and source health, and the network status while Namada is halted
 - [Depth (JSON)](${SITE.origin}/api/depth): every bid and ask for NAM on Osmosis as of the newest stored minute, with every read behind it
+- [Cross-checks (JSON)](${SITE.origin}/api/integrity): every check this site runs on its own figures, with its status and what was compared
 
 ## Optional
 

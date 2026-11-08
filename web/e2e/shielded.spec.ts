@@ -32,7 +32,7 @@ async function withSlices(page: Page) {
     }
     const first = j.unshields[0];
     const passthroughs7d = first
-      ? [{ inTs: first.ts - 1.2 * H, outTs: first.ts, dwellMs: 1.2 * H, inFrom: 'tnam1test', outTo: first.to, inAmount: first.amount, outAmount: first.amount, relDiff: 0, anonymitySetK: 3, confidence: 'low' }]
+      ? [{ outTs: first.ts, dwellMs: 1.2 * H, outTo: first.to, outAmount: first.amount, anonymitySetK: 3, confidence: 'low' }]
       : [];
     await route.fulfill({ response: res, json: { ...j, pulseSeries, passthroughs7d, turnstileNam7d: first?.amount ?? 0, stickySharePct7d: 87.3 } });
   });

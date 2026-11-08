@@ -19,7 +19,7 @@
 // keeps them, marked old with the reason. A server that does not send the slices or the pairs
 // (one before 2026-10-20) leaves those figures as "—" with the reason, never a stand-in.
 import { useMemo, useState } from 'react';
-import type { BlindSpot, Flow, MaspPassthroughLink, MaspPulseBucket, Overview } from '../../../../shared/types';
+import type { BlindSpot, Flow, MaspPassthroughPair, MaspPulseBucket, Overview } from '../../../../shared/types';
 import { BODY } from '../../../../shared/copy';
 import type { ScreenProps } from '../../app/index';
 import { useOverview, useReplay } from '../../app/index';
@@ -397,7 +397,7 @@ function MovesOut({ data, overview: o, now }: { data: BlindSpot; overview: Overv
   );
 }
 
-function MoveOutRow({ f, now, price, priceWords, pair }: { f: Flow; now: number; price: number | null; priceWords: string; pair?: MaspPassthroughLink }) {
+function MoveOutRow({ f, now, price, priceWords, pair }: { f: Flow; now: number; price: number | null; priceWords: string; pair?: MaspPassthroughPair }) {
   const name = f.toLabelPlain ?? null;
   const usd = price != null ? <Num v={f.amount * price} fmt={fmtUsdRule} /> : <span className="cap">no price</span>;
   return (

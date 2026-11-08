@@ -7,7 +7,8 @@ import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { canonicalRedirect, redirectStatus, ownershipFile, isClientPath } from '../worker/src/hosts';
 import { ROUTES, GUIDE_ROUTES, SITE, classifyPath, legacyHashTarget, routeByPath } from '../shared/routes';
-import { isListView, lastmodOf, guideHtml, jsonLd, facts } from '../worker/src/seo';
+import { isListView, lastmodOf, guideHtml, jsonLd, facts, haltHtml } from '../worker/src/seo';
+import { HALT, HALT_FACT_SOURCE, networkStatus } from '../shared/halt';
 import { testD1, insert } from './d1-sqlite';
 import { depthFixture } from './depth-fixtures';
 import { BODY } from '../shared/copy';
@@ -459,5 +460,64 @@ describe('what the review found, fixed', () => {
       expect(art.datePublished <= art.dateModified, r.path).toBe(true);
       expect(art.image).toBe(`${SITE.origin}/og.png`);
     }
+  });
+});
+
+// A reader without JavaScript (a crawler, a language model, a text browser) never sees the halt bar the app mounts
+// (web/src/app/HaltBanner.tsx). While the network is halted the same words come first in every server-rendered page,
+// in llms.txt, and beside the all-NAM, staked and shielded figures' times (owner, 2026-11-07: another model read the site and
+// saw no halt).
+describe('the network status for readers without JavaScript', () => {
+  const status = networkStatus();
+
+  it('haltHtml is the halt bar\'s words with their source while HALT.on, and nothing otherwise', () => {
+    const h = haltHtml();
+    if (!status) { expect(h).toBe(''); return; }
+    expect(h).toContain('aria-label="Namada network status"');
+    expect(h).toContain(`<strong style="`);
+    for (const w of [status.title, status.said, status.source, status.here]) expect(h).toContain(w.replace(/'/g, '&#39;'));
+    expect(h).not.toMatch(/<a |<button/);
+  });
+
+  it('every page, every guide and the 404 view state it before their heading', async () => {
+    // the one non-indexed page (settings) is rendered too, so it carries the status like every other page
+    const paths = [...ROUTES.filter((r) => r.index).map((r) => r.path), '/settings', '/no-such-page'];
+    for (const p of paths) {
+      const html = await (await get(`https://namada.trade${p}`)).text();
+      const root = html.slice(html.indexOf('<div id="root">'));
+      if (!status) { expect(root, p).not.toContain('Namada network status'); continue; }
+      const at = root.indexOf('aria-label="Namada network status"');
+      expect(at, p).toBeGreaterThan(-1);
+      expect(at, p).toBeLessThan(root.indexOf('<h1'));
+      expect(root, p).toContain(status.said.replace(/'/g, '&#39;'));
+      expect(root.match(/Namada network status/g)?.length, p).toBe(1);
+    }
+  });
+
+  it('llms.txt states it under Status, and names the JSON a client can read instead of the page', async () => {
+    const txt = await (await get('https://namada.trade/llms.txt')).text();
+    if (status) {
+      expect(txt).toContain('## Status');
+      expect(txt).toContain(`${status.title}. ${status.said} (${status.source})`);
+    } else expect(txt).not.toContain('## Status');
+    expect(txt).toContain(`](${SITE.origin}/api/overview)`);
+    expect(txt).toContain(`](${SITE.origin}/api/integrity)`);
+    expect(txt).toContain('readable without JavaScript');
+    const robots = await (await get('https://namada.trade/robots.txt')).text();
+    expect(robots).toContain('/llms.txt');
+    expect(robots.split('\n').filter((l) => l && !l.startsWith('#'))[0]).toBe('User-agent: *');
+  });
+
+  it('a Namada figure\'s stamp says it is the chain\'s state at the halt, an Osmosis figure\'s does not', async () => {
+    const db = testD1();
+    const t = Date.UTC(2026, 10, 3, 22, 53);
+    insert(db, 'metrics', [{ ts: t, key: 'supply.total', value: 1148774450.048534 }, { ts: t, key: 'supply.masp_shielded', value: 31618418.748038 }, { ts: t + 60000, key: 'price.usd', value: 0.000633 }]);
+    const f = await facts({ DB: db } as any);
+    const namada = HALT.on ? `Namada nodes, ${HALT_FACT_SOURCE}` : 'Namada nodes';
+    expect(f.supply).toEqual({ text: 'All NAM in existence: 1,148,774,450 NAM', at: t, source: namada });
+    expect(f.shielded?.source).toBe(namada);
+    expect(f.price?.source).toBe('Osmosis router quote');
+    const html = await (await worker.fetch(new Request('https://namada.trade/'), { ASSETS, DB: db }, ctx)).text();
+    expect(html).toContain(`(${namada.replace(/'/g, '&#39;')}, 2026-11-03 22:53 UTC)`); // the page escapes the apostrophe
   });
 });
