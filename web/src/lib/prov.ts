@@ -197,9 +197,9 @@ export const CHECK_TITLES: Record<string, string> = {
   bridge_records_paired: 'Every bridge crossing is on record on both chains',
   // the trust checks of 2026-11-07 (worker/src/cron.ts maspLedgerCheck, posRemainderNext, bondSourcesCheck, maspCoverageCheck)
   masp_ledger: "The shielded pool's NAM moves add up to its balance change",
-  pos_remainder: "The staking account's balance moves only by staking, unstaking and rewards",
+  pos_remainder: "The staking account's NAM outside bonds and unstaking rises only by staking inflation and slashing",
   bond_sources: 'No protocol account appears as a staker',
-  masp_tx_coverage: "Every shielded transaction the chain recorded is in this site's record",
+  masp_tx_coverage: "Every shielded transaction Namada's shielded-transaction indexer lists for the blocks this site has scanned since this record began is in this site's record",
   // the depth module's four checks, titled where the module keeps its words (shared/depth.ts)
   ...DEPTH_CHECK_TITLES,
 };
@@ -496,7 +496,7 @@ export function checkDetail(c: Check): string | null {
       const line = `${day}: ${inNam} NAM in and ${outNam} NAM out (${fees} NAM of it the pool's fees); the pool's balance changed by ${delta} NAM, ${off === '0.000000' ? 'exactly' : `${off} NAM ${residual > 0 ? 'more' : 'less'} than`} the net of its moves`;
       const reward = d.rewardDay === true ? nam6(d.rewardNam) : null;
       const epoch = epochNo(detailNum(d.rewardEpoch));
-      if (c.status === 'warn') return `${line}${reward != null ? `, on a day a shielded-reward epoch (${epoch}) started whose rewards the chain's total of shielded rewards puts at ${reward} NAM` : ''}; judged again tomorrow`;
+      if (c.status === 'warn') return `${line}${reward != null ? `, on a day a shielded-reward epoch (${epoch}) started whose rewards the chain's total of shielded rewards puts at ${reward} NAM` : ''}`;
       return reward != null ? `${line}: the shielded rewards credited as epoch ${epoch} started, which the chain's total of shielded rewards puts at ${reward} NAM` : line;
     }
     case 'pos_remainder': {
@@ -514,13 +514,14 @@ export function checkDetail(c: Check): string | null {
             return n == null || from == null || h == null ? null : `${plural(Math.abs(n), 'epoch', 'epochs')} started between the listings at blocks ${fmtCount(from)} and ${fmtCount(h)}: not judged, the chain keeps only the last epoch's staking inflation`;
           }
           case 'no-figures': return 'The last bond listing carries no figures for this check yet; the next listing does';
+          case 'no-new-listing': return `No complete bond listing since ${fmtUtcLong(detailNum(d.listingCompleteAt))}${h != null ? ` (block ${fmtCount(h)})` : ''}: nothing new to judge`;
           default: return null;
         }
       }
       const rise = exactNam(d.riseBase);
       if (from == null || to == null || rise == null) return null;
       const blocks = `the bond listings at blocks ${fmtCount(from)} and ${fmtCount(to)}`;
-      if (String(d.riseBase).startsWith('-')) return `Between ${blocks} the staking account's NAM outside bonds and unstaking fell by ${exactNam(unsigned(d.riseBase))} NAM (rewards claimed and withdrawals are not judged)`;
+      if (String(d.riseBase).startsWith('-')) return `Between ${blocks} the staking account's NAM outside bonds and unstaking fell by ${exactNam(unsigned(d.riseBase))} NAM; a fall is not judged by this check`;
       const allowed = exactNam(d.allowedBase);
       if (c.status === 'warn') {
         const over = exactNam(d.overBase) ?? rise;
@@ -558,6 +559,7 @@ export function checkDetail(c: Check): string | null {
           case 'no-new-heights': return judgedTo == null ? null : `No block scanned since block ${fmtCount(judgedTo)}: nothing new to compare`;
           case 'indexer-behind': return ih == null || judgedTo == null ? null : `The indexer's last shielded transaction is at block ${fmtCount(ih)}, below the blocks waiting to be judged (from ${fmtCount(judgedTo + 1)}): nothing to compare yet`;
           case 'no-cursor': return "This site's block scan has no position on record: nothing to compare";
+          case 'indexer-not-read': return 'The indexer could not be read at the last try: nothing compared this hour';
           default: return null;
         }
       }

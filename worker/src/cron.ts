@@ -39,6 +39,7 @@ import { DIGEST_HEALTH_LOG_KV, HEALTH_LOG_PER_NAME } from './digest/operator';
 import { runOps } from './ops';
 import { postHaltNotice } from './halt-notice';
 import { BASE_WINDOW_MS, CHECK_STALE_MS, MINUTE_BOUND_MS } from './digest/freshness';
+import { fmtUtcLong } from '../../shared/format';
 import { refreshFlowCounts } from './flow-counts';
 
 const INDEXER = 'https://indexer.namada.net/api/v1';
@@ -800,7 +801,7 @@ export interface MaspRewardReading { at: number; height: number; provider: strin
 export interface MaspLedgerState { rewards: MaspRewardReading[] }
 /** The pool's NAM at one end of the day (the last minute row before that midnight) and the epoch read that minute. */
 export interface MaspDayEnd { ts: number; nam: number; epoch: number | null }
-/** The day's moves as the digest's queries sum them (digest/sql.ts maspIn, maspOut, maspOtherCoinFees), NAM. */
+/** The day's moves as the digest's queries sum them (digest/sql.ts maspIn, maspOut, maspOtherCoinFees), NAM; feesNam counts each move's fee_nam, the fees on other coins' moves and the rows of kind 'masp_fee'. */
 export interface MaspDayLegs { shieldNam: number; ibcInNam: number; unshieldNam: number; ibcOutNam: number; feesNam: number; moves: number; otherKinds: { kind: string; n: number; nam: number }[] }
 export interface MaspDay { day: string; dayStart: number; dayEnd: number; start: MaspDayEnd | null; end: MaspDayEnd | null; legs: MaspDayLegs | null }
 
@@ -832,9 +833,12 @@ export async function readMaspDay(db: D1Database, dayStart: number): Promise<Mas
     const i = ins.results || [], o = outs.results || [];
     const pick = (rows: Row[], kind: string) => { const k = rows.find((x) => x.kind === kind); return { n: Number(k?.n ?? 0), nam: Number(k?.nam ?? 0) }; };
     const shield = pick(i, 'shield'), ibcIn = pick(i, 'ibc_in'), unshield = pick(o, 'unshield'), ibcOut = pick(o, 'ibc_out');
-    // a kind the digest does not sum (none on record) is said in the detail, so a residual it would explain can be seen
-    const otherKinds = [...i.filter((x) => x.kind !== 'shield' && x.kind !== 'ibc_in'), ...o.filter((x) => x.kind !== 'unshield' && x.kind !== 'ibc_out')].map((x) => ({ kind: x.kind, n: Number(x.n), nam: Number(x.nam ?? 0) }));
-    const feesNam = o.reduce((s, x) => s + Number(x.fee_nam ?? 0), 0) + Number(fees?.fee_nam ?? 0);
+    // a kind the digest does not sum (none on record) is said in the detail, so a residual it would explain can be seen;
+    // a fee filed as a row of its own (kind 'masp_fee') is a fee the pool paid, as digest/figures.ts shapeMasp counts it
+    const otherKinds = [...i.filter((x) => x.kind !== 'shield' && x.kind !== 'ibc_in'), ...o.filter((x) => x.kind !== 'unshield' && x.kind !== 'ibc_out' && x.kind !== 'masp_fee')].map((x) => ({ kind: x.kind, n: Number(x.n), nam: Number(x.nam ?? 0) }));
+    // the pool's fees: the gas payer's leg kept on a move out (fee_nam), on another coin's row (maspOtherCoinFees), or
+    // filed as a row of its own (a masp_fee row's amount is the fee; its meta carries no maspFeeNam, so nothing is counted twice)
+    const feesNam = o.reduce((s, x) => s + Number(x.fee_nam ?? 0), 0) + Number(fees?.fee_nam ?? 0) + pick(o, 'masp_fee').nam;
     const moves = [...i, ...o].reduce((s, x) => s + Number(x.n), 0) + Number(fees?.n ?? 0);
     legs = { shieldNam: shield.nam, ibcInNam: ibcIn.nam, unshieldNam: unshield.nam, ibcOutNam: ibcOut.nam, feesNam, moves, otherKinds };
   }
@@ -942,9 +946,11 @@ export function maspLedgerCheck(inp: MaspLedgerInputs, now: number): Stmt {
 // between them (the chain's record of it, read at the second listing's block) plus the NAM newly slashed; a rise
 // beyond that is NAM that entered the account outside bonds and rewards. The account's NAM is read at each listing's
 // own block (sources/namada.ts namProtocolBalanceAt), so a withdrawal between the listing and a read at the head
-// never looks like a rise. A fall (rewards claimed) is not judged. Only complete listings are compared; two listings
-// more than one epoch apart are not (the chain keeps only the last epoch's inflation), and the second becomes the one
-// compared next. On the halt the listings land with the same block: 'idle', nothing new to judge.
+// never looks like a rise. A fall is not judged. Only complete listings are compared; two listings more than one epoch
+// apart are not (the chain keeps only the last epoch's inflation), and the second becomes the one compared next. On
+// the halt the listings land with the same block, or none lands at all (no node's newest block is recent enough for
+// a listing to be applied): 'idle', nothing new to judge, written again every POS_REMAINDER_EVERY_MS so the row never
+// goes quiet while the chain stands.
 
 export const POS_REMAINDER_KV = 'pos.remainder';
 export const POS_REMAINDER_EVERY_MS = BOND_LISTING_MS;
@@ -952,7 +958,7 @@ export const POS_REMAINDER_EVERY_MS = BOND_LISTING_MS;
 export const POS_REMAINDER_RETRY_MS = 5 * 60_000;
 /** Within this (1 NAM, base units) a rise counts as accounted for. */
 export const POS_REMAINDER_TOLERANCE_BASE = 1_000_000n;
-export const POS_REMAINDER_TITLE = "The staking account's NAM outside bonds and unstaking (the bond listing's remainder) rises between two complete listings by at most the staking inflation the chain recorded for an epoch that started between them plus the NAM newly slashed; a fall (rewards claimed) is not judged";
+export const POS_REMAINDER_TITLE = "The staking account's NAM outside bonds and unstaking (the bond listing's remainder) rises between two complete listings by at most the staking inflation the chain recorded for an epoch that started between them plus the NAM newly slashed; a fall is not judged";
 
 /** One complete bond listing's figures for the remainder (base units as strings), as the state keeps the last one judged. */
 export interface PosListingFigures { height: number; epoch: number; at: number; provider: string; posBase: string; bondedBase: string; unbondingBase: string; slashedBase: string; unbondSlashedBase: string }
@@ -961,6 +967,8 @@ export interface PosRemainderState {
   last: PosListingFigures | null;
   /** the completeAt of the listing the last row was written for */
   rowFor: number | null;
+  /** when the last row was written (a row for the same listing is written again POS_REMAINDER_EVERY_MS later, so it never goes quiet on the halt) */
+  rowAt?: number | null;
   failedAt?: number | null;
 }
 /** The reads judging a listing needs: the account's NAM at the listing's block, and the inflation when one epoch started since the listing compared last. */
@@ -973,17 +981,22 @@ export function posListingFigures(rec: BondListingRecord): Pick<PosListingFigure
     ? { bondedBase: rec.bondedBase, unbondingBase: rec.unbondingBase, slashedBase: rec.slashedBase, unbondSlashedBase: rec.unbondSlashedBase } : null;
 }
 
-/** Whether this tick writes a row: a complete bond listing landed since the last row, and no read failed within POS_REMAINDER_RETRY_MS. */
+/**
+ * Whether this tick writes a row: a complete bond listing landed since the last row, or the last row is
+ * POS_REMAINDER_EVERY_MS old (the halt: no listing lands, and the row says so again rather than going quiet); and no
+ * read failed within POS_REMAINDER_RETRY_MS.
+ */
 export function posRemainderDue(state: PosRemainderState | null | undefined, rec: BondListingRecord | null | undefined, now: number): boolean {
   if (!rec || rec.remaining !== 0 || !rec.completeAt) return false;
-  if (state?.rowFor === rec.completeAt) return false;
+  if (state?.rowFor === rec.completeAt && state.rowAt != null && now - state.rowAt < POS_REMAINDER_EVERY_MS) return false;
   return !(state?.failedAt != null && now - state.failedAt < POS_REMAINDER_RETRY_MS);
 }
 
 /**
  * Which reads judging `rec` needs: the account's NAM at its block always, and the staking inflation at that block when
- * exactly one epoch started since the listing compared last; null when the tick reads nothing (no figures in the
- * record, the same block as last time, an older one, or several epochs apart: each is said in the row).
+ * exactly one epoch started since the listing compared last (several epochs apart, the account is still read: the
+ * listing is kept as the one compared next); null when the tick reads nothing (no figures in the record, the same
+ * block as last time, an older one: each is said in the row).
  */
 export function posRemainderReads(state: PosRemainderState | null | undefined, rec: BondListingRecord): { inflation: boolean } | null {
   if (!posListingFigures(rec)) return null;
@@ -991,7 +1004,7 @@ export function posRemainderReads(state: PosRemainderState | null | undefined, r
   if (!last) return { inflation: false };
   if (rec.height <= last.height) return null;
   const apart = rec.epoch - last.epoch;
-  return apart === 1 ? { inflation: true } : apart === 0 ? { inflation: false } : null;
+  return { inflation: apart === 1 };
 }
 
 const remainderOf = (f: PosListingFigures): bigint => BigInt(f.posBase) - BigInt(f.bondedBase) - BigInt(f.unbondingBase);
@@ -1002,13 +1015,16 @@ const slashedOf = (f: PosListingFigures): bigint => BigInt(f.slashedBase) + BigI
  * nothing is written and the next try waits POS_REMAINDER_RETRY_MS). 'ok' when the remainder rose by no more than the
  * inflation of an epoch that started between the listings plus the NAM newly slashed, within POS_REMAINDER_TOLERANCE_BASE,
  * or fell; 'warn' otherwise; 'idle' with the reason when nothing is judged (the first listing kept, the same block as
- * last time, an older block, several epochs apart, a record without figures).
+ * last time, an older block, several epochs apart, a record without figures, or no new complete listing since the
+ * last row: the halt).
  */
 export function posRemainderNext(state: PosRemainderState | null | undefined, rec: BondListingRecord, reads: PosReads | null, now: number): { state: PosRemainderState; row: Stmt | null } {
-  const s: PosRemainderState = { last: null, rowFor: null, failedAt: null, ...state };
+  const s: PosRemainderState = { last: null, rowFor: null, rowAt: null, failedAt: null, ...state };
   const base = { everyMs: POS_REMAINDER_EVERY_MS, height: rec.height, epoch: rec.epoch, provider: rec.provider, listingAt: rec.at, listingCompleteAt: rec.completeAt, toleranceNam: 1 };
   const idle = (notJudged: string, extra: Record<string, unknown>) => stmt.check('pos_remainder', 'idle', POS_REMAINDER_TITLE, { ...base, judged: false, notJudged, ...extra }, now);
-  const done = (row: Stmt) => { s.rowFor = rec.completeAt; s.failedAt = null; return { state: s, row }; };
+  const done = (row: Stmt) => { s.rowFor = rec.completeAt; s.rowAt = now; s.failedAt = null; return { state: s, row }; };
+  // the row for this listing was written already (the halt: no listing has completed since): said again, nothing read
+  if (rec.completeAt != null && s.rowFor === rec.completeAt) return done(idle('no-new-listing', { note: `no complete bond listing since ${fmtUtcLong(rec.completeAt)} (block ${n0(rec.height)}): nothing new to judge` }));
   const fig = posListingFigures(rec);
   if (!fig) return done(idle('no-figures', { note: 'the last bond listing carries no figures for this check yet; the next listing does' }));
   const last = s.last;
@@ -1064,7 +1080,8 @@ export function bondSourcesCheck(listing: (BondListing & { height: number; provi
 // at most MASP_INDEXER_MAX_HEIGHTS of them and only blocks below the indexer's last transaction (its answer past it
 // is an error), and names any transaction of the indexer's missing here by block, transaction and batch index. A
 // coverage check only: the site reads no figure from this source and keeps nothing of a transaction but its place.
-// On the halt no block is scanned: 'idle'.
+// On the halt no block is scanned: 'idle'. An indexer that cannot be read is 'idle' too, with the error, so the hourly
+// cadence holds (it is not asked again for an hour, and the row never goes quiet over a source no figure comes from).
 
 export const MASP_COVERAGE_KV = 'masp.coverage';
 export const MASP_COVERAGE_EVERY_MS = 3600_000;
@@ -1075,6 +1092,8 @@ export const MASP_COVERAGE_MISSES_KEPT = 50;
 export const MASP_COVERAGE_TITLE = "Every shielded transaction Namada's shielded-transaction indexer (masp.namada.net) lists for the blocks this site's block follower scanned is in this site's record (masp_seen), by block, transaction and batch index";
 export interface MaspCoverageState { judgedTo: number; at: number }
 export type MaspCoverageWindow = { from: number; to: number } | { idle: 'first-run' | 'no-new-heights' | 'indexer-behind' | 'no-cursor' };
+/** Why a run judged nothing: the window's reasons, or an indexer that could not be read. */
+export type MaspCoverageIdle = Exclude<MaspCoverageWindow, { from: number }>['idle'] | 'indexer-not-read';
 
 /** Whether the check runs this tick: never run, or its last run is MASP_COVERAGE_EVERY_MS old. */
 export const maspCoverageDue = (lastAt: number | null, now: number): boolean => lastAt == null || now - lastAt >= MASP_COVERAGE_EVERY_MS;
@@ -1093,11 +1112,12 @@ export function maspCoverageWindow(state: MaspCoverageState | null | undefined, 
   return { from, to: Math.min(cursor, indexerHeight - 1, from + MASP_INDEXER_MAX_HEIGHTS - 1) };
 }
 
-/** The row when nothing is judged, with why. */
-export function maspCoverageIdle(why: Exclude<MaspCoverageWindow, { from: number }>['idle'], ctx: { cursor: number | null; indexerHeight: number; judgedTo: number | null }, now: number): Stmt {
+/** The row when nothing is judged, with why (indexerHeight null when the indexer was not read: never 0; `error` is the read's public note). */
+export function maspCoverageIdle(why: MaspCoverageIdle, ctx: { cursor: number | null; indexerHeight: number | null; judgedTo: number | null; error?: string }, now: number): Stmt {
   const note = why === 'first-run' ? `this site's record of shielded transactions starts at block ${n0(ctx.cursor ?? 0)}; the blocks after it are judged from the next run`
     : why === 'no-new-heights' ? `no block scanned since block ${n0(ctx.judgedTo ?? 0)}: nothing new to compare`
-    : why === 'indexer-behind' ? `the indexer's last shielded transaction is at block ${n0(ctx.indexerHeight)}, below the blocks waiting to be judged (from ${n0((ctx.judgedTo ?? 0) + 1)}): nothing to compare yet`
+    : why === 'indexer-behind' ? `the indexer's last shielded transaction is at block ${n0(ctx.indexerHeight ?? 0)}, below the blocks waiting to be judged (from ${n0((ctx.judgedTo ?? 0) + 1)}): nothing to compare yet`
+    : why === 'indexer-not-read' ? `the indexer could not be read: nothing compared this hour${ctx.error ? ` (${ctx.error})` : ''}`.slice(0, 220)
     : "this site's block scan has no position on record: nothing to compare";
   return stmt.check('masp_tx_coverage', 'idle', MASP_COVERAGE_TITLE, { everyMs: MASP_COVERAGE_EVERY_MS, judged: false, notJudged: why, cursor: ctx.cursor, indexerHeight: ctx.indexerHeight, judgedTo: ctx.judgedTo, note }, now);
 }
@@ -2917,7 +2937,8 @@ export async function runCron(env: Env) {
       }
     }
     // This site's record of shielded transactions against the indexer's (masp_tx_coverage): hourly, two reads of the
-    // indexer in a phase of their own; a read that fails writes nothing but the source's row.
+    // indexer in a phase of their own; a read that fails writes the source's row (not ok) and an 'idle' row with the
+    // error, so the indexer is asked again in an hour, not every minute, and the row never goes quiet.
     if (!late()) {
       const lastCov = await env.DB.prepare(`SELECT checked_at FROM checks WHERE key = 'masp_tx_coverage'`).first<{ checked_at: number }>().then((r) => r?.checked_at ?? null, () => undefined);
       if (lastCov !== undefined && maspCoverageDue(lastCov, now)) {
@@ -2942,7 +2963,9 @@ export async function runCron(env: Env) {
             }
           } catch (e) {
             console.error('masp indexer', redact(String(e)));
-            health.push({ name: MASP_INDEXER_HEALTH, ok: false, at: now, latencyMs: Date.now() - t0, note: publicNote(String(e)).slice(0, 160) });
+            const why = publicNote(String(e)).slice(0, 160);
+            checkStmts.push(maspCoverageIdle('indexer-not-read', { cursor, indexerHeight: null, judgedTo: covState?.judgedTo ?? null, error: why }, now));
+            health.push({ name: MASP_INDEXER_HEALTH, ok: false, at: now, latencyMs: Date.now() - t0, note: why });
           } finally { phase.done(); }
         }
       }

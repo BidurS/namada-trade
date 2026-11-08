@@ -219,10 +219,17 @@ describe('masp_tx_coverage: the window and the row', () => {
     expect(lineOf(maspCoverageIdle('no-cursor', { ...ctx, cursor: null }, NOW))).toBe("This site's block scan has no position on record: nothing to compare");
     expect(servedAt(maspCoverageIdle('no-new-heights', ctx, NOW), NOW + 90 * MIN)).toBe('idle');
     expect(servedAt(maspCoverageIdle('no-new-heights', ctx, NOW), NOW + 2 * H + MIN)).toBe('stale');
+    // the indexer not read: idle with the error, the hourly cadence, and no height (null, never 0)
+    const down = maspCoverageIdle('indexer-not-read', { cursor: 8517986, indexerHeight: null, judgedTo: 8517986, error: 'HTTP 503' }, NOW);
+    expect(statusOf(down)).toBe('idle');
+    expect(detailOf(down)).toEqual({ everyMs: MASP_COVERAGE_EVERY_MS, judged: false, notJudged: 'indexer-not-read', cursor: 8517986, indexerHeight: null, judgedTo: 8517986, note: 'the indexer could not be read: nothing compared this hour (HTTP 503)' });
+    expect(lineOf(down)).toBe('The indexer could not be read at the last try: nothing compared this hour');
+    expect(lineOf(down)).not.toMatch(BANNED);
+    expect(servedAt(down, NOW + 90 * MIN)).toBe('idle');
   });
 
   it('the title and every line read plain, and the source\'s row is named as the sheet shows it', () => {
-    expect(CHECK_TITLES.masp_tx_coverage).toBe("Every shielded transaction the chain recorded is in this site's record");
+    expect(CHECK_TITLES.masp_tx_coverage).toBe("Every shielded transaction Namada's shielded-transaction indexer lists for the blocks this site has scanned since this record began is in this site's record");
     expect(MASP_INDEXER_HEALTH).toBe('masp.namada.net (MASP transactions)');
     const lines = [
       lineOf(maspCoverageCheck({ from: 8515150, to: 8515250 }, page, seen(8515196, 8515250), { cursor: 8515250, indexerHeight: 8517143 }, NOW)),

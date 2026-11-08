@@ -19,6 +19,7 @@ import { parseBondListing } from '../worker/src/sources/namada';
 import { MASP_INDEXER_HEALTH } from '../worker/src/sources/masp-indexer';
 import { checkOf } from '../worker/src/api';
 import { checkDetail, CHECK_TITLES } from '../web/src/lib/prov';
+import { fmtUtcLong } from '../shared/format';
 import { NAMADA } from '../worker/src/config';
 import { BANNED } from './banned-words';
 import { testD1, insert, type TestD1 } from './d1-sqlite';
@@ -94,13 +95,35 @@ describe('masp_ledger: the shielded pool\'s day ledger', () => {
     expect(statusOf(s)).toBe('warn');
     expect(detailOf(s)).toMatchObject({ judged: true, rewardDay: false });
     expect(Number(detailOf(s).residualNam)).toBeCloseTo(-12.5, 6);
-    expect(lineOf(s)).toBe("5 Nov 2026: 500.000000 NAM in and 300.850000 NAM out (0.850000 NAM of it the pool's fees); the pool's balance changed by 186.650000 NAM, 12.500000 NAM less than the net of its moves; judged again tomorrow");
+    expect(lineOf(s)).toBe("5 Nov 2026: 500.000000 NAM in and 300.850000 NAM out (0.850000 NAM of it the pool's fees); the pool's balance changed by 186.650000 NAM, 12.500000 NAM less than the net of its moves");
     // more than the moves, no reward epoch in (2737, 2738] with a multiplier of 4: a warn too
     const db2 = testD1();
     seedDay(db2, 1_000_000, 1_000_000 + 199.15 + 40_000);
     const s2 = judge(await readMaspDay(db2, DAY));
     expect(statusOf(s2)).toBe('warn');
-    expect(lineOf(s2)).toMatch(/^5 Nov 2026: .*40,000\.000000 NAM more than the net of its moves; judged again tomorrow$/);
+    expect(lineOf(s2)).toMatch(/^5 Nov 2026: .*40,000\.000000 NAM more than the net of its moves$/);
+  });
+
+  it('a fee the pool paid filed as a row of its own (kind masp_fee) is a fee, never an unexplained residual or another kind', async () => {
+    const db = testD1();
+    // the balanced day with one masp_fee row of 2 NAM from the pool: its balance ends 2 NAM lower than the moves alone would leave it
+    seedDay(db, 1_000_000, 1_000_000 + 199.15 - 2);
+    insert(db, 'flows', [flow('F1', 'masp_fee', DAY + 15 * H, 2, 'out', { innerTxHash: 'f1' })]);
+    const day = await readMaspDay(db, DAY);
+    expect(day.legs).toMatchObject({ shieldNam: 500, unshieldNam: 200, ibcOutNam: 100, moves: 5, otherKinds: [] });
+    expect(day.legs!.feesNam).toBeCloseTo(2.85, 9);
+    const s = judge(day);
+    expect(statusOf(s)).toBe('ok');
+    expect(detailOf(s)).toMatchObject({ judged: true, otherKinds: [] });
+    expect(detailOf(s).outNam).toBeCloseTo(302.85, 9);
+    expect(detailOf(s).feesNam).toBeCloseTo(2.85, 9);
+    expect(Math.abs(Number(detailOf(s).residualNam))).toBeLessThan(1e-6);
+    expect(lineOf(s)).toBe("5 Nov 2026: 500.000000 NAM in and 302.850000 NAM out (2.850000 NAM of it the pool's fees); the pool's balance changed by 197.150000 NAM, exactly the net of its moves");
+    // a kind the digest does not sum is still named in the detail
+    const db2 = testD1();
+    seedDay(db2, 1_000_000, 1_000_000 + 199.15);
+    insert(db2, 'flows', [flow('G1', 'other', DAY + 16 * H, 7, 'out', { innerTxHash: 'g1' })]);
+    expect((await readMaspDay(db2, DAY)).legs!.otherKinds).toEqual([{ kind: 'other', n: 1, nam: 7 }]);
   });
 
   it('on a day a shielded-reward epoch started, a rise equal to the rise of the chain\'s total of shielded rewards is the reward credit: a pass that says so', async () => {
@@ -117,7 +140,7 @@ describe('masp_ledger: the shielded pool\'s day ledger', () => {
     // the rewards total rose by less than the residual: not the credit alone
     const off = judge(day, { rewards: [reading(DAY + 20_000, 2739, T0), reading(NOW, 2740, T0 + 39_000_000_000n)] });
     expect(statusOf(off)).toBe('warn');
-    expect(lineOf(off)).toBe("5 Nov 2026: 500.000000 NAM in and 300.850000 NAM out (0.850000 NAM of it the pool's fees); the pool's balance changed by 40,199.150000 NAM, 40,000.000000 NAM more than the net of its moves, on a day a shielded-reward epoch (2740) started whose rewards the chain's total of shielded rewards puts at 39,000.000000 NAM; judged again tomorrow");
+    expect(lineOf(off)).toBe("5 Nov 2026: 500.000000 NAM in and 300.850000 NAM out (0.850000 NAM of it the pool's fees); the pool's balance changed by 40,199.150000 NAM, 40,000.000000 NAM more than the net of its moves, on a day a shielded-reward epoch (2740) started whose rewards the chain's total of shielded rewards puts at 39,000.000000 NAM");
     // no reading at both ends: a shielded-reward day, not judged
     const none = judge(day, { rewards: [reading(NOW, 2740, T0 + 40_000_000_000n)] });
     expect(statusOf(none)).toBe('idle');
@@ -223,7 +246,8 @@ describe('pos_remainder: the staking account\'s NAM outside bonds and unstaking 
     expect(posRemainderReads(null, rec())).toEqual({ inflation: false });
     expect(posRemainderReads(first.state, rec({ height: 8_516_500, epoch: 2739 }))).toEqual({ inflation: true });
     expect(posRemainderReads(first.state, rec({ height: 8_516_500, epoch: 2738 }))).toEqual({ inflation: false });
-    expect(posRemainderReads(first.state, rec({ height: 8_516_500, epoch: 2740 }))).toBeNull();
+    // several epochs apart the account is still read (the listing is kept as the one compared next), the inflation is not
+    expect(posRemainderReads(first.state, rec({ height: 8_516_500, epoch: 2740 }))).toEqual({ inflation: false });
     expect(posRemainderReads(first.state, rec())).toBeNull();
   });
 
@@ -255,11 +279,11 @@ describe('pos_remainder: the staking account\'s NAM outside bonds and unstaking 
     const withdrawn = next({ height: 8_516_300, epoch: 2738, unbondingBase: '36643965820000' }, reads(A_POS - 10_000_000_000n));
     expect(statusOf(withdrawn.row!)).toBe('ok');
     expect(lineOf(withdrawn.row!)).toBe("Between the bond listings at blocks 8,516,000 and 8,516,300 the staking account's NAM outside bonds and unstaking rose by 0.000000 NAM, within the 1 NAM allowed: no epoch started between them and nothing was newly slashed");
-    // rewards claimed: a fall, said as one
+    // a fall: said as one, and said as not judged
     const fell = next({ height: 8_516_300, epoch: 2738 }, reads(A_POS - 1_000_000_000n));
     expect(statusOf(fell.row!)).toBe('ok');
     expect(detailOf(fell.row!).riseBase).toBe('-1000000000');
-    expect(lineOf(fell.row!)).toBe("Between the bond listings at blocks 8,516,000 and 8,516,300 the staking account's NAM outside bonds and unstaking fell by 1,000.000000 NAM (rewards claimed and withdrawals are not judged)");
+    expect(lineOf(fell.row!)).toBe("Between the bond listings at blocks 8,516,000 and 8,516,300 the staking account's NAM outside bonds and unstaking fell by 1,000.000000 NAM; a fall is not judged by this check");
   });
 
   it('nothing new (the halt), an older block, several epochs apart and a record without figures are idle with their reasons', () => {
@@ -271,10 +295,17 @@ describe('pos_remainder: the staking account\'s NAM outside bonds and unstaking 
     expect(same.state.rowFor).toBe(T + BOND_LISTING_MS);
     const older = next({ height: 8_515_000, epoch: 2738 }, null);
     expect(lineOf(older.row!)).toBe('The listing at block 8,515,000 is older than the one compared last (block 8,516,000): not judged');
-    const apart = next({ height: 8_517_000, epoch: 2740 }, reads(A_POS + 2n * INFLATION));
+    // two epochs on: the tick reads the account (posRemainderReads is not null, so the row is reached), and the listing is kept
+    const apartRec = rec({ at: T + BOND_LISTING_MS, completeAt: T + BOND_LISTING_MS, height: 8_517_000, epoch: 2740 });
+    expect(posRemainderReads(first.state, apartRec)).toEqual({ inflation: false });
+    const apart = posRemainderNext(first.state, apartRec, reads(A_POS + 2n * INFLATION), T + BOND_LISTING_MS);
     expect(statusOf(apart.row!)).toBe('idle');
+    expect(detailOf(apart.row!)).toMatchObject({ notJudged: 'epochs-apart', epochsApart: 2, fromHeight: 8_516_000, height: 8_517_000 });
     expect(lineOf(apart.row!)).toBe("2 epochs started between the listings at blocks 8,516,000 and 8,517,000: not judged, the chain keeps only the last epoch's staking inflation");
-    expect(apart.state.last).toMatchObject({ height: 8_517_000, epoch: 2740 }); // the second becomes the one compared next
+    expect(apart.state.last).toMatchObject({ height: 8_517_000, epoch: 2740, posBase: (A_POS + 2n * INFLATION).toString() }); // the second becomes the one compared next
+    expect(apart.state).toMatchObject({ rowFor: T + BOND_LISTING_MS, rowAt: T + BOND_LISTING_MS, failedAt: null });
+    // the listing after that, one epoch on, is judged against it
+    expect(statusOf(posRemainderNext(apart.state, rec({ at: T + 2 * BOND_LISTING_MS, completeAt: T + 2 * BOND_LISTING_MS, height: 8_517_500, epoch: 2741 }), reads(A_POS + 3n * INFLATION, INFLATION), T + 2 * BOND_LISTING_MS).row!)).toBe('ok');
     const bare = next({ height: 8_516_500, epoch: 2739, bondedBase: undefined }, null);
     expect(detailOf(bare.row!)).toMatchObject({ notJudged: 'no-figures' });
     expect(lineOf(bare.row!)).toBe('The last bond listing carries no figures for this check yet; the next listing does');
@@ -294,6 +325,30 @@ describe('pos_remainder: the staking account\'s NAM outside bonds and unstaking 
     expect(posRemainderDue(first.state, rec({ remaining: 12, completeAt: T + BOND_LISTING_MS }), T + BOND_LISTING_MS)).toBe(false); // not complete
     expect(posRemainderDue(undefined, rec(), T)).toBe(true);
     expect(posRemainderDue(null, null, T)).toBe(false);
+  });
+
+  it('on the halt no listing completes: the row for the last one is written again every 40 minutes, idle, with nothing read, so it never goes quiet', () => {
+    // the first row was written at T for the listing complete at T; 39 minutes on nothing is due, at 40 the same listing is
+    expect(first.state.rowAt).toBe(T);
+    expect(posRemainderDue(first.state, rec(), T + POS_REMAINDER_EVERY_MS - MIN)).toBe(false);
+    expect(posRemainderDue(first.state, rec(), T + POS_REMAINDER_EVERY_MS)).toBe(true);
+    expect(posRemainderReads(first.state, rec())).toBeNull(); // the same block: no read
+    const again = posRemainderNext(first.state, rec(), null, T + POS_REMAINDER_EVERY_MS);
+    expect(statusOf(again.row!)).toBe('idle');
+    expect(detailOf(again.row!)).toMatchObject({ everyMs: POS_REMAINDER_EVERY_MS, judged: false, notJudged: 'no-new-listing', height: 8_516_000, listingCompleteAt: T });
+    expect(String(detailOf(again.row!).note)).toMatch(/^no complete bond listing since .* \(block 8,516,000\): nothing new to judge$/);
+    expect(lineOf(again.row!)).toBe(`No complete bond listing since ${fmtUtcLong(T)} (block 8,516,000): nothing new to judge`);
+    expect(lineOf(again.row!)).not.toMatch(BANNED);
+    expect(again.state).toMatchObject({ last: first.state.last, rowFor: T, rowAt: T + POS_REMAINDER_EVERY_MS, failedAt: null });
+    // the row written again is current, and 40 minutes on the same is due once more
+    expect(servedAt(again.row!, T + 2 * POS_REMAINDER_EVERY_MS - MIN)).toBe('idle');
+    expect(posRemainderDue(again.state, rec(), T + 2 * POS_REMAINDER_EVERY_MS - MIN)).toBe(false);
+    expect(posRemainderDue(again.state, rec(), T + 2 * POS_REMAINDER_EVERY_MS)).toBe(true);
+    // a state written without rowAt is due at once, and gets one
+    expect(posRemainderDue({ ...first.state, rowAt: undefined }, rec(), T + MIN)).toBe(true);
+    expect(posRemainderNext({ ...first.state, rowAt: undefined }, rec(), null, T + MIN).state.rowAt).toBe(T + MIN);
+    // a new complete listing is due at once, whatever the row's age
+    expect(posRemainderDue(again.state, rec({ at: T + 2 * BOND_LISTING_MS, completeAt: T + 2 * BOND_LISTING_MS, height: 8_516_300 }), T + 2 * BOND_LISTING_MS)).toBe(true);
   });
 });
 
@@ -378,9 +433,9 @@ describe('bond_sources: no protocol account as a source in the bond listing', ()
 describe('the four rows in words', () => {
   it('plain titles, free of the words the site does not show', () => {
     expect(CHECK_TITLES.masp_ledger).toBe("The shielded pool's NAM moves add up to its balance change");
-    expect(CHECK_TITLES.pos_remainder).toBe("The staking account's balance moves only by staking, unstaking and rewards");
+    expect(CHECK_TITLES.pos_remainder).toBe("The staking account's NAM outside bonds and unstaking rises only by staking inflation and slashing");
     expect(CHECK_TITLES.bond_sources).toBe('No protocol account appears as a staker');
-    expect(CHECK_TITLES.masp_tx_coverage).toBe("Every shielded transaction the chain recorded is in this site's record");
+    expect(CHECK_TITLES.masp_tx_coverage).toBe("Every shielded transaction Namada's shielded-transaction indexer lists for the blocks this site has scanned since this record began is in this site's record");
     for (const key of ['masp_ledger', 'pos_remainder', 'bond_sources', 'masp_tx_coverage']) expect(CHECK_TITLES[key], key).not.toMatch(BANNED);
   });
 });
@@ -389,18 +444,22 @@ const u256 = (n: bigint) => btoa(String.fromCharCode(...amount(n)));
 const json = (o: unknown) => new Response(JSON.stringify(o), { status: 200, headers: { 'content-type': 'application/json' } });
 const u64b64 = (n: number) => btoa(String.fromCharCode(...u64(n)));
 const asked: string[] = [];
-/** Both nodes at one head (8,343,400, epoch 2715), every balance key 1 NAM, and the shielded-transaction indexer's two routes. */
-function network(keys: Record<string, string> = {}) {
+/**
+ * Every node at one head (8,343,400, epoch 2715), every balance key 1 NAM, and the shielded-transaction indexer's two
+ * routes. `blockAgeMs` is how old every node's newest block is (the halt: days), `indexerDown` has the indexer answer 503.
+ */
+function network(keys: Record<string, string> = {}, opts: { blockAgeMs?: number; indexerDown?: boolean } = {}) {
   asked.length = 0;
   vi.stubGlobal('fetch', vi.fn((input: RequestInfo | URL) => {
     const url = String(input);
     asked.push(url);
     if (url.includes('masp.namada.net')) {
+      if (opts.indexerDown) return Promise.resolve(new Response('unavailable', { status: 503 }));
       if (url.endsWith('/api/v1/height')) return Promise.resolve(json({ block_height: 8343000 }));
       if (url.includes('/api/v1/tx')) return Promise.resolve(json({ txs: [] }));
       return Promise.resolve(new Response('not here', { status: 404 }));
     }
-    if (url.includes('/status')) return Promise.resolve(json({ result: { node_info: { network: NAMADA.chainId }, sync_info: { latest_block_height: '8343400', latest_block_time: new Date().toISOString(), catching_up: false, earliest_block_height: '1' } } }));
+    if (url.includes('/status')) return Promise.resolve(json({ result: { node_info: { network: NAMADA.chainId }, sync_info: { latest_block_height: '8343400', latest_block_time: new Date(Date.now() - (opts.blockAgeMs ?? 0)).toISOString(), catching_up: false, earliest_block_height: '1' } } }));
     if (url.includes('abci_query')) {
       const path = decodeURIComponent((url.split('path=')[1] ?? '').split('&')[0]).replace(/^"|"$/g, '');
       if (path.includes('/vp/pos/bond/')) return Promise.resolve(json({ result: { response: { code: 1, info: 'Cannot find bond', value: null, height: '1' } } }));
@@ -465,5 +524,76 @@ describe('the tick wires the four rows', () => {
     for (const key of ['masp_ledger', 'pos_remainder', 'masp_tx_coverage']) expect(row(db, key)!.checked_at, key).toBe(PLAIN);
     expect(asked.some((u) => u.includes('masp.namada.net'))).toBe(false);
     expect(asked.some((u) => u.includes('&height='))).toBe(false);
+  });
+
+  // 20:21:05 UTC: neither tick of the pair falls in the first minutes of an hour or on a holder sync (the second is 81 minutes on)
+  const HALT_T0 = Date.parse('2026-10-17T20:21:05Z');
+  const HALT_T1 = HALT_T0 + 2 * BOND_LISTING_MS + MIN;
+  const kvFixture = (db: TestD1, at: number) => {
+    const kvPut = (key: string, value: unknown) => db.raw.prepare('INSERT OR REPLACE INTO kv (key, value, updated_at) VALUES (?, ?, ?)').run(key, typeof value === 'string' ? value : JSON.stringify(value), at - 5 * MIN);
+    kvPut('namada.cursor', '8343400');
+    kvPut('bond.listing', { at: at - 5 * MIN, completeAt: at - 5 * MIN, height: 8343400, epoch: 2715, provider: '5ElementsNodes', sources: 15, stakers: 12, totalNam: 75_564_396.617851, bytes: 0, written: 0, zeroed: 0, remaining: 0, ticks: 1, durationMs: 0,
+      bondedBase: '75564396617851', unbondingBase: '1000000', slashedBase: '163756000000', unbondSlashedBase: '0' });
+    const yesterday = dayStartOf(at) - D;
+    insert(db, 'metrics', [{ ts: yesterday - MIN, key: 'supply.masp_shielded', value: 1 }, { ts: yesterday + D - MIN, key: 'supply.masp_shielded', value: 1 }, { ts: yesterday - MIN, key: 'epoch', value: 2714 }, { ts: yesterday + D - MIN, key: 'epoch', value: 2715 }]);
+  };
+
+  it('on the halted chain (every node\'s newest block five days old, so no listing is applied) no row of the four goes quiet or warns, 81 minutes on', async () => {
+    const db = testD1();
+    kvFixture(db, HALT_T0);
+    network({ masp_epoch_multiplier: u64b64(4) }, { blockAgeMs: 5 * D });
+    await tick(db, HALT_T0);
+    expect(row(db, 'pos_remainder')).toMatchObject({ status: 'idle', checked_at: HALT_T0, detail: { notJudged: 'first', height: 8343400 } });
+    expect(kvJson(db, POS_REMAINDER_KV)).toMatchObject({ rowFor: HALT_T0 - 5 * MIN, rowAt: HALT_T0, last: { height: 8343400 } });
+    expect(row(db, 'masp_tx_coverage')).toMatchObject({ status: 'idle', checked_at: HALT_T0, detail: { notJudged: 'first-run' } });
+    // 81 minutes on: the bond listing is due and refused (no node's newest block is recent enough), so its record keeps
+    // the pre-halt completeAt; pos_remainder says again that nothing new landed, masp_tx_coverage that no block was scanned
+    network({ masp_epoch_multiplier: u64b64(4) }, { blockAgeMs: 5 * D });
+    await tick(db, HALT_T1);
+    const listing = kvJson(db, 'bond.listing');
+    expect(listing.completeAt).toBe(HALT_T0 - 5 * MIN);
+    expect(listing.error).toMatch(/newest block over 5 min old/);
+    expect(row(db, 'pos_remainder')).toMatchObject({ status: 'idle', checked_at: HALT_T1, detail: { everyMs: POS_REMAINDER_EVERY_MS, judged: false, notJudged: 'no-new-listing', height: 8343400, listingCompleteAt: HALT_T0 - 5 * MIN } });
+    expect(kvJson(db, POS_REMAINDER_KV)).toMatchObject({ rowFor: HALT_T0 - 5 * MIN, rowAt: HALT_T1, last: { height: 8343400, epoch: 2715 } });
+    expect(row(db, 'masp_tx_coverage')).toMatchObject({ status: 'idle', checked_at: HALT_T1, detail: { notJudged: 'no-new-heights', judgedTo: 8343400 } });
+    expect(row(db, 'masp_ledger')).toMatchObject({ status: 'idle', checked_at: HALT_T0 }); // daily: not due again, and not quiet for two days
+    expect(row(db, 'bond_sources')).toBeNull(); // written only with a listing read
+    for (const key of ['masp_ledger', 'pos_remainder', 'masp_tx_coverage']) {
+      const served = checkOf(db.raw.prepare('SELECT * FROM checks WHERE key = ?').get(key), HALT_T1);
+      expect(served.status, key).not.toBe('stale');
+      expect(served.status, key).not.toBe('warn');
+      const line = checkDetail(served);
+      expect(line, key).toBeTruthy();
+      expect(line, key).not.toMatch(BANNED);
+    }
+    expect(checkDetail(checkOf(db.raw.prepare("SELECT * FROM checks WHERE key = 'pos_remainder'").get(), HALT_T1))).toBe(`No complete bond listing since ${fmtUtcLong(HALT_T0 - 5 * MIN)} (block 8,343,400): nothing new to judge`);
+    // nothing was read at a block for it
+    expect(asked.some((u) => u.includes('&height='))).toBe(false);
+  });
+
+  it('when the indexer cannot be read, masp_tx_coverage is idle with the error and the source\'s row is not ok; the indexer is asked again in an hour, not every minute', async () => {
+    const db = testD1();
+    kvFixture(db, PLAIN);
+    network({ masp_epoch_multiplier: u64b64(4) }, { indexerDown: true });
+    await tick(db, PLAIN);
+    expect(row(db, 'masp_tx_coverage')).toMatchObject({ status: 'idle', checked_at: PLAIN, detail: { everyMs: MASP_COVERAGE_EVERY_MS, judged: false, notJudged: 'indexer-not-read', cursor: 8343400, indexerHeight: null, judgedTo: null } });
+    expect(String(row(db, 'masp_tx_coverage')!.detail.note)).toMatch(/^the indexer could not be read: nothing compared this hour \(.*503.*\)$/);
+    expect(kvJson(db, MASP_COVERAGE_KV)).toBeNull(); // no record start without a read
+    const health = JSON.parse(db.raw.prepare("SELECT value FROM kv WHERE key='source.health'").get().value);
+    expect(health[MASP_INDEXER_HEALTH]).toMatchObject({ ok: false, at: PLAIN });
+    expect(health[MASP_INDEXER_HEALTH].note).toMatch(/503/);
+    expect(checkDetail(checkOf(db.raw.prepare("SELECT * FROM checks WHERE key = 'masp_tx_coverage'").get(), PLAIN))).toBe('The indexer could not be read at the last try: nothing compared this hour');
+    // a minute later the indexer is not asked, and the row keeps its time
+    network({ masp_epoch_multiplier: u64b64(4) }, { indexerDown: true });
+    await tick(db, PLAIN + MIN);
+    expect(asked.some((u) => u.includes('masp.namada.net'))).toBe(false);
+    expect(row(db, 'masp_tx_coverage')!.checked_at).toBe(PLAIN);
+    expect(JSON.parse(db.raw.prepare("SELECT value FROM kv WHERE key='source.health'").get().value)[MASP_INDEXER_HEALTH].at).toBe(PLAIN);
+    // an hour on it is asked again, and the first run starts the record
+    network({ masp_epoch_multiplier: u64b64(4) });
+    await tick(db, PLAIN + MASP_COVERAGE_EVERY_MS);
+    expect(asked.some((u) => u.includes('masp.namada.net'))).toBe(true);
+    expect(row(db, 'masp_tx_coverage')).toMatchObject({ status: 'idle', checked_at: PLAIN + MASP_COVERAGE_EVERY_MS, detail: { notJudged: 'first-run', cursor: 8343400, indexerHeight: 8343000 } });
+    expect(kvJson(db, MASP_COVERAGE_KV)).toEqual({ judgedTo: 8343400, at: PLAIN + MASP_COVERAGE_EVERY_MS });
   });
 });
