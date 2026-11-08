@@ -356,7 +356,7 @@ export const SHIELDED_WORDS = {
    * record of each block, never users. `txs` and `inside` arrive as words with their count ("12 shielded
    * transactions", "9"), so the sentence types no figure.
    */
-  activity: (txs: string, inside: string) => `${txs} in 7 days, ${inside} entirely inside the pool.`,
+  activity: (txs: string, inside: string) => `${txs} in 7 days, ${inside} in a block with no NAM moving into or out of the pool.`,
   /** the noun, singular and plural, and the count in words */
   activityNoun: SHIELDED_ACTIVITY_NOUN,
   activityCount: (n: string, one: boolean) => `${n} ${SHIELDED_ACTIVITY_NOUN(one)}`,
@@ -368,9 +368,9 @@ export const SHIELDED_WORDS = {
   activityPartial: (days: string) => `${days} of the 7 days ${days === '1' ? 'is' : 'are'} counted so far.`,
   /** the desktop chart's heading and unit line */
   activityHead: 'Shielded transactions a day',
-  activityUnit: 'Each bar is one UTC day: every shielded transaction the chain recorded that day, the darker part those in a block with no NAM moving into or out of the pool (entirely inside it, in another coin, or paying a fee from it). Transactions, never users. A day without a bar was not counted.',
-  activityKey: { all: 'Shielded transactions', inside: 'Entirely inside the pool' } as const,
-  activityNone: 'No day is counted yet: a day is counted once the block follower has scanned past its end, from this release on.',
+  activityUnit: 'Each bar is one UTC day: every shielded transaction the chain recorded that day, the darker part those in a block with no NAM moving into or out of the pool (entirely inside it, in another coin, or paying a fee from it). A day without a bar was not counted.',
+  activityKey: { all: 'Shielded transactions', inside: 'No NAM into or out of the pool' } as const,
+  activityNone: 'No day is counted yet: a day is counted once the block follower has scanned past its end.',
 } as const;
 
 /**
@@ -427,7 +427,7 @@ export const COHORT_WORDS = {
   heading: 'Genesis cohorts',
   /** the one sentence (a phone shows it alone, under the since-genesis sentence) */
   line: (allPct: string, backersPct: string, foundationPct: string, teamPct: string, publicPct: string, shieldedNam: string) =>
-    `Genesis cohorts hold ${allPct} of their allocations: backers ${backersPct}, foundation ${foundationPct}, team ${teamPct}, public sale ${publicPct}; ${shieldedNam} NAM of theirs has moved into the shielded pool.`,
+    `The addresses funded at genesis hold ${allPct} of their allocations; among them backers ${backersPct}, foundation ${foundationPct}, team ${teamPct}, public sale ${publicPct}; ${shieldedNam} NAM of theirs has moved into the shielded pool since this site’s record began.`,
   lead: 'What the addresses funded at genesis hold now, by cohort, against what they were allocated: spendable and staked NAM from the chain listings, and the NAM they have sent into the shielded pool since this site’s record began.',
   notLoaded: 'The allocation table is not loaded yet, so the cohorts cannot be counted.',
   noSnapshot: 'No daily snapshot of the cohorts exists yet: one is written on a day both chain listings complete.',
@@ -450,7 +450,8 @@ export const COHORT_WORDS = {
     atGenesis: (nam: string) => `${nam} NAM at genesis`,
     shielded: (nam: string, moves: string) => `${nam} NAM moved into the shielded pool (${moves})`,
     sentTo: 'sent to',
-    sentOn: (addrs: string) => `has since sent to ${addrs}`,
+    /** `cut`: the recipient's onward moves were read up to the cap, so the count is a floor */
+    sentOn: (addrs: string, cut: boolean) => `has since sent to ${addrs}${cut ? ' or more' : ''}`,
     more: (nam: string, addrs: string) => `and ${nam} NAM to ${addrs} more`,
     none: 'No move out of it is on record.',
     cut: (moves: string) => `counted over its newest ${moves} moves`,

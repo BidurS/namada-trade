@@ -8,6 +8,10 @@ import type { Stamp } from '../../lib/prov';
 
 /** The technical source word of the allocation table (worker/src/series-api.ts GENESIS_TABLE_SOURCE; plain words in lib/prov.ts). */
 export const GENESIS_TABLE_SOURCE = 'Genesis allocations (namada-mainnet-genesis balances.toml)';
+/** The technical source word of the daily cohort snapshot (worker/src/series-api.ts COHORT_SOURCE; plain words in lib/prov.ts). */
+export const COHORT_SOURCE = 'Genesis allocations · holder index · D1 flow index (daily snapshot)';
+/** The stamp of the cohorts on a phone when /api/series/cohorts did not answer: no figure, and why (the desktop section says the same). */
+export const COHORTS_FAILED: Stamp = { source: COHORT_SOURCE, at: null, status: 'missing', note: 'The genesis cohorts did not load: the server did not answer.' };
 
 /** The allocation table's own stamp: the genesis file's reviewed copy, as loaded (kv genesis.alloc); 'conflict' when it is not the pinned copy. */
 export function tableStamp(t: GenesisCohortsResponse['table']): Stamp {

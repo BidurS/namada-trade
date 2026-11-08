@@ -13,10 +13,11 @@ import { maspSeenOf, maspSeenStmts } from '../worker/src/masp-seen';
 import { SERIES_KEYS, readSeries, MASP_ACTIVITY_SOURCE } from '../worker/src/series-api';
 import { PLAIN_SOURCE, plainSource } from '../web/src/lib/prov';
 import { SHIELDED_WORDS } from '../shared/copy';
+import { activityWeek, type MaspActivitySeries } from '../web/src/screens/shielded/activity';
 import { INTERNAL_ADDRESSES } from '../shared/alerts';
 import { BANNED } from '../scripts/copy-lint';
 import { testD1, insert, runStmts, type TestD1 } from './d1-sqlite';
-import type { SourceHealth } from '../shared/types';
+import type { SeriesResponse, SourceHealth } from '../shared/types';
 
 const MASP = INTERNAL_ADDRESSES.masp;
 const ESCROW = INTERNAL_ADDRESSES.ibc;
@@ -197,8 +198,8 @@ describe('/api/series serves the five counts', () => {
 
 describe('the page\'s words (shared/copy.ts SHIELDED_WORDS)', () => {
   it('the phone\'s sentence is exact: transactions, never users', () => {
-    expect(SHIELDED_WORDS.activity(SHIELDED_WORDS.activityCount('12', false), '9')).toBe('12 shielded transactions in 7 days, 9 entirely inside the pool.');
-    expect(SHIELDED_WORDS.activity(SHIELDED_WORDS.activityCount('1', true), '0')).toBe('1 shielded transaction in 7 days, 0 entirely inside the pool.');
+    expect(SHIELDED_WORDS.activity(SHIELDED_WORDS.activityCount('12', false), '9')).toBe('12 shielded transactions in 7 days, 9 in a block with no NAM moving into or out of the pool.');
+    expect(SHIELDED_WORDS.activity(SHIELDED_WORDS.activityCount('1', true), '0')).toBe('1 shielded transaction in 7 days, 0 in a block with no NAM moving into or out of the pool.');
     expect(SHIELDED_WORDS.activityPartial('3')).toBe('3 of the 7 days are counted so far.');
     expect(SHIELDED_WORDS.activityPartial('1')).toBe('1 of the 7 days is counted so far.');
     expect(SHIELDED_WORDS.activitySince('20 Nov 2026')).toBe('Counted since 20 Nov 2026; earlier days are not counted.');
@@ -213,5 +214,44 @@ describe('the page\'s words (shared/copy.ts SHIELDED_WORDS)', () => {
       // the sentence with the week's span is the one figure the words carry (its window, not a count)
       if (w !== words[0] && w !== SHIELDED_WORDS.activityPartial('K')) expect(w).not.toMatch(/\d/);
     }
+  });
+});
+
+describe('the week\'s sentence (web/src/screens/shielded/activity.ts activityWeek)', () => {
+  /** A daily series as /api/series answers it, with only what the sentence reads: the points, the start and the stamp. */
+  const series = (points: [number, number][], start: number | null): SeriesResponse =>
+    ({ key: MASP_ACTIVITY_KEYS.txs, points: points.map(([t, v]) => ({ t, v })), start, prov: { source: MASP_ACTIVITY_SOURCE, at: YESTERDAY + D, status: 'live' } } as unknown as SeriesResponse);
+  const fetched = (all: SeriesResponse | null, inside: SeriesResponse | null): MaspActivitySeries => ({ at: null, all, inside, failed: false });
+  // the window: the 7 whole UTC days before the day of `end` (2 to 8 Nov when `end` is 02:03 on 9 Nov)
+  const week = Array.from({ length: 7 }, (_, i) => TODAY - (7 - i) * D);
+
+  it('sums the 7 whole days before the day of `end`, says nothing partial when all are counted, and names the record\'s start', () => {
+    // a point on the day before the window and one on the day of `end` itself (were one written) are both outside it
+    const all = series([[TODAY - 8 * D, 100], ...week.map((t, i): [number, number] => [t, i + 1]), [TODAY, 100]], TODAY - 8 * D);
+    const inside = series([[TODAY - 8 * D, 100], ...week.map((t, i): [number, number] => [t, Math.floor((i + 1) / 2)]), [TODAY, 100]], TODAY - 8 * D);
+    const w = activityWeek(fetched(all, inside), NOW)!;
+    expect(w.text).toBe('28 shielded transactions in 7 days, 12 in a block with no NAM moving into or out of the pool. Counted since 1 Nov 2026; earlier days are not counted.');
+    expect(w.stamp).toEqual({ source: MASP_ACTIVITY_SOURCE, at: YESTERDAY + D, status: 'live' });
+  });
+
+  it('says how many of the 7 days are counted when not all are, in the singular when the count is one', () => {
+    // the record began 3 days ago: 6, 7 and 8 Nov are counted, with one transaction in all
+    const days = week.slice(4);
+    const all = series(days.map((t, i): [number, number] => [t, i === 1 ? 1 : 0]), days[0]);
+    const inside = series(days.map((t): [number, number] => [t, 0]), days[0]);
+    expect(activityWeek(fetched(all, inside), NOW)!.text).toBe('1 shielded transaction in 7 days, 0 in a block with no NAM moving into or out of the pool. 3 of the 7 days are counted so far. Counted since 6 Nov 2026; earlier days are not counted.');
+    // the inside series missing a day the all series has counts that day as none inside, never as a missing sentence
+    const partial = series([[days[0], 0]], days[0]);
+    expect(activityWeek(fetched(all, partial), NOW)!.text).toMatch(/^1 shielded transaction in 7 days, 0 in a block/);
+  });
+
+  it('is null while the series have not arrived and when no day of the window is counted, so no 0 stands in', () => {
+    expect(activityWeek(fetched(null, null), NOW)).toBeNull();
+    expect(activityWeek(fetched(series([[YESTERDAY, 3]], YESTERDAY), null), NOW)).toBeNull();
+    const empty = series([], null);
+    expect(activityWeek(fetched(empty, empty), NOW)).toBeNull();
+    // every point before the window (the record stopped), none in it
+    const old = series([[TODAY - 9 * D, 5], [TODAY - 8 * D, 4]], TODAY - 9 * D);
+    expect(activityWeek(fetched(old, old), NOW)).toBeNull();
   });
 });

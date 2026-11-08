@@ -24,7 +24,7 @@
 // keeps them, marked old with the reason. A server that does not send the slices or the pairs
 // (one before 2026-10-20) leaves those figures as "—" with the reason, never a stand-in.
 import { useEffect, useMemo, useState } from 'react';
-import type { BlindSpot, Flow, MaspMakeup, MaspPassthroughPair, MaspPulseBucket, MoveOutGroup, Overview, PoolShare, SeriesResponse } from '../../../../shared/types';
+import type { BlindSpot, Flow, MaspMakeup, MaspPassthroughPair, MaspPulseBucket, MoveOutGroup, Overview, PoolShare } from '../../../../shared/types';
 import { BODY, SHIELDED_WORDS } from '../../../../shared/copy';
 import type { ScreenProps } from '../../app/index';
 import { useOverview, useReplay } from '../../app/index';
@@ -45,6 +45,7 @@ import { INCIDENTS } from '../../generated/events';
 import { TIMELINE_SHOWN, TIMELINE_WORDS } from '../../../../shared/copy';
 import { incidentMarks } from '../trade/model';
 import { Timeline } from './Timeline';
+import { activityWeek, type MaspActivitySeries } from './activity';
 
 const DAY = 86_400_000;
 const RANGES: SeriesRange[] = [
@@ -388,8 +389,6 @@ function Inside({ data, overview: o, now, rewound, activity }: { data: BlindSpot
 
 // ---------------------------------------------------------------- activity inside the pool (/api/series masp.txs_daily, masp.txs_inside_daily)
 
-/** The two daily series as fetched: null while loading or failed (`failed` says which). */
-interface MaspActivitySeries { at: number | null; all: SeriesResponse | null; inside: SeriesResponse | null; failed: boolean }
 const ACTIVITY_DAYS = 30;
 
 /**
@@ -408,25 +407,6 @@ function useMaspActivity(at: number | null): MaspActivitySeries {
     return () => ctl.abort();
   }, [at]);
   return st.at === at ? st : { at, all: null, inside: null, failed: false };
-}
-
-/**
- * The week's sentence from the two series: the counted days in the 7 UTC days before `end`, summed, with how many of
- * the 7 were counted when not all were, and the start of the record. Null while the series have not arrived or no
- * day of the window is counted (the sheet then says nothing: no 0 stands in).
- */
-function activityWeek(a: MaspActivitySeries, end: number): { text: string; stamp: Stamp } | null {
-  if (!a.all || !a.inside) return null;
-  const from = end - 7 * DAY;
-  const days = a.all.points.filter((p) => p.t >= from && p.t < end);
-  if (!days.length) return null;
-  const insideBy = new Map(a.inside.points.map((p) => [p.t, p.v]));
-  const txs = days.reduce((s, p) => s + p.v, 0);
-  const inside = days.reduce((s, p) => s + (insideBy.get(p.t) ?? 0), 0);
-  const parts = [SHIELDED_WORDS.activity(SHIELDED_WORDS.activityCount(fmtCount(txs), txs === 1), fmtCount(inside))];
-  if (days.length < 7) parts.push(SHIELDED_WORDS.activityPartial(fmtCount(days.length)));
-  if (a.all.start != null) parts.push(SHIELDED_WORDS.activitySince(fmtDayMonthYear(a.all.start)));
-  return { text: parts.join(' '), stamp: a.all.prov as Stamp };
 }
 
 const ACT_H = 120, ACT_L = 36, ACT_T = 8, ACT_B = 20;

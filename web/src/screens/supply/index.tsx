@@ -304,7 +304,7 @@ export default function SupplyScreen({ route }: ScreenProps) {
           )}
           {/* NAM since genesis: current figures, so not on a rewound page. A phone shows its one sentence in place of the
               "What this page shows" paragraph (the least informative line here: it restates the page); a desktop shows both. */}
-          {!rewound ? <SinceGenesis overview={o} wide={wide} cohorts={cohorts.data} /> : null}
+          {!rewound ? <SinceGenesis overview={o} wide={wide} cohorts={cohorts.data} failed={cohorts.failed} /> : null}
           {/* the genesis cohorts: the sentence, the share held over time, the cohorts and the largest allocations, from 1024 px */}
           {wide ? <GenesisCohorts data={cohorts.data} failed={cohorts.failed} at={at} /> : null}
           {wide || rewound ? (

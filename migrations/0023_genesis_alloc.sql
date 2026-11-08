@@ -1,4 +1,4 @@
--- 2026-11-07. The genesis allocation table and the cohort columns it feeds (docs/design/owner-decisions.md row 39).
+-- 2026-11-07. The genesis allocation table and the cohort columns it feeds (docs/design/owner-decisions.md row 40).
 --
 -- genesis_alloc: one row per NAM allocation of the genesis balances file (namada-net/namada-mainnet-genesis
 -- genesis/balances.toml), written by scripts/genesis-alloc.ts from the reviewed copy pinned in shared/genesis.ts, and

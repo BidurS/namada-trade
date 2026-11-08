@@ -7,7 +7,8 @@
 // Every live figure comes from the overview with its stamp; the dated part carries its day. Nothing here is typed.
 // Under 1024 px the section also carries the genesis cohorts' one sentence (COHORT_WORDS.line, from
 // /api/series/cohorts) as its second paragraph, in place of the Ready-to-sell lead that a phone no longer shows
-// (owner: a phone line replaces one); from 1024 px that sentence opens the Genesis cohorts section (GenesisCohorts.tsx).
+// (owner: a phone line replaces one); when that request failed the paragraph is the missing figure with its reason,
+// as the desktop section says it; from 1024 px that sentence opens the Genesis cohorts section (GenesisCohorts.tsx).
 import type { GenesisCohortsResponse, Overview } from '../../../../shared/types';
 import { COHORT_WORDS, SUPPLY_WORDS } from '../../../../shared/copy';
 import { SUPPLY_SPLIT } from '../../generated/supply';
@@ -15,7 +16,7 @@ import { Num, ProvDot, ProvScope, SourceLine, Tag, derive, type ScopeItem, type 
 import { fmtCount, fmtDayMonthYear, fmtNamRule, fmtPctRule } from '../../lib/format';
 import { SUPPLY_SOURCES } from '../../lib/prov';
 import { genesisShares, sinceGenesisParts } from './since-genesis';
-import { cohortLineParts, tableStamp } from './cohorts';
+import { COHORTS_FAILED, cohortLineParts, tableStamp } from './cohorts';
 
 /**
  * The dated split's stamp: the day it was re-derived and what from (a static figure with its date, as the proof block).
@@ -34,13 +35,16 @@ const notSent = (source: string, what: string): Stamp => ({ source, at: null, st
 
 const PART_CLASS = { rewards: 'sp-gen__f--rewards', staking: 'sp-gen__f--staking', publicFunding: 'sp-gen__f--pgf', together: 'sp-gen__f--together' } as const;
 
-export function SinceGenesis({ overview: o, wide, cohorts }: { overview: Overview | null; wide: boolean; cohorts: GenesisCohortsResponse | null }) {
+export function SinceGenesis({ overview: o, wide, cohorts, failed = false }: { overview: Overview | null; wide: boolean; cohorts: GenesisCohortsResponse | null; /** the cohorts' request failed (no data) */ failed?: boolean }) {
   if (!o) return null;
-  // the cohorts' sentence on a phone: its stamp is the snapshot's, missing with the reason when it cannot be said
+  // the cohorts' sentence on a phone: its stamp is the snapshot's, missing with the reason when it cannot be said, or
+  // when the request itself failed
   const cohortAnswer = !wide && cohorts ? cohortLineParts(cohorts) : null;
   const cp = cohortAnswer?.parts ?? null;
   const cohortLine = cp ? COHORT_WORDS.line(fmtPctRule(cp.allPct, 0), fmtPctRule(cp.backersPct, 0), fmtPctRule(cp.foundationPct, 0), fmtPctRule(cp.teamPct, 0), fmtPctRule(cp.publicPct, 0), fmtNamRule(cp.shieldedNam)) : null;
-  const cohortStamp: Stamp | null = cohorts && cohortAnswer ? (cp ? cohorts.prov : { ...cohorts.prov, status: 'missing', note: cohortAnswer.why ?? cohorts.prov.note }) : null;
+  const cohortStamp: Stamp | null = cohorts && cohortAnswer
+    ? (cp ? cohorts.prov : { ...cohorts.prov, status: 'missing', note: cohortAnswer.why ?? cohorts.prov.note })
+    : !wide && !cohorts && failed ? COHORTS_FAILED : null;
   const totalStamp: Stamp = o.supply.prov;
   const rewardsStamp: Stamp = o.supply.shieldedRewards?.prov ?? notSent(SUPPLY_SOURCES.rewards, 'the chain’s total of shielded rewards');
   const mintStamp: Stamp = o.supply.mint?.prov ?? notSent(SUPPLY_SOURCES.mint, 'the newest epoch’s staking inflation');
@@ -60,7 +64,8 @@ export function SinceGenesis({ overview: o, wide, cohorts }: { overview: Overvie
     { label: SUPPLY_WORDS.scope.rewards, p: rewardsStamp },
     { label: SUPPLY_WORDS.scope.split, p: SPLIT_STAMP },
     ...(wide ? [{ label: SUPPLY_WORDS.scope.mint, p: mintStamp }] : []),
-    ...(cohortStamp && cohorts ? [{ label: COHORT_WORDS.scope.cohorts, p: cohortStamp }, { label: COHORT_WORDS.scope.table, p: tableStamp(cohorts.table) }] : []),
+    ...(cohortStamp ? [{ label: COHORT_WORDS.scope.cohorts, p: cohortStamp }] : []),
+    ...(cohortStamp && cohorts ? [{ label: COHORT_WORDS.scope.table, p: tableStamp(cohorts.table) }] : []),
   ];
   const names = {
     rewards: SUPPLY_WORDS.parts.rewards,
