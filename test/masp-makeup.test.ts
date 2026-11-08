@@ -234,7 +234,7 @@ describe('the page\'s sentences', () => {
   it('the ledger and how NAM entered the pool, each figure formatted by the site\'s rules, the gap as a size', () => {
     const gap = Math.abs(m.in.nam - m.out.nam + m.rewards!.nam - m.balance!.nam);
     const s = SHIELDED_WORDS.makeup(fmtDayMonthYear(m.since), fmtNamRule(m.in.nam), fmtNamRule(m.out.nam), fmtNamRule(m.rewards!.nam), fmtNamRule(m.balance!.nam), fmtNamRule(gap));
-    expect(s).toBe('Since 13 Jun 2025, 269,121,616 NAM was shielded and 264,876,452 NAM unshielded. Another 27,347,610 NAM was minted into the pool as shielded rewards, which no transaction shows. In − out + rewards = today’s 31,618,419 NAM, within 25,645 NAM.');
+    expect(s).toBe('Since 13 Jun 2025, 269,121,616 NAM was shielded and 264,876,452 NAM unshielded. Since the chain began it has minted 27,347,610 NAM into the pool as shielded rewards, which no transaction shows. In − out + rewards = today’s 31,618,419 NAM, within 25,645 NAM.');
     const b = SHIELDED_WORDS.bridgeShare(fmtSharePct((m.in.bridge.nam / m.in.nam) * 100), `${m.in.bridge.n.toLocaleString('en-US')} crossings`);
     expect(b).toBe('Of all NAM ever shielded, 14% arrived straight over the bridge in 1,655 crossings; the rest came from Namada addresses.');
     for (const w of [s, b, ...Object.values(SHIELDED_WORDS.makeupRows), SHIELDED_WORDS.makeupScope, SHIELDED_WORDS.bridgeScope]) {
