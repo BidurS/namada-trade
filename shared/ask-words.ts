@@ -20,7 +20,7 @@ export const ASK_ANSWER_MAX_WORDS = 120;
 /** Follow-up questions offered under an answer at most. */
 export const ASK_FOLLOW_UPS_MAX = 2;
 
-export type AskStatus = 'answered' | 'refused' | 'not_covered' | 'failed' | 'resting' | 'invalid' | 'unavailable';
+export type AskStatus = 'answered' | 'refused' | 'not_covered' | 'failed' | 'resting' | 'limit' | 'invalid' | 'unavailable';
 
 export interface AskPageLink { id: string; label: string; path: string }
 /** The source and time of one figure an answer states. */
@@ -80,7 +80,9 @@ export const ASK_WORDS = {
   unavailable: 'The Ask chat is not available right now.',
   restingDay: 'The Ask chat is resting until tomorrow: it has had all the questions it can take today.',
   restingMonth: 'The Ask chat is resting until next month: it has used all it can this month.',
-  restingAddress: 'The Ask chat has answered all the questions it takes from one connection today. It opens again tomorrow.',
+  limitReader: 'That is all the questions this chat takes in a day without signing in. Sign in with a wallet to ask more, or come back tomorrow.',
+  limitWallet: 'That is all the questions this chat takes from one wallet in a day. It opens again tomorrow.',
+  limitConnection: 'That is all the questions this chat takes from one connection in a day. It opens again tomorrow.',
   rate: 'That was a lot of questions at once; please wait a minute and try again.',
   offline: 'You seem to be offline; your question is still here to send again.',
   /** How many characters are left, or how many are too many. */

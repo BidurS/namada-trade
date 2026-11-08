@@ -2,7 +2,7 @@
 //
 // One question is one model call and one second reading, inside about ten seconds, and nothing about it is kept: not
 // the question, not the answer, not the address. Only two counters are written, in kv: `ask.day` (questions today,
-// UTC, and today's count per connection under a tag that cannot be read back: see addressTag) and `ask.spend` (dollars
+// UTC, and today's count per connection and wallet under tags that cannot be read back: see dayTag) and `ask.spend` (dollars
 // this month from each answer's usage). Without ANTHROPIC_API_KEY, or with ASK_SHOWN off,
 // the endpoint answers unavailable.
 //
@@ -29,8 +29,12 @@ export const ASK_DAY_KEY = 'ask.day';
 export const ASK_SPEND_KEY = 'ask.spend';
 /** Questions the whole site may ask in one UTC day. */
 export const ASK_DAY_CAP = 500;
-/** Questions one connection (client-key.ts: an IPv4 address, an IPv6 /64) may ask in one UTC day, so one caller cannot use up the day's questions for everyone. */
-export const ASK_ADDRESS_DAY_CAP = 25;
+/** Questions a reader who has not signed in may ask in one UTC day, counted by connection (client-key.ts: an IPv4 address, an IPv6 /64). */
+export const ASK_READER_DAY_CAP = 5;
+/** Questions one signed-in wallet may ask in one UTC day. */
+export const ASK_WALLET_DAY_CAP = 25;
+/** Questions one connection may ask in one UTC day, signed in or not: a wallet costs nothing to make, so many wallets on one connection share this. */
+export const ASK_CONNECTION_DAY_CAP = 75;
 /** No call once this month's counted spend reaches this. */
 export const ASK_MONTH_CAP_USD = 40;
 
@@ -85,40 +89,43 @@ const dayOf = (ms: number) => new Date(ms).toISOString().slice(0, 10);
 const monthOf = (ms: number) => new Date(ms).toISOString().slice(0, 7);
 
 /** One more question today, counted in one statement so two at once cannot both read the same count. Returns the new count. */
-/**
- * What today's per-connection count is kept under: a keyed hash of the day and the connection, cut short. It cannot be
- * turned back into an address without the key, the same connection has another tag tomorrow, and the whole map goes
- * when the day's row is replaced.
- */
-export async function addressTag(apiKey: string, day: string, ip: string | null | undefined): Promise<string> {
+/** A keyed hash of the day and the caller, cut short: it cannot be turned back into an address without the key, and the same caller has another tag tomorrow. */
+async function dayTag(apiKey: string, label: string): Promise<string> {
   const enc = new TextEncoder();
   const key = await crypto.subtle.importKey('raw', enc.encode(apiKey), { name: 'HMAC', hash: 'SHA-256' }, false, ['sign']);
-  const mac = new Uint8Array(await crypto.subtle.sign('HMAC', key, enc.encode(`ask-address:${day}:${clientKey(ip)}`)));
+  const mac = new Uint8Array(await crypto.subtle.sign('HMAC', key, enc.encode(label)));
   return `a${[...mac.slice(0, 6)].map((b) => b.toString(16).padStart(2, '0')).join('')}`;
 }
+/** What today's count for a connection is kept under. The whole map goes when the day's row is replaced. */
+export const addressTag = (apiKey: string, day: string, ip: string | null | undefined): Promise<string> => dayTag(apiKey, `ask-address:${day}:${clientKey(ip)}`);
+/** What today's count for a signed-in wallet is kept under. */
+export const walletTag = (apiKey: string, day: string, wallet: string): Promise<string> => dayTag(apiKey, `ask-wallet:${day}:${wallet}`);
 
 /**
- * One statement, so two questions at once cannot both pass a cap. A connection past its quota moves nothing, so its
- * questions cannot use up the day's; `n` stops one past the day's cap and `hits` one past the connection's, which keeps
- * the row to at most ASK_DAY_CAP tags however many addresses ask.
+ * One statement, so two questions at once cannot both pass a cap. A caller past a limit moves nothing, so its questions
+ * cannot use up the day's; `n` stops one past the day's cap and each count one past its own cap, which keeps the row to
+ * a few entries for each question the day allows, however many addresses ask.
  */
-async function countQuestion(db: D1Database, now: number, tag: string): Promise<{ n: number; hits: number }> {
+async function countQuestion(db: D1Database, now: number, limits: { tag: string; cap: number }[]): Promise<{ n: number; hits: number[] }> {
   const day = dayOf(now);
-  const fresh = `json_object('day',?2,'n',1,'by',json_object(?4,1))`;
-  const hits = `COALESCE(json_extract(value,?5),0)`;
+  const tagAt = (i: number) => `?${4 + 2 * i}`;
+  const pathAt = (i: number) => `?${5 + 2 * i}`;
+  const hits = (i: number) => `COALESCE(json_extract(value,${pathAt(i)}),0)`;
+  const fresh = `json_object('day',?2,'n',1,'by',json_object(${limits.map((_, i) => `${tagAt(i)},1`).join(',')}))`;
   const withMap = `json(COALESCE(json_extract(value,'$.by'),'{}'))`;
   const row = await db.prepare(
     `INSERT INTO kv (key,value,updated_at) VALUES (?1, ${fresh}, ?3)
      ON CONFLICT(key) DO UPDATE SET updated_at=?3,
        value = CASE
          WHEN json_extract(value,'$.day') IS NOT ?2 THEN ${fresh}
-         WHEN json_extract(value,'$.n') > ${ASK_DAY_CAP} OR ${hits} > ${ASK_ADDRESS_DAY_CAP} THEN value
-         WHEN ${hits} = ${ASK_ADDRESS_DAY_CAP} THEN json_set(value,'$.by',${withMap},?5,${ASK_ADDRESS_DAY_CAP + 1})
-         ELSE json_set(value,'$.by',${withMap},'$.n',json_extract(value,'$.n')+1,?5,${hits}+1)
+         WHEN json_extract(value,'$.n') > ${ASK_DAY_CAP} OR ${limits.map((l, i) => `${hits(i)} > ${l.cap}`).join(' OR ')} THEN value
+         WHEN ${limits.map((l, i) => `${hits(i)} = ${l.cap}`).join(' OR ')}
+           THEN json_set(value,'$.by',${withMap},${limits.map((l, i) => `${pathAt(i)},CASE WHEN ${hits(i)} = ${l.cap} THEN ${l.cap + 1} ELSE ${hits(i)} END`).join(',')})
+         ELSE json_set(value,'$.by',${withMap},'$.n',json_extract(value,'$.n')+1,${limits.map((_, i) => `${pathAt(i)},${hits(i)}+1`).join(',')})
        END
-     RETURNING json_extract(value,'$.n') AS n, json_extract(value,?5) AS hits`,
-  ).bind(ASK_DAY_KEY, day, now, tag, `$.by.${tag}`).first<{ n: number; hits: number | null }>();
-  return { n: Number(row?.n ?? 1), hits: Number(row?.hits ?? 1) };
+     RETURNING json_extract(value,'$.n') AS n, ${limits.map((_, i) => `json_extract(value,${pathAt(i)}) AS h${i}`).join(', ')}`,
+  ).bind(ASK_DAY_KEY, day, now, ...limits.flatMap((l) => [l.tag, `$.by.${l.tag}`])).first<Record<string, number | null>>();
+  return { n: Number(row?.n ?? 1), hits: limits.map((_, i) => Number(row?.[`h${i}`] ?? 1)) };
 }
 
 /**
@@ -191,6 +198,8 @@ export interface AskDeps {
   shown?: boolean;
   /** The connecting address (cf-connecting-ip), for the day's quota; never stored as written. */
   ip?: string | null;
+  /** The signed-in wallet, or null. Read only when a question is about to be counted; never stored as written. */
+  readWallet?: () => Promise<string | null>;
   /** The request's Origin header (askOriginAllowed). */
   origin?: string | null;
 }
@@ -216,7 +225,7 @@ function logFailure(what: string, e: unknown): void {
 const failed = (reason: string): { http: number; answer: AskAnswer; reason: string } => ({ http: 200, answer: FAILED, reason });
 
 export async function answerAsk(body: unknown, deps: AskDeps): Promise<{ http: number; answer: AskAnswer; reason?: string }> {
-  const { db, apiKey, now, shown = ASK_SHOWN, clock = Date.now, ip, origin } = deps;
+  const { db, apiKey, now, shown = ASK_SHOWN, clock = Date.now, ip, origin, readWallet } = deps;
   if (!shown || !apiKey) return { http: 503, answer: UNAVAILABLE };
   if (!askOriginAllowed(origin)) return { http: 403, answer: INVALID };
   const call = deps.call ?? anthropicAsk(apiKey);
@@ -232,8 +241,15 @@ export async function answerAsk(body: unknown, deps: AskDeps): Promise<{ http: n
   if (why) return { http: 200, answer: REFUSED };
 
   if ((await monthSpent(db, now)) >= ASK_MONTH_CAP_USD) return { http: 200, answer: plain('resting', ASK_WORDS.restingMonth) };
-  const counted = await countQuestion(db, now, await addressTag(apiKey, dayOf(now), ip));
-  if (counted.hits > ASK_ADDRESS_DAY_CAP) return { http: 200, answer: plain('resting', ASK_WORDS.restingAddress) };
+  const wallet = readWallet ? await readWallet() : null;
+  const connectionCap = wallet ? ASK_CONNECTION_DAY_CAP : ASK_READER_DAY_CAP;
+  const counted = await countQuestion(db, now, [
+    { tag: await addressTag(apiKey, dayOf(now), ip), cap: connectionCap },
+    ...(wallet ? [{ tag: await walletTag(apiKey, dayOf(now), wallet), cap: ASK_WALLET_DAY_CAP }] : []),
+  ]);
+  // 'limit', not 'resting': the chat stays open, since signing in or another caller may still ask.
+  if (wallet && counted.hits[1] > ASK_WALLET_DAY_CAP) return { http: 200, answer: plain('limit', ASK_WORDS.limitWallet) };
+  if (counted.hits[0] > connectionCap) return { http: 200, answer: plain('limit', wallet ? ASK_WORDS.limitConnection : ASK_WORDS.limitReader) };
   if (counted.n > ASK_DAY_CAP) return { http: 200, answer: plain('resting', ASK_WORDS.restingDay) };
 
   const started = clock();
@@ -310,7 +326,7 @@ export async function runAskSelfTest(env: Pick<Env, 'DB' | 'ANTHROPIC_API_KEY'>,
     if (rows.length >= ASK_SELFTEST.length) return;
     for (const t of ASK_SELFTEST.slice(rows.length, rows.length + SELFTEST_PER_TICK)) {
       const t0 = clock();
-      const { answer, reason } = await answerAsk(t, { db: env.DB, apiKey: env.ANTHROPIC_API_KEY, now, shown: true, call, clock });
+      const { answer, reason } = await answerAsk(t, { db: env.DB, apiKey: env.ANTHROPIC_API_KEY, now, shown: true, call, clock, readWallet: async () => 'review run' });
       rows.push({ question: t.question, status: answer.status, text: answer.text, pages: answer.pages.map((p) => p.id), ms: clock() - t0, ...(reason ? { reason } : {}) });
     }
     await kvSet(env.DB, SELFTEST_KEY, rows);

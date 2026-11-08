@@ -7,6 +7,7 @@
 // as plain text.
 import { useCallback, useEffect, useId, useLayoutEffect, useMemo, useRef, useState, type KeyboardEvent, type PointerEvent, type ReactNode, type RefObject } from 'react';
 import { Link } from '../../app/index';
+import { authFetch } from '../../lib/auth';
 import { Ico } from '../../ui/ico';
 import { useMinWidth } from '../../ui/useMinWidth';
 import { useUiNow } from '../../ui/now';
@@ -28,7 +29,7 @@ const STICK_PX = 48;
 const SWIPE_CLOSE_PX = 96;
 const COPIED_MS = 1500;
 
-type TurnState = 'pending' | 'answered' | 'refused' | 'not_covered' | 'failed' | 'invalid' | 'resting' | 'unavailable' | 'rate' | 'offline';
+type TurnState = 'pending' | 'answered' | 'refused' | 'not_covered' | 'failed' | 'invalid' | 'resting' | 'limit' | 'unavailable' | 'rate' | 'offline';
 interface Turn {
   id: number;
   q: string;
@@ -241,7 +242,8 @@ export default function AskPanel({ open }: { open: boolean }) {
       setDraft((d) => d || q);
     };
     try {
-      const res = await fetch('/api/ask', {
+      // authFetch sends the sign-in when there is one: the larger daily limit is the wallet's
+      const res = await authFetch('/api/ask', {
         method: 'POST',
         headers: { 'content-type': 'application/json' },
         body: JSON.stringify({ question: q, history: earlier }),
