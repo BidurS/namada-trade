@@ -3,7 +3,7 @@ import { LiveHub } from './live-hub';
 import { runCron } from './cron';
 import { registerSecrets, type Env } from './util';
 import { alertsPausedIn, configureAlerts, sendsAlerts } from './sources/discord';
-import { seoHtml, robotsTxt, sitemapXml, llmsTxt, classifyPath } from './seo';
+import { seoHtml, robotsTxt, sitemapXml, llmsTxt, securityTxt, classifyPath } from './seo';
 import { redirectLocation } from '../../shared/routes';
 import { cachedApi as cachedApiWith, inlineScriptHashes, pagePolicies, ENFORCE_SCRIPT_POLICY, wsLimited } from './http';
 import { canonicalRedirect, redirectStatus, isCanonicalHost, ownershipFile } from './hosts';
@@ -78,6 +78,7 @@ export default {
     if (url.pathname === '/robots.txt') return withSiteHeaders(robotsTxt(), url);
     if (url.pathname === '/sitemap.xml') return withSiteHeaders(await sitemapXml(env), url);
     if (url.pathname === '/llms.txt') return withSiteHeaders(llmsTxt(), url);
+    if (url.pathname === '/.well-known/security.txt') return withSiteHeaders(securityTxt(), url);
 
     const action = classifyPath(url.pathname);
     // 301 with the query kept, so ?at= survives every redirect

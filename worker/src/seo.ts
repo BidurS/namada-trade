@@ -357,6 +357,7 @@ export function robotsTxt(): Response {
   // costs the server a walk to that page (the first page and the list itself stay crawlable).
   const body = `# Every agent is welcome under these rules: search engines, language models and scripts alike.
 # The pages are readable without JavaScript, /llms.txt describes the site, and /api/overview is the figures as JSON.
+# A security problem with the site is reported as /.well-known/security.txt says.
 User-agent: *
 Allow: /
 Disallow: /activity?*page=
@@ -369,6 +370,26 @@ Disallow: /api/cron
 Disallow: /api/webhooks
 
 Sitemap: ${SITE.origin}/sitemap.xml
+`;
+  return new Response(body, { headers: { 'content-type': 'text/plain; charset=utf-8', 'cache-control': 'public, max-age=3600' } });
+}
+
+/** Where a security problem with the site is reported privately: a GitHub security advisory on the public repository (SECURITY.md says the same). */
+export const SECURITY_CONTACT = `${SITE.repo}/security/advisories/new`;
+/** How long a security.txt answer stays valid: a year from the request (RFC 9116 asks for less than a year ahead; the file is made afresh on every request, an hour at the edge). */
+export const SECURITY_TXT_VALID_MS = 365 * 86_400_000;
+
+/**
+ * /.well-known/security.txt (RFC 9116): the one contact (SECURITY_CONTACT), when this copy expires (a year after the
+ * request, computed when it is made), the language, and where the canonical copy is. Nothing else: no encryption key,
+ * no acknowledgements page, no hiring line.
+ */
+export function securityTxt(now = Date.now()): Response {
+  const body = `# How to report a security problem with ${new URL(SITE.origin).host} (SECURITY.md in the repository says the same).
+Contact: ${SECURITY_CONTACT}
+Expires: ${w3c(now + SECURITY_TXT_VALID_MS)}
+Preferred-Languages: en
+Canonical: ${SITE.origin}/.well-known/security.txt
 `;
   return new Response(body, { headers: { 'content-type': 'text/plain; charset=utf-8', 'cache-control': 'public, max-age=3600' } });
 }
