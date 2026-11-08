@@ -95,6 +95,12 @@ export const POOL_SOURCES = {
   index: 'D1 flow index',
 } as const;
 
+/** The technical source names of the Supply page's since-genesis figures (worker/src/api.ts, the overview's supply.shieldedRewards and supply.mint). */
+export const SUPPLY_SOURCES = {
+  rewards: POOL_SOURCES.rewards,
+  mint: 'Namada RPC abci_query (last_inflation_amount)',
+} as const;
+
 const PREFIXES: [string, string][] = [
   ['Namada RPC', 'Namada node'],
   ['Osmosis SQS pools', 'Osmosis pools'],

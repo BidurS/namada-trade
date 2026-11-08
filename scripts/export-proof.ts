@@ -1,12 +1,17 @@
 /**
- * W4: build-time export of the dated proof block and the chart event markers.
+ * W4: build-time export of the dated proof block, the chart event markers, the incidents timeline and the
+ * NAM-supply split since genesis.
  *
  *   node --experimental-strip-types scripts/export-proof.ts      (npm run gen)
  *
  * Reads docs/replay-report.md (written by test/replay.test.ts) and docs/events.json (written by
  * scripts/events.ts) and writes web/src/generated/proof.ts and web/src/generated/events.ts. Every figure in
  * the output is parsed from those two files, and the ones that appear in both are checked against each
- * other: the script stops instead of writing a figure the sources do not agree on.
+ * other: the script stops instead of writing a figure the sources do not agree on. events.ts also carries
+ * INCIDENTS, the reviewed rows of scripts/incidents.ts, each checked for a source and a well-formed date.
+ * web/src/generated/supply.ts is the dated split of NAM minted since genesis, read from docs/data (the
+ * per-epoch table and the period totals, re-derived from public figures on 2026-11-02), each period's total
+ * checked against the table's rows. No network: everything here is read from files in the repository.
  *
  * Owner decision 10: the owner's own trades never become public. Events of type "trade" (and report rows
  * marked "(own)") are left out of both outputs, including from every count.
@@ -16,6 +21,7 @@ import { join, dirname } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { evaluateFlows, type AlertThresholds } from '../shared/alerts.ts';
 import type { Flow } from '../shared/types.ts';
+import { INCIDENTS, type Incident } from './incidents.ts';
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), '..');
 const H = 3600000;
@@ -247,8 +253,215 @@ export const PROOF: Proof = ${lit(p)};
 `;
 }
 
-export function renderEventsTs(m: { priceMoves: PriceMoveMarker[]; largeFlows: LargeFlowMarker[] }, generatedAt: number): string {
-  return `${HEADER('docs/events.json')}
+// ---------------------------------------------------------------- the incidents timeline (scripts/incidents.ts)
+
+const DAY_RE = /^\d{4}-\d{2}-\d{2}$/;
+const dayOf = (ms: number) => new Date(ms).toISOString().slice(0, 10);
+/** The chart label's longest form (web/src/ui/PriceChart.tsx cuts a longer one). */
+export const INCIDENT_MARK_MAX = 12;
+
+/**
+ * The rows as the page may show them: unique ids, UTC days, a moment on the row's day, a title, a text, at least one
+ * source a reader can open (an https URL), a mark a chart can print, measured halts with their blocks in order, and
+ * the rows themselves in time order. Throws on the first row that is not so, naming it.
+ */
+export function checkIncidents(rows: Incident[]): Incident[] {
+  const ids = new Set<string>();
+  let last = -Infinity;
+  for (const r of rows) {
+    const where = `incident ${r.id || '(no id)'}`;
+    if (!r.id || ids.has(r.id)) throw new Error(`${where}: id missing or repeated`);
+    ids.add(r.id);
+    if (!DAY_RE.test(r.date) || (r.end != null && !DAY_RE.test(r.end))) throw new Error(`${where}: date is not a UTC day`);
+    if (!Number.isFinite(r.at) || dayOf(r.at) !== r.date) throw new Error(`${where}: at (${Number.isFinite(r.at) ? dayOf(r.at) : r.at}) is not on its day ${r.date}`);
+    if (r.end != null && r.end < r.date) throw new Error(`${where}: ends before it starts`);
+    if (r.at < last) throw new Error(`${where}: out of time order`);
+    last = r.at;
+    if (!r.title.trim() || !r.text.trim()) throw new Error(`${where}: title or text missing`);
+    if (!r.sources.length || !r.sources.some((s) => s.url)) throw new Error(`${where}: no source a reader can open`);
+    for (const s of r.sources) {
+      if (!s.label.trim()) throw new Error(`${where}: a source has no words`);
+      if (s.url != null && !/^https:\/\/[^\s]+$/.test(s.url)) throw new Error(`${where}: source "${s.label}" is not an https URL`);
+    }
+    if (r.mark != null && (!r.mark.trim() || r.mark.length > INCIDENT_MARK_MAX)) throw new Error(`${where}: mark "${r.mark}" is empty or over ${INCIDENT_MARK_MAX} characters`);
+    for (const h of r.halts ?? []) {
+      if (!(h.to === h.from + 1) || !(h.hours > 0) || !Number.isFinite(h.hours)) throw new Error(`${where}: halt ${h.from} to ${h.to} is not two consecutive blocks with hours between them`);
+    }
+    for (const p of r.pages) if (!/^\/[a-z-]*$/.test(p)) throw new Error(`${where}: page "${p}" is not a route path`);
+  }
+  return rows;
+}
+
+// ---------------------------------------------------------------- NAM supply since genesis (docs/data)
+
+/** The period totals and fixed facts of docs/data/supply_since_genesis.json, as written there (NAM as decimal strings). */
+export interface SupplyPeriodsFile {
+  derivedOn: string;
+  source: string;
+  genesis: { nam: string; source: string };
+  mintedAt: { epoch: number; fromBlock: number; toBlock: number; nam: string; source: string };
+  epochStarts: { epoch: number; block: number; day: string }[];
+  inflationFromEpoch: number;
+  publicFundingRateZeroFromEpoch: number;
+  before: { fromEpoch: number; toEpoch: number; observedNam: string; note: string };
+  periods: { fromEpoch: number; toEpoch: number; observedNam: string; stakingNam: string; publicFundingNam: string; indexerRows: number }[];
+  publicFundingTransfer: { nam: string; block: number; at: string; txHash: string; note: string };
+}
+
+/** One row of docs/data/supply_by_epoch_1207_2737.tsv, in micro-NAM as integers. */
+export interface SupplyEpochRow { epoch: number; maspEpoch: boolean; observed: bigint; staking: bigint; publicFunding: bigint; residual: bigint }
+
+const MICRO = 1_000_000n;
+/** A decimal NAM string ("1148734527.288587", "0") as micro-NAM. */
+export function microOf(nam: string): bigint {
+  const m = /^(-?)(\d+)(?:\.(\d{1,6}))?$/.exec(nam.trim());
+  if (!m) throw new Error(`not a NAM amount: "${nam}"`);
+  const v = BigInt(m[2]) * MICRO + BigInt((m[3] ?? '').padEnd(6, '0'));
+  return m[1] ? -v : v;
+}
+const namOf = (micro: bigint) => Number(micro) / 1e6;
+
+export function parseSupplyTsv(tsv: string): SupplyEpochRow[] {
+  const lines = tsv.trim().split('\n');
+  const head = lines[0].split('\t');
+  const col = (name: string) => {
+    const i = head.findIndex((h) => h === name || h.startsWith(`${name}(`));
+    if (i < 0) throw new Error(`supply table: no column ${name}`);
+    return i;
+  };
+  const cEpoch = col('epoch'), cMasp = col('masp_epoch'), cObs = col('observed_mint_microNAM'), cPos = col('pos_pred_microNAM'), cPgf = col('pgf_pred_microNAM'), cRes = col('residual_microNAM');
+  const rows: SupplyEpochRow[] = [];
+  for (const line of lines.slice(1)) {
+    const c = line.split('\t');
+    const r: SupplyEpochRow = { epoch: Number(c[cEpoch]), maspEpoch: c[cMasp] === '1', observed: BigInt(c[cObs]), staking: BigInt(c[cPos]), publicFunding: BigInt(c[cPgf]), residual: BigInt(c[cRes]) };
+    if (!Number.isInteger(r.epoch) || (rows.length && r.epoch <= rows[rows.length - 1].epoch)) throw new Error(`supply table: epoch "${c[cEpoch]}" out of order`);
+    rows.push(r);
+  }
+  return rows;
+}
+
+/** What web/src/generated/supply.ts carries (the Supply page's dated split; its live figures come from the API). */
+export interface SupplySplit {
+  /** the day the split was re-derived from public figures (UTC), and that day as unix ms */
+  derivedOn: string;
+  derivedAt: number;
+  source: string;
+  genesisNam: number;
+  /** the epochs the split covers, their first and last blocks and the first's day */
+  fromEpoch: number;
+  toEpoch: number;
+  fromBlock: number;
+  toBlock: number;
+  fromDay: string;
+  /** the minted total at the last epoch covered */
+  mintedAtToEpochNam: number;
+  /** staking inflation and public-funding inflation over the epochs covered */
+  stakingNam: number;
+  publicFundingNam: number;
+  /** epochs covered, and how many of them the indexer has a figure for; the rest were carried across by the formulas */
+  epochs: number;
+  measuredEpochs: number;
+  /** the one stretch with no indexer figure at all: its epochs, days and the staking inflation modelled over it */
+  modelled: { fromEpoch: number; toEpoch: number; fromDay: string; toDay: string; stakingNam: number };
+  /** the one large transfer into the public-funding account: moved, not minted */
+  transfer: { nam: number; block: number; at: number; txHash: string };
+}
+
+/**
+ * The split from the two files, each period's totals checked against the table's rows: a period's rows add up to no
+ * more than its total (the epochs the indexer lacks were carried across), and the periods together are exactly the
+ * growth from genesis less the growth before the first period. Throws on the first figure that does not hold.
+ */
+export function buildSupplySplit(file: SupplyPeriodsFile, rows: SupplyEpochRow[]): SupplySplit {
+  const periods = [...file.periods].sort((a, b) => a.fromEpoch - b.fromEpoch);
+  if (!periods.length) throw new Error('supply periods: none');
+  for (let i = 1; i < periods.length; i++) if (periods[i].fromEpoch !== periods[i - 1].toEpoch + 1) throw new Error(`supply periods: a gap or overlap before epoch ${periods[i].fromEpoch}`);
+  const fromEpoch = periods[0].fromEpoch, toEpoch = periods[periods.length - 1].toEpoch;
+  if (file.before.toEpoch + 1 !== fromEpoch) throw new Error('supply periods: the period before does not end where the first period starts');
+  if (file.mintedAt.epoch !== toEpoch) throw new Error(`supply periods: the minted total is at epoch ${file.mintedAt.epoch}, the periods end at ${toEpoch}`);
+  if (rows.length && (rows[0].epoch < fromEpoch || rows[rows.length - 1].epoch > toEpoch)) throw new Error('supply table: rows outside the periods');
+  const growth = microOf(file.mintedAt.nam) - microOf(file.genesis.nam);
+  let sumObserved = 0n, staking = 0n, publicFunding = 0n, measured = 0;
+  let modelled: SupplySplit['modelled'] | null = null;
+  const startOf = (epoch: number) => file.epochStarts.find((s) => s.epoch === epoch);
+  for (const p of periods) {
+    const inRows = rows.filter((r) => r.epoch >= p.fromEpoch && r.epoch <= p.toEpoch);
+    if (inRows.length !== p.indexerRows) throw new Error(`supply period ${p.fromEpoch} to ${p.toEpoch}: ${inRows.length} rows in the table, ${p.indexerRows} said`);
+    const sum = (f: (r: SupplyEpochRow) => bigint) => inRows.reduce((a, r) => a + f(r), 0n);
+    const obs = microOf(p.observedNam), st = microOf(p.stakingNam), pf = microOf(p.publicFundingNam);
+    if (sum((r) => r.observed) > obs) throw new Error(`supply period ${p.fromEpoch} to ${p.toEpoch}: the table's observed mint exceeds the period's`);
+    if (sum((r) => r.staking) > st) throw new Error(`supply period ${p.fromEpoch} to ${p.toEpoch}: the table's staking inflation exceeds the period's`);
+    if (sum((r) => r.publicFunding) > pf) throw new Error(`supply period ${p.fromEpoch} to ${p.toEpoch}: the table's public-funding inflation exceeds the period's`);
+    sumObserved += obs; staking += st; publicFunding += pf; measured += inRows.length;
+    if (inRows.length === 0) {
+      if (modelled) throw new Error('supply periods: more than one stretch without indexer figures');
+      const a = startOf(p.fromEpoch), b = startOf(p.toEpoch + 1);
+      if (!a || !b) throw new Error(`supply periods: no epoch start recorded for epochs ${p.fromEpoch} and ${p.toEpoch + 1}`);
+      modelled = { fromEpoch: p.fromEpoch, toEpoch: p.toEpoch, fromDay: a.day, toDay: b.day, stakingNam: namOf(st) };
+    }
+  }
+  if (!modelled) throw new Error('supply periods: no stretch is marked as carried across (every period has rows)');
+  const before = microOf(file.before.observedNam);
+  if (sumObserved + before !== growth) throw new Error(`supply periods: the periods (${namOf(sumObserved)}) plus the growth before (${namOf(before)}) are not the growth from genesis (${namOf(growth)})`);
+  const first = startOf(fromEpoch);
+  if (!first) throw new Error(`supply periods: no epoch start recorded for epoch ${fromEpoch}`);
+  const t = file.publicFundingTransfer;
+  const at = Date.parse(t.at);
+  if (!Number.isFinite(at) || !Number.isInteger(t.block) || !/^[0-9A-F]{64}$/.test(t.txHash)) throw new Error('supply transfer: block, time or hash malformed');
+  const derivedAt = Date.parse(`${file.derivedOn}T00:00:00Z`);
+  if (!DAY_RE.test(file.derivedOn) || !Number.isFinite(derivedAt)) throw new Error(`supply periods: derivedOn "${file.derivedOn}" is not a UTC day`);
+  return {
+    derivedOn: file.derivedOn, derivedAt, source: file.source,
+    genesisNam: namOf(microOf(file.genesis.nam)),
+    fromEpoch, toEpoch, fromBlock: first.block, toBlock: file.mintedAt.toBlock, fromDay: first.day,
+    mintedAtToEpochNam: namOf(microOf(file.mintedAt.nam)),
+    stakingNam: namOf(staking), publicFundingNam: namOf(publicFunding),
+    epochs: toEpoch - fromEpoch + 1, measuredEpochs: measured,
+    modelled,
+    transfer: { nam: namOf(microOf(t.nam)), block: t.block, at, txHash: t.txHash },
+  };
+}
+
+export function renderSupplyTs(s: SupplySplit): string {
+  return `${HEADER('docs/data/supply_since_genesis.json and docs/data/supply_by_epoch_1207_2737.tsv')}
+/**
+ * NAM minted since genesis, split by what minted it, over the epochs the public record lets the split be made for:
+ * re-derived from public figures on the day named (docs/data/README.md has the method and the coverage). The live
+ * figures beside it (the minted total now, the chain's total of shielded rewards, the newest epoch's staking
+ * inflation) come from the API, never from here.
+ */
+export interface SupplySplit {
+  /** the day the split was re-derived (UTC), and that day as unix ms */
+  derivedOn: string;
+  derivedAt: number;
+  source: string;
+  genesisNam: number;
+  /** the epochs the split covers, their first and last blocks and the first's day */
+  fromEpoch: number;
+  toEpoch: number;
+  fromBlock: number;
+  toBlock: number;
+  fromDay: string;
+  /** the minted total at the last epoch covered */
+  mintedAtToEpochNam: number;
+  /** staking inflation and public-funding inflation over the epochs covered */
+  stakingNam: number;
+  publicFundingNam: number;
+  /** epochs covered, and how many of them the indexer has a figure for; the rest were carried across by the formulas */
+  epochs: number;
+  measuredEpochs: number;
+  /** the one stretch with no indexer figure at all: its epochs, days and the staking inflation modelled over it */
+  modelled: { fromEpoch: number; toEpoch: number; fromDay: string; toDay: string; stakingNam: number };
+  /** the one large transfer into the public-funding account: moved, not minted */
+  transfer: { nam: number; block: number; at: number; txHash: string };
+}
+
+export const SUPPLY_SPLIT: SupplySplit = ${lit(s)};
+`;
+}
+
+export function renderEventsTs(m: { priceMoves: PriceMoveMarker[]; largeFlows: LargeFlowMarker[] }, generatedAt: number, incidents: Incident[]): string {
+  return `${HEADER('docs/events.json and scripts/incidents.ts')}
 /** When docs/events.json was built from the database (unix ms). */
 export const EVENTS_GENERATED_AT = ${generatedAt};
 
@@ -279,18 +492,65 @@ export interface LargeFlowMarker {
 export const PRICE_MOVES: PriceMoveMarker[] = ${lit(m.priceMoves)};
 
 export const LARGE_FLOWS: LargeFlowMarker[] = ${lit(m.largeFlows)};
+
+/** A source of an incident row: the link's words and its page; a statement with no page of its own has no url. */
+export interface IncidentSource {
+  label: string;
+  url?: string;
+}
+
+/** A stretch without blocks: the last block before it, the first after it, and the hours between their header times. */
+export interface IncidentHalt {
+  from: number;
+  to: number;
+  hours: number;
+}
+
+/**
+ * One row of the public incidents timeline (scripts/incidents.ts): what happened on Namada, with its day (UTC), the
+ * moment a chart marks, its plain words, the pages it concerns and the sources a reader can open.
+ */
+export interface Incident {
+  id: string;
+  /** the UTC day the row is dated (YYYY-MM-DD) and, for a span, its last day */
+  date: string;
+  end?: string;
+  /** unix ms of the moment a chart marks */
+  at: number;
+  title: string;
+  text: string;
+  /** route paths of the pages the row concerns */
+  pages: string[];
+  sources: IncidentSource[];
+  /** the chart label, ${INCIDENT_MARK_MAX} characters or fewer; a row without one is listed, not drawn */
+  mark?: string;
+  halts?: IncidentHalt[];
+  /** still running */
+  ongoing?: boolean;
+}
+
+export const INCIDENTS: Incident[] = ${lit(checkIncidents(incidents))};
 `;
+}
+
+/** The split from docs/data, checked (buildSupplySplit). */
+export function readSupplySplit(root = ROOT): SupplySplit {
+  const file = JSON.parse(readFileSync(join(root, 'docs', 'data', 'supply_since_genesis.json'), 'utf8')) as SupplyPeriodsFile;
+  const rows = parseSupplyTsv(readFileSync(join(root, 'docs', 'data', 'supply_by_epoch_1207_2737.tsv'), 'utf8'));
+  return buildSupplySplit(file, rows);
 }
 
 export function exportProof(root = ROOT): { proof: Proof; files: string[] } {
   const md = readFileSync(join(root, 'docs', 'replay-report.md'), 'utf8');
   const ev = JSON.parse(readFileSync(join(root, 'docs', 'events.json'), 'utf8')) as EventsFile;
   const proof = buildProof(parseReport(md), ev);
+  const split = readSupplySplit(root);
   const out = join(root, 'web', 'src', 'generated');
   mkdirSync(out, { recursive: true });
-  const files = [join(out, 'proof.ts'), join(out, 'events.ts')];
+  const files = [join(out, 'proof.ts'), join(out, 'events.ts'), join(out, 'supply.ts')];
   writeFileSync(files[0], renderProofTs(proof));
-  writeFileSync(files[1], renderEventsTs(buildMarkers(ev), ev.generatedAt));
+  writeFileSync(files[1], renderEventsTs(buildMarkers(ev), ev.generatedAt, INCIDENTS));
+  writeFileSync(files[2], renderSupplyTs(split));
   return { proof, files };
 }
 

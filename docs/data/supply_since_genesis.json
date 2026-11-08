@@ -1,0 +1,31 @@
+{
+  "derivedOn": "2026-11-02",
+  "source": "indexer.namada.net (the minted total per epoch) and the chain's own inflation formulas",
+  "genesis": { "nam": "1000000000.000000", "source": "the mainnet genesis balances file: 70,830 allocations, exact sum" },
+  "mintedAt": { "epoch": 2737, "fromBlock": 8511071, "toBlock": 8514218, "nam": "1148734527.288587", "source": "the chain's minted key on three public nodes; equal to the indexer's total supply for epoch 2737" },
+  "epochStarts": [
+    { "epoch": 1207, "block": 3750313, "day": "2025-10-01" },
+    { "epoch": 2200, "block": 6826063, "day": "2026-06-07" },
+    { "epoch": 2410, "block": 7483276, "day": "2026-07-29" }
+  ],
+  "inflationFromEpoch": 49,
+  "publicFundingRateZeroFromEpoch": 1489,
+  "before": {
+    "fromEpoch": 49,
+    "toEpoch": 1206,
+    "observedNam": "91555381.466871",
+    "note": "only the total growth is observed; staking and public funding cannot be told apart there from the formulas alone"
+  },
+  "periods": [
+    { "fromEpoch": 1207, "toEpoch": 2199, "observedNam": "45888919.165399", "stakingNam": "19846001.240615", "publicFundingNam": "10295702.540893", "indexerRows": 985 },
+    { "fromEpoch": 2200, "toEpoch": 2409, "observedNam": "4768289.314453", "stakingNam": "4146759.344549", "publicFundingNam": "0", "indexerRows": 0 },
+    { "fromEpoch": 2410, "toEpoch": 2737, "observedNam": "6521937.341864", "stakingNam": "6521938.278951", "publicFundingNam": "0", "indexerRows": 194 }
+  ],
+  "publicFundingTransfer": {
+    "nam": "52378111.75",
+    "block": 5725013,
+    "at": "2026-03-10T20:05:03Z",
+    "txHash": "5E9C6830725480D376A2E5C1C484CBAC7E782D454E1D68CD1203F6E9772C8B29",
+    "note": "one transparent transfer from a genesis account into the public-funding account: moved, not minted"
+  }
+}

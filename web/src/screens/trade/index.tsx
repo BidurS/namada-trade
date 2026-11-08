@@ -21,14 +21,15 @@
 import { useMemo, useState } from 'react';
 import type { ScreenProps } from '../../app/index';
 import { REWIND_WORDS, useClock, useOverview, useOverviewFailed, useReplay } from '../../app/index';
-import { Button, Notice, Num, OrderflowChart, PriceChart, ProvScope, SkeletonBlock, type ChartRange } from '../../ui/index';
+import { Button, Notice, Num, OrderflowChart, PriceChart, ProvScope, SkeletonBlock, useMinWidth, type ChartRange } from '../../ui/index';
 import type { Stamp } from '../../ui/index';
 import { fmtCount, fmtNamRule, fmtPctSigned, fmtUtcClock } from '../../lib/format';
 import { ageOutStamps } from '../../lib/prov';
-import { PRICE_MOVES } from '../../generated/events';
+import { INCIDENTS, PRICE_MOVES } from '../../generated/events';
+import { TIMELINE_WORDS } from '../../../../shared/copy';
 import { HISTORY_ALL_DAYS, historyCapReached } from '../../../../shared/history';
 import type { Reading, Side, TicketMode } from './model';
-import { DEFAULT_SIZE, PRESET_SIZES, depthOf, fromQuote, fromTable, markerEvents, parseAmount, quoteKey, serviceAnswered, tablePoints } from './model';
+import { DEFAULT_SIZE, PRESET_SIZES, depthOf, fromQuote, fromTable, incidentMarks, markerEvents, parseAmount, quoteKey, serviceAnswered, tablePoints } from './model';
 import { useDailyTrades, useOrderflowHistory, usePairs, usePools, usePriceChanges, usePriceHistory, useQuote, useSizeTable, useTrades, useVolume } from './data';
 import { Ticket } from './Ticket';
 import { SizeBlock } from './SizeBlock';
@@ -154,6 +155,14 @@ export default function TradeScreen({ route }: ScreenProps) {
   }, [overview, kept, history.fetchedAt, history.data]);
   // "All" ran into the cap: the series starts where the request did, not where the record does
   const priceCapped = range === 'all' && history.data != null && historyCapReached(Math.min(history.data.executed[0]?.t ?? Infinity, history.data.quoted[0]?.t ?? Infinity, history.data.pool?.[0]?.t ?? Infinity), at ?? history.fetchedAt ?? clock);
+  // Dated events on Namada as markers, desktop only, and only from where the price history starts (the executed
+  // series' honest start when the server says it, else its first point): nothing is marked where there is no price.
+  const wide = useMinWidth(1024);
+  const marks = useMemo(() => {
+    if (!wide || !history.data) return [];
+    const since = history.data.executedStart ?? history.data.executed[0]?.t ?? null;
+    return incidentMarks(INCIDENTS, since);
+  }, [wide, history.data]);
 
   // the same for the record of what was bought and sold
   const flowKept = flow.data != null && flow.failedAt != null;
@@ -211,6 +220,8 @@ export default function TradeScreen({ route }: ScreenProps) {
                   starts={history.data.starts}
                   executedStart={history.data.executedStart}
                   events={EVENTS}
+                  marks={marks}
+                  marksKey={TIMELINE_WORDS.chartKey}
                   range={range}
                   onRange={setRange}
                   end={at ?? clock}

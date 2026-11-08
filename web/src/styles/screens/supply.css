@@ -55,6 +55,25 @@
   .sp-pipe__pct { font: var(--w-regular) var(--t-12) / 16px var(--font-code); color: var(--c-ink-2); }
   .rts__via { display: block; flex-basis: 100%; }
 
+  /* ---------- NAM since genesis: one sentence on a phone (in place of "What this page shows"); from 1024 px the dated
+     split as one bar on the growth since genesis (shielded rewards, staking, public funding, and the undivided part
+     hatched), its legend, the modelled caveat and the newest epoch's mint. ---------- */
+  .sp-gen__bar { display: grid; gap: var(--s-3); justify-items: start; margin-top: var(--s-2); }
+  .sp-gen__track { display: flex; height: 14px; width: 100%; background: var(--c-line); overflow: hidden; }
+  .sp-gen__seg { display: block; height: 100%; flex: none; }
+  .sp-gen__seg + .sp-gen__seg { box-shadow: inset 1px 0 0 var(--c-bg); }
+  .sp-gen__f--rewards { background: var(--shielded); }
+  .sp-gen__f--staking { background: var(--c-ink); }
+  .sp-gen__f--pgf { background: var(--c-mark); }
+  .sp-gen__f--together { background-color: var(--c-ink-2); background-image: repeating-linear-gradient(135deg, transparent 0 3px, var(--c-bg) 3px 4px); }
+  .sp-gen__legend { display: grid; width: 100%; margin: 0; padding: 0; list-style: none; }
+  .sp-gen__item { display: grid; grid-template-columns: 10px minmax(0, 1fr) auto; align-items: baseline; column-gap: var(--s-2); padding: 10px 0; border-top: 1px solid var(--c-line); font-size: var(--t-13); line-height: 20px; color: var(--c-ink-2); }
+  .sp-gen__sw { display: inline-block; width: 10px; height: 10px; align-self: center; }
+  .sp-gen__name { min-width: 0; }
+  .sp-gen__v { display: grid; justify-items: end; text-align: right; color: var(--c-ink); white-space: nowrap; }
+  .sp-gen__pct { font: var(--w-regular) var(--t-12) / 16px var(--font-code); color: var(--c-ink-2); }
+  .sp-gen .cap { max-width: 72ch; text-wrap: pretty; }
+
   /* ---------- the band's six figures: Osmosis in the first row, staking in the second (3 columns);
      2 x 3 on phones. Hairlines between columns, a hairline above every row after the first. ---------- */
   .sp-facts .facts { grid-template-columns: repeat(2, minmax(0, 1fr)); row-gap: var(--s-4); }

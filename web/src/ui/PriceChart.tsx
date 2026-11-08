@@ -84,6 +84,13 @@ export interface PriceChartProps {
   /** the executed series' honest start: hours before it are not counted as hours without a trade */
   executedStart?: number | null;
   events?: ChartEvent[];
+  /**
+   * Dated events on Namada (generated/events.ts INCIDENTS, through the screen's placement rule): dotted markers in
+   * the mark colour, drawn only inside the window and never before the series' first point. The key's line for them
+   * is `marksKey`. Desktop only: the screen passes none on a phone.
+   */
+  marks?: ChartEvent[];
+  marksKey?: string;
   range: ChartRange;
   onRange?: (r: ChartRange) => void;
   /** The window end (now, or the rewound time). Default: the last point. */
@@ -154,7 +161,7 @@ const clean = <T extends { t: number }>(list: T[] | undefined, ok: (p: T) => boo
 
 export function PriceChart({
   series, bars, barsStepMs, barsMissing, band, flatHours, poolStepMs, poolMissing, starts, executedStart,
-  events = [], range, onRange, end, cursorAt, prov, title, headingId, level = 2, variant = 'price', unit, bucketMs, className = '',
+  events = [], marks = [], marksKey, range, onRange, end, cursorAt, prov, title, headingId, level = 2, variant = 'price', unit, bucketMs, className = '',
 }: PriceChartProps) {
   const now = useUiNow();
   const [boxRef, { w, h }] = useSize<HTMLDivElement>();
@@ -191,9 +198,14 @@ export function PriceChart({
   const L = Math.ceil(Math.max(...yLabels.map((s) => s.length), barsSc ? barsSc.label.length : 0) * CHAR) + 14;
   const R = 10;
   const evIn = events.filter((e) => e.t >= tStart && e.t <= tEnd).slice(0, 3);
+  // dated events on Namada: every one in the window, and none before the first point any series has (no marker where
+  // there is no price history to mark)
+  const mkIn = marks.filter((m) => Number.isFinite(m.t) && m.t >= tStart && m.t <= tEnd && m.t >= earliest);
   const X = lin(tStart, tEnd, L, Math.max(L + 1, w - R));
-  const evRows = stackLabels(evIn.map((e) => ({ x: X(e.t), text: e.label.slice(0, 12) })), CHAR);
-  const T = 26 + Math.max(0, ...evRows) * 14;
+  const labelRows = stackLabels([...evIn, ...mkIn].map((e) => ({ x: X(e.t), text: e.label.slice(0, 12) })), CHAR);
+  const evRows = labelRows.slice(0, evIn.length);
+  const mkRows = labelRows.slice(evIn.length);
+  const T = 26 + Math.max(0, ...labelRows) * 14;
   const B = 26;
   const plotBottom = Math.max(T + 1, h - B - (showBars ? BARS_H + BARS_GAP : 0));
   const Y = lin(yT.lo, yT.hi, plotBottom, T);
@@ -363,6 +375,12 @@ export function PriceChart({
                 <text className="c-evtl" x={X(e.t) + 4} y={14 + evRows[i] * 14} textAnchor={X(e.t) + 4 + e.label.slice(0, 12).length * CHAR > w ? 'end' : 'start'}>{e.label.slice(0, 12)}</text>
               </g>
             ))}
+            {mkIn.map((m, i) => (
+              <g key={`mark-${m.t}-${i}`}>
+                <line className="c-inc" x1={X(m.t)} x2={X(m.t)} y1={T - 6} y2={plotBottom} />
+                <text className="c-incl" x={X(m.t) + 4} y={14 + mkRows[i] * 14} textAnchor={X(m.t) + 4 + m.label.slice(0, 12).length * CHAR > w ? 'end' : 'start'}>{m.label.slice(0, 12)}</text>
+              </g>
+            ))}
             {atX != null ? <line className="c-at" x1={atX} x2={atX} y1={T} y2={showBars ? h - B : plotBottom} /> : null}
             {/* the quoted price's lowest and highest quote in each hour, under every line */}
             {isPrice ? bandRuns.map((run, i) => (run.length > 1 ? (
@@ -415,6 +433,7 @@ export function PriceChart({
         {isPrice && !showBars && barsMissing ? <li className="key__miss"><span data-num="" data-status="none">—</span> NAM traded per hour: {barsMissing}</li> : null}
         {/* each marker is a move between two hours that had trades (generated/events.ts), not always one hour apart */}
         {evIn.length ? <li><i className="key__ln key__ln--evt" />Dashed lines: the {evIn.length === 1 ? 'biggest move' : `${evIn.length} biggest moves`} from one hour with trades to the next</li> : null}
+        {mkIn.length && marksKey ? <li><i className="key__ln key__ln--inc" />{marksKey}</li> : null}
       </ul>
 
       <dl className="cstats">

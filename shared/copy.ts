@@ -352,6 +352,55 @@ export const SHIELDED_WORDS = {
   outEmpty: 'Nothing left the shielded set for a personal address or over the bridge in 30 days.',
 } as const;
 
+/**
+ * The Supply page's "NAM since genesis" sentences (2026-11-07). Every figure arrives already formatted: the words
+ * type none (N2), and web/src/screens/supply/since-genesis.ts computes the parts from the API's live figures and the
+ * dated split in web/src/generated/supply.ts.
+ */
+export const SUPPLY_WORDS = {
+  heading: 'NAM since genesis',
+  /** the one sentence (a phone shows it alone, in place of the "What this page shows" paragraph) */
+  sinceGenesis: (genesisNam: string, nowNam: string, rewardsNam: string, fromEpoch: string, stakingNam: string, publicFundingNam: string) =>
+    `Since genesis, NAM supply grew from ${genesisNam} to ${nowNam} NAM: ${rewardsNam} NAM minted into the shielded pool as shielded rewards (the chain’s own total), the rest staking inflation and public-funding inflation, which can be told apart only from epoch ${fromEpoch} on (${stakingNam} and ${publicFundingNam} NAM since then; before that, together).`,
+  /** the bar's four parts, as its legend names them */
+  parts: {
+    rewards: 'Shielded rewards, minted into the pool (the chain’s own total)',
+    staking: (fromEpoch: string, toEpoch: string) => `Staking inflation, epochs ${fromEpoch} to ${toEpoch}`,
+    publicFunding: (fromEpoch: string, toEpoch: string) => `Public-funding inflation, epochs ${fromEpoch} to ${toEpoch}`,
+    together: (fromEpoch: string, toEpoch: string) => `Staking and public funding together: before epoch ${fromEpoch}, and since epoch ${toEpoch}`,
+  } as const,
+  /** the modelled caveat under the bar */
+  caveat: (derivedOn: string, fromEpoch: string, toEpoch: string, measuredEpochs: string, epochs: string, modelledEpochs: string, modelledFrom: string, modelledTo: string, modelledStakingNam: string) =>
+    `The split from epoch ${fromEpoch} to ${toEpoch} was re-derived ${derivedOn} from indexer.namada.net and the chain’s inflation formulas, epoch by epoch for ${measuredEpochs} of the ${epochs} epochs; for the rest, among them the ${modelledEpochs} epochs from ${modelledFrom} to ${modelledTo} that the indexer lacks, the formulas were carried across, so about ${modelledStakingNam} NAM of the staking figure is modelled, not measured. Before epoch ${fromEpoch} only the total growth is on record, so staking and public funding are said together there, and so is what was minted after epoch ${toEpoch}.`,
+  /** the newest epoch's staking inflation, the chain's own record of it */
+  mintNow: (nam: string, epoch: string, block: string) => `${nam} NAM an epoch goes to stakers (chain record at epoch ${epoch}, block ${block}).`,
+  mintNotRead: 'How much NAM an epoch goes to stakers is not read yet: the chain records it as an epoch starts, and no epoch has started since this site began reading the record.',
+  /** the one large transfer into the public-funding account */
+  transfer: (nam: string, block: string, day: string) =>
+    `The public-funding account also holds ${nam} NAM that arrived in one transfer at block ${block} (${day}): moved from another account, not newly minted.`,
+  /** the source-line labels */
+  scope: {
+    total: 'All NAM in existence',
+    rewards: 'Shielded rewards minted, the chain’s total',
+    split: 'The dated split: staking and public-funding inflation by epoch',
+    mint: 'The newest epoch’s staking inflation, the chain’s record',
+  } as const,
+  /** the tag on the dated part */
+  dated: (day: string) => `Static, dated ${day}`,
+} as const;
+
+/** The incidents timeline's words (web/src/generated/events.ts INCIDENTS; the Shielded page and the chart markers). */
+export const TIMELINE_WORDS = {
+  heading: 'What happened on Namada',
+  lead: 'Dated events on the chain, each with a source you can open: releases, halts and the moves this site’s pages carry. Nothing here says how or why.',
+  /** the phone's one-line disclosure */
+  summary: 'Timeline',
+  ongoing: 'Ongoing',
+  pagesLead: 'On this site:',
+  /** the chart key's line for the dotted markers */
+  chartKey: 'Dotted lines: dated events on Namada, listed under “What happened on Namada” on the Shielded page',
+} as const;
+
 /** The address sheet's sentences of 2026-11-07 (first seen, NAM that came out of the pool, a label's reason). */
 export const ADDRESS_WORDS = {
   firstSeen: (date: string, since: string) => `First seen ${date} by this site, which has listed every Namada balance since ${since}.`,

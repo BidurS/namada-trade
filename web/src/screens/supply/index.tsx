@@ -20,7 +20,7 @@ import type { ScreenProps } from '../../app/index';
 import { useOverview, useReplay, useSession } from '../../app/index';
 import { fetchPressure } from '../../api';
 import { ageOutStamps, unbondingStamp, type Stamp } from '../../lib/prov';
-import { Derived, Fact, HeroNumber, Notice, Num, ProvChip, ProvDot, Segmented, Skeleton, SkeletonBlock, Term, derive, useUiNow, type FactItem } from '../../ui';
+import { Derived, Fact, HeroNumber, Notice, Num, ProvChip, ProvDot, Segmented, Skeleton, SkeletonBlock, Term, derive, useMinWidth, useUiNow, type FactItem } from '../../ui';
 import { NBSP, fmtCount, fmtDateline, fmtNamRule, fmtNamSigned, fmtPctRule, fmtUsdRule } from '../../lib/format';
 import { isMineIn } from '../../ui';
 import { lastWindow, refreshFailedNote, refreshFailedSentence, useLiveLoad, type WindowDays } from './parts';
@@ -28,6 +28,7 @@ import { ReadyToSell } from './ReadyToSell';
 import { Movers } from './Movers';
 import { UNLOCKS_ID, Unlocks, windowWords, type UnlockFilter } from './Unlocks';
 import { Votes } from './Votes';
+import { SinceGenesis } from './SinceGenesis';
 import { epochMs, unbondStates, unbondSums, unbondingAllOf, waitingAll } from './unbonds';
 
 /** The stamp of a figure whose request failed: no data, and why. */
@@ -46,6 +47,8 @@ export default function SupplyScreen({ route }: ScreenProps) {
   const { at, rewound } = useReplay();
   const { session } = useSession();
   const now = useUiNow();
+  // from 1024 px the since-genesis section is whole; a phone shows its one sentence in place of "What this page shows"
+  const wide = useMinWidth(1024);
   const [days, setDays] = useState<WindowDays>(7);
   const [ulFilter, setUlFilter] = useState<UnlockFilter>('all');
   const load = useLiveLoad<Pressure>(at, String(days), () => fetchPressure(at, days));
@@ -295,10 +298,15 @@ export default function SupplyScreen({ route }: ScreenProps) {
               </section>
             </>
           )}
-          <section className="ipg-sec ipg-col--full ipg-about" aria-labelledby="sp-about-h">
-            <h2 id="sp-about-h" className="h2">What this page shows</h2>
-            <p className="ipg-prose">{lead[1]}</p>
-          </section>
+          {/* NAM since genesis: current figures, so not on a rewound page. A phone shows its one sentence in place of the
+              "What this page shows" paragraph (the least informative line here: it restates the page); a desktop shows both. */}
+          {!rewound ? <SinceGenesis overview={o} wide={wide} /> : null}
+          {wide || rewound ? (
+            <section className="ipg-sec ipg-col--full ipg-about" aria-labelledby="sp-about-h">
+              <h2 id="sp-about-h" className="h2">What this page shows</h2>
+              <p className="ipg-prose">{lead[1]}</p>
+            </section>
+          ) : null}
         </div>
       </div>
     </>

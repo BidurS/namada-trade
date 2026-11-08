@@ -93,6 +93,12 @@ export interface SeriesKeyDef {
   osmosisRecord?: boolean;
   /** a pool size stored since before the pools were sized from their reserves: a window reaching back before then says so (pool-sizes.ts PRICED_KEY) */
   sizeBasis?: boolean;
+  /**
+   * A sparse key that is not written by the hourly trade writer (so the writer's marker says nothing about it): the
+   * words of its stamp when the range has no point, and with its newest point's time when it has one. Such a key's
+   * newest point is 'live': the row is the chain's record of an event, not a reading that ages.
+   */
+  words?: { none: string; newest: (at: string) => string };
 }
 
 const MINUTE_GAP = 'No reading was recorded: the minute reader was not running or its source did not answer.';
@@ -128,6 +134,13 @@ export const SERIES_KEYS: Record<string, SeriesKeyDef> = {
   },
   'supply.total_stake': minuteKey('nam', 'Namada RPC abci_query', 'NAM staked with validators (the chain\'s total stake)'),
   'supply.masp_shielded': minuteKey('nam', 'Namada RPC (MASP balance)', 'NAM in the shielded pool'),
+  // one row per epoch step the mint rule judged (cron.ts mintMetricStmt): the staking inflation the chain recorded for
+  // that step, in NAM an epoch, stamped with the tick that judged it
+  'supply.mint': {
+    unit: 'nam', agg: 'last', sparse: true, native: '1h', source: 'Namada RPC abci_query (last_inflation_amount)', backfilled: false, maxAgeMs: Infinity, graceMs: 0, gapWhy: '',
+    startNote: (s) => `The staking inflation the chain recorded for each epoch step since ${s}, in NAM an epoch, written once per step as the mint rule judges it. A step without a point was not judged (the chain's record of it could not be read); nothing earlier exists.`,
+    words: { none: 'No epoch step was judged in this range.', newest: (at) => `Written once per epoch step; the newest step was judged ${at}.` },
+  },
   'price.swap_1h': {
     unit: 'usd_per_nam', agg: 'last', sparse: true, native: '1h', lo: 'price.swap_1h.low', hi: 'price.swap_1h.high', n: 'price.swap_1h.n',
     source: 'executed NAM/USDC swaps (hourly median)', backfilled: true, maxAgeMs: 2 * H + JOB_WINDOW_MS, graceMs: JOB_WINDOW_MS, gapWhy: '', osmosisRecord: true,
@@ -402,10 +415,13 @@ function seriesAnswer(def: SeriesKeyDef, key: string, native: NativePoint[], sta
       source: def.source, at: null, status: 'missing',
       note: start == null ? 'Nothing is recorded for this series yet.'
         : start >= to ? `Nothing in this range: the series starts on ${fmtDay(start)}.`
-        : def.sparse ? 'No hour in this range had a trade.' : 'No reading was recorded in this range.',
+        : def.words ? def.words.none : def.sparse ? 'No hour in this range had a trade.' : 'No reading was recorded in this range.',
     };
   } else if (replay) {
     prov = { source: def.source, at: newest.at, status: 'live' };
+  } else if (def.words) {
+    // a record of an event (an epoch step), not a reading that ages: the newest point is live, its time said
+    prov = { source: def.source, at: newest.at, status: 'live', note: def.words.newest(fmtDayTime(newest.at)) };
   } else if (def.sparse) {
     // Quiet hours make the newest point old by nature; what can go stale is the writer, so its marker decides.
     const job = finite(jobRaw != null ? safeParseJson(jobRaw, null) : null);

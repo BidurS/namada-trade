@@ -5,7 +5,7 @@ import { bodyLimit } from 'hono/body-limit';
 import type { Env } from './util';
 import type {
   Overview, Holder, AddressReport, SearchResult, Check, IntelResponse, DonationConfig, SourceHealth, Provenance, Sourced,
-  AlertsRecentResponse, HoldersResponse, FlowsResponse, HolderCountsKv, SearchGroup, SearchMatch, SearchResponse, Chain, Flow,
+  AlertsRecentResponse, HoldersResponse, FlowsResponse, HolderCountsKv, SearchGroup, SearchMatch, SearchResponse, Chain, Flow, MaspMakeup,
 } from '../../shared/types';
 import { quoteNamTrade, priceSourceName } from './sources/sqs';
 import { PRICE_HOW_KEY, priceHowAt, storedPriceNote, storedPriceSource, type PriceHowLog } from './price-how';
@@ -39,6 +39,7 @@ import { counterpartiesOf, priceAtOf, priceBasisWords, priceHowOf } from '../../
 import { settleUsd } from '../../shared/settle';
 import {
   FLOW_SELECT, flowSelect, rowToFlow, safeParseJson, provAt, metricAt, coverageOf, pressure, blindSpot, alertsWindow, lastAlertBefore, metricSeries, withSettles, metricSeriesRolled, type HistoryPoint, osmosisNetIbc, orderflowSeries,
+  MASP_MAKEUP_KV,
 } from './analytics';
 import { NAM_AMOUNT, NOT_LEGACY_TWIN as NOT_TWIN } from './flows-query';
 import { INTERNAL_ADDRESSES } from '../../shared/alerts';
@@ -52,7 +53,7 @@ import { seriesApp } from './api-series';
 import { depthApp } from './api-depth';
 import { ROLLUP_KEYS } from './series-sql';
 import { DAY_HOURS, HISTORY_ALL_DAYS } from '../../shared/history';
-import { SINGLE_POOL_USDC_SWAP } from './cron';
+import { SINGLE_POOL_USDC_SWAP, MINT_RULE_KV, type MintRuleState } from './cron';
 import { checkStaleMs } from './digest/freshness';
 import { readHealth } from './ops';
 
@@ -151,12 +152,16 @@ app.get('/api/overview', async (c) => {
 
   // Nothing here asks an outside service: the price and the pools are the cron's stored minute (pool-sizes.ts), so a
   // cache miss costs D1 reads only, however many visitors arrive.
-  const [checksRes, health, storedPools] = replay
-    ? [{ results: [] as any[] }, null, { row: null, failed: false }]
+  // The pool's ledger (kv masp.makeup, the daily job's row: the chain's total of shielded rewards) and the mint rule's
+  // state (kv supply.mint_rule: the newest epoch step judged) are current rows, read live only.
+  const [checksRes, health, storedPools, makeup, mintState] = replay
+    ? [{ results: [] as any[] }, null, { row: null, failed: false }, null, null]
     : await Promise.all([
         db.prepare('SELECT * FROM checks').all<any>().catch(() => ({ results: [] as any[] })),
         kvGetJson<Record<string, SourceHealth>>(db, 'source.health'),
         readPoolsRow(db),
+        kvGetJson<MaspMakeup>(db, MASP_MAKEUP_KV).catch(() => null),
+        kvGetJson<MintRuleState>(db, MINT_RULE_KV).catch(() => null),
       ]);
 
   const checks: Check[] = (checksRes.results || []).map((r: any) => checkOf(r, Date.now()));
@@ -273,6 +278,28 @@ app.get('/api/overview', async (c) => {
   const posBalance = mv('supply.pos_bonded');
   const totalStake = mv('supply.total_stake');
   const unstaking = posBalance != null && totalStake != null && mt('supply.pos_bonded') === mt('supply.total_stake') ? Math.max(0, posBalance - totalStake) : null;
+  // The chain's total of shielded rewards, as the daily job last read it (series.ts maspMakeup): old once a day has
+  // passed without a new read; missing with the reason while never read. The newest epoch step's staking inflation,
+  // the chain's own record, from the mint rule's state: missing with the reason until a step has been judged.
+  const REWARDS_SOURCE = 'Namada RPC (shielded rewards total)';
+  const MINT_SOURCE = 'Namada RPC abci_query (last_inflation_amount)';
+  const shieldedRewards: Sourced<number> = makeup?.rewards
+    ? {
+        value: makeup.rewards.nam,
+        prov: {
+          source: REWARDS_SOURCE, at: makeup.rewards.at, height: makeup.rewards.height,
+          status: now - makeup.rewards.at <= 26 * H ? 'live' : 'stale',
+          note: now - makeup.rewards.at <= 26 * H ? `The chain's running total of shielded rewards, read once a day (${makeup.rewards.provider}).` : `Read once a day, and not since ${Math.round((now - makeup.rewards.at) / H)} hours ago (${makeup.rewards.provider}).`,
+        },
+      }
+    : { value: null, prov: { source: REWARDS_SOURCE, at: null, status: 'missing', note: 'The chain\'s total of shielded rewards has not been read yet: it is read once a day.' } };
+  const step = mintState?.lastStep ?? null;
+  const mint: Overview['supply']['mint'] = step
+    ? {
+        nam: Number(BigInt(step.stakingBase)) / 1e6, epoch: step.epoch, height: step.height,
+        prov: { source: MINT_SOURCE, at: step.at ?? mintState?.judgedAt ?? null, height: step.height, status: 'live', note: `The chain's record of the staking inflation minted as epoch ${step.epoch} started, read at block ${step.height} (${step.provider}). It is read again when the next epoch starts.` },
+      }
+    : { nam: null, epoch: null, height: null, prov: { source: MINT_SOURCE, at: null, status: 'missing', note: 'Not read yet: the chain records an epoch\'s staking inflation as the epoch starts, and no epoch has started since this site began reading the record.' } };
   const overview: Overview = {
     generatedAt: now,
     asOf: replay ? asOf : null,
@@ -283,6 +310,8 @@ app.get('/api/overview', async (c) => {
       total: totalSupply, bonded: totalStake, posBalance, unstaking, pgf: mv('supply.pgf'), shielded: mv('supply.masp_shielded'),
       ibcEscrow: mv('supply.ibc_escrow'), osmosis: osmoSupply, transparentLiquid: mv('supply.liquid'),
       prov: supplyProv, osmosisProv: osmoSupplyProv,
+      // current rows, not as of a rewound time: absent under Rewind
+      ...(replay ? {} : { shieldedRewards, mint }),
     },
     heads: {
       osmosis: { value: osmoHead, prov: cov.osmosis },

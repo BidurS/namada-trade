@@ -12,7 +12,7 @@ import { Segmented } from './Segmented';
 import { SourceLine } from './SourceLine';
 import { useSize } from './useSize';
 import { useUiNow } from './now';
-import { lin, nearestIndex, niceTicks, pathOf, stepDecimals, takeaway } from './chartMath';
+import { lin, nearestIndex, niceTicks, pathOf, stackLabels, stepDecimals, takeaway } from './chartMath';
 import { fmtAgo, fmtDayClock, fmtDayMonth, fmtNamRule } from '../lib/format';
 
 export interface SeriesPoint { t: number; v: number }
@@ -36,9 +36,18 @@ export interface SeriesChartProps {
   headingId: string;
   level?: 2 | 3;
   className?: string;
+  /**
+   * Dated events on Namada (generated/events.ts INCIDENTS): dotted markers in the mark colour with a label of 12
+   * characters or fewer, drawn inside the window and never before the first point. `marksKey` is the key's line for
+   * them. Desktop only: the screen passes none on a phone.
+   */
+  marks?: { t: number; label: string }[];
+  marksKey?: string;
 }
 
 const CHAR = 6.6; // JetBrains Mono at 11 px
+/** The chart label's longest form (web/src/ui/PriceChart.tsx cuts the same way). */
+const MARK_CHARS = 12;
 const MON = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
 const dayMonthYear = (t: number) => `${fmtDayMonth(t)} ${new Date(t).getUTCFullYear()}`;
 const monthYear = (t: number) => `${MON[new Date(t).getUTCMonth()]} ${new Date(t).getUTCFullYear()}`;
@@ -59,7 +68,7 @@ export const namShort = (v: number): string => {
   return fmtNamRule(v);
 };
 
-export function SeriesChart({ points, end, ranges, range, onRange, tone, what, unit, prov, provLabel, headingId, level = 2, className = '' }: SeriesChartProps) {
+export function SeriesChart({ points, end, ranges, range, onRange, tone, what, unit, prov, provLabel, headingId, level = 2, className = '', marks = [], marksKey }: SeriesChartProps) {
   const now = useUiNow();
   const [boxRef, { w, h }] = useSize<HTMLDivElement>();
   const [pick, setPick] = useState<number | null>(null);
@@ -77,9 +86,13 @@ export function SeriesChart({ points, end, ranges, range, onRange, tone, what, u
   const yLabels = yT.ticks.map((t) => namTick(t, yT.step));
   const L = Math.ceil(Math.max(...yLabels.map((s) => s.length)) * CHAR) + 14;
   const R = 10;
-  const T = 14;
   const B = 26;
   const X = lin(tStart, tEnd, L, Math.max(L + 1, w - R));
+  // dated events on Namada: every one in the window, and none before the series' first point (nothing to mark there);
+  // their labels stack above the plot, which moves the plot's top down a row per label row
+  const mkIn = E.length ? marks.filter((m) => Number.isFinite(m.t) && m.t >= tStart && m.t <= tEnd && m.t >= E[0].t) : [];
+  const mkRows = stackLabels(mkIn.map((m) => ({ x: X(m.t), text: m.label.slice(0, MARK_CHARS) })), CHAR);
+  const T = mkIn.length ? 26 + Math.max(0, ...mkRows) * 14 : 14;
   const Y = lin(yT.lo, yT.hi, Math.max(T + 1, h - B), T);
   const pts = E.map((p) => [X(p.t), Y(p.v)] as [number, number]);
   const xTicks = [tStart, tStart + (tEnd - tStart) / 2, tEnd];
@@ -186,6 +199,12 @@ export function SeriesChart({ points, end, ranges, range, onRange, tone, what, u
             {xTicks.map((t, i) => (
               <text key={i} className="c-tick" x={X(t)} y={h - 6} textAnchor={i === 0 ? 'start' : i === 2 ? 'end' : 'middle'}>{xFmt(t)}</text>
             ))}
+            {mkIn.map((m, i) => (
+              <g key={`mark-${m.t}-${i}`}>
+                <line className="c-inc" x1={X(m.t)} x2={X(m.t)} y1={T - 6} y2={Math.max(T + 1, h - B)} />
+                <text className="c-incl" x={X(m.t) + 4} y={14 + mkRows[i] * 14} textAnchor={X(m.t) + 4 + m.label.slice(0, MARK_CHARS).length * CHAR > w ? 'end' : 'start'}>{m.label.slice(0, MARK_CHARS)}</text>
+              </g>
+            ))}
             {pts.length > 2 ? (
               <g className="c-wipe">
                 <path className={lineCls} d={pathOf(pts)} />
@@ -207,6 +226,12 @@ export function SeriesChart({ points, end, ranges, range, onRange, tone, what, u
           </svg>
         ) : null}
       </div>
+
+      {mkIn.length && marksKey ? (
+        <ul className="key">
+          <li><i className="key__ln key__ln--inc" />{marksKey}</li>
+        </ul>
+      ) : null}
 
       <dl className="cstats cstats--3">
         <div><dt>Low</dt><dd data-num="">{low ? <>{fmtNamRule(low.v)}<small>{fmtDayMonth(low.t)}{long ? ` ${new Date(low.t).getUTCFullYear()}` : ''}</small></> : '—'}</dd></div>

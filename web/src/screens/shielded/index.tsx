@@ -39,6 +39,10 @@ import { SeriesChart, type SeriesRange } from '../../ui';
 import { lin, nearestIndex } from '../../ui/chartMath';
 import { useSize } from '../../ui/useSize';
 import { FLOW_WINDOWS, FLOW_WINDOW_DEFAULT, PAIR, PAIR_WORDS, SERIES_DAYS, SLICE, flowSums, flowTakeaway, flowWindow, pairFor, slicesIn } from './flow';
+import { INCIDENTS } from '../../generated/events';
+import { TIMELINE_WORDS } from '../../../../shared/copy';
+import { incidentMarks } from '../trade/model';
+import { Timeline } from './Timeline';
 
 const DAY = 86_400_000;
 const RANGES: SeriesRange[] = [
@@ -170,6 +174,9 @@ export default function ShieldedScreen({ route }: ScreenProps) {
   // ---------------- the chart ----------------
   const trend = data?.trend ?? [];
   const firstDaily = trend[0]?.ts ?? null;
+  // dated events on Namada as markers on the trend, desktop only, from the trend's first reading on (nothing is marked where no reading is)
+  const wide = useMinWidth(1024);
+  const marks = useMemo(() => (wide ? incidentMarks(INCIDENTS, firstDaily) : []), [wide, firstDaily]);
   // where the readings switch from one a day to the recent, more frequent ones (from the data itself)
   const switchAt = (() => {
     for (let i = 1; i < trend.length; i++) if (trend[i].ts - trend[i - 1].ts < 20 * 3_600_000) return trend[i - 1].ts;
@@ -219,6 +226,8 @@ export default function ShieldedScreen({ route }: ScreenProps) {
             }
             prov={sp}
             provLabel="Shielded NAM readings"
+            marks={marks}
+            marksKey={TIMELINE_WORDS.chartKey}
           />
         ) : data ? (
           <EmptyState title="No shielded-set readings recorded yet.">The chart appears once there are two readings.</EmptyState>
@@ -248,6 +257,7 @@ export default function ShieldedScreen({ route }: ScreenProps) {
             <>
               <Inside data={data} overview={o} now={now} rewound={rewound} />
               <MovesOut data={data} overview={o} now={now} />
+              <Timeline />
             </>
           ) : err ? (
             <section className="ipg-sec" aria-label="Shielded figures">

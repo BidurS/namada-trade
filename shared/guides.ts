@@ -351,7 +351,10 @@ const namSupply: Guide = {
         { t: 'Before launch, namada.net\'s genesis post proposed that total with no lockups and set out the groups it would be allocated to.', src: ['blogGenesis'] },
         { t: 'NAM could not be transferred at first: the genesis settings made it non-transferable until the launch\'s last phase, and namada.net\'s post of 20 June 2025 announced that full transferability of NAM was enabled and the launch complete.', src: ['genesisParams', 'blogComplete'], fixed: true },
       ],
-      see: [{ to: '/', label: 'All NAM in existence now, with its source and time' }],
+      see: [
+        { to: '/', label: 'All NAM in existence now, with its source and time' },
+        { to: '/supply', label: 'How NAM grew since genesis: shielded rewards, staking and public-funding inflation, with the newest epoch\'s staking mint' },
+      ],
     },
     {
       id: 'staking-rewards',

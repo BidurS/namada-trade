@@ -295,3 +295,17 @@ export function markerEvents(moves: { t1: number; pct: number }[], fmt: (pct: nu
     .sort((a, b) => Math.abs(b.pct) - Math.abs(a.pct))
     .map((m) => ({ t: m.t1, label: fmt(m.pct) }));
 }
+
+/**
+ * The dated events on Namada a chart marks (generated/events.ts INCIDENTS): the rows with a mark, at their moment,
+ * from `since` on (the series' honest start: the executed price begins 2026-08-11, so an event before it has no price
+ * history to mark and is left off the Trade chart; the Shielded trend, which runs from 2025-06-13, passes its own
+ * start). null `since`: the start is not known, so nothing is marked. Time order.
+ */
+export function incidentMarks(rows: { at: number; mark?: string }[], since: number | null): { t: number; label: string }[] {
+  if (since == null || !fin(since)) return [];
+  return rows
+    .filter((r) => fin(r.at) && r.at >= since && !!r.mark)
+    .sort((a, b) => a.at - b.at)
+    .map((r) => ({ t: r.at, label: r.mark as string }));
+}

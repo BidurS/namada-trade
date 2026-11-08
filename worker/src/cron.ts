@@ -515,6 +515,22 @@ export interface MintStep {
   posRiseMatches: boolean | null;
   /** the step is what the chain recorded */
   fits: boolean;
+  /** when the reading that judged the step was made (absent in a state written before 2026-11-07) */
+  at?: number;
+}
+
+/** The series key written once per epoch step the rule judges: the chain's staking inflation of that step, in NAM (series-api.ts SERIES_KEYS). */
+export const MINT_SERIES_KEY = 'supply.mint';
+/**
+ * The metric statement for a newly judged epoch step: the staking inflation the chain recorded for it (last_inflation_amount
+ * at the step's block), in NAM, stamped with this tick's time. null when the tick judged no new step (the same step as the
+ * state before, or none yet), so the key holds one row per step.
+ */
+export function mintMetricStmt(prev: MintRuleState | null | undefined, next: MintRuleState, now: number): Stmt | null {
+  const step = next.lastStep;
+  if (!step || (prev?.lastStep && prev.lastStep.epoch === step.epoch && prev.lastStep.height === step.height)) return null;
+  const nam = Number(BigInt(step.stakingBase)) / 1e6;
+  return Number.isFinite(nam) ? stmt.metric(now, MINT_SERIES_KEY, nam) : null;
 }
 
 /** What judging a reading against the anchor found. */
@@ -624,7 +640,7 @@ export function judgeMint(anchor: MintReading, r: MintReading, keys: MintKeys | 
     epoch: r.epoch, fromHeight: anchor.height, height: r.height, provider: r.provider,
     mintedBeforeBase: anchor.mintedBase, grewBase: grew.toString(), stakingBase: keys.lastInflationBase.toString(), shieldedBase: shielded.toString(),
     shieldedEpoch, maspRiseBase: maspRise?.toString() ?? null, posRiseBase: posRise?.toString() ?? null,
-    posRiseMatches: posRise == null ? null : posRise === keys.lastInflationBase, fits,
+    posRiseMatches: posRise == null ? null : posRise === keys.lastInflationBase, fits, at: r.at,
   });
   if (extra === 0n) return { kind: 'step', step: step(0n, true) };
   if (extra > 0n && shieldedEpoch) {
@@ -2721,6 +2737,9 @@ export async function runCron(env: Env) {
       const m = mintRuleNext(mintPrev, reading, keys, now);
       mintState = m.state;
       checkStmts.push(stmt.check('supply_mint_rule', m.status, MINT_RULE_TITLE, m.detail, now), stmt.kvSet(MINT_RULE_KV, JSON.stringify(m.state), now));
+      // a newly judged epoch step: its staking inflation, the chain's record, as one row of the supply.mint series
+      const mintMetric = mintMetricStmt(mintPrev, m.state, now);
+      if (mintMetric) checkStmts.push(mintMetric);
     }
     const beforeStepBase = mintedEpochBefore(mintState);
 

@@ -418,6 +418,18 @@ export interface Overview {
     transparentLiquid: number | null;
     prov: Provenance;
     osmosisProv: Provenance;
+    /**
+     * The chain's running total of shielded rewards minted into the shielded pool (NAM): the key the daily job reads
+     * at the head (kv masp.makeup, MaspMakeup.rewards), with the block and node it was read from, missing with the
+     * reason while never read. Current only: absent under Rewind, and on servers before 2026-11-07.
+     */
+    shieldedRewards?: Sourced<number>;
+    /**
+     * The staking inflation of the newest epoch step the mint rule judged: the chain's own record (the staking account's
+     * last_inflation_amount, read at the step's block) in NAM an epoch, with that epoch and block. Missing with the
+     * reason until a step has been judged (the first one after the chain resumes). Current only: absent under Rewind.
+     */
+    mint?: { nam: number | null; epoch: number | null; height: number | null; prov: Provenance };
   };
   heads: {
     osmosis: Sourced<number>;
