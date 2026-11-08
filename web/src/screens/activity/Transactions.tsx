@@ -75,6 +75,8 @@ interface Applied {
 function matches(fl: Flow, f: Applied): boolean {
   if (f.chain !== 'all' && fl.chain !== f.chain) return false;
   if (f.kind !== 'all' && !(GROUPS[f.kind]?.includes(fl.kind) ?? (f.kind === 'other' ? isBot(fl) : fl.kind === f.kind))) return false;
+  // the shielded pool's fee for a transaction is listed only when asked for by kind, address, record, block or text (flows-query.ts NOT_FEE)
+  if (f.kind === 'all' && fl.kind === 'masp_fee' && !f.addr && !f.hash && f.height == null && !f.search) return false;
   if (f.since != null && fl.ts < f.since) return false;
   if (f.addr && ![fl.from, fl.to].some((a) => !!a && a.startsWith(f.addr!))) return false;
   if (f.hash && !fl.txHash.toUpperCase().startsWith(f.hash)) return false;

@@ -180,13 +180,13 @@ app.get('/api/overview', async (c) => {
 
     // Bridged in minus bridged out, sends that timed out and were refunded left out (their NAM never left Osmosis).
     osmosisNetIbc(db, dayAgo, asOf).catch(() => null),
-    // Into / out of the shielded pool: shielding, and bridge crossings straight into or out of it; NAM only, each transfer once.
+    // Into / out of the shielded pool: shielding, the pool's fees (masp_fee), and bridge crossings straight into or out of it; NAM only, each transfer once.
     // The day's range on flows_ts (86 rows read on 2026-10-20): the planner otherwise walks every Namada flow on
     // flows_chain_height (52,463 rows).
     db.prepare(`SELECT COUNT(*) total_flows,
           SUM(CASE WHEN kind='bond' THEN amount_num ELSE 0 END) bonded, SUM(CASE WHEN kind='withdraw' THEN amount_num ELSE 0 END) withdrawn,
           SUM(CASE WHEN kind IN ('shield','ibc_in') AND to_addr = ? AND ${NAM_AMOUNT} THEN amount_num ELSE 0 END) shielded,
-          SUM(CASE WHEN kind IN ('unshield','ibc_out') AND from_addr = ? AND ${NAM_AMOUNT} THEN amount_num ELSE 0 END) unshielded
+          SUM(CASE WHEN kind IN ('unshield','masp_fee','ibc_out') AND from_addr = ? AND ${NAM_AMOUNT} THEN amount_num ELSE 0 END) unshielded
          FROM flows f INDEXED BY flows_ts WHERE chain='namada' AND ts >= ? AND ts < ? AND ${NOT_TWIN}`).bind(MASP, MASP, dayAgo, asOf).first<any>().catch(() => null),
     db.prepare(`SELECT (SELECT MAX(height) FROM flows WHERE chain='osmosis' AND ts <= ?) osmo_h, (SELECT MAX(height) FROM flows WHERE chain='namada' AND ts <= ?) nam_h,
                        (SELECT value FROM kv WHERE key='namada.cursor') nam_cursor`).bind(asOf, asOf).first<any>().catch(() => null),
@@ -1120,7 +1120,7 @@ const shortAddr = (a: string) => (a.length <= 18 ? a : `${a.slice(0, 10)}…${a.
 const KIND_WORDS: Record<string, string> = {
   buy: 'Bought', sell: 'Sold', transfer: 'Sent', ibc_in: 'Bridged in', ibc_out: 'Bridged out', bond: 'Staked', unbond: 'Unstaking',
   withdraw: 'Unlocked', rewards: 'Staking rewards', shield: 'Shielded', unshield: 'Unshielded', lp_add: 'Added to a pool', lp_remove: 'Removed from a pool',
-  pgf: 'Public funding', pos_balance: 'Staking account transfer', other: 'Other move',
+  pgf: 'Public funding', pos_balance: 'Staking account transfer', masp_fee: 'Shielded pool fee', other: 'Other move',
 };
 const MATCH_RANK: Record<SearchMatch, number> = { exact: 0, start: 1, end: 2, word: 3, contains: 4 };
 /** Where a name came from, as a stamp (the label's source; a name states no figure). */

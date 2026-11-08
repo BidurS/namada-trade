@@ -123,7 +123,8 @@ export const SQL = {
    *  address also returns Osmosis rows (ibc_out with the MASP address as the packet's receiver). */
   maspIn: `SELECT f.kind, COUNT(*) n, SUM(f.amount_num) nam FROM flows f INDEXED BY flows_to
     WHERE f.to_addr = ? AND f.chain = 'namada' AND f.ts >= ? AND f.ts < ? AND ${NAM_AMOUNT} AND ${NOT_LEGACY_TWIN} GROUP BY f.kind`,
-  /** NAM out of the shielded pool by kind, with the NAM fee the pool paid on each (chain = 'namada': the same guard) */
+  /** NAM out of the shielded pool by kind, with the NAM fee the pool paid on each (chain = 'namada': the same guard); a
+   *  fee filed as a row of its own is the 'masp_fee' kind's row, which figures.ts shapeMasp adds to the fees */
   maspOut: `SELECT f.kind, COUNT(*) n, SUM(f.amount_num) nam, SUM(COALESCE(json_extract(f.meta,'$.maspFeeNam'), 0)) fee_nam FROM flows f INDEXED BY flows_from
     WHERE f.from_addr = ? AND f.chain = 'namada' AND f.ts >= ? AND f.ts < ? AND ${NAM_AMOUNT} AND ${NOT_LEGACY_TWIN} GROUP BY f.kind`,
   /** the NAM fees the pool paid on moves of other coins (rows with tokenSymbol whose maspFeeNam is NAM), as series.dayAggregates adds them */

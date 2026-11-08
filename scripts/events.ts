@@ -52,7 +52,7 @@ function leadFlows(t: number): Flow[] {
   return d1<Flow>(`
     SELECT f.id, f.chain, f.ts, f.kind, f.from_addr, f.to_addr, f.amount_num, f.value_usd, f.meta, l1.label from_label, l2.label to_label
     FROM flows f LEFT JOIN labels l1 ON l1.address=f.from_addr LEFT JOIN labels l2 ON l2.address=f.to_addr
-    WHERE f.ts >= ${t - LEAD} AND f.ts < ${t} AND f.kind != 'rewards' AND f.kind != 'other'
+    WHERE f.ts >= ${t - LEAD} AND f.ts < ${t} AND f.kind NOT IN ('rewards', 'other', 'masp_fee')
       AND f.amount_num >= 5000
       AND ${EXPLOIT}
     ORDER BY f.amount_num DESC LIMIT 80`).filter(notOwner).slice(0, 40);
@@ -67,11 +67,11 @@ for (let i = 1; i < prices.length; i++) {
 }
 moves.sort((x, y) => Math.abs(y.pct) - Math.abs(x.pct));
 
-// 2. whale flows (largest real moves of NAM, excluding reward payouts and arb churn)
+// 2. whale flows (largest real moves of NAM, excluding reward payouts, arb churn and the shielded pool's fees, which are no market event)
 const whales = d1<Flow & { from_label: string | null; to_label: string | null }>(`
   SELECT f.id, f.chain, f.ts, f.kind, f.from_addr, f.to_addr, f.amount_num, f.value_usd, f.meta, l1.label from_label, l2.label to_label
   FROM flows f LEFT JOIN labels l1 ON l1.address=f.from_addr LEFT JOIN labels l2 ON l2.address=f.to_addr
-  WHERE f.kind NOT IN ('rewards','other') AND f.ts >= ${prices[0]?.ts ?? 0}
+  WHERE f.kind NOT IN ('rewards','other','masp_fee') AND f.ts >= ${prices[0]?.ts ?? 0}
     AND ${EXPLOIT}
   ORDER BY f.amount_num DESC LIMIT 40`).filter(notOwner).slice(0, 12);
 

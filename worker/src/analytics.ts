@@ -29,12 +29,27 @@ export function safeParseJson(str: string | null | undefined, fallback: any = {}
   try { return JSON.parse(str); } catch { return fallback; }
 }
 
+/**
+ * The meta keys a flow leaves behind when it leaves the Worker as JSON (rowToFlow, the hub's live stream): maspFeeNam,
+ * the shielded pool's fee for the transaction, is its gas limit times its gas price, a setting of the wallet that built
+ * it. The stored meta keeps the key for the pool's sums (digest/sql.ts maspOut, series.ts dayAggregates), which read
+ * the rows themselves, never a public answer.
+ */
+const PRIVATE_META_KEYS = ['maspFeeNam'] as const;
+export function publicMeta<M extends Record<string, unknown> | null | undefined>(meta: M): M {
+  if (!meta || !PRIVATE_META_KEYS.some((k) => k in meta)) return meta;
+  const out: Record<string, unknown> = { ...meta };
+  for (const k of PRIVATE_META_KEYS) delete out[k];
+  return out as M;
+}
+
 export function rowToFlow(r: any): Flow {
   const stored = safeParseJson(r.meta, null);
   // A Namada coin's name as the token table gives it now (parse/namada.ts withCoinName), the row's counter_denom with
   // it when that was the same name: a row stored before its coin was in the table is never rewritten for it.
-  const meta = withCoinName(stored);
-  const counterDenom = meta !== stored && r.counter_denom === stored.tokenSymbol ? meta.tokenSymbol : r.counter_denom;
+  const named = withCoinName(stored);
+  const counterDenom = named !== stored && r.counter_denom === stored.tokenSymbol ? named.tokenSymbol : r.counter_denom;
+  const meta = publicMeta(named);
   return {
     id: r.id, chain: r.chain, height: r.height, ts: r.ts, txHash: r.tx_hash, explorerHash: explorerHashOf({ txHash: r.tx_hash, meta }), kind: r.kind,
     from: r.from_addr, to: r.to_addr, amount: r.amount_num,
@@ -1130,7 +1145,8 @@ export function matchMaspPassthroughs(
 export const publicPair = ({ inFrom: _inFrom, inAmount: _inAmount, inTs: _inTs, relDiff: _relDiff, ...pair }: MaspPassthroughLink): MaspPassthroughPair => pair;
 
 /**
- * Every NAM leg into or out of the shielded pool, once. Namada records: shield / unshield, and bridge crossings
+ * Every NAM leg into or out of the shielded pool, once. Namada records: shield / unshield, the pool's fees for
+ * transactions (masp_fee: NAM out of the pool to the gas payer), and bridge crossings
  * straight into or out of the pool (escrow → pool, pool → escrow, recorded as ibc_in / ibc_out, or as shield /
  * unshield by older parser builds). Osmosis records of crossings to or from the pool are added when Namada has
  * no record of the same crossing (same amount within 15 minutes, and the same Osmosis address when Namada
@@ -1175,7 +1191,7 @@ export async function blindSpot(db: D1Database, asOf: number, replay: boolean): 
     db.prepare(`SELECT ts, value FROM metrics WHERE key='supply.masp_shielded.daily' AND ts <= ? ORDER BY ts`).bind(asOf).all<{ ts: number; value: number }>().catch(() => ({ results: [] as any[] })),
     // NAM only (shielding another coin is not NAM), each transfer once (older twin rows left out).
     db.prepare(`SELECT f.kind, f.ts, f.from_addr, f.to_addr, f.amount_num FROM flows f WHERE f.chain='namada' AND f.ts >= ? AND f.ts < ?
-                AND f.kind IN ('shield','unshield','ibc_in','ibc_out') AND (f.to_addr = ? OR f.from_addr = ?) AND ${NAM_AMOUNT} AND ${NOT_LEGACY_TWIN}`)
+                AND f.kind IN ('shield','unshield','masp_fee','ibc_in','ibc_out') AND (f.to_addr = ? OR f.from_addr = ?) AND ${NAM_AMOUNT} AND ${NOT_LEGACY_TWIN}`)
       .bind(from30, asOf, MASP, MASP).all<any>().catch(() => ({ results: [] as any[] })),
     osmosisSendsOut(db, from30 - PAIR_MS, asOf).catch(() => ({ outs: [] as IbcRow[], refunded: 0 })),
     db.prepare(`SELECT ts, from_addr, to_addr, amount_num FROM flows WHERE chain='osmosis' AND kind='ibc_in' AND from_addr = ? AND ts >= ? AND ts < ?`)

@@ -342,37 +342,78 @@ export function parseNamadaBlock(block: NamadaBlock, priceUsd: number | null, fe
   };
 
   /**
+   * The inner transactions whose fee the shielded pool paid: the chain marks each with a masp/fee-payment event
+   * (attributes: hash, height, indexed-tx, inner-tx-hash, section; it names no account). A shielded-to-shielded
+   * transfer that pays its gas from the pool emits only this event and one token/transfer, the pool to the gas payer.
+   */
+  const feePaidBy = new Set<string>();
+  /**
+   * The shielded pool's own NAM balance after each inner transaction's legs, from the token/transfer events'
+   * post-balances, by inner transaction hash: the last event of the inner transaction that carries one, so an inner
+   * transaction with several events gives the balance after all of its legs (never a "before" derived per event). Kept
+   * on every NAM flow that touches the pool as meta.maspPostNam, in base units as the chain writes them. An event
+   * without an inner transaction hash is read on its own (keyed by its index).
+   */
+  const maspPostOf = new Map<string, string>();
+  block.events.forEach((e, i) => {
+    if (e?.type === 'masp/fee-payment') {
+      const inner = (attrs(e)['inner-tx-hash'] || '').toUpperCase();
+      if (inner) feePaidBy.add(inner);
+    } else if (e?.type === 'token/transfer') {
+      const a = attrs(e);
+      const key = (a['inner-tx-hash'] || '').toUpperCase() || `#${i}`;
+      for (const p of entries(a['post-balances'])) if (p.account === I.masp && p.token === NAM.namadaToken && unitsOf(p.amount) !== null) maspPostOf.set(key, p.amount);
+    }
+  });
+
+  /**
    * The NAM flows of one event's NAM legs, one per leg (pairLegs). The first keeps the id `idBase`, so an event with
-   * one source and one target is written as before; the others are `idBase:<n>`.
+   * one source and one target is written as before; the others are `idBase:<n>`. `postKey`: the inner transaction
+   * hash the event's legs belong to (its index when it has none), for the pool's post-balance (maspPostOf).
    *
-   * The shielded pool's fee: an unshield (the pool the only source) usually carries a second, small target, the gas
-   * payer the pool pays for the transaction (blocks 8,288,955, 7,011,473). That target's leg is kept in the first
-   * flow's meta (maspFeeNam), so pool accounting can add it back, and never a leg above MASP_FEE_CAP_NAM or into a
-   * protocol account (staking, the bridge escrow: those never pay gas, so a small bond or bridge send out of the pool
-   * is a flow of its own). Which target paid gas:
-   * - the wrapper's fee payer, when it is given (`feePayers`, the key in the wrapper's header): its leg is the fee,
-   *   whatever its size next to the others, and no leg is when it is not a target (the fee was paid from elsewhere);
-   * - otherwise the events alone, which never name it. A masp/fee-payment event marks an inner transaction whose fee
-   *   the pool paid, but names no account (its attributes: hash, height, indexed-tx, inner-tx-hash, section), and this
-   *   parser does not read it. The event is there for a pool fee leg with one target; of the 2,491 fee-shaped pool
-   *   transfers with more than one target in the 70,908 blocks of scripts/out/history/masp_blocks (to block
-   *   7,172,196), 19 carry it. Read from the targets alone, the fee is the smallest target, when it is the only one
-   *   that can be the fee. When another can too (303 of the 2,491), none is read as the fee and each is a flow of its
-   *   own, the gas payer's an unshield to it: the smallest is not always the gas payer (block 4,349,059: 0.0625 NAM to
-   *   an account that held exactly that afterwards, the gas payer, and 0.000001 to one that already held NAM), and a
-   *   fee read off the wrong leg hides the recipient's receipt.
+   * The shielded pool's fee, the leg to the gas payer the pool pays for the transaction. Never a leg above
+   * MASP_FEE_CAP_NAM or into a protocol account (staking, the bridge escrow: those never pay gas, so a small bond or
+   * bridge send out of the pool is a flow of its own). Two shapes:
+   * - the pool the only source and its one target (blocks 8,515,250, 0.175 NAM): a shielded transaction that moved
+   *   nothing else out of the pool, whose fee the pool paid. The chain marks such an inner transaction with a
+   *   masp/fee-payment event, and that event decides: with it, the leg is the fee and is filed as a flow of kind
+   *   'masp_fee' (from the pool, to the gas payer, the leg's amount), so the pool's sums count it and no list of moves
+   *   shows it as NAM someone received; without it, the leg is an unshield to that account, as before. When the
+   *   wrapper's fee payer is given (`feePayers`, the key in the wrapper's header) the target must be that account;
+   *   when it is not, the event and the cap decide and the wrapper is noted (feePayerWanted) so the block is read
+   *   again with it.
+   * - the pool the only source and more than one target, the usual unshield (blocks 8,288,955, 7,011,473, 8,510,819):
+   *   the gas payer's leg is kept in the first flow's meta (maspFeeNam), so pool accounting can add it back. Which
+   *   target paid gas: the wrapper's fee payer when it is given (its leg is the fee, whatever its size next to the
+   *   others, and no leg is when it is not a target: the fee was paid from elsewhere); otherwise the events alone,
+   *   which never name it (the masp/fee-payment event names no account; of the 2,491 fee-shaped pool transfers with
+   *   more than one target in the 70,908 blocks of scripts/out/history/masp_blocks, to block 7,172,196, 19 carry it).
+   *   Read from the targets alone, the fee is the smallest target, when it is the only one that can be the fee. When
+   *   another can too (303 of the 2,491), none is read as the fee and each is a flow of its own, the gas payer's an
+   *   unshield to it: the smallest is not always the gas payer (block 4,349,059: 0.0625 NAM to an account that held
+   *   exactly that afterwards, the gas payer, and 0.000001 to one that already held NAM), and a fee read off the
+   *   wrong leg hides the recipient's receipt.
    * The limit left without the wrapper: the one target that can be the fee is read as the fee even when the fee was
    * paid from elsewhere, so up to MASP_FEE_CAP_NAM per transfer can be filed as a fee and not as the receipt of the
-   * account it went to. Every leg is in the flows or in maspFeeNam either way, so the pool's outflow stays whole.
-   * Every other leg is a flow of its own too, a shield's side output included (block 4,707,359: 10 NAM shielded and
-   * 0.1 NAM to another account, a transparent transfer that never touched the pool).
+   * account it went to. Every leg is in the flows (an unshield, or a 'masp_fee') or in maspFeeNam either way, so the
+   * pool's outflow stays whole. Every other leg is a flow of its own too, a shield's side output included (block
+   * 4,707,359: 10 NAM shielded and 0.1 NAM to another account, a transparent transfer that never touched the pool).
    */
-  const namFlows = (idBase: string, txHash: string, innerTxHash: string, descriptor: string, src: Leg[], dst: Leg[]) => {
+  const namFlows = (idBase: string, txHash: string, innerTxHash: string, descriptor: string, src: Leg[], dst: Leg[], postKey: string) => {
     if (!src.length && !dst.length) return;
     const s = [...src].sort(byUnitsDesc);
     const d = [...dst].sort(byUnitsDesc);
+    const maspPost = maspPostOf.get(postKey);
     let maspFee: bigint | null = null;
-    if (s.length === 1 && s[0].account === I.masp && d.length > 1) {
+    /** the one leg is the pool's fee itself (kind 'masp_fee') */
+    let feeLeg = false;
+    if (s.length === 1 && s[0].account === I.masp && d.length === 1 && feeSized(d[0]) && feePaidBy.has(innerTxHash)) {
+      const payer = payerOf(txHash);
+      if (payer === undefined) {
+        wantPayer(txHash);
+        feeLeg = true;
+      } else feeLeg = d[0].account === payer;
+    } else if (s.length === 1 && s[0].account === I.masp && d.length > 1) {
       const payer = payerOf(txHash);
       let k = -1;
       if (payer !== undefined) k = d.findIndex((l) => l.account === payer && feeSized(l));
@@ -387,13 +428,16 @@ export function parseNamadaBlock(block: NamadaBlock, priceUsd: number | null, fe
     pairs.forEach((l, k) => {
       const id = k === 0 ? idBase : `${idBase}:${k}`;
       const amount = toNam(l.units);
-      const kind = classify(descriptor, l.from, l.to);
+      const kind: Flow['kind'] = feeLeg ? 'masp_fee' : classify(descriptor, l.from, l.to);
       let flowFrom = l.from;
       let flowTo = l.to;
       const meta: Record<string, unknown> = {
         descriptor,
         ...(innerTxHash ? { innerTxHash } : {}),
         ...(k === 0 && maspFee !== null ? { maspFeeNam: toNam(maspFee) } : {}),
+        // the pool's own NAM after this inner transaction, on every leg into or out of it (the escrow legs of a
+        // crossing through the pool included: l.from and l.to are the legs' own ends, before a packet renames them)
+        ...(maspPost !== undefined && (l.from === I.masp || l.to === I.masp) ? { maspPostNam: maspPost } : {}),
         ...(assumed ? { pairing: 'largest-first' } : {}),
         // priced at the quote for the block's minute, and says so (as the PoS requests and Osmosis rows do)
         ...(priceUsd != null ? { priceSource: 'spot' } : {}),
@@ -558,12 +602,12 @@ export function parseNamadaBlock(block: NamadaBlock, priceUsd: number | null, fe
         },
       });
       // `:nam` keeps these ids apart from every Case B id of the block (`namada:<hash>:<i>[:<n>]`).
-      if (feeUnits === null) namFlows(`namada:${txHash}:${i}:nam`, txHash, innerTxHash, descriptor, namSrc, namDst);
+      if (feeUnits === null) namFlows(`namada:${txHash}:${i}:nam`, txHash, innerTxHash, descriptor, namSrc, namDst, innerTxHash || `#${i}`);
       return;
     }
 
     // Case B: Pure NAM transfer
-    namFlows(`namada:${txHash}:${i}`, txHash, innerTxHash, descriptor, namSrc, namDst);
+    namFlows(`namada:${txHash}:${i}`, txHash, innerTxHash, descriptor, namSrc, namDst, innerTxHash || `#${i}`);
   });
 
   // Keep only the last post-balance per address within the block

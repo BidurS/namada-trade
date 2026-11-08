@@ -1,6 +1,6 @@
 // W1: GET /api/flows?minNam=&arb=false — newest first, bots removed, at least N NAM, limit clamp kept.
 import { describe, it, expect } from 'vitest';
-import { flowsWhere, flowsFilterFromQuery, NOT_BOT, NAM_AMOUNT, NOT_LEGACY_TWIN, FLOWS_ORDER } from '../worker/src/flows-query';
+import { flowsWhere, flowsFilterFromQuery, NOT_BOT, NOT_FEE, NAM_AMOUNT, NOT_LEGACY_TWIN, FLOWS_ORDER } from '../worker/src/flows-query';
 import { app } from '../worker/src/api';
 import { testD1, insert } from './d1-sqlite';
 import type { FlowsResponse } from '../shared/types';
@@ -37,11 +37,11 @@ describe('the flows filter', () => {
     expect(flowsFilterFromQuery(q({}), T)).toMatchObject({ minNam: null, excludeBots: false, whale: false });
   });
 
-  it('builds exactly the conditions asked for', () => {
+  it('builds exactly the conditions asked for (the feed leaves the shielded pool\'s fee rows out: NOT_FEE)', () => {
     const w = flowsWhere({ asOf: T, minNam: 1000, excludeBots: true });
-    expect(w.where).toBe(`WHERE f.ts <= ? AND ${NOT_LEGACY_TWIN} AND f.amount_num >= ? AND ${NAM_AMOUNT} AND ${NOT_BOT}`);
+    expect(w.where).toBe(`WHERE f.ts <= ? AND ${NOT_LEGACY_TWIN} AND ${NOT_FEE} AND f.amount_num >= ? AND ${NAM_AMOUNT} AND ${NOT_BOT}`);
     expect(w.params).toEqual([T, 1000]);
-    expect(flowsWhere({ asOf: T }).where).toBe(`WHERE f.ts <= ? AND ${NOT_LEGACY_TWIN}`);
+    expect(flowsWhere({ asOf: T }).where).toBe(`WHERE f.ts <= ? AND ${NOT_LEGACY_TWIN} AND ${NOT_FEE}`);
     const all = flowsWhere({ asOf: T, chain: 'namada', kind: 'ibc', whale: true, search: 'tnam1x' });
     expect(all.where).toContain("f.kind IN ('ibc_in','ibc_out')");
     expect(all.params).toEqual([T, 'namada', '%tnam1x%', '%tnam1x%', '%tnam1x%']);

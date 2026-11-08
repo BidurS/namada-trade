@@ -1222,10 +1222,11 @@ export const operatorMove = (flow: Flow, whaleNam: number): boolean => isNamWhal
  * Whether the live alert pass (live-hub.ts alertFlows) offers a move to sendDiscordWhaleAlert at all. `minNam` is a
  * NAM size, so it reads NAM moves only. A move into or out of the shielded set is always offered, and so is a move
  * in another coin: no NAM size can measure it, and only a watchlist can match it (no rule or whale size is in its
- * coin), so it is offered for the watchers of its addresses whatever its size.
+ * coin), so it is offered for the watchers of its addresses whatever its size. The shielded pool's fee for a transaction
+ * (kind 'masp_fee') is never offered: it is no one's move.
  */
 export const offeredForAlerts = (flow: Flow, minNam: number): boolean =>
-  isOtherCoin(flow) || flow.kind === 'shield' || flow.kind === 'unshield' || flow.amount >= minNam;
+  flow.kind !== 'masp_fee' && (isOtherCoin(flow) || flow.kind === 'shield' || flow.kind === 'unshield' || flow.amount >= minNam);
 
 // ---------------------------------------------------------------- the messages
 //
@@ -1488,6 +1489,7 @@ export function moveCard(flow: Flow, ctx: MoveContext = {}, late = false): Card 
     }
     case 'shield': who = `From ${P} into the shielded pool`; break;
     case 'unshield': who = `To ${P}, from the shielded pool`; break;
+    case 'masp_fee': who = `To ${P}, the shielded pool's fee for a transaction`; break;
     case 'bond': who = `By ${P}${validator ? `, with validator ${validator}` : ''}`; break;
     case 'unbond': who = `By ${P}${validator ? `, from validator ${validator}` : ''}`; break;
     case 'withdraw': case 'pgf': who = `To ${P}`; break;

@@ -31,7 +31,7 @@ const FILTERS: { value: Filter; label: string; kinds: (k: string) => boolean }[]
   { value: 'all', label: 'All', kinds: () => true },
   { value: 'trades', label: 'Trades', kinds: (k) => ['buy', 'sell', 'lp_add', 'lp_remove'].includes(k) },
   { value: 'bridge', label: 'Bridge', kinds: (k) => k.startsWith('ibc') },
-  { value: 'other', label: 'Staking and shielded', kinds: (k) => ['bond', 'unbond', 'withdraw', 'shield', 'unshield', 'rewards'].includes(k) },
+  { value: 'other', label: 'Staking and shielded', kinds: (k) => ['bond', 'unbond', 'withdraw', 'shield', 'unshield', 'masp_fee', 'rewards'].includes(k) },
 ];
 const FIRST = 20;
 const MORE = 40;

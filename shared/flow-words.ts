@@ -58,14 +58,16 @@ export const partyOf = (f: LabelledLike): Party => partiesOf(f).party;
 
 /** The word before the person a move names, as Home's latest moves writes it ("to", "from", "by"), with its space; none for other kinds. */
 export const partyPreposition = (kind: FlowKind | string): string =>
-  kind === 'unshield' || kind === 'withdraw' ? 'to ' : kind === 'shield' ? 'from ' : kind === 'unbond' || kind === 'bond' ? 'by ' : '';
+  kind === 'unshield' || kind === 'withdraw' || kind === 'masp_fee' ? 'to ' : kind === 'shield' ? 'from ' : kind === 'unbond' || kind === 'bond' ? 'by ' : '';
 
 /**
  * What a move is called, amount first: "791,848 NAM sold on Osmosis", "1,500,000 NAM bridged to Osmosis", "25,100 NAM
  * started unstaking", "290 OSMO moved out of the shielded set to Osmosis". A move in another coin keeps its own symbol
  * (meta.tokenSymbol); amounts follow the site's rule (fmtNamRule: no cents from 1,000 up). A transfer of the staking
  * account's NAM ('pos_balance') is named by its direction, "331,386,682 NAM moved out of the staking account", from
- * whichever side of it is the staking account; a caller that gives neither side gets both directions in the words.
+ * whichever side of it is the staking account; a caller that gives neither side gets both directions in the words. The
+ * shielded pool's fee for a transaction ('masp_fee') is named as what it is, "0.175 NAM paid from the shielded pool as a
+ * transaction fee", never as NAM moved out of the shielded set.
  */
 export function moveTitle(f: MoveLike & Pick<Flow, 'amount' | 'to'> & Partial<Pick<Flow, 'from'>>): string {
   const coin = isOtherCoin(f) ? String(f.meta!.tokenSymbol) : 'NAM';
@@ -79,6 +81,7 @@ export function moveTitle(f: MoveLike & Pick<Flow, 'amount' | 'to'> & Partial<Pi
     case 'sell': return `${amt} sold on Osmosis`;
     case 'shield': return `${amt} moved into the shielded set`;
     case 'unshield': return typeof f.to === 'string' && f.to.startsWith('osmo1') ? `${amt} moved out of the shielded set to Osmosis` : `${amt} moved out of the shielded set`;
+    case 'masp_fee': return `${amt} paid from the shielded pool as a transaction fee`;
     case 'bond': return `${amt} staked`;
     case 'unbond': return `${amt} started unstaking`;
     case 'withdraw': return `${amt} unlocked and withdrawn from staking`;
@@ -113,6 +116,7 @@ export function pastWords(m: Pick<Flow, 'kind' | 'chain'> & { meta?: Record<stri
     case 'sell': return `sold ${amt}`;
     case 'shield': return `moved ${amt} into the shielded set`;
     case 'unshield': return `moved ${amt} out of the shielded set`;
+    case 'masp_fee': return received ? `received ${amt} from the shielded pool as a transaction fee` : `paid ${amt} from the shielded pool as a transaction fee`;
     case 'bond': return `staked ${amt}`;
     case 'unbond': return `started unstaking ${amt}`;
     case 'withdraw': return `withdrew ${amt} from staking`;
