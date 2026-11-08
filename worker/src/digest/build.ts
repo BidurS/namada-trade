@@ -20,6 +20,7 @@ import {
 import { PRICE_HOW_KEY, priceHowAt, storedPriceNote, storedPriceSource, type PriceHowLog } from '../price-how';
 import { DIGEST_HEALTH_LOG_KV, HEALTH_LOG_PER_NAME, digestKeysAsked, readOperatorFigures, type OperatorFigures as ReadOperator } from './operator';
 import { SQL } from './sql';
+import { OPENING_MARK } from '../../../shared/digest-opening';
 import {
   DAY_MS, DB_NOT_ANSWERED, digestWindow, isNotRead, notRead, type Change, type DigestKind, type Figure, type MetricFigure as ReadMetric,
   type NotRead,
@@ -692,8 +693,35 @@ function post(embeds: Embed[], files: DigestFile[]): DigestPost {
  * second message carries the own embed first, when the first message had no room for it, and the attention section
  * at the first level its room allows, with its picture (the owner's decision: the full section as the digest's second
  * message with its picture when the first message has no room, else embed 2). Nothing is cut to make room.
+ *
+ * `opening` is the period's opening, when one was written (digest/opening.ts): it goes first in the shared embed's
+ * description only when that changes nothing else the recipient gets. When it would push another part into a second
+ * message or past a limit, this recipient's digest goes out exactly as it does without one.
  */
-export function postsFor(parts: DigestParts, own: FitPart | null): DigestPost[] {
+export function postsFor(parts: DigestParts, own: FitPart | null, opening: string | null = null): DigestPost[] {
+  const plain = layOutPosts(parts, own);
+  if (!opening) return plain;
+  const opened = layOutPosts({ ...parts, body: { ...parts.body, shared: withOpening(parts.body.shared, opening) } }, own);
+  return sameExceptOpening(plain, opened) && opened.every((p) => discordProblems(p).length === 0) ? opened : plain;
+}
+
+/** The shared embed with the opening first in its description and marked as written by AI; the rest follows unchanged. */
+export function withOpening(shared: Embed, opening: string): Embed {
+  return { ...shared, description: `${opening}\n*${OPENING_MARK}*\n\n${shared.description ?? ''}` };
+}
+
+/** Whether the opening changed only the shared embed: the same posts, and every other embed exactly as it was. */
+function sameExceptOpening(plain: DigestPost[], opened: DigestPost[]): boolean {
+  if (plain.length !== opened.length) return false;
+  return plain.every((p, i) => {
+    const o = opened[i];
+    const skip = i === 0 ? 1 : 0;
+    return p.payload.embeds.length === o.payload.embeds.length && p.files.length === o.files.length
+      && JSON.stringify(p.payload.embeds.slice(skip)) === JSON.stringify(o.payload.embeds.slice(skip));
+  });
+}
+
+function layOutPosts(parts: DigestParts, own: FitPart | null): DigestPost[] {
   const { body } = parts;
   const fitted = fitMessage({ shared: body.shared, own, gallery: body.gallery });
   let embeds = fitted.embeds;
@@ -791,9 +819,9 @@ export interface DigestBuild {
   operatorPosts: DigestPost[];
   subscriberPosts: (wallet: SubscriberWallet) => DigestPost[];
   /** the operator's posts for the targets known at the send (the operator embed's "This digest" and cap lines) */
-  operatorPostsWith: (x: { channels: number; subscribers: number; watchCapWallets: number }) => DigestPost[];
+  operatorPostsWith: (x: { channels: number; subscribers: number; watchCapWallets: number }, opening?: string | null) => DigestPost[];
   /** a subscriber's posts with the watchlists read at the send (null: none were read; a NotRead: the read failed) */
-  subscriberPostsWith: (watch: WatchResult | NotRead | null) => (wallet: SubscriberWallet) => DigestPost[];
+  subscriberPostsWith: (watch: WatchResult | NotRead | null, opening?: string | null) => (wallet: SubscriberWallet) => DigestPost[];
   /** what was left out of the build and why, for the health row and the console (no address, no figure) */
   notes: string[];
 }
@@ -928,20 +956,20 @@ export async function readAndBuildDigest(db: D1Database, now: number, kind: Dige
   const operatorFor = (x: { channels: number; subscribers: number; watchCapWallets: number }) => toMessageOperator(operator, {
     healthLogFirstAt: extras.healthLogFirstAt, channels: x.channels, subscribers: x.subscribers, watchCapWallets: x.watchCapWallets,
   });
-  const operatorPostsWith = (x: { channels: number; subscribers: number; watchCapWallets: number }): DigestPost[] =>
-    postsFor(parts, operatorEmbed(operatorFor(x), now, kind));
+  const operatorPostsWith = (x: { channels: number; subscribers: number; watchCapWallets: number }, opening: string | null = null): DigestPost[] =>
+    postsFor(parts, operatorEmbed(operatorFor(x), now, kind), opening);
   const targets = opts.targets ?? { channels: 1, subscribers: 0 };
   const operatorMessage = operatorFor({ ...targets, watchCapWallets: watch && !isNotRead(watch) ? watch.capped : 0 });
   const operatorPosts = postsFor(parts, operatorEmbed(operatorMessage, now, kind));
 
-  const subscriberPostsWith = (w: WatchResult | NotRead | null) => (wallet: SubscriberWallet): DigestPost[] => {
+  const subscriberPostsWith = (w: WatchResult | NotRead | null, opening: string | null = null) => (wallet: SubscriberWallet): DigestPost[] => {
     const list = wallet.watchlist ?? [];
-    if (!wallet.watchlistOn || !list.length) return postsFor(parts, null);
+    if (!wallet.watchlistOn || !list.length) return postsFor(parts, null, opening);
     const lines: ReadWatchLine[] | NotRead = w == null
       ? notRead('watchlist', null, 'the watchlists were not part of this run')
       : isNotRead(w) ? w
         : w.lines.get(wallet.address) ?? notRead('watchlist', null, "this wallet's watchlist was not part of this run");
-    return postsFor(parts, watchlistPart(toMessageWatch(lines), now, kind));
+    return postsFor(parts, watchlistPart(toMessageWatch(lines), now, kind), opening);
   };
   const subscriberPosts = subscriberPostsWith(watch);
 

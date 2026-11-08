@@ -12,6 +12,8 @@ import { MASP_INDEXER_HEALTH, MASP_INDEXER_MAX_HEIGHTS, maspIndexerHeight, maspI
 import { MASP_SEEN_RANGE_SQL, seenKey } from './masp-seen';
 import { MASP_ADDRESS, SQL as DIGEST_SQL } from './digest/sql';
 import { fetchIntelChecked } from './sources/intel';
+import { runProposalSummaries } from './proposal-summaries';
+import { runAskSelfTest } from './ask';
 import { sendTelegramForum, sendTelegramGov, sendTelegramHour, telegramRun, TG_CRON_MS, TG_CRON_SENDS } from './sources/telegram';
 import { postGovOnX, postHourCrossingOnX, postHourLiquidityOnX, postHourOnX, repostNamada } from './sources/x';
 import { namFloors, publicHour } from './public-posts';
@@ -35,6 +37,7 @@ import {
 } from './holders';
 import * as series from './series';
 import { prepareDigests, sendDigests, type DigestRun } from './digest/deliver';
+import { digestOpeningMaker } from './digest/opening';
 import { DIGEST_HEALTH_LOG_KV, HEALTH_LOG_PER_NAME } from './digest/operator';
 import { runOps } from './ops';
 import { postHaltNotice } from './halt-notice';
@@ -136,7 +139,7 @@ async function syncIntelAndAlerts(env: Env, health: SourceHealth[]) {
     // The digests due (the day's from 08:00 UTC, the week's on Mondays; digest/deliver.ts) are built from D1 alone
     // beside the intel read, so its timeout never delays them; they are sent after the governance alerts and before
     // the forum's, under the same budget. A Worker that does not send alerts builds and claims none.
-    const digests = prepareDigests(env.DB, t0, sendsAlerts(env)).catch((e): DigestRun => {
+    const digests = prepareDigests(env.DB, t0, sendsAlerts(env), digestOpeningMaker(env)).catch((e): DigestRun => {
       console.error('digest: the periods due could not be read', e);
       return { jobs: [], rows: [] };
     });
@@ -2497,6 +2500,11 @@ export async function runCron(env: Env) {
   // The halt's one notice (halt-notice.ts), beside the chain reads; it ends before the tick's lock is released, so two
   // ticks never post it at once.
   const haltNotice = postHaltNotice(env).catch((e) => console.error('halt notice', e));
+  // Plain summaries of governance proposals (proposal-summaries.ts), beside the chain reads: once every half hour at
+  // most, only with ANTHROPIC_API_KEY, and it never throws; it ends before the tick's lock is released.
+  const summaries = runProposalSummaries(env, now, signal);
+  // The Ask chat's one review run while it is off (ask.ts): two fixed questions a tick until each has an answer on record.
+  const askReview = runAskSelfTest(env, now);
   try {
     await sweepAuth(env.DB);
     // A channel saved on while its connection notice did not reach it is on trial: one no post reached within a day
@@ -3242,6 +3250,8 @@ export async function runCron(env: Env) {
     await intel;
     await trials;
     await haltNotice;
+    await summaries;
+    await askReview;
     if (health.length > merged) await mergeHealth(env, health.slice(merged));
     // The operator's incidents (ops.ts): the tick's rows and checks judged once all are written, and the tick's
     // completion recorded (the live hub and /api/health read it). The lock expires TICK_LOCK_MS after it was taken,

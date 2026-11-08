@@ -60,6 +60,7 @@ import { UpdateBanner } from './UpdateBanner';
 import { StaleBanner } from './StaleBanner';
 import { HaltBanner } from './HaltBanner';
 import { GUIDE_ROUTES } from '../../../shared/routes';
+import { AskHost } from '../screens/ask/AskHost';
 
 export interface ScreenProps {
   view: ViewId;
@@ -207,6 +208,7 @@ function Shell() {
       <Outlet />
       <Footer />
       <TabBar />
+      <AskHost />
     </div>
   );
 }

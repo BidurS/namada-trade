@@ -1,0 +1,90 @@
+/* ==========================================================================
+   The Ask chat (screens/ask). Square, with the sheets' 2 px yellow top rule, on the ink ground: it reads as one of the
+   site's own panels. Phone and tablet: a full-height modal sheet held above the keyboard (--ask-h from the visual
+   viewport). From 1280 px: a panel docked on the right; the page moves aside (html.ask-docked), so nothing is covered.
+   ========================================================================== */
+@layer components {
+  /* the one line on the page */
+  .ask-band { padding-block: 0; border-bottom: 1px solid var(--c-line); }
+  .ask-line { display: flex; align-items: center; justify-content: space-between; gap: var(--s-3); width: 100%; min-height: 52px; padding: 0; background: none; border: 0; color: var(--c-ink); font-size: var(--t-15); line-height: var(--lh-15); font-weight: var(--w-medium); text-align: left; cursor: pointer; }
+  .ask-line .ico { flex: none; width: 18px; height: 18px; transition: transform var(--d-2) var(--ease-enter); }
+  .ask-line:hover .ico { transform: translateX(3px); }
+  .rail__in .ask-line { min-height: 44px; margin-bottom: var(--s-3); border-bottom: 1px solid var(--c-line); font-size: var(--t-13); line-height: var(--lh-13); }
+
+  .ask { display: flex; flex-direction: column; margin: 0; padding: 0; border: 0; border-top: 2px solid var(--accent); background: var(--surface); color: var(--c-ink); overflow: hidden; }
+  .ask[hidden] { display: none; }
+  dialog.ask:not([open]) { display: none; }
+  .ask:focus { outline: none; }
+
+  .ask--modal { position: fixed; top: var(--ask-top, 0); left: 0; right: 0; bottom: auto; width: 100%; max-width: none; height: var(--ask-h, 100dvh); max-height: none; transition: transform var(--d-2) var(--ease-state); }
+  .ask--modal::backdrop { background: var(--scrim); }
+  .ask--modal[open] { animation: nt-sheet-in var(--d-3) var(--ease-enter); }
+  .ask--modal[open]::backdrop { animation: nt-fade-in var(--d-3) var(--ease-enter); }
+  html:has(.ask--modal[open]) { overflow: hidden; }
+
+  .ask--docked { position: fixed; z-index: calc(var(--z-header) - 1); top: var(--ask-top, var(--header-h)); right: 0; bottom: 0; width: 420px; border-left: 1px solid var(--c-line-strong); animation: nt-side-in var(--d-3) var(--ease-enter); }
+  html.ask-docked .app__main, html.ask-docked .foot { padding-right: 420px; }
+  /* the rail is narrower beside the panel: its stamps wrap rather than run under it */
+  html.ask-docked .home .rail * { white-space: normal; }
+
+  @media (min-width: 640px) {
+    .ask--modal { left: auto; width: 460px; border-left: 1px solid var(--c-line-strong); }
+    .ask--modal[open] { animation-name: nt-side-in; }
+  }
+
+  .ask__head { position: relative; flex: none; display: flex; align-items: center; justify-content: space-between; gap: var(--s-3); padding: var(--s-3) var(--s-4); border-bottom: 1px solid var(--c-line); touch-action: none; }
+  .ask--docked .ask__head { touch-action: auto; }
+  .ask__grip { position: absolute; top: 6px; left: 50%; width: 36px; height: 4px; margin-left: -18px; border-radius: var(--r-pill); background: var(--c-line-strong); }
+  .ask--docked .ask__grip { display: none; }
+  .ask__t { font-size: var(--t-18); line-height: var(--lh-18); font-weight: var(--w-semi); letter-spacing: 0; text-transform: none; }
+  .ask__head .icon-btn { margin: -8px -10px -8px 0; }
+
+  .ask__thread { flex: 1 1 auto; min-height: 0; overflow-y: auto; overscroll-behavior: contain; display: flex; flex-direction: column; gap: var(--s-5); padding: var(--s-4); }
+  .ask__thread:focus-visible { outline-offset: -2px; }
+
+  .ask__empty { margin-block: auto; display: grid; gap: var(--s-3); }
+  .ask__emptyh { font-size: var(--t-18); line-height: var(--lh-18); font-weight: var(--w-semi); }
+  .ask__lead { color: var(--c-ink-2); font-size: var(--t-15); line-height: var(--lh-15); text-wrap: pretty; }
+
+  .ask__turn { display: grid; gap: var(--s-3); }
+  .ask__q { justify-self: end; max-width: 85%; padding: 10px var(--s-3); border-radius: var(--r-1); background: var(--surface-2); font-size: var(--t-15); line-height: var(--lh-15); overflow-wrap: anywhere; }
+  .ask__a { display: grid; gap: var(--s-3); font-size: var(--t-15); line-height: var(--lh-15); text-wrap: pretty; animation: nt-fade-in var(--d-3) var(--ease-enter); }
+  .ask__note p { color: var(--c-ink-2); }
+  .ask__note .ask__chip { justify-self: start; }
+
+  .ask__wait { display: flex; align-items: center; gap: var(--s-2); color: var(--c-ink-2); font-size: var(--t-15); line-height: var(--lh-15); }
+  .ask__pulse { flex: none; width: 8px; height: 8px; border-radius: 50%; background: var(--accent-text, var(--c-ink)); animation: ask-pulse 1.4s var(--ease-state) infinite; }
+  @keyframes ask-pulse { 0%, 100% { opacity: .35; } 50% { opacity: 1; } }
+
+  .ask__stamps { display: grid; gap: 6px; font: var(--w-medium) var(--t-12) / var(--lh-12) var(--font-code); color: var(--c-ink-2); }
+  .ask__stamps li { display: flex; align-items: flex-start; gap: var(--s-2); }
+  .ask__stamps .dot { margin-top: 4px; }
+
+  .ask__chips { display: flex; flex-wrap: wrap; gap: var(--s-2); }
+  .ask__chips--stack { flex-direction: column; align-items: flex-start; }
+  .ask__chip, .ask__page { display: inline-flex; align-items: center; min-height: 44px; padding: 8px 14px; border: 1px solid var(--c-line-strong); border-radius: var(--r-pill); background: none; color: var(--c-ink); font-size: var(--t-13); line-height: var(--lh-13); font-weight: var(--w-medium); text-align: left; text-decoration: none; cursor: pointer; }
+  @media (hover: hover) { .ask__chip:hover:not([disabled]), .ask__page:hover { background: var(--c-ink); color: var(--c-bg); border-color: var(--c-ink); } }
+  .ask__chip[disabled] { opacity: .45; cursor: not-allowed; }
+
+  .ask__meta { display: flex; align-items: center; justify-content: space-between; gap: var(--s-3); }
+  .ask__ai { color: var(--c-ink-2); font-size: var(--t-12); line-height: var(--lh-12); }
+  .ask__copy { flex: none; display: inline-flex; align-items: center; gap: 6px; min-height: 44px; margin-right: -6px; padding: 0 6px; background: none; border: 0; color: var(--c-ink-2); font-size: var(--t-12); line-height: var(--lh-12); cursor: pointer; }
+  @media (hover: hover) { .ask__copy:hover { color: var(--c-ink); } }
+  .ask__copy .ico { width: 16px; height: 16px; }
+
+  .ask__latest { position: relative; align-self: center; flex: none; min-height: 44px; margin-block: calc(var(--s-2) * -1) var(--s-2); padding: 0 var(--s-4); border: 1px solid var(--c-line-strong); border-radius: var(--r-pill); background: var(--surface-2); color: var(--c-ink); font-size: var(--t-13); font-weight: var(--w-medium); cursor: pointer; }
+
+  .ask__form { flex: none; display: grid; gap: var(--s-2); padding: var(--s-3) var(--s-4) calc(var(--s-3) + env(safe-area-inset-bottom, 0px)); border-top: 1px solid var(--c-line); }
+  .ask__resting { color: var(--c-ink-2); font-size: var(--t-13); line-height: var(--lh-13); }
+  .ask__box { display: flex; align-items: flex-end; gap: var(--s-2); padding: 4px 4px 4px var(--s-3); border: 1px solid var(--c-line-strong); border-radius: var(--r-1); background: var(--bg); }
+  .ask__box:focus-within { outline: var(--ring-w) solid var(--c-focus); outline-offset: var(--ring-o); }
+  /* 16 px at the least: a smaller field makes iOS zoom the page */
+  .ask__in { flex: 1 1 auto; min-width: 0; min-height: 44px; max-height: 156px; padding: 11px 0; border: 0; background: none; color: var(--c-ink); font: inherit; font-size: 1rem; line-height: 22px; resize: none; }
+  .ask__in:focus { outline: none; }
+  .ask__in::placeholder { color: var(--c-ink-2); opacity: 1; }
+  .ask__send { flex: none; display: grid; place-items: center; width: 44px; height: 44px; border: 0; border-radius: var(--r-pill); background: var(--c-primary-bg); color: var(--c-primary-ink); cursor: pointer; }
+  .ask__send .ico { width: 20px; height: 20px; transform: rotate(-90deg); }
+  .ask__send[disabled] { opacity: .45; cursor: not-allowed; }
+  .ask__count { justify-self: end; color: var(--c-ink-2); font: var(--w-medium) var(--t-12) / var(--lh-12) var(--font-code); }
+  .ask__count[data-over] { color: var(--c-bad); }
+}

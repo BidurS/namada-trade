@@ -185,6 +185,25 @@ test.describe('layout, every viewport', () => {
   });
 });
 
+test.describe('votes with none open, every viewport', () => {
+  test('a phone gains no section; from 640 px the decided proposals are listed under "Votes"', async ({ page }) => {
+    await gotoRoute(page, '/supply');
+    await ready(page);
+    const live = await page.evaluate(() => fetch('/api/pressure?days=7').then((r) => r.json()));
+    const decided = { id: 4241, title: 'Fixture decided', authors: null, abstract: null, type: 'default', status: 'passed', startEpoch: 1, endEpoch: 2, activationEpoch: 3, yayNam: 3, nayNam: 1, abstainNam: 0, discussionsUrl: null };
+    await page.route('**/api/pressure?*', (route) => route.fulfill({ json: { ...live, proposals: [], decided: [decided] } }));
+    await page.reload();
+    await ready(page);
+    if (page.viewportSize()!.width < 640) {
+      await expect(page.locator('#vote-h')).toBeHidden();
+    } else {
+      await expect(page.locator('#vote-h')).toHaveText('Votes');
+      await expect(page.locator('.votes__none')).toHaveText('No vote is open.');
+      await expect(page.locator('.votes__past summary')).toHaveText('Recently decided (1)');
+    }
+  });
+});
+
 test.describe('taps, every viewport', () => {
   test('stacked addresses: a tap on either line opens that line\'s address, never its neighbour\'s; every target 44 px', async ({ page }) => {
     await gotoRoute(page, '/supply');
@@ -305,7 +324,7 @@ test.describe('once', () => {
     await gotoRoute(page, '/supply');
     await ready(page);
     const live = await page.evaluate(() => fetch('/api/pressure?days=7').then((r) => r.json()));
-    if (!live.proposals.length) await expect(page.locator('#vote-h')).toHaveCount(0);
+    if (!live.proposals.length && !live.decided?.length) await expect(page.locator('#vote-h')).toHaveCount(0);
     // the same response with one proposal added (a fixture: the panel must render it, not invent it)
     const proposal = { id: 4242, title: 'Fixture proposal', authors: null, abstract: null, type: 'default_with_wasm', status: 'voting', startEpoch: 1, endEpoch: 2, activationEpoch: 3, yayNam: 3, nayNam: 2, abstainNam: 1, discussionsUrl: null };
     await page.route('**/api/pressure?*', (route) => route.fulfill({ json: { ...live, proposals: [proposal] } }));

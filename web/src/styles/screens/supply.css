@@ -267,4 +267,20 @@
   .vote__yes { background: var(--c-ink); }
   .vote__no { background: repeating-linear-gradient(135deg, var(--c-ink-2) 0 2px, transparent 2px 5px); box-shadow: inset 0 0 0 1px var(--c-ink-2); }
   .vote__abs { background: var(--c-line-strong); }
+  /* on a phone the link has no room beside the title: its nowrap text ran over the title, so it goes under it */
+  @media (max-width: 639px) {
+    .vote__top { flex-direction: column; gap: 0; }
+    .vote__t { padding-top: 0; }
+    .vote__top .xrec { flex-shrink: 0; justify-content: flex-start; }
+  }
+  .vote__sum { display: grid; gap: 4px; }
+  .vote__sum p { font-size: var(--t-13); line-height: 20px; overflow-wrap: anywhere; }
+  .vote__sum .vote__by { font-size: var(--t-12); line-height: 18px; color: var(--c-ink-2); }
+  .votes__none { padding: 14px 0 4px; border-top: 1px solid var(--c-line); }
+  .votes__past { border-top: 1px solid var(--c-line); }
+  /* A phone gains no line here: no section with no vote open, and the closed list replaces the lead when votes are open. */
+  @media (max-width: 639px) {
+    .ipg-sec.votes-sec--past, .votes-sec .ipg-lead { display: none; }
+  }
+  .votes__past > summary { cursor: pointer; min-height: 44px; display: flex; align-items: center; font-size: var(--t-13); font-weight: var(--w-medium); }
 }

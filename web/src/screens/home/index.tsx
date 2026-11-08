@@ -24,6 +24,7 @@ import { Holders } from './Holders';
 import { Rail } from './Rail';
 import { Path } from './Path';
 import { Closing } from './Closing';
+import { AskLine } from '../ask/AskLine';
 
 const HOME = ROUTES.find((r) => r.id === 'home')!;
 
@@ -79,6 +80,7 @@ export default function HomeScreen({ route }: ScreenProps) {
   return (
     <div className="home">
       <Hero o={ov} h1={r.h1} at={at} spark={d.spark} onSources={openSources} supplyP={supplyP} osmoP={osmoBase} holdersP={holdersP} failed={failed} why={ovError} wide={wide} />
+      <AskLine where="band" />
 
       <div className="band ground-ink narrative">
         <div className="wrap narrative__grid">

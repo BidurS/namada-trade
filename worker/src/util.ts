@@ -27,6 +27,8 @@ export interface Env {
   X_API_SECRET?: string;
   X_ACCESS_TOKEN?: string;
   X_ACCESS_SECRET?: string;
+  /** An Anthropic API key (a secret): short summaries of governance proposals (worker/src/proposal-summaries.ts); unset: none are written */
+  ANTHROPIC_API_KEY?: string;
   WHALE_OSMOSIS_NAM?: string;
   WHALE_NAMADA_NAM?: string;
   /** Workers rate limiting (wrangler.jsonc `ratelimits`) for the requests that read many rows or write for anyone (worker/src/http.ts) */
@@ -35,6 +37,8 @@ export interface Env {
   REPLAY_LIMITER?: { limit(o: { key: string }): Promise<{ success: boolean }> };
   /** The search and the lists searched by text, 120 a minute (worker/src/http.ts limiterFor; wrangler.jsonc SEARCH_LIMITER) */
   SEARCH_LIMITER?: { limit(o: { key: string }): Promise<{ success: boolean }> };
+  /** The Ask chat's questions, a few a minute per client address (worker/src/http.ts limiterFor; wrangler.jsonc ASK_LIMITER) */
+  ASK_LIMITER?: { limit(o: { key: string }): Promise<{ success: boolean }> };
   /** /ws upgrade attempts, 60 a minute per client address (worker/src/index.ts, http.ts wsLimited; wrangler.jsonc WS_LIMITER) */
   WS_LIMITER?: { limit(o: { key: string }): Promise<{ success: boolean }> };
   /** The Osmosis quote service calls all visitors' quotes may make, 10 per 10 s per location (worker/src/api.ts quoteBudget) */

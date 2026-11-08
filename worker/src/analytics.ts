@@ -11,6 +11,7 @@ import { QUOTE_KEYS, quotesNeeded, settleMetaOf, settleOf, type Settle } from '.
 import { SELLS_MOST_CUT } from '../../shared/supply-thresholds';
 import { withOsmosisGap } from '../../shared/osmosis-gap';
 import { kvGetJson, kvSet } from './db';
+import { SUMMARIES_KEY, publicSummary, type StoredSummaries } from '../../shared/proposal-summary';
 import { AFTER_CURSOR, FLOWS_ORDER, NAM_AMOUNT, NOT_BELOW, NOT_LEGACY_TWIN } from './flows-query';
 import { safeHttpUrl, explorerHashOf, isOtherCoin, priceAtOf } from '../../shared/flow-rules';
 import { fetchJson, toNam } from './util';
@@ -996,8 +997,12 @@ export async function pressure(db: D1Database, asOf: number, replay: boolean, wi
     }
   }
 
-  const proposals: GovernanceProposal[] = (intel?.proposals ?? []).filter((p) => /voting|pending/i.test(p.status)).slice(0, 8)
-    .map((p) => ({ ...p, discussionsUrl: safeHttpUrl(p.discussionsUrl) }));
+  // Each proposal with its plain summary when one passed the checks (proposal-summaries.ts; kv proposal.summaries).
+  const summaries = (await kvGetJson<StoredSummaries>(db, SUMMARIES_KEY).catch(() => null)) ?? {};
+  const withSummary = (p: GovernanceProposal): GovernanceProposal => ({ ...p, discussionsUrl: safeHttpUrl(p.discussionsUrl), summary: publicSummary(summaries[String(p.id)]) });
+  const proposals: GovernanceProposal[] = (intel?.proposals ?? []).filter((p) => /voting|pending/i.test(p.status)).slice(0, 8).map(withSummary);
+  const decided: GovernanceProposal[] = (intel?.proposals ?? []).filter((p) => /passed|rejected/i.test(p.status))
+    .sort((a, b) => b.id - a.id).slice(0, 5).map(withSummary);
   const now = Date.now();
   // Chain parameters and proposals are current readings (no history), also under Rewind: their stamps say when they were read.
   const current = replay ? { note: 'A current reading, not as of the rewound time.' } : {};
@@ -1058,7 +1063,7 @@ export async function pressure(db: D1Database, asOf: number, replay: boolean, wi
     unbondingProv, chainParams: params,
     ...(unbondTermStructure ? { unbondTermStructure } : {}), unbondTermStructureProv, unbondWithdrawProv,
     pipelineSummary,
-    bondedTrend: bondedTrend.map((p) => ({ ts: p.ts, value: p.value })), movers, proposals, proposalsProv,
+    bondedTrend: bondedTrend.map((p) => ({ ts: p.ts, value: p.value })), movers, proposals, proposalsProv, decided,
     // A window reaching back before the stored Osmosis record is complete says so (shared/osmosis-gap.ts); no figure
     // changes. The window's own figures (the movers, the crossings) reach back to `from`; what each receiver has left
     // is counted from its sells since 30 days before it, so its own stamp reaches back that far.

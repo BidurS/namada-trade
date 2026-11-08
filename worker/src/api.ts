@@ -56,6 +56,7 @@ import { DAY_HOURS, HISTORY_ALL_DAYS } from '../../shared/history';
 import { SINGLE_POOL_USDC_SWAP, MINT_RULE_KV, type MintRuleState } from './cron';
 import { checkStaleMs } from './digest/freshness';
 import { readHealth } from './ops';
+import { answerAsk, askState } from './ask';
 
 /** A check that has not run for this long is served as 'stale': its last result is kept, but it no longer counts as
  *  passing (on 2026-10-19 the supply check kept a green "Passes" for 3.5 h after its source went quiet). */
@@ -142,6 +143,15 @@ function pageParam(c: any): number | Response {
   const page = Math.max(1, parseInt(c.req.query('page') || '1', 10) || 1);
   return page > PAGE_MAX ? c.json({ error: `page must be between 1 and ${PAGE_MAX.toLocaleString('en-US')}` }, 400) : page;
 }
+
+// ---------------------------------------------------------------- the Ask chat (worker/src/ask.ts)
+// Whether the chat is there and open: cached at the edge like the other reads, so a page load costs no D1 read of its own.
+app.get('/api/ask', async (c) => c.json(await askState({ db: c.env.DB, apiKey: c.env.ANTHROPIC_API_KEY, now: Date.now() })));
+// Nothing about a question is stored or logged; only the day's count and the month's spend.
+app.post('/api/ask', async (c) => {
+  const { http, answer } = await answerAsk(await jsonObject(c), { db: c.env.DB, apiKey: c.env.ANTHROPIC_API_KEY, now: Date.now() });
+  return c.json(answer, http as 200, { 'cache-control': 'no-store' });
+});
 
 // ---------------------------------------------------------------- GET /api/overview
 app.get('/api/overview', async (c) => {

@@ -1,8 +1,12 @@
 // Votes in progress (decision D3): governance proposals in voting or waiting to start. A vote
-// can change supply or spending, so it is an unlock event too. Rendered only when non-empty.
+// can change supply or spending, so it is an unlock event too. Below them, the latest decided proposals, behind a
+// closed disclosure (phones and desktop alike). Each proposal shows its plain summary when one passed the checks
+// (shared/proposal-summary.ts), named as written by a Claude model from the proposal's own text. Rendered only when
+// there is a proposal to show. On a phone the section adds no line: with no vote open it is not shown, and with votes
+// open the closed "Recently decided" line takes the place of the lead sentence (supply.css).
 import type { GovernanceProposal, Pressure } from '../../../../shared/types';
 import { Icon, ProvScope, SourceLine } from '../../ui';
-import { fmtNamRule, fmtPctRule } from '../../lib/format';
+import { fmtNamRule, fmtPctRule, fmtUtcLong } from '../../lib/format';
 import { safeHttpUrl } from '../../../../shared/flow-rules';
 import { proposalStatusWords, proposalTypeWords } from '../../../../shared/flow-words';
 
@@ -12,16 +16,29 @@ const plainStatus = proposalStatusWords;
 const plainType = proposalTypeWords;
 
 export function Votes({ data }: { data: Pressure }) {
-  if (!data.proposals.length) return null;
+  const decided = data.decided ?? [];
+  if (!data.proposals.length && !decided.length) return null;
   return (
-    <ProvScope as="section" className="ipg-sec ipg-col--full" aria-labelledby="vote-h" data-decision="D3">
+    <ProvScope as="section" className={`ipg-sec ipg-col--full votes-sec${data.proposals.length ? '' : ' votes-sec--past'}`} aria-labelledby="vote-h" data-decision="D3">
       <div className="ipg-sec__head">
-        <h2 id="vote-h" className="h2">Votes in progress</h2>
-        <p className="lead ipg-lead">Proposals that can change how much NAM exists or where public funds go.</p>
+        <h2 id="vote-h" className="h2">{data.proposals.length ? 'Votes in progress' : 'Votes'}</h2>
+        {data.proposals.length ? <p className="lead ipg-lead">Proposals that can change how much NAM exists or where public funds go.</p> : null}
       </div>
-      <ul className="votes">
-        {data.proposals.map((p) => <VoteRow key={p.id} p={p} />)}
-      </ul>
+      {data.proposals.length ? (
+        <ul className="votes">
+          {data.proposals.map((p) => <VoteRow key={p.id} p={p} />)}
+        </ul>
+      ) : (
+        <p className="vote__n votes__none">No vote is open.</p>
+      )}
+      {decided.length ? (
+        <details className="votes__past">
+          <summary>Recently decided ({decided.length})</summary>
+          <ul className="votes">
+            {decided.map((p) => <VoteRow key={p.id} p={p} />)}
+          </ul>
+        </details>
+      ) : null}
       <SourceLine items={[{ label: 'Proposals and their votes', p: data.proposalsProv ?? { source: 'indexer.namada.net', at: null, status: 'stale', note: 'Read from the Namada indexer; this server does not say when.' } }]} label="Where the votes come from" />
     </ProvScope>
   );
@@ -45,6 +62,7 @@ function VoteRow({ p }: { p: GovernanceProposal }) {
         ) : null}
       </div>
       <p className="vote__s">{plainType(p.type)} · {plainStatus(p.status)}</p>
+      {p.summary ? <Summary s={p.summary} /> : null}
       {total > 0 ? (
         <>
           <div className="vote__bar" aria-hidden="true">
@@ -60,5 +78,15 @@ function VoteRow({ p }: { p: GovernanceProposal }) {
         <p className="vote__n">No votes cast yet.</p>
       )}
     </li>
+  );
+}
+
+/** A proposal's plain summary and who wrote it: a Claude model, from the proposal's own text, on a date. */
+function Summary({ s }: { s: NonNullable<GovernanceProposal['summary']> }) {
+  return (
+    <div className="vote__sum">
+      <p>{s.text}</p>
+      <p className="vote__by">Summary written by {s.model}, an AI model, from the proposal's own text on {fmtUtcLong(s.at)}. The proposal's text is the source.</p>
+    </div>
   );
 }

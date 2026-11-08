@@ -7,6 +7,7 @@ import { checksStamp, type Stamp } from '../../lib/prov';
 import { fmtNamRule, fmtUsdWhole } from '../../lib/format';
 import type { Res } from './data';
 import { daysText } from './Path';
+import { AskLine } from '../ask/AskLine';
 
 export interface RailProps {
   o: Overview | null;
@@ -29,6 +30,8 @@ export function Rail({ o, osmoP, pressure, waitP, checks, rewound, failed, why }
   return (
     <aside className="rail" aria-labelledby="home-rail">
       <div className="rail__in">
+        {/* first in the rail: the rail is sticky and taller than a short screen, so a last row could never be reached */}
+        <AskLine where="rail" />
         <h2 id="home-rail" className="rail__h">{rewound ? 'At that moment' : 'Right now'}</h2>
         <dl className="rail__list">
           <div data-prov-group="">

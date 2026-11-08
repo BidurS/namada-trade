@@ -11,6 +11,7 @@ import type { SourceHealth } from '../../../shared/types';
 import { alertsPaused, sendDiscordDigest, PAUSED_NOTE, type AlertBudget, type DigestDelivery, type DigestOutcome, type WebhookPost } from '../sources/discord';
 import type { StoredSettings } from '../settings';
 import { readAndBuildDigest, type DigestBuild, type DigestPost } from './build';
+import type { OpeningMaker } from './opening';
 import { DIGEST_LATE_NOTE_MS, ago, clock, dayMon, digestDueAt, digestKey, digestLabel, isoDate, lateNote, plural } from './message';
 import { DIGEST_LAST_KV, dailyClaimKey, digestLastKv } from './operator';
 import { DAY_MS, DB_NOT_ANSWERED, isNotRead, notRead, type DigestKind, type NotRead } from './types';
@@ -95,8 +96,12 @@ export async function missedYesterday(db: D1Database, now: number): Promise<Sour
   return { name: DIGEST_HEALTH, ok: false, at: now, note: `No digest on ${dayMon(now - DAY_MS)}: no run between ${hourWords} and 24:00 UTC.` };
 }
 
-/** A period the run sends: its build, started beside the intel read, and what was known of it before. */
-export interface DigestJob { kind: DigestKind; key: string; what: string; now: number; state: 'new' | 'open'; record: DigestRecord | null; build: Promise<DigestBuild | { error: string }> }
+/**
+ * A period the run sends: its build, started beside the intel read, and what was known of it before. `opening` is the
+ * period's opening or null; it starts once the build is done, is settled within OPENING_BUDGET_MS of that
+ * (digest/opening.ts), and never rejects.
+ */
+export interface DigestJob { kind: DigestKind; key: string; what: string; now: number; state: 'new' | 'open'; record: DigestRecord | null; build: Promise<DigestBuild | { error: string }>; opening?: Promise<string | null> }
 export interface DigestRun { jobs: DigestJob[]; rows: SourceHealth[] }
 
 /** Why no digest is claimed or posted on this run: the pause (ALERTS_PAUSED, read as off on purpose) or no SEND_ALERTS. */
@@ -110,7 +115,7 @@ const capFirst = (s: string) => s.charAt(0).toUpperCase() + s.slice(1);
  * does not send). `sends` is sources/discord.ts sendsAlerts(env): a Worker that does not send builds nothing and
  * claims nothing, so a preview deployment or a local run on the same database never takes production's key.
  */
-export async function prepareDigests(db: D1Database, now: number, sends: boolean): Promise<DigestRun> {
+export async function prepareDigests(db: D1Database, now: number, sends: boolean, makeOpening?: OpeningMaker): Promise<DigestRun> {
   const rows: SourceHealth[] = [];
   const jobs: DigestJob[] = [];
   const due = digestsDue(now);
@@ -127,7 +132,13 @@ export async function prepareDigests(db: D1Database, now: number, sends: boolean
       continue;
     }
     if (st.state === 'done') { known.add(key); continue; }
-    jobs.push({ kind, key, what, now, state: st.state, record: st.record, build: readAndBuildDigest(db, now, kind).catch((e) => ({ error: errText(e) })) });
+    const build: Promise<DigestBuild | { error: string }> = readAndBuildDigest(db, now, kind).catch((e) => ({ error: errText(e) }));
+    const state = st.state;
+    // A Worker that does not send never comes here (above), so the pause and a preview deployment make no model call.
+    const opening = makeOpening
+      ? build.then((b) => ('error' in b ? null : makeOpening(b, state))).catch((e) => { console.error(`${what}: no opening: ${errText(e)}`); return null; })
+      : undefined;
+    jobs.push({ kind, key, what, now, state, record: st.record, build, opening });
   }
   // Until the day's digest is sent, the day before is looked at once for a missed digest (its row comes first, so a
   // send this run replaces it).
@@ -157,15 +168,15 @@ async function watchOf(db: D1Database, wallets: StoredSettings[], b: DigestBuild
 }
 
 /** One build as the dispatcher's DigestDelivery: the operator's posts and each subscriber's, with their watchlists read at the send. */
-export function deliveryOf(b: DigestBuild, db: D1Database): DigestDelivery {
+export function deliveryOf(b: DigestBuild, db: D1Database, opening: string | null = null): DigestDelivery {
   return {
     key: b.key,
     what: b.what,
     maxPosts: DIGEST_MAX_POSTS,
-    operator: (t) => b.operatorPostsWith(t).map(toPost),
+    operator: (t) => b.operatorPostsWith(t, opening).map(toPost),
     subscribers: async (wallets) => {
       const watch = await watchOf(db, wallets, b);
-      const of = b.subscriberPostsWith(watch);
+      const of = b.subscriberPostsWith(watch, opening);
       return { postsOf: (u) => of(walletOf(u)).map(toPost), capped: watch && !isNotRead(watch) ? watch.capped : 0 };
     },
   };
@@ -209,8 +220,9 @@ export async function sendDigests(db: D1Database, webhookUrl: string | undefined
       continue;
     }
     for (const n of b.notes) console.warn(`${j.what}: ${n}`);
+    const opening = j.opening ? await j.opening : null;
     let r: DigestOutcome;
-    try { r = await sendDiscordDigest(webhookUrl, deliveryOf(b, db), db, budget); } catch (e) {
+    try { r = await sendDiscordDigest(webhookUrl, deliveryOf(b, db, opening), db, budget); } catch (e) {
       console.error(`${j.what}: not sent:`, e);
       health.push({ name: DIGEST_HEALTH, ok: false, at: Date.now(), note: `${capFirst(j.what)}: not sent: ${errText(e)}`.slice(0, 160) });
       continue;

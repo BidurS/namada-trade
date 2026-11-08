@@ -6,7 +6,7 @@ import { DAY_MS, DAILY_DAYS, HISTORY_FETCH_DAYS } from '../../shared/history';
 import { TRADES_TAPE_LIMIT } from '../../shared/types';
 import { QUOTE_NAM_MIN, QUOTE_NAM_MAX, roundQuoteNam, HEAT_DAYS, CHANGES_LIMIT_MAX } from '../../shared/depth';
 
-export const CACHEABLE_API = /^\/api\/(overview|pools|pressure|blindspot|orderflow|flows|holders|search|metrics\/history|quote\/curve|alerts\/rules|alerts\/recent|intel|series|series\/changes|series\/volume|series\/pairs|series\/trades|series\/values|series\/cohorts|depth|depth\/quote|depth\/history|depth\/heat|depth\/owners|depth\/changes|integrity|donation|health)$/;
+export const CACHEABLE_API = /^\/api\/(overview|pools|pressure|blindspot|orderflow|flows|holders|search|metrics\/history|quote\/curve|alerts\/rules|alerts\/recent|intel|series|series\/changes|series\/volume|series\/pairs|series\/trades|series\/values|series\/cohorts|depth|depth\/quote|depth\/history|depth\/heat|depth\/owners|depth\/changes|integrity|donation|health|ask)$/;
 
 const THRESHOLDS = ['ibcInventory', 'unlock', 'bigSwap', 'unshield', 'bond', 'exitBridge', 'liquidity'];
 /**
@@ -17,6 +17,7 @@ const THRESHOLDS = ['ibcInventory', 'unlock', 'bigSwap', 'unshield', 'bond', 'ex
 export const CACHE_PARAMS: Record<string, string[]> = {
   '/api/overview': ['at'],
   '/api/pools': [],
+  '/api/ask': [],
   '/api/pressure': ['at', 'days'],
   '/api/blindspot': ['at'],
   '/api/orderflow': ['at', 'hours'],
@@ -110,9 +111,10 @@ const EXPORT_EDGE_CACHE = 'public, max-age=5, s-maxage=60';
  * - null: everything else. Each is skipped where its binding is absent; a search falls back to HEAVY_LIMITER when
  *   only that one is bound.
  */
-export type LimiterKind = 'heavy' | 'search';
+export type LimiterKind = 'heavy' | 'search' | 'ask';
 export function limiterFor(url: URL, method = 'GET'): LimiterKind | null {
   const p = url.pathname;
+  if (method === 'POST' && p === '/api/ask') return 'ask';
   if (method === 'POST' || method === 'PUT' || method === 'DELETE') return /^\/api\/(auth\/|labels$|me($|\/))/.test(p) ? 'heavy' : null;
   if (method !== 'GET') return null;
   if (/^\/api\/(export\/|address\/|quote$)/.test(p)) return 'heavy';
@@ -199,12 +201,14 @@ async function limitBy(limiter: Limiter, request: Request, url: URL, message: st
     status: 429, headers: { 'content-type': 'application/json', 'retry-after': '60', 'x-robots-tag': 'noindex', 'cache-control': 'no-store', 'x-content-type-options': 'nosniff' },
   });
 }
+export const ASK_LIMIT_WORDS = 'Too many questions from your address; try again in a minute.';
 export const SEARCH_LIMIT_WORDS = 'Too many searches from your address; try again in a minute.';
 export async function rateLimited(request: Request, env: Env): Promise<Response | null> {
   const url = new URL(request.url);
   const kind = limiterFor(url, request.method);
   if (!kind) return null;
   if (kind === 'search') return limitBy(env.SEARCH_LIMITER ?? env.HEAVY_LIMITER, request, url, SEARCH_LIMIT_WORDS);
+  if (kind === 'ask') return limitBy(env.ASK_LIMITER ?? env.HEAVY_LIMITER, request, url, ASK_LIMIT_WORDS);
   return limitBy(env.HEAVY_LIMITER, request, url, 'Too many requests of this kind from your address; try again in a minute.');
 }
 /**

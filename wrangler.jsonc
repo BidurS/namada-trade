@@ -57,7 +57,9 @@
     // /ws upgrade attempts, 60 a minute per client address (worker/src/http.ts wsLimited), counted before the one
     // LiveHub object sees them: its admission bounds open sockets only, and every attempt is an event in the object
     // that runs the scan.
-    { "name": "WS_LIMITER", "namespace_id": "1005", "simple": { "limit": 60, "period": 60 } }
+    { "name": "WS_LIMITER", "namespace_id": "1005", "simple": { "limit": 60, "period": 60 } },
+    // The Ask chat's questions, per client address (worker/src/http.ts limiterFor): each is a paid model call.
+    { "name": "ASK_LIMITER", "namespace_id": "1006", "simple": { "limit": 5, "period": 60 } }
   ],
 
   // Every minute: holders refresh, prices, supply split, integrity checks, gap-fill.

@@ -686,6 +686,8 @@ export interface Pressure {
   proposals: GovernanceProposal[];
   /** when the proposals were read (absent on servers before 2026-10-17) */
   proposalsProv?: Provenance;
+  /** The latest decided proposals (passed or rejected), newest first, at most five (absent on servers before 2026-11-08) */
+  decided?: GovernanceProposal[];
   /** NAM in sends to Namada over the window that timed out and were refunded (left out of `ibcOut7d`) */
   ibcRefunded7d?: number;
   /**
@@ -1176,6 +1178,11 @@ export interface GovernanceProposal {
   nayNam: number;
   abstainNam: number;
   discussionsUrl: string | null;
+  /**
+   * A short plain summary written by a Claude model from the proposal's own text (shared/proposal-summary.ts), with the
+   * model and when; null or absent when none is shown (none written yet, or one that failed a check).
+   */
+  summary?: { text: string; model: string; at: number } | null;
 }
 
 export interface ValidatorSummary {

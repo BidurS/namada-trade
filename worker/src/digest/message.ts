@@ -606,6 +606,17 @@ function countDelta(m: Metric, c: Ctx, mode: 'always' | 'off-bound'): string {
 
 const fieldNotRead = (name: string, nr: NotRead, c: Ctx, inline = false): EmbedField => ({ name, value: notReadLine(name, nr, c.now), inline });
 
+/** Whether the Namada scan has stopped short of the window's end: its last block is old, or far behind the chain's head. */
+export function namadaScanBehind(ix: NamadaIndex, now: number): boolean {
+  if (ix.cursor == null || ix.cursorAt == null) return false;
+  return now - ix.cursorAt > NAMADA_CURSOR_STALE_MS || (ix.head != null && ix.head - ix.cursor > NAMADA_CURSOR_MAX_LAG);
+}
+/** Whether the Osmosis index counts to the window's end: its stream is up, or its catch-up search is recent. */
+export function osmosisIndexUpToDate(ix: OsmosisIndex | null, now: number): boolean {
+  const live = ix?.live ?? null, sweep = ix?.sweep ?? null;
+  return (!!live && live.connected && now - live.at <= OSMOSIS_LIVE_STALE_MS) || (!!sweep && now - sweep.at <= OSMOSIS_SWEEP_STALE_MS);
+}
+
 /** The Namada flow index's state: its cite, and the partial-window line when the scan is behind. */
 function namadaIndex(c: Ctx): { behind: string | null } {
   const ix = c.fig.anchors.namada;
@@ -614,9 +625,7 @@ function namadaIndex(c: Ctx): { behind: string | null } {
     return { behind: null };
   }
   c.marks.cite('namadaScan', { text: `this site's Namada block scan, read to block ${int(ix.cursor)} at ${timeWords(ix.cursorAt, c.now)}` });
-  const stale = c.now - ix.cursorAt > NAMADA_CURSOR_STALE_MS;
-  const lagging = ix.head != null && ix.head - ix.cursor > NAMADA_CURSOR_MAX_LAG;
-  if (!stale && !lagging) return { behind: null };
+  if (!namadaScanBehind(ix, c.now)) return { behind: null };
   return { behind: `counted to ${timeWords(ix.cursorAt, c.now)} only ${c.marks.sup('namadaScan')} — this site's Namada scan is behind (read to block ${int(ix.cursor)}); moves since are not counted.` };
 }
 /** The Osmosis index's state: the stream is up, or the sweep is recent, or the lines count to the sweep only. */
@@ -626,8 +635,7 @@ function osmosisIndex(c: Ctx): { behind: string | null } {
   const streaming = !!live && live.connected && c.now - live.at <= OSMOSIS_LIVE_STALE_MS;
   const sweptWords = sweep ? `swept to height ${int(sweep.height)} at ${timeWords(sweep.at, c.now)}` : 'no catch-up search on record';
   c.marks.cite('osmosisIndex', { text: `this site's Osmosis stream and catch-up search, ${sweptWords}${streaming ? '' : live ? `; stream down since ${timeWords(live.at, c.now)}` : ''}` });
-  if (streaming) return { behind: null };
-  if (sweep && c.now - sweep.at <= OSMOSIS_SWEEP_STALE_MS) return { behind: null };
+  if (osmosisIndexUpToDate(ix, c.now)) return { behind: null };
   if (!sweep) return { behind: `counted by this site's Osmosis index ${c.marks.sup('osmosisIndex')}, whose stream is down and whose catch-up search has no record; moves may be missing.` };
   return { behind: `counted to ${timeWords(sweep.at, c.now)} only ${c.marks.sup('osmosisIndex')} — this site's Osmosis index is behind (${sweptWords}); moves since are not counted.` };
 }

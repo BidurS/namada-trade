@@ -343,6 +343,10 @@ check "security.txt is plain text"     1 "$(curl -s -o /dev/null -w '%{http_code
 check "search answers in groups"       1 "$(curl -s "$H/api/search?q=anoma" | python3 -c "import sys,json; d=json.load(sys.stdin); print(1 if 'groups' in d and all('group' in r for r in d['results']) else 0)")"
 check "rows-only moves take no count"  1 "$(curl -s "$H/api/flows?limit=10&count=none" | python3 -c "import sys,json; d=json.load(sys.stdin); print(1 if d['total'] is None and len(d['flows']) > 0 else 0)")"
 check "holders page 2 answers"         200 "$(curl -s -o /dev/null -w '%{http_code}' "$H/api/holders?chain=namada&by=total&page=2&limit=50")"
+# the Ask chat, spending nothing: an empty question is 503 while ASK_SHOWN is off (400 once it is on: the release that turns it on changes both lines)
+check "/api/ask is off (503)"          503 "$(curl -s -o /dev/null -w '%{http_code}' -X POST -H 'content-type: application/json' --data '{}' "$H/api/ask")"
+check "/api/ask state is unavailable"  1 "$(curl -s "$H/api/ask" | python3 -c "import sys,json; print(1 if json.load(sys.stdin)['state']=='unavailable' else 0)")"
+check "pressure carries decided"       1 "$(curl -s "$H/api/pressure" | python3 -c "import sys,json; print(1 if 'decided' in json.load(sys.stdin) else 0)")"
 echo "== checks and health"
 curl -s "$H/api/integrity" | python3 -c "
 import sys,json; d=json.load(sys.stdin)
