@@ -32,13 +32,15 @@ const transfer = (post: string) => ({
 });
 
 interface NodeSpec { height: number; catchingUp?: boolean; network?: string; down?: boolean; blockAgeMs?: number; events?: Record<number, any[]> }
-/** The two configured nodes behind one fetch stub, as CometBFT answers; every request is logged as "node path". */
-function chain(spec: { five: NodeSpec; papa: NodeSpec }) {
+/** The configured nodes behind one fetch stub, as CometBFT answers; every request is logged as "node path". */
+function chain(spec: { five: NodeSpec; papa: NodeSpec; sar?: NodeSpec }) {
   const calls: string[] = [];
   vi.stubGlobal('fetch', vi.fn(async (u: string) => {
     const url = new URL(String(u));
-    const who = url.host.includes('5elementsnodes') ? 'five' : 'papa';
-    const n = spec[who];
+    const who = url.host.includes('5elementsnodes') ? 'five' : url.host.includes('papadritta') ? 'papa' : 'sar';
+    // The third configured node (StakeAndRelax, since 2026-11-07) is down unless the scenario gives it an answer, so
+    // each two-node scenario still means what it meant: "the other node" is Papadritta.
+    const n = spec[who] ?? { height: 0, down: true };
     calls.push(`${who} ${url.pathname}${url.search}`);
     if (n.down) throw new Error('refused');
     const network = n.network ?? NAMADA.chainId;
@@ -146,7 +148,7 @@ describe('the live scan follows only nodes at this chain\'s head', () => {
     await hub.scanNamada();
     expect(blockReads(calls)).toEqual([]);
     expect(cursor(db)).toBe('8300000');
-    expect(notes(db)).toEqual([`no Namada node is at the chain's head (5ElementsNodes: catching up; Papadritta: names another network than ${NAMADA.chainId})`]);
+    expect(notes(db)).toEqual([`no Namada node is at the chain's head (5ElementsNodes: catching up; Papadritta: names another network than ${NAMADA.chainId}; StakeAndRelax: no answer)`]);
   });
 
   it('both nodes down: the scan throws as before (the alarm logs it) and records no note', async () => {
@@ -195,7 +197,7 @@ describe('chainHead', () => {
   const st = (provider: string, o: Partial<namada.NodeStatus> = {}): namada.NodeStatus => ({ provider, network: NAMADA.chainId, height: 8_300_000, time: NOW - 7000, catchingUp: false, ...o });
   it('refuses a height that is not one and a newest block from the future', () => {
     expect(namada.chainHead([st('5ElementsNodes', { height: 2e9 }), st('Papadritta', { time: NOW + 3_600_000 })], NOW))
-      .toEqual({ height: null, rpcs: [], note: "no Namada node is at the chain's head (5ElementsNodes: an invalid height; Papadritta: newest block not from the last 5 minutes)", agreed: false, byNodes: false, disputed: false });
+      .toEqual({ height: null, rpcs: [], note: "no Namada node is at the chain's head (5ElementsNodes: an invalid height; Papadritta: newest block not from the last 5 minutes; StakeAndRelax: no answer)", agreed: false, byNodes: false, disputed: false });
   });
   it('one node at the head is enough; a node with no answer is left out of the reads', () => {
     const h = namada.chainHead([{ provider: '5ElementsNodes', error: 'timeout' }, st('Papadritta')], NOW);
@@ -209,8 +211,32 @@ describe('chainHead', () => {
     expect(namada.headBound(null, NOW)).toBeNull();
   });
   it('nodes within 100 blocks agree: the lower head (a height both say the chain has reached), both nodes read', () => {
-    expect(namada.chainHead([st('5ElementsNodes'), st('Papadritta', { height: 8_300_100 })], NOW)).toEqual({ height: 8_300_000, rpcs: [...NAMADA.rpcs], note: null, agreed: true, byNodes: true, disputed: false });
+    expect(namada.chainHead([st('5ElementsNodes'), st('Papadritta', { height: 8_300_100 })], NOW)).toEqual({ height: 8_300_000, rpcs: NAMADA.rpcs.slice(0, 2), note: null, agreed: true, byNodes: true, disputed: false });
     expect(namada.HEAD_AGREE_BLOCKS).toBe(100);
     expect(namada.HEAD_MAX_AGE_MS).toBe(5 * 60_000);
+  });
+  // The third node (StakeAndRelax, since 2026-11-07): two nodes within 100 blocks of each other agree whatever the third
+  // says, the lowest of the agreeing is the head, a third far from both is not at the head, and a lone node is still bounded.
+  it('three nodes: two that agree win, the lower is followed, and a third far behind or far ahead is left out and named', () => {
+    const [five, papa, sar] = NAMADA.rpcs;
+    const three = (o: Partial<namada.NodeStatus>) => [st('5ElementsNodes'), st('Papadritta', { height: 8_300_010 }), st('StakeAndRelax', o)];
+    expect(namada.chainHead(three({ height: 8_300_090 }), NOW)).toEqual({ height: 8_300_000, rpcs: [five, papa, sar], note: null, agreed: true, byNodes: true, disputed: false });
+    // a node far behind whose newest block it says is fresh: not at the head, not read from, named
+    expect(namada.chainHead(three({ height: 8_200_000 }), NOW)).toEqual({
+      height: 8_300_000, rpcs: [five, papa], agreed: true, byNodes: true, disputed: false,
+      note: 'the Namada nodes disagree on the head (5ElementsNodes 8300000, Papadritta 8300010, StakeAndRelax 8200000): the scan follows 5ElementsNodes and Papadritta, which agree, and not StakeAndRelax',
+    });
+    expect(namada.chainHead(three({ height: 40_000_000 }), NOW)).toMatchObject({ height: 8_300_000, rpcs: [five, papa], agreed: true, byNodes: true });
+    // a node far behind with an old newest block is not at the head at all, as before: no note
+    expect(namada.chainHead(three({ height: 8_200_000, time: NOW - 10 * 60_000 }), NOW)).toMatchObject({ height: 8_300_000, rpcs: [five, papa], note: null, byNodes: true });
+    // the two agreeing may be the second and third: the lower of them is followed, the first (far ahead) left out
+    expect(namada.chainHead([st('5ElementsNodes', { height: 40_000_000 }), st('Papadritta', { height: 8_300_010 }), st('StakeAndRelax')], NOW)).toMatchObject({ height: 8_300_000, rpcs: [papa, sar], agreed: true, byNodes: true });
+    // none within 100 blocks of another: no two agree, and with no vote the lowest not far below the cursor is followed unagreed, as with two nodes
+    expect(namada.chainHead([st('5ElementsNodes'), st('Papadritta', { height: 8_300_200 }), st('StakeAndRelax', { height: 8_300_400 })], NOW, 8_300_000)).toMatchObject({ height: 8_300_000, rpcs: [five], agreed: false, byNodes: false, disputed: true });
+    // a lone node (the two others down) is still bounded: by the last agreed head, and by the lone bound
+    const lone = [{ provider: '5ElementsNodes', error: 'down' }, { provider: 'Papadritta', error: 'down' }, st('StakeAndRelax', { height: 8_305_000 })];
+    expect(namada.chainHead(lone, NOW, 8_300_000, null, 8_300_150)).toMatchObject({ height: null, agreed: false });
+    expect(namada.chainHead(lone, NOW, 8_300_000, null, null, null, 8_300_150)).toMatchObject({ height: null, agreed: false });
+    expect(namada.chainHead(lone, NOW, 8_300_000, null, 8_305_000)).toMatchObject({ height: 8_305_000, rpcs: [sar], agreed: false, byNodes: false });
   });
 });

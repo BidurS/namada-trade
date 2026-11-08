@@ -514,11 +514,11 @@ describe('the bond listing run', () => {
     vi.stubGlobal('fetch', vi.fn(async () => new Response('down', { status: 503 })));
     const r = (await sampleStakes(env(db), [], NOW + 120000, 2690, { timeoutMs: 1000, retries: 0 }))!;
     expect(r).toMatchObject({ checked: 0, failed: 12, cursor: '', passes: 1 });
-    // the phase ends after the first batch of six (two nodes asked a read: twelve fetches): the cursor stops at the
-    // last row attempted, the six after it are left for next tick, the pass is not counted
+    // the phase ends after the first batch of six (every configured node asked a read, three since 2026-11-07: eighteen
+    // fetches): the cursor stops at the last row attempted, the six after it are left for next tick, the pass is not counted
     const phase = new AbortController();
     let n = 0;
-    vi.stubGlobal('fetch', vi.fn(async () => { if (++n > 12) phase.abort('phase over'); return new Response('down', { status: 503 }); }));
+    vi.stubGlobal('fetch', vi.fn(async () => { if (++n > 6 * NAMADA.rpcs.length) phase.abort('phase over'); return new Response('down', { status: 503 }); }));
     const cut = (await sampleStakes(env(db), [], NOW + 180000, 2690, { signal: phase.signal, timeoutMs: 1000, retries: 0 }))!;
     expect(cut).toMatchObject({ passes: 1, failed: 6 });
     expect(cut.cursor).not.toBe('');

@@ -38,8 +38,8 @@ import type { RawEvent } from '../worker/src/parse/osmosis';
 import type { Flow } from '../shared/types';
 
 export const SOURCE = 'namada-rpc-block-results';
-/** The archive nodes the masp step reads (backfill-history.ts ARCHIVE_RPCS, not exported), named as it names them. */
-export const ARCHIVE_RPCS: readonly string[] = [...NAMADA.rpcs.map((r) => r.url), 'https://namada-rpc.polkachu.com', 'https://namada-rpc.stakeandrelax.net'];
+/** The archive nodes the masp step reads (backfill-history.ts ARCHIVE_RPCS, not exported), named as it names them: each once. */
+export const ARCHIVE_RPCS: readonly string[] = [...new Set([...NAMADA.rpcs.map((r) => r.url), 'https://namada-rpc.polkachu.com', 'https://namada-rpc.stakeandrelax.net'])];
 
 export type StoredRow = { id: string; height: number; ts: number; tx_hash: string; kind: string; from_addr: string | null; to_addr: string | null; amount_num: number; meta: string | null };
 

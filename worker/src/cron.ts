@@ -300,7 +300,7 @@ async function probe<T>(health: SourceHealth[], name: string, fn: () => Promise<
  * compresses its answer (checked 2026-10-20 with Accept-Encoding gzip: the bond answer came back as 5,369,673 bytes
  * either way), so a listing costs the node its whole JSON size: 11.98 MB for the balances, 5.37 MB for the bonds.
  * One balance listing an hour and one bond listing every 40 minutes is 24 × 11.98 + 36 × 5.37 = 287.5 + 193.3 =
- * 481 MB a day across both nodes (a tick that carries a listing's writes over re-reads it; only a first run on an
+ * 481 MB a day across the nodes (a tick that carries a listing's writes over re-reads it; only a first run on an
  * empty table needs that). The block follower (live-hub.ts) keeps moved addresses current between listings, so a
  * listing is reconciliation, not the only source of a balance.
  */
@@ -326,7 +326,7 @@ export const SAMPLE_CONCURRENCY = 6;
 /** Sample disagreements are reported by the coverage check for this long. */
 export const SAMPLE_KEEP_MS = 24 * 3600_000;
 /**
- * After a listing read fails (both nodes past the timeout, the deadline), the next try waits this long: a slow day
+ * After a listing read fails (every node past the timeout, the deadline), the next try waits this long: a slow day
  * must not cost the nodes a cut-off download every minute (a node streaming at 0.4 MB/s sends 8 MB in the 20 s).
  */
 export const LISTING_RETRY_MS = 5 * 60_000;
@@ -1652,7 +1652,7 @@ export interface BalanceListingRecord {
   written: number; zeroed: number; remaining: number; ticks: number; durationMs: number;
   /** when the span bookkeeping last ran (a complete pass) and when every unchanged span was last extended */
   spansAt: number | null; extendedAt: number | null;
-  /** the last read that failed (both nodes) or was refused by the gate, the last error, and how many in a row (the retry backs off) */
+  /** the last read that failed (every node) or was refused by the gate, the last error, and how many in a row (the retry backs off) */
   failedAt?: number | null;
   error?: string;
   failures?: number;

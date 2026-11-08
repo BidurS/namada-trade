@@ -1114,7 +1114,7 @@ export class LiveHub extends DurableObject<Env> {
       }
       // 0. The alerts kept from earlier dispatches go first (sendPending), in order.
       await this.sendPending(alerts);
-      // 1. The Namada scan. Whatever happens to it (both nodes down, a D1 error), the Osmosis side below still runs:
+      // 1. The Namada scan. Whatever happens to it (every node down, a D1 error), the Osmosis side below still runs:
       //    one chain's outage is never the other's.
       try {
         await this.scanNamada(scanEnd.signal, alerts);
@@ -1254,7 +1254,7 @@ export class LiveHub extends DurableObject<Env> {
     if (this.reread && lastScanned >= this.reread.to) this.reread = null;
     if (!this.reread && lastScanned > head + HEAD_AGREE_BLOCKS) {
       if (!at.byNodes) {
-        await this.noteHead(head, 'above', `the scan's cursor ${lastScanned} is ${lastScanned - head} blocks above the head ${head}, which only one node and the indexer give: it is moved back only on a head both nodes agree on, and the scan waits`);
+        await this.noteHead(head, 'above', `the scan's cursor ${lastScanned} is ${lastScanned - head} blocks above the head ${head}, which only one node and the indexer give: it is moved back only on a head two nodes agree on, and the scan waits`);
         return;
       }
       await this.noteScanFailure(head, `the scan's cursor ${lastScanned} was ${lastScanned - head} blocks above the head ${head}: the scan restarts at block ${head - SCAN_MAX_LAG + 1}, and blocks it missed before then are not scanned`);

@@ -26,13 +26,15 @@ const recvEvents = () => JSON.parse(readFileSync(join(__dirname, 'fixtures', 'na
   .map((e: any) => ({ ...e, attributes: e.attributes.map((a: any) => ({ ...a, value: String(a.value).split(NAMADA.internal.masp).join(X) })) }));
 
 interface NodeSpec { height: number; down?: boolean; statusOnly?: boolean; events?: Record<number, any[]> }
-/** The two configured nodes, as CometBFT answers; every request is logged as "node path?query". */
-function chain(spec: { five: NodeSpec; papa: NodeSpec }) {
+/** The configured nodes, as CometBFT answers; every request is logged as "node path?query". */
+function chain(spec: { five: NodeSpec; papa: NodeSpec; sar?: NodeSpec }) {
   const calls: string[] = [];
   vi.stubGlobal('fetch', vi.fn(async (u: string) => {
     const url = new URL(String(u));
-    const who = url.host.includes('5elementsnodes') ? 'five' : 'papa';
-    const n = spec[who];
+    const who = url.host.includes('5elementsnodes') ? 'five' : url.host.includes('papadritta') ? 'papa' : 'sar';
+    // The third configured node (StakeAndRelax, since 2026-11-07) is down unless the scenario gives it an answer, so
+    // each two-node scenario still means what it meant: "the other node" is Papadritta.
+    const n = spec[who] ?? { height: 0, down: true };
     calls.push(`${who} ${url.pathname}${url.search}`);
     if (n.down) throw new Error('refused');
     if (url.pathname === '/status') {
@@ -249,7 +251,7 @@ describe('the cursor reset reads blocks again without counting them twice', () =
     vote(db, 8_300_000);
     await hub.scanNamada();
     expect(cursor(db)).toBe('40000000');
-    expect(notes(db).at(-1)).toBe('the scan\'s cursor 40000000 is 31700000 blocks above the head 8300000, which only one node and the indexer give: it is moved back only on a head both nodes agree on, and the scan waits');
+    expect(notes(db).at(-1)).toBe('the scan\'s cursor 40000000 is 31700000 blocks above the head 8300000, which only one node and the indexer give: it is moved back only on a head two nodes agree on, and the scan waits');
     spec.papa = { height: 8_300_010 };
     chain(spec);
     await hub.scanNamada();

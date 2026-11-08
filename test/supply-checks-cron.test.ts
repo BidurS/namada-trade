@@ -122,7 +122,7 @@ interface Chain { epoch: number; minted: bigint; keys?: Record<string, string> }
 const u64 = (n: number) => btoa(String.fromCharCode(n & 0xff, (n >> 8) & 0xff, 0, 0, 0, 0, 0, 0));
 const asked: string[] = [];
 
-/** Both nodes at one head; `noValue(node, path)` makes that node answer the key without a value. */
+/** Every node at one head (a host other than 5ElementsNodes answers as B); `noValue(node, path)` makes that node answer the key without a value. */
 function network(noValue: (node: 'A' | 'B', path: string) => boolean = () => false, chain: Chain = { epoch: 2715, minted: MINTED }) {
   asked.length = 0;
   vi.stubGlobal('fetch', vi.fn((input: RequestInfo | URL) => {
@@ -205,7 +205,7 @@ describe('the tick', () => {
     const noInflation = (_: 'A' | 'B', path: string) => path.endsWith('/last_inflation_amount');
     network(noInflation, { epoch: 2716, minted: MINTED + inflation, keys });
     await tick(db, PLAIN + MIN);
-    expect(asked.filter((u) => u.includes('&height=')).length).toBe(2);
+    expect(asked.filter((u) => u.includes('&height=')).length).toBe(NAMADA.rpcs.length); // each configured node asked once (three since 2026-11-07)
     // nothing judged yet (the first minute only anchored): idle
     expect(row(db, 'supply_mint_rule')).toMatchObject({ status: 'idle', detail: { verdict: 'not-judged', why: 'step-not-read' } });
     expect(JSON.parse(db.raw.prepare('SELECT value FROM kv WHERE key = ?').get(MINT_RULE_KV).value)).toMatchObject({ keysFailedAt: PLAIN + MIN, anchor: { epoch: 2715 } });

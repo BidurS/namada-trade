@@ -8,6 +8,8 @@
 import { describe, it, expect, vi, afterEach } from 'vitest';
 import { namBalance, namProtocolBalance, namTotalSupply, namadaEpochRead, mintKeysAt, decString, AbciCodeError, RpcBreaker, QUICK } from '../worker/src/sources/namada';
 import { NAMADA } from '../worker/src/config';
+import { app } from '../worker/src/api';
+import { testD1, insert } from './d1-sqlite';
 
 afterEach(() => { vi.unstubAllGlobals(); });
 
@@ -135,5 +137,37 @@ describe("the mint rule's keys, read at the block it judges", () => {
     expect(decString(u256(254_116_362_341n))).toBe('0.254116362341');
     expect(decString(u256(3n * 10n ** 12n))).toBe('3');
     expect(decString(u256((1n << 256n) - 10n ** 12n))).toBe('-1');
+  });
+});
+
+// The address answer's live read (api.ts /api/address) read every address with namBalance, which decodes a node's
+// "no value" answer as 0, while the cron's reads of the four protocol accounts moved to namProtocolBalance (release 1,
+// 2026-11-07): a node answering the shielded pool's key without a value made the sheet show 0 NAM marked live. The
+// reader is now picked by the account, so such an answer fails the live read and the stored balance is served with its note.
+describe('/api/address for a protocol account', () => {
+  const stored = (address: string, at: number) => ({ chain: 'namada', address, balance: '31618419065539', balance_num: 31_618_419.065539, updated_height: 8_516_662, updated_at: at, verified_at: at, verified_src: 'balance_listing' });
+
+  it("the shielded pool's balance answered without a value by every node: the stored balance with its note, never 0 marked live", async () => {
+    const db = testD1();
+    insert(db, 'holders', [stored(NAMADA.internal.masp, Date.now() - 3_600_000)]);
+    const asked = nodes(() => NO_VALUE);
+    const res = await app.request(`/api/address/${NAMADA.internal.masp}`, {}, { DB: db } as any);
+    expect(res.status).toBe(200);
+    const body = await res.json() as { balance: { value: number | null; prov: Record<string, unknown> } };
+    expect(body.balance.value).toBe(31_618_419.065539);
+    expect(body.balance.prov).toMatchObject({ source: 'D1 index (RPC failed)', status: 'stale', height: 8_516_662, note: 'The live read from the chain failed, so this is the last indexed balance.' });
+    // every configured node was asked for the pool's balance before the stored reading was served
+    expect(asked.filter((a) => a.path.endsWith(`/balance/#${NAMADA.internal.masp}`)).length).toBe(NAMADA.rpcs.length);
+  });
+
+  it("a holder's address answered so is still 0 NAM, live, from the first node that answered", async () => {
+    const db = testD1();
+    const asked = nodes(() => NO_VALUE);
+    const res = await app.request('/api/address/tnam1qr4wemkpjfycn7ts7297e8qecg2t6pf2vq2wulsa', {}, { DB: db } as any);
+    expect(res.status).toBe(200);
+    const body = await res.json() as { balance: { value: number | null; prov: Record<string, unknown> } };
+    expect(body.balance.value).toBe(0);
+    expect(body.balance.prov).toMatchObject({ source: `Namada RPC ${NAMADA.rpcs[0].provider}`, status: 'live', height: 8_516_662 });
+    expect(asked.filter((a) => a.path.endsWith('/balance/#tnam1qr4wemkpjfycn7ts7297e8qecg2t6pf2vq2wulsa')).length).toBe(1);
   });
 });

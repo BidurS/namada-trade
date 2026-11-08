@@ -66,12 +66,12 @@ describe('a listing not read for want of an agreed head while it is overdue', ()
       { key: 'balance.listing', value: JSON.stringify(bal), updated_at: at },
       { key: 'bond.listing', value: JSON.stringify({ at: PLAIN - 60000, completeAt: PLAIN - 60000, height: 8382840, epoch: 2696, provider: 'Papadritta', sources: 48, stakers: 12, totalNam: 75, bytes: 0, written: 0, zeroed: 0, remaining: 0, ticks: 1, durationMs: 0 }), updated_at: PLAIN - 60000 },
     ]);
-    // 5ElementsNodes down, the indexer down: Papadritta alone, as in the fixer's accepted residual
+    // 5ElementsNodes down (and StakeAndRelax, the third node since 2026-11-07, which this stub does not answer), the indexer down: Papadritta alone, as in the fixer's accepted residual
     network({ five: null, papa: 8382950, indexer: null });
     await tick(db, PLAIN);
     const row = JSON.parse(db.raw.prepare("SELECT value FROM kv WHERE key='source.health'").get().value)['Namada RPC (balance listing)'];
     console.log('row', JSON.stringify(row.note), row.note.length);
-    expect(row.note).toMatch(/^Not read this tick: no two of this tick's answers agree on the chain's head/);
+    expect(row.note).toMatch(/^Not read this tick: no two answers agree on the head/);
     expect(row.note).toMatch(/No complete balance listing for 3 h \(balances as of the last one\)\./);
   });
 });

@@ -349,8 +349,12 @@ async function namada() {
 // in between (block metas first, so empty blocks cost nothing), and every MASP leg the chain shows that `flows`
 // lacks is emitted as a corrective INSERT (meta.source = 'namada-rpc-block-results', never an overwrite).
 const IBC_ESCROW = 'tnam1qcqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqvtr7x4';
-/** Public nodes that serve block_results and block metas back to genesis (checked 2026-10-16). */
-const ARCHIVE_RPCS = [...NAMADA_RPCS, 'https://namada-rpc.polkachu.com', 'https://namada-rpc.stakeandrelax.net'];
+/**
+ * Public nodes that serve block_results and block metas back to genesis (checked 2026-10-16): the Worker's nodes first,
+ * then the others, each once (Stake&Relax is among the Worker's nodes since 2026-11-07; listed twice it would agree
+ * with itself).
+ */
+const ARCHIVE_RPCS = [...new Set([...NAMADA_RPCS, 'https://namada-rpc.polkachu.com', 'https://namada-rpc.stakeandrelax.net'])];
 const BLOCKS_DIR = P('masp_blocks');
 /** agreedBy: the nodes that gave these events (a block cached before two had to agree has only rpc). */
 type MaspBlock = { height: number; rpc: string; agreedBy?: string[]; nEvents: number; events: TokenEvent[] };

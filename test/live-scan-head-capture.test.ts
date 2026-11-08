@@ -22,11 +22,13 @@ const recvEvents = () => JSON.parse(readFileSync(join(__dirname, 'fixtures', 'na
   .map((e: any) => ({ ...e, attributes: e.attributes.map((a: any) => ({ ...a, value: String(a.value).split(NAMADA.internal.masp).join(X) })) }));
 
 interface NodeSpec { height: number; down?: boolean; events?: Record<number, any[]> }
-function chain(spec: { five: NodeSpec; papa: NodeSpec }, calls: string[]) {
+function chain(spec: { five: NodeSpec; papa: NodeSpec; sar?: NodeSpec }, calls: string[]) {
   vi.stubGlobal('fetch', vi.fn(async (u: string) => {
     const url = new URL(String(u));
-    const who = url.host.includes('5elementsnodes') ? 'five' : 'papa';
-    const n = spec[who];
+    const who = url.host.includes('5elementsnodes') ? 'five' : url.host.includes('papadritta') ? 'papa' : 'sar';
+    // The third configured node (StakeAndRelax, since 2026-11-07) is down unless the scenario gives it an answer, so
+    // each two-node scenario still means what it meant: "the other node" is Papadritta.
+    const n = spec[who] ?? { height: 0, down: true };
     calls.push(`${who} ${url.pathname}${url.search}`);
     if (n.down) throw new Error('refused');
     if (url.pathname === '/status') {

@@ -91,13 +91,18 @@ export const OSMOSIS = {
 export const NAMADA = {
   chainId: 'namada.5f5de2dd1b88cba30586420',
   /**
-   * Ordered by preference. Both keep every block (/status earliest block 1, so block_results and blocks read back to
-   * genesis), but their event index starts much later: block_search answers from block 7,679,994 on 5ElementsNodes and
-   * 7,914,171 on Papadritta, tx_search from 7,682,174 and 7,914,248 (read 2026-11-02), and nothing below.
+   * Ordered by preference. All three keep every block (/status earliest block 1, so block_results and blocks read back
+   * to genesis), but their event index starts much later: block_search answers from block 7,679,994 on 5ElementsNodes
+   * and 7,914,171 on Papadritta, tx_search from 7,682,174 and 7,914,248 (read 2026-11-02), and Stake&Relax indexes
+   * masp and token events from block 4,546,325; nothing below. Polkachu (namada-rpc.polkachu.com) keeps every block
+   * too but has event indexing off, so it is not listed: an empty block_search page from it would read as "no
+   * blocks" (scripts/backfill-namada.ts transferHeights asks any node of this list). Stake&Relax was added on
+   * 2026-11-07, when the first two answered HTTP 502 for hours and every Namada read of the site failed with them.
    */
   rpcs: [
     { provider: '5ElementsNodes', url: 'https://rpc-namada.5elementsnodes.com' },
     { provider: 'Papadritta', url: 'https://rpc.papadritta.com' },
+    { provider: 'StakeAndRelax', url: 'https://namada-rpc.stakeandrelax.net' },
   ],
   /** Stale (~850k blocks behind at research time) – used only for static metadata */
   staleIndexer: 'https://indexer.namada.citizenweb3.com',

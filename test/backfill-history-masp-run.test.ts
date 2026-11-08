@@ -20,6 +20,8 @@ const NAM = 'tnam1q9gr66cvu4hrzm0sd5kmlnjje82gs3xlfg3v6nu7';
 const MASP = 'tnam1pcqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqzmefah';
 const CHAIN = 'namada.5f5de2dd1b88cba30586420';
 const FIVE = 'https://rpc-namada.5elementsnodes.com', PAPA = 'https://rpc.papadritta.com';
+// The archive list is the Worker's nodes then Polkachu, each once (backfill-history.ts ARCHIVE_RPCS): since 2026-11-07
+// Stake&Relax is the Worker's third node, so it is the third asked and Polkachu the fourth.
 const POLK = 'https://namada-rpc.polkachu.com', SAR = 'https://namada-rpc.stakeandrelax.net';
 const NOW_METRIC = Date.parse('2026-10-01T20:00:00Z');
 
@@ -143,30 +145,32 @@ describe('the masp step and a node that leaves a transfer out of a block', () =>
     expect(r.flows).toContain("'namada:AAAA:c0','namada',200,");
     expect(r.flows).toContain(`"blockBy":["${FIVE}","${PAPA}"]`);
     expect(r.block300.agreedBy).toEqual([FIVE, PAPA]);
+    expect(r.reads300).toEqual([FIVE, PAPA]); // the first two agree: neither Stake&Relax nor Polkachu is asked
+    expect(r.reads300).not.toContain(POLK);
     expect(r.report).toMatchObject({ lastBalance: 1500, liveBalance: 1500, written: true });
     expect(r.sql.every((s) => /^\s*SELECT\b/.test(s))).toBe(true);
   }, 30000);
 
   it('a node asked second that leaves the shield out is outvoted, not taken alone', async () => {
     const r = await runMasp({ b300: { [PAPA]: B300_OMIT } });
-    expect(r.reads300).toEqual([FIVE, PAPA, POLK]);
-    expect(r.block300.agreedBy).toEqual([FIVE, POLK]);
+    expect(r.reads300).toEqual([FIVE, PAPA, SAR]);
+    expect(r.block300.agreedBy).toEqual([FIVE, SAR]);
     expect(inners(r.block300)).toEqual(['CCCC']);
     expect(r.daily).toEqual([expect.stringContaining(",'supply.masp_shielded.daily',1500);")]);
   }, 30000);
 
   it('the first node that leaves the shield out of a height flows names is not taken alone', async () => {
     const r = await runMasp({ b300: { [FIVE]: B300_OMIT } });
-    expect(r.reads300).toEqual([FIVE, PAPA, POLK]);
-    expect(r.block300.agreedBy).toEqual([PAPA, POLK]);
+    expect(r.reads300).toEqual([FIVE, PAPA, SAR]);
+    expect(r.block300.agreedBy).toEqual([PAPA, SAR]);
     expect(inners(r.block300)).toEqual(['CCCC']);
     expect(r.daily).toEqual([expect.stringContaining(",'supply.masp_shielded.daily',1500);")]);
   }, 30000);
 
   it('a block cached from one node without the shield, at a height flows names, is asked of the others', async () => {
     const r = await runMasp({ b300: { [FIVE]: B300_OMIT }, cached300: { height: 300, rpc: FIVE, ...maspEvents(B300_OMIT)! } });
-    expect(r.reads300).toEqual([PAPA, POLK]);
-    expect(r.block300.agreedBy).toEqual([PAPA, POLK]);
+    expect(r.reads300).toEqual([PAPA, SAR]);
+    expect(r.block300.agreedBy).toEqual([PAPA, SAR]);
     expect(inners(r.block300)).toEqual(['CCCC']);
     expect(r.daily).toEqual([expect.stringContaining(",'supply.masp_shielded.daily',1500);")]);
   }, 30000);

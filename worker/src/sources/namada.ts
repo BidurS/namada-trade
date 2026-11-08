@@ -70,7 +70,9 @@ export interface ListingHead {
  * than HEAD_MAX_AGE_MS is not an answer either (as in chainHead): it is behind, whatever catching_up says. When no two answers agree there is no head: one
  * node's word is not checked against anything (a node far ahead would have its own listing applied there, a node
  * restored from an old snapshot would roll the rows back), so no listing is applied that tick. A node that says it
- * is catching up is not an answer, so two such nodes cannot vouch for each other.
+ * is catching up is not an answer, so two such nodes cannot vouch for each other. The note is kept short: the listing
+ * record and the health row cut it at 160 characters after "Not applied: ", and with three nodes (2026-11-07) each
+ * node's reason and the indexer's block must still fit.
  */
 export function listingHeads(statuses: readonly { provider?: string; error?: string; height?: number; time?: number; catchingUp?: boolean; network?: string }[], indexerHeight?: number | null, now?: number): ListingHead {
   const isHeight = (h: unknown): h is number => Number.isInteger(h) && (h as number) > 0 && (h as number) <= MAX_HEAD_HEIGHT;
@@ -81,17 +83,17 @@ export function listingHeads(statuses: readonly { provider?: string; error?: str
     const t = Number(s.time);
     const stale = now != null && !(t > now - HEAD_MAX_AGE_MS && t < now + 60_000);
     const no = s.error ? 'no answer' : namesOtherChain(s) ? 'names another chain' : s.catchingUp ? 'catching up' : !isHeight(s.height) ? 'an invalid height'
-      : stale ? `newest block not from the last ${HEAD_MAX_AGE_MS / 60_000} minutes` : null;
+      : stale ? `newest block over ${HEAD_MAX_AGE_MS / 60_000} min old` : null;
     if (no) said.push(`${who}: ${no}`);
     else { nodes.push(s.height as number); said.push(`${who} ${s.height}`); }
   }
   const indexer = isHeight(indexerHeight) ? indexerHeight : null;
-  said.push(indexer != null ? `the indexer ${indexer}` : 'the indexer: no answer');
+  said.push(indexer != null ? `indexer ${indexer}` : 'indexer: no answer');
   const all = indexer != null ? [...nodes, indexer] : nodes;
   const agreed = nodes.filter((h, i) => all.some((o, j) => j !== i && Math.abs(h - o) <= HEAD_AGREE_BLOCKS));
   const byNodes = nodes.some((h, i) => nodes.some((o, j) => j !== i && Math.abs(h - o) <= HEAD_AGREE_BLOCKS));
   if (agreed.length) return { head: Math.min(...agreed), top: Math.max(...agreed), note: null, byNodes };
-  return { head: null, top: null, note: `no two of this tick's answers agree on the chain's head (${said.join('; ')})`, byNodes: false };
+  return { head: null, top: null, note: `no two answers agree on the head (${said.join('; ')})`, byNodes: false };
 }
 
 /** Two nodes at the chain's head are at most this many blocks apart (about twelve minutes of blocks); further apart, one of them is not at it. */
@@ -150,9 +152,10 @@ export function headSince(last: { height: number; at: number } | null, now: numb
 /**
  * The head the live scan follows, from every node's status. A node counts only when its answer shows it is at this
  * chain's head: it names NAMADA.chainId, is not catching up, gives a height that is a height, and its newest block
- * is from the last HEAD_MAX_AGE_MS. When two or more are within HEAD_AGREE_BLOCKS of each other (agreed, byNodes),
- * the head is the LOWEST of them: a height every one of them says the chain has reached, so a node that says it is a
- * little ahead is never the only source of a block. Otherwise (the nodes further apart, or only one node counts) the
+ * is from the last HEAD_MAX_AGE_MS. When two or more are within HEAD_AGREE_BLOCKS of another (agreed, byNodes), the
+ * head is the LOWEST of them: a height every one of them says the chain has reached, so a node that says it is a
+ * little ahead is never the only source of a block; a counted node far from every one of them is not at the head, is
+ * not read from, and the note names it. Otherwise (no two nodes that near, or only one node counts) the
  * `vote` decides when it is from the last HEAD_VOTE_MAX_AGE_MS: the lowest node within HEAD_AGREE_BLOCKS of it,
  * allowing for the blocks made since, is followed as agreed, no higher than the vote itself. With no such vote
  * nothing says which node is right: the head is the lowest node at or above the scan's place less HEAD_AGREE_BLOCKS
@@ -181,11 +184,20 @@ export function chainHead(statuses: NodeStatus[], now: number, cursor = 0, vote:
     else at.push({ rpc: r, height: h });
   }
   if (!at.length) return { height: null, rpcs: [], note: `no Namada node is at the chain's head (${why.join('; ')})`, agreed: false, byNodes: false, disputed: false };
-  const hi = Math.max(...at.map((a) => a.height)), lo = Math.min(...at.map((a) => a.height));
-  if (at.length > 1 && hi - lo <= HEAD_AGREE_BLOCKS) return { height: lo, rpcs: at.map((a) => a.rpc), note: null, agreed: true, byNodes: true, disputed: false };
-  const near = (h: number) => at.filter((a) => Math.abs(a.height - h) <= HEAD_AGREE_BLOCKS).map((a) => a.rpc);
   const names = (rpcs: Rpc[]) => rpcs.map((r) => r.provider).join(' and ');
   const split = at.length > 1 ? `the Namada nodes disagree on the head (${at.map((a) => `${a.rpc.provider} ${a.height}`).join(', ')})` : null;
+  // The nodes within HEAD_AGREE_BLOCKS of another counted node agree on the head: the lowest of them, a height every
+  // one of them says the chain has reached. A counted node far from every other (behind, with a newest block it says
+  // is fresh, or far ahead) is not at the head: it is not read from, and the note names it. With two nodes this is
+  // "both within HEAD_AGREE_BLOCKS of each other"; with three (since 2026-11-07) two agreeing nodes win over the third.
+  const agreeing = at.filter((a, i) => at.some((o, j) => j !== i && Math.abs(a.height - o.height) <= HEAD_AGREE_BLOCKS));
+  if (agreeing.length) {
+    const h = Math.min(...agreeing.map((a) => a.height));
+    const out = at.filter((a) => !agreeing.includes(a));
+    const note = out.length ? `${split}: the scan follows ${names(agreeing.map((a) => a.rpc))}, which agree, and not ${names(out.map((a) => a.rpc))}` : null;
+    return { height: h, rpcs: agreeing.map((a) => a.rpc), note, agreed: true, byNodes: true, disputed: false };
+  }
+  const near = (h: number) => at.filter((a) => Math.abs(a.height - h) <= HEAD_AGREE_BLOCKS).map((a) => a.rpc);
   // The vote, moved on by the blocks made since it was stored.
   const vh = Number(vote?.height), vt = Number(vote?.at);
   const voteNow = Number.isInteger(vh) && vh > 0 && vh <= MAX_HEAD_HEIGHT && vt > now - HEAD_VOTE_MAX_AGE_MS && vt < now + 60_000
@@ -234,8 +246,8 @@ async function rpcRead<T>(fn: (base: string) => Promise<T>, opts: ReadOpts): Pro
 export const LIVE_READ: ReadOpts = { timeoutMs: 10000, retries: 0 };
 
 /**
- * The status of the first node that answers: a down node is never the reason the other is not asked. Its height is
- * not checked against the chain or the other node; the live scan follows chainHead instead.
+ * The status of the first node that answers: a down node is never the reason the next is not asked. Its height is
+ * not checked against the chain or the other nodes; the live scan follows chainHead instead.
  */
 export async function namadaStatusAny(opts: ReadOpts = QUICK) {
   const list = opts.breaker ? opts.breaker.order(RPCS) : RPCS;

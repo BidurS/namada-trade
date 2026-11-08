@@ -12,11 +12,13 @@ import { testD1, type TestD1 } from './d1-sqlite';
 afterEach(() => { vi.unstubAllGlobals(); vi.useRealTimers(); });
 
 interface NodeSpec { height: number; down?: boolean }
-function chain(spec: { five: NodeSpec; papa: NodeSpec }, calls: string[]) {
+function chain(spec: { five: NodeSpec; papa: NodeSpec; sar?: NodeSpec }, calls: string[]) {
   vi.stubGlobal('fetch', vi.fn(async (u: string) => {
     const url = new URL(String(u));
-    const who = url.host.includes('5elementsnodes') ? 'five' : 'papa';
-    const n = spec[who];
+    const who = url.host.includes('5elementsnodes') ? 'five' : url.host.includes('papadritta') ? 'papa' : 'sar';
+    // The third configured node (StakeAndRelax, since 2026-11-07) is down unless the scenario gives it an answer, so
+    // each two-node scenario still means what it meant: "the other node" is Papadritta.
+    const n = spec[who] ?? { height: 0, down: true };
     calls.push(`${who} ${url.pathname}${url.search}`);
     if (n.down) throw new Error('refused');
     if (url.pathname === '/status') return Response.json({ result: { node_info: { network: NAMADA.chainId }, sync_info: { latest_block_height: String(n.height), latest_block_time: new Date().toISOString(), catching_up: false, earliest_block_height: '1' } } });

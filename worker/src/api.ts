@@ -11,7 +11,7 @@ import { quoteNamTrade, priceSourceName } from './sources/sqs';
 import { PRICE_HOW_KEY, priceHowAt, storedPriceNote, storedPriceSource, type PriceHowLog } from './price-how';
 import { MINUTE_STALE_MS, NOT_KNOWN_KEY, NOT_READ, NOT_STORED, POOLS_SOURCE, POOLS_STALE_MS, PRICED_KEY, notKnownThenWords, poolsTotal, readPoolsRow, readStoredCurve, routerCapNote, storedCurve, storedPoolsProv, storedTotalProv } from './pool-sizes';
 import { OSMOSIS_GAP_NOTE, OSMOSIS_GAP_UNTIL, osmosisGapCounts, reachesOsmosisGap, withOsmosisGap } from '../../shared/osmosis-gap';
-import { namBalance, namadaEpoch, delegationsAt, QUICK, type ReadOpts } from './sources/namada';
+import { namBalance, namProtocolBalance, namadaEpoch, delegationsAt, QUICK, type ReadOpts } from './sources/namada';
 import { withCoinName } from './parse/namada';
 import { fetchIntel } from './sources/intel';
 import { alertsOn, sendDiscordPreview, sendDiscordTestPost, testExample, testPostHeld, INVALID_WINDOW_MS, type TestPostAnswer, type WebhookPost } from './sources/discord';
@@ -22,7 +22,7 @@ import { fmtAddr } from '../../shared/format';
 import { networkStatus } from '../../shared/halt';
 import { stmt, TAGS_PER_AUTHOR, TAGS_PER_DAY, kvGet, kvSet, kvGetJson } from './db';
 import { toNam, chainOf, publicNote } from './util';
-import { OSMOSIS, INTERNAL_LABELS } from './config';
+import { OSMOSIS, INTERNAL_LABELS, NAMADA } from './config';
 import {
   flowsFilterFromQuery, flowsFilterError, flowsMode, flowsPageSql, flowsRowsSql, flowsCountSql, flowsLastSql, flowOrder, afterPosition,
   storedCountSql, storedTotal, COUNT_MAX, type StoredCountRow,
@@ -964,7 +964,12 @@ app.get('/api/address/:addr', async (c) => {
   let balance: Sourced<number>;
   if (chain === 'namada') {
     try {
-      const res = await namBalance(addr, live);
+      // The four protocol accounts always hold a balance, so a node's answer without a value is refused and the next
+      // node asked (namProtocolBalance, as the cron reads them); with every node answering so, the read fails and the
+      // indexed balance below is served with its note, never a 0 marked live. Any other address reads a missing key as
+      // 0: an address that never held NAM has none.
+      const mustExist = ([NAMADA.internal.pos, NAMADA.internal.ibc, NAMADA.internal.masp, NAMADA.internal.pgf] as string[]).includes(addr);
+      const res = await (mustExist ? namProtocolBalance : namBalance)(addr, live);
       balance = { value: toNam(res.balance), prov: { source: `Namada RPC ${res.provider}`, at: now, height: res.height, status: 'live' } };
     } catch (e) {
       const listedAt = holder ? null : (await listingTimes(db)).balance;

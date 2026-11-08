@@ -12,7 +12,7 @@ vi.mock('cloudflare:workers', () => ({
   DurableObject: class { ctx: any; env: any; constructor(ctx: any, env: any) { this.ctx = ctx; this.env = env; } },
 }));
 import { ALARM_DEADLINE_MS, ALARM_LEASE_MS, LiveHub, SCAN_MAX_LAG } from '../worker/src/live-hub';
-import { NAM } from '../worker/src/config';
+import { NAM, NAMADA } from '../worker/src/config';
 import { testD1, type TestD1 } from './d1-sqlite';
 
 afterEach(() => { vi.useRealTimers(); vi.unstubAllGlobals(); });
@@ -177,41 +177,41 @@ describe('the alarm\'s single-flight mark', () => {
     vi.useFakeTimers({ toFake: ['Date'] });
     const T0 = Date.now();
 
-    // A scan asks every Namada node for its status at once (sources/namada.ts chainHead): two reads a run.
+    // A scan asks every Namada node for its status at once (sources/namada.ts chainHead): one read per configured
+    // node a run (three since 2026-11-07).
+    const N = NAMADA.rpcs.length;
+    const endRun = (from: number) => { for (let i = 0; i < N; i++) pending[from + i].reject(new TypeError('reset')); };
     const first = hub.alarm();
     await flush();
-    expect(pending.length).toBe(2);
+    expect(pending.length).toBe(N);
     await hub.alarm();
     vi.setSystemTime(T0 + ALARM_LEASE_MS - 1000);
     await hub.alarm();
-    expect(pending.length).toBe(2); // within the lease: re-armed only
+    expect(pending.length).toBe(N); // within the lease: re-armed only
     expect(setAlarm).toHaveBeenCalledTimes(2);
 
     vi.setSystemTime(T0 + ALARM_LEASE_MS + 1000);
     const second = hub.alarm();
     await flush();
-    expect(pending.length).toBe(4); // taken over: this alarm scans
+    expect(pending.length).toBe(2 * N); // taken over: this alarm scans
     expect(scanNotes(db).some((n) => /never ended; the next one took over/.test(n))).toBe(true);
 
     // the first run ends at last; the second still holds the mark
-    pending[0].reject(new TypeError('reset'));
-    pending[1].reject(new TypeError('reset'));
+    endRun(0);
     await first;
     const calls = pending.length;
     await hub.alarm();
     expect(pending.length).toBe(calls);
 
     // the second run ends and releases it: the next alarm scans again
-    pending[2].reject(new TypeError('reset'));
-    pending[3].reject(new TypeError('reset'));
+    endRun(N);
     await second;
     expect(hub.alarmRun).toBeNull();
     const before = pending.length;
     const third = hub.alarm();
     await flush();
-    expect(pending.length).toBe(before + 2);
-    pending[before].reject(new TypeError('reset'));
-    pending[before + 1].reject(new TypeError('reset'));
+    expect(pending.length).toBe(before + N);
+    endRun(before);
     await third;
     expect(hub.alarmRun).toBeNull();
   });

@@ -1,6 +1,7 @@
 // The full-history backfill's scan (scripts/backfill-namada.ts scan) finds blocks with block_search, which answers only
-// from where a node's event index starts. Both config nodes keep every block but index events only from block
-// 7,679,994 (5ElementsNodes) and 7,914,171 (Papadritta, 2026-11-02): an empty answer below that read as "no blocks",
+// from where a node's event index starts. The config nodes keep every block but index events only from block
+// 7,679,994 (5ElementsNodes), 7,914,171 (Papadritta, both read 2026-11-02) and 4,546,325 (StakeAndRelax, the third node
+// since 2026-11-07): an empty answer below that read as "no blocks",
 // and a scan from block 1 saw 505 blocks over 8.28M heights and said "scan complete". The scan now reads where each
 // node's index starts first and stops below it, refuses a progress file from a scan that did not, stops on a page with
 // no block before the count is reached, and never reports complete when the index listed no block at all.
@@ -13,7 +14,7 @@ import { join } from 'node:path';
 
 const ROOT = join(__dirname, '..');
 const CHAIN = 'namada.5f5de2dd1b88cba30586420';
-const FIVE = 'rpc-namada.5elementsnodes.com', PAPA = 'rpc.papadritta.com';
+const FIVE = 'rpc-namada.5elementsnodes.com', PAPA = 'rpc.papadritta.com', SAR = 'namada-rpc.stakeandrelax.net';
 const T0 = Date.parse('2026-06-13T00:00:00Z');
 
 const dirs: string[] = [];
@@ -93,10 +94,10 @@ async function runScan(c: Chain) {
 
 describe('backfill-namada scan: where the nodes index events', () => {
   it('stops before reading a block when the nodes index events only from later, naming where each starts', async () => {
-    const r = await runScan({ head: 8_516_900, floors: { [FIVE]: 7_679_994, [PAPA]: 7_914_171 }, transfers: [7_682_174, 8_202_488] });
+    const r = await runScan({ head: 8_516_900, floors: { [FIVE]: 7_679_994, [PAPA]: 7_914_171, [SAR]: 4_546_325 }, transfers: [7_682_174, 8_202_488] });
     expect(r.exit).toBe(1);
     const err = r.logs.join('\n');
-    expect(err).toContain('the scan is at block 1, but the nodes index events only from later (5ElementsNodes from block 7679994, Papadritta from block 7914171)');
+    expect(err).toContain('the scan is at block 1, but the nodes index events only from later (5ElementsNodes from block 7679994, Papadritta from block 7914171, StakeAndRelax from block 4546325)');
     expect(err).toContain('block_search answers nothing below block 7914171');
     expect(err).not.toContain('scan complete');
     // no transfer search, no block read and no progress written
@@ -107,7 +108,7 @@ describe('backfill-namada scan: where the nodes index events', () => {
   it('refuses a progress file from a scan that did not check the index: such a run read unindexed blocks as empty', async () => {
     // what the run of 2026-10 left: past the floor, so the old scan went on from there and said "scan complete"
     const r = await runScan({
-      head: 8_516_900, floors: { [FIVE]: 7_679_994, [PAPA]: 7_914_171 }, transfers: [8_400_000],
+      head: 8_516_900, floors: { [FIVE]: 7_679_994, [PAPA]: 7_914_171, [SAR]: 4_546_325 }, transfers: [8_400_000],
       progress: { nextFrom: 8_280_001, head: 8_280_000, blocks: 505, flows: 900 },
     });
     expect(r.exit).toBe(1);
@@ -117,14 +118,14 @@ describe('backfill-namada scan: where the nodes index events', () => {
   });
 
   it('stops when a node does not say where its index starts: any node may answer the scan', async () => {
-    const r = await runScan({ head: 250_000, floors: { [FIVE]: 1, [PAPA]: null }, transfers: [5] });
+    const r = await runScan({ head: 250_000, floors: { [FIVE]: 1, [PAPA]: null, [SAR]: 1 }, transfers: [5] });
     expect(r.exit).toBe(1);
     expect(r.logs.join('\n')).toContain("where Papadritta's event index starts could not be read");
     expect(r.progress).toBeNull();
   });
 
   it('never reports complete when the index lists no block with a transfer', async () => {
-    const r = await runScan({ head: 250_000, floors: { [FIVE]: 1, [PAPA]: 1 }, transfers: [] });
+    const r = await runScan({ head: 250_000, floors: { [FIVE]: 1, [PAPA]: 1, [SAR]: 1 }, transfers: [] });
     expect(r.exit).toBe(1);
     const all = r.logs.join('\n');
     expect(all).toContain('block_search listed no block with a transfer from block 1 to 250000');
@@ -133,7 +134,7 @@ describe('backfill-namada scan: where the nodes index events', () => {
 
   it('stops on a page with no block before the count is reached, without writing that window', async () => {
     const transfers = Array.from({ length: 150 }, (_, i) => 10 + i * 100);
-    const r = await runScan({ head: 50_000, floors: { [FIVE]: 1, [PAPA]: 1 }, transfers, emptyPage: 2 });
+    const r = await runScan({ head: 50_000, floors: { [FIVE]: 1, [PAPA]: 1, [SAR]: 1 }, transfers, emptyPage: 2 });
     expect(r.exit).toBe(1);
     expect(r.logs.join('\n')).toContain('block_search 1-50000 answered page 2 with no block after 100 of 150');
     expect(r.asked.filter((a) => a.includes('/block_results'))).toEqual([]);
@@ -141,7 +142,7 @@ describe('backfill-namada scan: where the nodes index events', () => {
   });
 
   it('with an index from block 1 it scans every window and says how far the index reached', async () => {
-    const r = await runScan({ head: 250_000, floors: { [FIVE]: 1, [PAPA]: 1 }, transfers: [5, 150_000] });
+    const r = await runScan({ head: 250_000, floors: { [FIVE]: 1, [PAPA]: 1, [SAR]: 1 }, transfers: [5, 150_000] });
     expect(r.exit, r.logs.join('\n')).toBeUndefined();
     expect(r.logs.some((l) => l.includes('scan complete: 2 blocks with transfers from block 1 to 250000 (event index from block 1)'))).toBe(true);
     expect(r.progress).toMatchObject({ nextFrom: 250_001, head: 250_000, blocks: 2, from: 1, indexFrom: 1 });
