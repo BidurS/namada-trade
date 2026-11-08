@@ -84,7 +84,7 @@ export const SERIES_META = {
 
 // ---------------------------------------------------------------- jobs bookkeeping
 
-interface DailyJob { day: string; snapNamada?: boolean; snapOsmosis?: boolean; flows?: boolean; names?: boolean; /** the pool's ledger (maspMakeup) written with the chain's rewards total read */ makeup?: boolean; /** the hour the validator list was last asked for (once an hour while it fails) */ namesTried?: number }
+interface DailyJob { day: string; snapNamada?: boolean; snapOsmosis?: boolean; flows?: boolean; names?: boolean; /** the pool's ledger (maspMakeup) written with the chain's rewards total read */ makeup?: boolean; /** the hour the validator list was last asked for (once an hour while it fails) */ namesTried?: number; /** the hour the rewards total was last asked for (once an hour while it fails) */ makeupTried?: number }
 
 async function kvJson<T>(db: D1Database, keys: string[]): Promise<Record<string, T | null>> {
   const out: Record<string, T | null> = {};
@@ -452,6 +452,10 @@ export function dayAggregates(rows: DayFlowRow[], refunds: DayFlowRow[]): DayAgg
   }
 
   const real = kept.filter((r) => !isBot(r));
+  // activity_daily counts a masp_fee row (the pool's NAM fee filed as its own row, migration 0022) as a flow and its
+  // gas payer as a receiver and an active address, while the Activity feed leaves those rows out (flows-query.ts
+  // NOT_FEE). Accepted on 2026-11-07: the figures are the ones these rows gave as unshields, and the count and the
+  // list are read for different things; the rows are not taken out here.
   const ownChain = (a: string | null, chain: string) => !!a && !PROTOCOL.has(a) && (chain === 'namada' ? a.startsWith('tnam1') : a.startsWith('osmo1'));
   const isPool = (cat: string | null | undefined, src: string | null | undefined) => cat === 'pool' && src !== 'user';
   const activity: DayAggregates['activity'] = [];
@@ -553,9 +557,16 @@ export function maspMakeupOf(
 /**
  * The ledger as of `now`: the three index reads and the pool's newest minute reading beside the chain read of the
  * rewards total (sources/namada.ts maspTotalRewards, a must-exist read: a node answering no value is refused, and
- * every node answering so, or none within MAKEUP_REWARDS_TIMEOUT_MS, leaves `rewards` null, never 0).
+ * every node answering so, or none within MAKEUP_REWARDS_TIMEOUT_MS, fails the read). A read that fails never
+ * discards the last reading: `prev` is the row as stored (kv masp.makeup), and its `rewards` is kept as it was, with
+ * its own time, block and node, so the page and the overview show the reading as stale once it is old enough; a row
+ * that never carried a reading keeps `rewards` null, never 0. A fresh reading is stamped `at: now`.
  */
-export async function readMaspMakeup(db: D1Database, now: number, signal?: AbortSignal, read = (s?: AbortSignal) => maspTotalRewards({ signal: s, timeoutMs: MAKEUP_REWARDS_TIMEOUT_MS, retries: 0 })): Promise<MaspMakeup> {
+export async function readMaspMakeup(
+  db: D1Database, now: number, signal?: AbortSignal,
+  read = (s?: AbortSignal) => maspTotalRewards({ signal: s, timeoutMs: MAKEUP_REWARDS_TIMEOUT_MS, retries: 0 }),
+  prev: MaspMakeup | null = null,
+): Promise<MaspMakeup> {
   const from = RECORD_SINCE.shieldedMoves;
   const [inRows, outRows, other, balance, rewards] = await Promise.all([
     db.prepare(MAKEUP_IN_SQL).bind(MASP, from, now).all<MakeupLegRow>().then((r) => r.results || []),
@@ -564,7 +575,8 @@ export async function readMaspMakeup(db: D1Database, now: number, signal?: Abort
     metricAt(db, 'supply.masp_shielded', now),
     read(signal).then((r) => ({ ...r, at: now }), (e) => { console.error('masp makeup: the rewards total was not read:', String(e).slice(0, 200)); return null; }),
   ]);
-  return maspMakeupOf(inRows, outRows, Number(other?.fee_nam) || 0, rewards, balance, now);
+  const m = maspMakeupOf(inRows, outRows, Number(other?.fee_nam) || 0, rewards, balance, now);
+  return rewards || !prev?.rewards ? m : { ...m, rewards: prev.rewards };
 }
 
 // ---------------------------------------------------------------- daily: the snapshots
@@ -646,14 +658,16 @@ export const VALIDATOR_LIST_TIMEOUT_MS = 10_000;
  * - from DAY_FLOWS_FROM_HOUR, the flow index of the two days before (flow_edges_daily, activity_daily, the daily
  *   keys; the day before yesterday again for rows that arrived late) and supply.masp_shielded.daily of yesterday;
  * - the validator list (names, commission, state) into kv validators.names for validator_daily: the request starts
- *   before the database parts and runs beside them, at most once an hour while it fails.
+ *   before the database parts and runs beside them, at most once an hour while it fails;
+ * - the pool as a ledger (kv masp.makeup), done for the day once the chain's rewards total was read; while that read
+ *   fails the row is written with the last reading and the part is asked again once an hour.
  */
 export async function daily(env: Env, now: number, ctx: DailyCtx): Promise<DailyResult | null> {
   if (now % H >= JOB_WINDOW_MS) return null;
   if (ctx.listingTick && !closingAt(now)) return null;
   const late = () => ctx.late?.() ?? false;
   const day = isoDay(now);
-  const kv = await kvJson<any>(env.DB, ['jobs.daily', 'balance.listing', 'bond.listing']);
+  const kv = await kvJson<any>(env.DB, ['jobs.daily', 'balance.listing', 'bond.listing', MASP_MAKEUP_KV]);
   const job: DailyJob = kv['jobs.daily']?.day === day ? { ...kv['jobs.daily'] } : { day };
   if (job.snapNamada && job.snapOsmosis && job.flows && job.names && job.makeup) return null;
   const res: DailyResult = { day, ran: [], waiting: [], failed: [], written: 0 };
@@ -709,15 +723,21 @@ export async function daily(env: Env, now: number, ctx: DailyCtx): Promise<Daily
     return stmts;
   });
   // The pool as a ledger (kv masp.makeup): the flow index's legs since the record's start, the pool's balance as last
-  // read, and the chain's running total of shielded rewards read at the head. Written whatever the chain read gave; the
-  // part is done for the day only once the rewards total was read, so a failed read is tried again next tick in the
-  // window (the page shows the sentences the row can carry: the rewards sentence needs the read).
+  // read, and the chain's running total of shielded rewards read at the head. Written whatever the chain read gave,
+  // the last reading kept when the read fails (readMaspMakeup); the part is done for the day only once the rewards
+  // total was read this tick (a fresh reading is stamped with the tick), and a failed read is asked once an hour, not
+  // every tick: the three index scans and the 10 s chain read are rationed as the validator list is (makeupTried,
+  // written with the row in the same batch, and set on the job in memory so the names block below does not write the
+  // job without it).
   await part('shielded makeup', 'makeup', async () => {
-    const m = await readMaspMakeup(env.DB, now, ctx.signal, ctx.maspRewards);
+    if (job.makeupTried === hourNow) { res.waiting.push('shielded makeup: the chain’s total of shielded rewards was not read this hour; asked again next hour'); return null; }
+    const m = await readMaspMakeup(env.DB, now, ctx.signal, ctx.maspRewards, (kv[MASP_MAKEUP_KV] as MaspMakeup | null) ?? null);
     const row = kvStmt(MASP_MAKEUP_KV, m, now);
-    if (m.rewards) return [row];
-    res.written += await runBatch(env.DB, [row]);
-    res.waiting.push('shielded makeup: the chain’s total of shielded rewards could not be read, so the ledger was written without it; tried again next tick');
+    if (m.rewards?.at === now) return [row];
+    const next: DailyJob = { ...job, makeupTried: hourNow };
+    res.written += await runBatch(env.DB, [row, kvStmt('jobs.daily', next, now)]);
+    Object.assign(job, next);
+    res.waiting.push(`shielded makeup: the chain’s total of shielded rewards could not be read, so the ledger was written ${m.rewards ? 'with the last reading' : 'without it'}; asked again next hour`);
     return null;
   });
 
