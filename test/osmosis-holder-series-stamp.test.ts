@@ -32,7 +32,7 @@ function seeded(trusted: number) {
 }
 async function series(db: ReturnType<typeof testD1>) {
   const health: SourceHealth[] = [];
-  const d = await daily({ DB: db } as any, NOW, { health, validators: async () => [] });
+  const d = await daily({ DB: db } as any, NOW, { health, validators: async () => [], maspRewards: async () => { throw new Error('not read in this test'); } });
   await hourly({ DB: db } as any, NOW, { pools: [], poolsAt: null, health, listingTick: false, summary: async () => { throw new Error('x'); }, chart: async () => null });
   return {
     waiting: d?.waiting ?? [],

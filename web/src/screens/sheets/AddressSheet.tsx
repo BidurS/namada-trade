@@ -15,16 +15,18 @@ import { useEffect, useMemo, useState } from 'react';
 import type { AddressReport, Flow, Overview } from '../../../../shared/types';
 import { navigate, useClock, useHeaderPrice, useOverlays, useOverview, useReplay, useSession, REWIND_WORDS } from '../../app/index';
 import { fetchAddressReport, saveLabel } from '../../api';
-import { Button, Derived, Notice, Num, ProvDot, SelectChip, Sheet, Skeleton, SourceLine, SNum, Tag, type Stamp } from '../../ui/index';
+import { Button, Derived, Notice, Num, ProvDot, SelectChip, Sheet, Skeleton, SourceLine, SNum, Tag, useMinWidth, type Stamp } from '../../ui/index';
 import { Icon } from '../../ui/Icon';
-import { explorerAddr, explorerTxOf, fmtAddr, fmtAgo, fmtCount, fmtDayClock, fmtNamRule, fmtNamSigned, fmtPctRule, fmtUsdRule, fmtCoin, labelNeedsAddr } from '../../lib/format';
+import { explorerAddr, explorerTxOf, fmtAddr, fmtAgo, fmtCount, fmtDayClock, fmtDayMonthYear, fmtNamRule, fmtNamSigned, fmtPctRule, fmtUsdRule, fmtCoin, labelNeedsAddr } from '../../lib/format';
 import { alsoCoinsWords, rewardWords, tradesOf, tradesWords } from '../../lib/settle';
 import { label_plain, tagByline } from '../../../../shared/labels';
-import { coinOf, counterpartiesOf, crossingsWith, onePerCrossing } from './moves';
+import { ADDRESS_WORDS } from '../../../../shared/copy';
+import { RECORD_SINCE } from '../../../../shared/record-since';
+import { TECH } from '../activity/words';
+import { coinOf, counterpartiesOf, crossingsWith, fromPoolOf, onePerCrossing } from './moves';
 import { plainError, useCopy } from './util';
 import { clearOrigin, originFor, type AddressOrigin } from '../activity/sheetOrigin';
 import { serverHolderProv } from '../activity/holderStamp';
-import { TECH } from '../activity/words';
 
 type Filter = 'all' | 'trades' | 'bridge' | 'other';
 const FILTERS: { value: Filter; label: string; kinds: (k: string) => boolean }[] = [
@@ -122,6 +124,8 @@ export function AddressSheet({ address, onClose, origin: given }: { address: str
           {cat && !(name ?? '').toLowerCase().includes(cat.toLowerCase()) ? <Tag cat={cat} /> : null}
         </div>
         {r && (r.rank != null || r.rankTotal != null) ? <Ranks r={r} stamp={rankStamp(overview, isOsmo)} /> : null}
+        {r?.firstSeen != null ? <FirstSeen at={r.firstSeen} /> : null}
+        {r?.label ? <WhyLabel label={r.label} /> : null}
         <div className="sh-addr__id">
           <p className="sh-addr__full">{address}</p>
           <div className="sh-addr__acts">
@@ -181,6 +185,39 @@ function Ranks({ r, stamp }: { r: AddressReport; stamp: Stamp }) {
   );
 }
 
+/**
+ * "First seen 3 Nov 2026 by this site, which has listed every Namada balance since 20 Oct 2026." The date is the balance
+ * listing that first found the address with NAM (holders.first_seen); an address without the mark was already there
+ * when the listings began (shared/record-since.ts everyBalance) and gets no line. The stamp is the holder index's.
+ */
+function FirstSeen({ at }: { at: number }) {
+  const stamp: Stamp = { source: TECH.holderIndex, plain: 'Holder index', at, status: 'live' };
+  return (
+    <p className="sh-cap sh-first" data-prov-group="">
+      {ADDRESS_WORDS.firstSeen(fmtDayMonthYear(at), fmtDayMonthYear(RECORD_SINCE.everyBalance))}
+      {' '}<ProvDot p={stamp} label="First seen by this site" />
+    </p>
+  );
+}
+
+/**
+ * Why a curated or genesis label is on the address: the label row's own note, inline in the side panel (from 1024 px)
+ * and behind a "Why this label" disclosure in the phone's bottom sheet. A wallet's own tag has no reason shown: the
+ * server does not send one, and a tag (source 'user') is skipped here too.
+ */
+function WhyLabel({ label }: { label: NonNullable<AddressReport['label']> }) {
+  const wide = useMinWidth(1024);
+  const source = label.label_source ?? label.source;
+  if (!label.note || source === 'user') return null;
+  if (wide) return <p className="sh-cap sh-why" data-testid="sh-why">{label.note}</p>;
+  return (
+    <details className="sh-why" data-testid="sh-why">
+      <summary>{ADDRESS_WORDS.whyLabel}<Icon name="chev" className="ico ico--inline" /></summary>
+      <p className="sh-cap">{label.note}</p>
+    </details>
+  );
+}
+
 function Report({
   r, isOsmo, price, now, at, openAddress, overviewCoverage, onClose,
 }: {
@@ -214,6 +251,13 @@ function Report({
   const overWords = partial ? `the newest ${fmtCount(moves.length)} moves listed below` : `the ${fmtCount(moves.length)} moves listed below`;
   // what the address's trades realised, at their settle prices, beside the moves (the rows' own values are NAM at the minute's price)
   const tradeWords = useMemo(() => tradesWords(tradesOf(moves, r.address), overWords), [moves, r.address, overWords]);
+  // of the NAM it received over the same moves, what came out of the shielded pool (every leg from the pool to it)
+  const pool = useMemo(() => fromPoolOf(moves, r.address), [moves, r.address]);
+  const poolWords = pool.moves > 0
+    ? ADDRESS_WORDS.fromPool(fmtNamRule(pool.fromPoolNam), fmtNamRule(pool.receivedNam), pool.moves === 1 ? '1 move' : `${fmtCount(pool.moves)} moves`, partial ? overWords : undefined)
+    : null;
+  // the record the moves come from: the Namada flow index's stamp (moves out of the pool are Namada records)
+  const recordStamp: Stamp = overviewCoverage ? overviewCoverage[1] : { source: 'D1 flow index', at: null, status: 'missing', note: 'How old the record is was not sent by this site’s server.' };
 
   return (
     <>
@@ -376,6 +420,11 @@ function Report({
         ) : null}
 
         {tradeWords ? <p className="sh-cap" data-testid="sh-trades">{tradeWords}</p> : null}
+        {poolWords ? (
+          <p className="sh-cap" data-testid="sh-from-pool" data-prov-group="">
+            {poolWords}{' '}<ProvDot p={recordStamp} label="NAM received that came out of the shielded pool" />
+          </p>
+        ) : null}
         <Moves moves={moves} loaded={flows.length} recorded={recorded} note={r.flowsNote ?? null} address={r.address} now={now} openAddress={openAddress} />
 
         {last != null ? (

@@ -131,7 +131,7 @@ export const MESSAGE_SOURCES: { file: string; names: Set<string> | null }[] = [
   { file: 'shared/flow-words.ts', names: null },
   {
     file: 'worker/src/sources/discord.ts',
-    names: new Set(['sideWords', 'crossingSide', 'PROTOCOL_WORDS', 'coinWords', 'settleField', 'worthWords', 'runClauses', 'moveCard', 'forumCard', 'govCard', 'settingsFields', 'CARD_WORDS', 'testBody', 'noticeBody', 'COLOUR', 'SENDER', 'FILES_REFUSED_NOTE']),
+    names: new Set(['sideWords', 'crossingSide', 'PROTOCOL_WORDS', 'coinWords', 'settleField', 'worthWords', 'poolMoveWords', 'runClauses', 'moveCard', 'forumCard', 'govCard', 'settingsFields', 'CARD_WORDS', 'testBody', 'noticeBody', 'COLOUR', 'SENDER', 'FILES_REFUSED_NOTE']),
   },
   // the Telegram bot's own messages (the alerts themselves are the cards above)
   { file: 'worker/src/sources/telegram.ts', names: new Set(['connectedMessage', 'testMessages', 'cardMessage', 'settingsButton', 'forumMessage', 'hourMessage']) },

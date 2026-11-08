@@ -86,6 +86,8 @@ function seed(): Seed {
 
 const bucketOf = (t: number) => (t >= 1e7 ? '10m+' : t >= 1e6 ? '1m-10m' : t >= 1e5 ? '100k-1m' : t >= 1e4 ? '10k-100k' : t >= 1e3 ? '1k-10k' : t >= 1 ? '1-1k' : 'under1');
 const VALIDATORS = [{ address: 'tnam1qval1', name: 'One', commission: '0.05', state: 'consensus', email: 'secret@example.com' }, { address: 'tnam1qval2', name: '<decommissioned>', commission: '0.2', state: 'jailed' }];
+/** the chain's running total of shielded rewards, as the daily ledger reads it (sources/namada.ts maspTotalRewards): never the network in a test */
+const rewards = async () => ({ total: 27_347_610_418_808n, height: 8_517_986, provider: 'StakeAndRelax' });
 
 // ---------------------------------------------------------------- daily: the snapshots
 
@@ -93,8 +95,8 @@ describe('daily(): the holder snapshots', () => {
   it('writes one row per non-empty size line per chain that reconciles with the seed: spendable to the holders, staked to the bond listing', async () => {
     const s = seed();
     const health: SourceHealth[] = [];
-    const r = (await daily(env(s.db), NOW, { health, validators: async () => VALIDATORS }))!;
-    expect(r.ran).toEqual(['snapshot namada', 'snapshot osmosis', 'flow index', 'validator names']);
+    const r = (await daily(env(s.db), NOW, { health, maspRewards: rewards, validators: async () => VALIDATORS }))!;
+    expect(r.ran).toEqual(['snapshot namada', 'snapshot osmosis', 'flow index', 'shielded makeup', 'validator names']);
     const rows = all(s.db, "SELECT * FROM holder_cohorts_daily WHERE chain = 'namada' ORDER BY bucket");
     // independent: the union of spendable and staked, per bucket
     const want = new Map<string, { holders: number; nam: number; spendable: number; staked: number }>();
@@ -125,7 +127,7 @@ describe('daily(): the holder snapshots', () => {
 
   it('cohort_daily: each genesis category is the labelled join; "none" is every other holder; a user tag is not a cohort', async () => {
     const s = seed();
-    await daily(env(s.db), NOW, { health: [], validators: async () => VALIDATORS });
+    await daily(env(s.db), NOW, { health: [], maspRewards: rewards, validators: async () => VALIDATORS });
     const rows = Object.fromEntries(all(s.db, 'SELECT * FROM cohort_daily').map((r) => [r.category, r]));
     for (const cat of ['backer', 'foundation', 'genesis']) {
       const addrs = [...s.labels].filter(([, c]) => c === cat).map(([a]) => a);
@@ -146,12 +148,12 @@ describe('daily(): the holder snapshots', () => {
 
   it('runs once a day: a second call does nothing, a call outside the window does nothing, and a rerun after the marker is cleared writes the same rows', async () => {
     const s = seed();
-    await daily(env(s.db), NOW, { health: [], validators: async () => VALIDATORS });
+    await daily(env(s.db), NOW, { health: [], maspRewards: rewards, validators: async () => VALIDATORS });
     const snap = all(s.db, 'SELECT * FROM holder_cohorts_daily ORDER BY chain, bucket');
-    expect(await daily(env(s.db), NOW + 60000, { health: [], validators: async () => VALIDATORS })).toBeNull();
-    expect(await daily(env(s.db), NOW + JOB_WINDOW_MS, { health: [] })).toBeNull();
+    expect(await daily(env(s.db), NOW + 60000, { health: [], maspRewards: rewards, validators: async () => VALIDATORS })).toBeNull();
+    expect(await daily(env(s.db), NOW + JOB_WINDOW_MS, { health: [], maspRewards: rewards })).toBeNull();
     s.db.raw.prepare("DELETE FROM kv WHERE key = 'jobs.daily'").run();
-    await daily(env(s.db), NOW + 2 * 60000, { health: [], validators: async () => VALIDATORS });
+    await daily(env(s.db), NOW + 2 * 60000, { health: [], maspRewards: rewards, validators: async () => VALIDATORS });
     expect(all(s.db, 'SELECT * FROM holder_cohorts_daily ORDER BY chain, bucket')).toEqual(snap);
   });
 
@@ -159,7 +161,7 @@ describe('daily(): the holder snapshots', () => {
     const s = seed();
     s.db.raw.prepare("UPDATE kv SET value = ? WHERE key = 'bond.listing'").run(JSON.stringify({ at: NOW - 7 * H, completeAt: NOW - 7 * H }));
     const health: SourceHealth[] = [];
-    const r = (await daily(env(s.db), NOW, { health, validators: async () => VALIDATORS }))!;
+    const r = (await daily(env(s.db), NOW, { health, maspRewards: rewards, validators: async () => VALIDATORS }))!;
     expect(r.waiting[0]).toMatch(/^snapshot namada: the older listing is 7\.0 h old/);
     expect(all(s.db, "SELECT * FROM holder_cohorts_daily WHERE chain = 'namada'")).toHaveLength(0);
     expect(health.find((h) => h.name === 'Series (daily snapshot)')).toMatchObject({ ok: false });
@@ -167,7 +169,7 @@ describe('daily(): the holder snapshots', () => {
     const next = NOW + D;
     s.db.raw.prepare("UPDATE kv SET value = ? WHERE key IN ('bond.listing', 'balance.listing')").run(JSON.stringify({ at: next - H, completeAt: next - H }));
     s.db.raw.prepare("UPDATE holders SET verified_at = ? WHERE chain = 'osmosis'").run(next - 60000);
-    await daily(env(s.db), next, { health: [], validators: async () => VALIDATORS });
+    await daily(env(s.db), next, { health: [], maspRewards: rewards, validators: async () => VALIDATORS });
     expect(all(s.db, "SELECT DISTINCT day FROM holder_cohorts_daily WHERE chain = 'namada'").map((x) => x.day)).toEqual(['2026-10-22']);
   });
 
@@ -269,7 +271,7 @@ describe('dayAggregates / the daily flow index', () => {
     // a stale edge from an earlier build of the 20th must not survive
     insert(s.db, 'flow_edges_daily', [{ day: '2026-10-20', chain: 'namada', kind: 'withdraw', from_cat: 'pos', to_cat: 'user', n: 1, nam: 331_386_682, usd: null }]);
     insert(s.db, 'metrics', [{ ts: Date.UTC(2026, 9, 20, 23, 58), key: 'supply.masp_shielded', value: 50_812_000 }, { ts: Date.UTC(2026, 9, 20, 23, 59), key: 'supply.masp_shielded', value: 50_812_667 }, { ts: Date.UTC(2026, 9, 21, 0, 0), key: 'supply.masp_shielded', value: 1 }]);
-    await daily(env(s.db), NOW, { health: [], validators: async () => VALIDATORS });
+    await daily(env(s.db), NOW, { health: [], maspRewards: rewards, validators: async () => VALIDATORS });
     const edges = all(s.db, "SELECT chain, kind, from_cat, to_cat, n, nam FROM flow_edges_daily WHERE day = '2026-10-20' ORDER BY chain, kind, from_cat, to_cat");
     expect(edges.find((x) => x.kind === 'withdraw')).toBeUndefined();
     expect(edges.find((x) => x.kind === 'transfer' && x.from_cat === 'backer')).toMatchObject({ n: 1, nam: 5000 });
@@ -283,7 +285,7 @@ describe('dayAggregates / the daily flow index', () => {
 
   it('waits for 01:00 UTC before writing the day', async () => {
     const s = seed();
-    const r = (await daily(env(s.db), Date.UTC(2026, 9, 21, 0, 5), { health: [], validators: async () => VALIDATORS }))!;
+    const r = (await daily(env(s.db), Date.UTC(2026, 9, 21, 0, 5), { health: [], maspRewards: rewards, validators: async () => VALIDATORS }))!;
     expect(r.waiting).toContain('flow index: from 1:00 UTC');
     expect(all(s.db, 'SELECT * FROM activity_daily')).toHaveLength(0);
   });
@@ -668,8 +670,8 @@ describe('daily(): each part on its own', () => {
     let names = 0;
     const validators = async () => { names++; return VALIDATORS; };
     const health: SourceHealth[] = [];
-    const r = (await daily(env(failingOn(s.db, (sql) => sql === DAY_FLOWS_SQL)), NOW, { health, validators }))!;
-    expect(r.ran).toEqual(['snapshot namada', 'snapshot osmosis', 'validator names']);
+    const r = (await daily(env(failingOn(s.db, (sql) => sql === DAY_FLOWS_SQL)), NOW, { health, maspRewards: rewards, validators }))!;
+    expect(r.ran).toEqual(['snapshot namada', 'snapshot osmosis', 'shielded makeup', 'validator names']);
     expect(r.failed).toEqual([expect.stringMatching(/^flow index: Error: D1_ERROR/)]);
     expect(all(s.db, "SELECT COUNT(*) n FROM holder_cohorts_daily WHERE chain = 'namada'")[0].n).toBeGreaterThan(0);
     expect(all(s.db, 'SELECT * FROM activity_daily')).toEqual([]);
@@ -677,37 +679,37 @@ describe('daily(): each part on its own', () => {
     // next tick: only the flow index; the size pass and the validator list are not asked again
     const snapSql: string[] = [];
     const watching = { ...s.db, prepare: (sql: string) => { snapSql.push(sql); return s.db.prepare(sql); }, batch: s.db.batch } as any;
-    const r2 = (await daily(env(watching), NOW + 60000, { health: [], validators }))!;
+    const r2 = (await daily(env(watching), NOW + 60000, { health: [], maspRewards: rewards, validators }))!;
     expect(r2.ran).toEqual(['flow index']);
     expect(snapSql.some((q) => /holder_cohorts|GROUP BY bucket/.test(q))).toBe(false);
     expect(names).toBe(1);
     expect(all(s.db, 'SELECT COUNT(*) n FROM activity_daily')[0].n).toBe(4);
-    expect(await daily(env(s.db), NOW + 2 * 60000, { health: [], validators })).toBeNull();
+    expect(await daily(env(s.db), NOW + 2 * 60000, { health: [], maspRewards: rewards, validators })).toBeNull();
   });
 
   it('a failing validator list is asked once an hour, not every tick, and the other parts are written meanwhile', async () => {
     const s = seed();
     let asked = 0;
     const down = async () => { asked++; throw new Error('timeout'); };
-    await daily(env(s.db), NOW, { health: [], validators: down });
-    await daily(env(s.db), NOW + 60000, { health: [], validators: down });
+    await daily(env(s.db), NOW, { health: [], maspRewards: rewards, validators: down });
+    await daily(env(s.db), NOW + 60000, { health: [], maspRewards: rewards, validators: down });
     expect(asked).toBe(1);
     expect(JSON.parse(all(s.db, "SELECT value FROM kv WHERE key = 'jobs.daily'")[0].value)).toMatchObject({ snapNamada: true, snapOsmosis: true, flows: true, namesTried: Math.floor(NOW / H) * H });
-    await daily(env(s.db), NOW + H, { health: [], validators: down });
+    await daily(env(s.db), NOW + H, { health: [], maspRewards: rewards, validators: down });
     expect(asked).toBe(2);
   });
 
   it('waits for a tick without a chain listing (reading nothing) unless the window is closing; a late tick starts nothing', async () => {
     const s = seed();
     const q0 = s.db.queries;
-    expect(await daily(env(s.db), NOW, { health: [], listingTick: true, validators: async () => VALIDATORS })).toBeNull();
+    expect(await daily(env(s.db), NOW, { health: [], maspRewards: rewards, listingTick: true, validators: async () => VALIDATORS })).toBeNull();
     expect(s.db.queries).toBe(q0);
     let asked = 0;
-    const r = (await daily(env(s.db), NOW, { health: [], late: () => true, validators: async () => { asked++; return VALIDATORS; } }))!;
+    const r = (await daily(env(s.db), NOW, { health: [], maspRewards: rewards, late: () => true, validators: async () => { asked++; return VALIDATORS; } }))!;
     expect(asked).toBe(0);
     expect(r.ran).toEqual([]);
     const closing = Date.UTC(2026, 9, 21, 1, 14);
-    expect((await daily(env(s.db), closing, { health: [], listingTick: true, validators: async () => VALIDATORS }))!.ran).toHaveLength(4);
+    expect((await daily(env(s.db), closing, { health: [], maspRewards: rewards, listingTick: true, validators: async () => VALIDATORS }))!.ran).toHaveLength(5);
   });
 });
 

@@ -66,6 +66,10 @@ export const PLAIN_SOURCE: Record<string, string> = {
   'last indexed Osmosis flow': 'Flow index',
   'Namada RPC abci_query': 'Namada node',
   'Namada RPC (MASP balance)': 'Namada node',
+  // the pool's balance after a move, as the block's own transfer event records it (meta.maspPostNam), and the chain's
+  // running total of shielded rewards (the daily ledger's read of the pool's max_total_rewards key)
+  'Namada block record (pool balance after the move)': 'Namada block record',
+  'Namada RPC (shielded rewards total)': 'Namada node',
   'Namada RPC status': 'Namada node',
   'Namada nodes': 'Namada nodes',
   'namada-rpc': 'Namada node',
@@ -79,6 +83,17 @@ export const PLAIN_SOURCE: Record<string, string> = {
   'size table': 'Size table',
   'cross-check': 'Cross-checks',
 };
+
+/**
+ * The technical source names the shielded page's ledger and moves-out shares carry (as the Worker writes them:
+ * analytics.ts POOL_RECORD_SOURCE, series.ts readMaspMakeup), kept here so the screen types no raw name.
+ */
+export const POOL_SOURCES = {
+  record: 'Namada block record (pool balance after the move)',
+  reading: 'Namada RPC (MASP balance)',
+  rewards: 'Namada RPC (shielded rewards total)',
+  index: 'D1 flow index',
+} as const;
 
 const PREFIXES: [string, string][] = [
   ['Namada RPC', 'Namada node'],

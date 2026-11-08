@@ -1,9 +1,10 @@
 // Decision-level queries over D1 (see docs/decisions.md). Every function takes `asOf` so the same
 // code serves the live UI and replay mode.
 import type {
-  AlertHit, BlindSpot, ChainParams, Flow, GovernanceProposal, IntelResponse, MaspPassthroughLink, MaspPassthroughPair, MaspPulseBucket, MoverEntry, OnDeckEntry,
-  OrderflowBucket, OrderflowResponse, Pressure, Provenance, Sourced, SupplyCohortBreakdown, UnbondMaturityBucket, UnbondTermStructure, UnlockEntry,
+  AlertHit, BlindSpot, ChainParams, Flow, GovernanceProposal, IntelResponse, MaspMakeup, MaspPassthroughLink, MaspPassthroughPair, MaspPulseBucket, MoveOutGroup, MoverEntry, OnDeckEntry,
+  OrderflowBucket, OrderflowResponse, PoolShare, Pressure, Provenance, Sourced, SupplyCohortBreakdown, UnbondMaturityBucket, UnbondTermStructure, UnlockEntry,
 } from '../../shared/types';
+import { RECORD_SINCE } from '../../shared/record-since';
 import type { BondListing } from './sources/namada';
 import { evaluateFlows, INTERNAL_ADDRESSES, isInternal, type AlertThresholds } from '../../shared/alerts';
 import { QUOTE_KEYS, quotesNeeded, settleMetaOf, settleOf, type Settle } from '../../shared/settle';
@@ -12,7 +13,7 @@ import { withOsmosisGap } from '../../shared/osmosis-gap';
 import { kvGetJson, kvSet } from './db';
 import { AFTER_CURSOR, FLOWS_ORDER, NAM_AMOUNT, NOT_BELOW, NOT_LEGACY_TWIN } from './flows-query';
 import { safeHttpUrl, explorerHashOf, isOtherCoin, priceAtOf } from '../../shared/flow-rules';
-import { fetchJson } from './util';
+import { fetchJson, toNam } from './util';
 import { INTERNAL_LABELS } from './config';
 import { label_plain, labelAuthorShort } from './labels';
 import { chunks } from './holders';
@@ -1144,6 +1145,87 @@ export function matchMaspPassthroughs(
  */
 export const publicPair = ({ inFrom: _inFrom, inAmount: _inAmount, inTs: _inTs, relDiff: _relDiff, ...pair }: MaspPassthroughLink): MaspPassthroughPair => pair;
 
+// ---------------------------------------------------------------- the moves out of the pool: groups and shares (2026-11-07)
+
+/** The kv row the daily job writes the pool's ledger to (series.ts maspMakeup); blindSpot serves it as `makeup`. */
+export const MASP_MAKEUP_KV = 'masp.makeup';
+/** The largest moves out the page lists (as before), and the most moves out of the window read for the groups and the shares. */
+export const MOVES_OUT_SHOWN = 25;
+export const MOVES_OUT_READ_MAX = 1000;
+/** The source name of a share computed from the block's own record of the pool's balance (meta.maspPostNam). */
+export const POOL_RECORD_SOURCE = 'Namada block record (pool balance after the move)';
+
+/**
+ * The pool's NAM before a move out, from the row's stored meta: the pool's balance after the inner transaction
+ * (meta.maspPostNam, base units as the block's transfer event wrote it) plus what the inner transaction took out of
+ * the pool (`legsOutNam`: the move, its fee and any sibling leg) less what it put in (`legsInNam`). null when the row
+ * carries no such record.
+ */
+export function poolBeforeOf(meta: Record<string, unknown> | null | undefined, legsOutNam: number, legsInNam = 0): number | null {
+  const post = meta?.maspPostNam;
+  if (typeof post !== 'string' || !/^\d+$/.test(post)) return null;
+  const before = toNam(post) + legsOutNam - legsInNam;
+  return Number.isFinite(before) && before > 0 ? before : null;
+}
+
+/** A move's share of the pool's NAM before it, in percent; null without a positive before. */
+export const poolShareOf = (amountNam: number, beforeNam: number | null | undefined): number | null =>
+  beforeNam != null && beforeNam > 0 && Number.isFinite(amountNam) ? (amountNam / beforeNam) * 100 : null;
+
+/** The NAM fee a row's meta says the pool paid with the move (meta.maspFeeNam), 0 when none. */
+export const poolFeeOf = (meta: Record<string, unknown> | null | undefined): number => {
+  const fee = Number(meta?.maspFeeNam);
+  return Number.isFinite(fee) && fee > 0 ? fee : 0;
+};
+
+/**
+ * The window's moves out grouped by the address they went to, ranked by the group's NAM (the largest group first; a
+ * tie by the group's largest move). Each group keeps its first and last move and its largest move (whose record a
+ * phone's one row for the group links, and whose share of the pool it says). The rows' labels are the recipient's.
+ */
+export function groupMovesOut(rows: Flow[]): MoveOutGroup[] {
+  const groups = new Map<string, MoveOutGroup>();
+  for (const f of rows) {
+    if (!f.to) continue;
+    const g = groups.get(f.to);
+    if (!g) {
+      groups.set(f.to, {
+        to: f.to, toLabel: f.toLabel ?? null, toLabelPlain: f.toLabelPlain ?? null, toLabelSource: f.toLabelSource ?? null, toLabelAuthor: f.toLabelAuthor ?? null,
+        n: 1, nam: f.amount, since: f.ts, last: f.ts, largestId: f.id, largestKind: f.kind, largestNam: f.amount,
+      });
+      continue;
+    }
+    g.n += 1;
+    g.nam += f.amount;
+    if (f.ts < g.since) g.since = f.ts;
+    if (f.ts > g.last) g.last = f.ts;
+    if (f.amount > g.largestNam) { g.largestId = f.id; g.largestKind = f.kind; g.largestNam = f.amount; }
+  }
+  return [...groups.values()].sort((a, b) => b.nam - a.nam || b.largestNam - a.largestNam || a.since - b.since);
+}
+
+/**
+ * A move's share of the pool's NAM before it (PoolShare): from the block's own record when the row carries it, else
+ * from the site's minute reading of the pool just before the block (`reading`, the latest supply.masp_shielded row at
+ * or before the move's time), said as "about". null when neither is there.
+ */
+export function poolShareFor(f: Flow, reading: { ts: number; value: number } | null, stored: Record<string, unknown> | null | undefined = f.meta): PoolShare | null {
+  // the stored meta: a public Flow's meta has no maspFeeNam (publicMeta), the row's does
+  const exact = poolBeforeOf(stored, f.amount + poolFeeOf(stored));
+  if (exact != null) {
+    const sharePct = poolShareOf(f.amount, exact);
+    return sharePct == null ? null : { beforeNam: exact, sharePct, about: false, prov: { source: POOL_RECORD_SOURCE, at: f.ts, height: f.height, status: 'live' } };
+  }
+  if (!reading || !(reading.value > 0) || reading.ts > f.ts) return null;
+  const sharePct = poolShareOf(f.amount, reading.value);
+  if (sharePct == null) return null;
+  const minutes = Math.round((f.ts - reading.ts) / 60000);
+  return {
+    beforeNam: reading.value, sharePct, about: true,
+    prov: { source: 'Namada RPC (MASP balance)', at: reading.ts, status: 'live', note: `About: the pool’s balance as this site read it ${minutes <= 1 ? 'in the minute' : `${minutes} min`} before the block, not the block’s own record.` },
+  };
+}
+
 /**
  * Every NAM leg into or out of the shielded pool, once. Namada records: shield / unshield, the pool's fees for
  * transactions (masp_fee: NAM out of the pool to the gas payer), and bridge crossings
@@ -1184,7 +1266,7 @@ export function maspLegs(namada: any[], osmosisOut: IbcRow[], osmosisIn: any[]):
 export async function blindSpot(db: D1Database, asOf: number, replay: boolean): Promise<BlindSpot> {
   const from30 = asOf - 30 * D;
   const from7 = asOf - 7 * D;
-  const [shielded, total, trendRecent, trendDaily, namadaLegs, osmoOut, osmoIn, unshieldRows, cov] = await Promise.all([
+  const [shielded, total, trendRecent, trendDaily, namadaLegs, osmoOut, osmoIn, unshieldRows, cov, makeup] = await Promise.all([
     metricAt(db, 'supply.masp_shielded', asOf),
     metricAt(db, 'supply.total', asOf),
     metricSeries(db, 'supply.masp_shielded', asOf - 7 * D, asOf, 6 * H),
@@ -1196,13 +1278,28 @@ export async function blindSpot(db: D1Database, asOf: number, replay: boolean): 
     osmosisSendsOut(db, from30 - PAIR_MS, asOf).catch(() => ({ outs: [] as IbcRow[], refunded: 0 })),
     db.prepare(`SELECT ts, from_addr, to_addr, amount_num FROM flows WHERE chain='osmosis' AND kind='ibc_in' AND from_addr = ? AND ts >= ? AND ts < ?`)
       .bind(MASP, from30 - PAIR_MS, asOf).all<any>().catch(() => ({ results: [] as any[] })),
-    // The largest moves out of the pool to an address: unshields and crossings straight out over the bridge.
+    // The moves out of the pool, largest first: unshields to an address (never to a protocol account), and crossings
+    // straight out of the pool over the bridge, whether the record names the receiver (to_addr an Osmosis address,
+    // rows since the 2026-10-22 rederive) or only the bridge account it went through (older records, to_addr the
+    // escrow). The pool's fees are rows of their own kind (masp_fee) and are not moves out to anyone. The first
+    // MOVES_OUT_SHOWN are the list; every row read makes the groups by recipient.
     db.prepare(`${FLOW_SELECT} WHERE f.chain='namada' AND f.ts >= ? AND f.ts < ? AND f.from_addr = ?
-                AND (f.kind = 'unshield' OR (f.kind = 'ibc_out' AND f.to_addr LIKE 'osmo1%'))
-                AND f.to_addr NOT IN (?,?,?,?) AND ${NAM_AMOUNT} AND ${NOT_LEGACY_TWIN}
-                ORDER BY f.amount_num DESC LIMIT 25`).bind(asOf - 30 * D, asOf, MASP, INTERNAL_ADDRESSES.pos, INTERNAL_ADDRESSES.ibc, INTERNAL_ADDRESSES.pgf, INTERNAL_ADDRESSES.governance).all<any>(),
+                AND ((f.kind = 'unshield' AND f.to_addr NOT IN (?,?,?,?)) OR (f.kind = 'ibc_out' AND (f.to_addr LIKE 'osmo1%' OR f.to_addr = ?)))
+                AND ${NAM_AMOUNT} AND ${NOT_LEGACY_TWIN}
+                ORDER BY f.amount_num DESC, f.ts DESC LIMIT ?`)
+      .bind(asOf - 30 * D, asOf, MASP, INTERNAL_ADDRESSES.pos, INTERNAL_ADDRESSES.ibc, INTERNAL_ADDRESSES.pgf, INTERNAL_ADDRESSES.governance, ESCROW, MOVES_OUT_READ_MAX).all<any>(),
     coverageOf(db, asOf, replay),
+    // the pool as a ledger, as the daily job last wrote it (null while never written, or when kv cannot be read)
+    kvGetJson<MaspMakeup>(db, MASP_MAKEUP_KV).catch(() => null),
   ]);
+  const outAll: Flow[] = (unshieldRows.results || []).map(rowToFlow);
+  const unshields = outAll.slice(0, MOVES_OUT_SHOWN);
+  // Each listed move's share of the pool before it: the block's own record when the row carries it, else the minute
+  // reading just before the block (one seek a row without the record; none for a row older than the minute series).
+  const storedMeta: (Record<string, unknown> | null)[] = (unshieldRows.results || []).slice(0, MOVES_OUT_SHOWN).map((r: any) => safeParseJson(r.meta, null));
+  const readings = await Promise.all(unshields.map((f, i) => (poolBeforeOf(storedMeta[i], f.amount) != null ? Promise.resolve(null) : metricAt(db, 'supply.masp_shielded', f.ts))));
+  const outShares: Record<string, PoolShare> = {};
+  unshields.forEach((f, i) => { const s = poolShareFor(f, readings[i], storedMeta[i]); if (s) outShares[f.id] = s; });
 
   const allLegs30 = maspLegs(namadaLegs.results || [], osmoOut.outs, osmoIn.results || []).filter((l) => l.ts >= from30 && l.ts < asOf);
   const legs = allLegs30.filter((l) => l.ts >= from7);
@@ -1271,7 +1368,11 @@ export async function blindSpot(db: D1Database, asOf: number, replay: boolean): 
     bridgeIn24h: sum(d1, 'in', true), bridgeOut24h: sum(d1, 'out', true), bridgeIn7d, bridgeOut7d,
     lastBridgeAt: bridgeLegs.length ? Math.max(...bridgeLegs.map((l) => l.ts)) : null,
     ibcShielded7d: bridgeIn7d + bridgeOut7d,
-    unshields: (unshieldRows.results || []).map(rowToFlow),
+    unshields,
+    outGroups: groupMovesOut(outAll),
+    outRead: outAll.length,
+    outShares,
+    makeup: makeup ?? null,
     passthroughs7d: passthroughs7d.map(publicPair),
     turnstileNam7d,
     stickySharePct7d,

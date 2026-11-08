@@ -320,6 +320,47 @@ export const BODY: Record<string, PageCopy> = {
   },
 };
 
+/**
+ * The shielded page's sentences that state figures (2026-11-07: the pool as a ledger, how NAM enters it, the moves
+ * out grouped by recipient and a move's share of the pool). Each takes its figures already formatted by the view
+ * (shared/format.ts), so no figure is typed here; the view puts the stamp beside the sentence. Bridge words, never
+ * the protocol's acronym: a crossing "straight over the bridge".
+ */
+export const SHIELDED_WORDS = {
+  /** the pool as a ledger since the record's start: what went in, what came out, the rewards no transaction shows, and the gap to today's balance */
+  makeup: (since: string, inNam: string, outNam: string, rewardsNam: string, balanceNam: string, gapNam: string) =>
+    `Since ${since}, ${inNam} NAM was shielded and ${outNam} NAM unshielded. Another ${rewardsNam} NAM was minted into the pool as shielded rewards, which no transaction shows. In − out + rewards = today’s ${balanceNam} NAM, within ${gapNam} NAM.`,
+  /** the ledger's four parts as the waterfall names them (the drawing's row labels) */
+  makeupRows: { in: 'Shielded in', rewards: 'Shielded rewards minted', out: 'Unshielded', balance: 'Today’s balance' } as const,
+  /** how NAM entered the pool: straight over the bridge against from Namada addresses */
+  bridgeShare: (sharePct: string, crossings: string) =>
+    `Of all NAM ever shielded, ${sharePct} arrived straight over the bridge in ${crossings}; the rest came from Namada addresses.`,
+  /** what the ledger's sentences are counted from (their stamp's label in the section's source sheet) */
+  makeupScope: 'The pool as a ledger since this site’s record starts',
+  bridgeScope: 'How NAM entered the pool',
+  /** a recipient's moves out in the window, on a phone, where the group stands for its rows */
+  group: (moves: string, nam: string, since: string) => `To the same address: ${moves}, ${nam} NAM since ${since}`,
+  /** a move's share of the pool's NAM before it ("about" when read from the minute before the block, not the block's own record) */
+  poolShare: (pct: string, about: boolean) => `${about ? 'about ' : ''}${pct} of the pool`,
+  /** a group's largest move's share, on a phone */
+  largestShare: (pct: string, about: boolean) => `the largest took ${about ? 'about ' : ''}${pct} of the pool`,
+  /** the column heads the desktop table adds */
+  shareHead: '% of the pool',
+  movesHead: 'Moves',
+  /** the moves-out list's lead, now that crossings straight out of the pool to the bridge account are listed too */
+  outLead: 'The biggest single moves out of the shielded set, largest first: to a personal address, or straight over the bridge to the receiver the record names (older records name only the bridge account). Moves to staking and the other protocol accounts are left out.',
+  outEmpty: 'Nothing left the shielded set for a personal address or over the bridge in 30 days.',
+} as const;
+
+/** The address sheet's sentences of 2026-11-07 (first seen, NAM that came out of the pool, a label's reason). */
+export const ADDRESS_WORDS = {
+  firstSeen: (date: string, since: string) => `First seen ${date} by this site, which has listed every Namada balance since ${since}.`,
+  /** `moves` already in words ("3 moves"); `over` names the moves counted when the list is cut ("the newest 300 moves listed below") */
+  fromPool: (fromPoolNam: string, receivedNam: string, moves: string, over?: string) =>
+    `${fromPoolNam} of ${receivedNam} NAM received came out of the shielded pool (${moves})${over ? `, counted over ${over}` : ''}.`,
+  whyLabel: 'Why this label',
+} as const;
+
 /** The not-found view and the server's 404 page (system.md 9.9). */
 export const NOT_FOUND = {
   h1: 'That page does not exist',

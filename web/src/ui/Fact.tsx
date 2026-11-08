@@ -30,11 +30,13 @@ export interface FactProps {
   oldSentence?: React.ReactNode;
   /** Extra content between the strip and its SourceLine. */
   children?: React.ReactNode;
+  /** Entries the strip's sheet lists after its figures' (a sentence with its source that the strip itself does not show). */
+  scopeExtra?: ScopeItem[];
   className?: string;
 }
 
-export function Fact({ items, sourceLabel = 'Where these figures come from', sourceText, old, oldSentence, children, className = '' }: FactProps) {
-  const scope = items.map((i) => i.scope).filter((s): s is ScopeItem => !!s);
+export function Fact({ items, sourceLabel = 'Where these figures come from', sourceText, old, oldSentence, children, scopeExtra = [], className = '' }: FactProps) {
+  const scope = [...items.map((i) => i.scope).filter((s): s is ScopeItem => !!s), ...scopeExtra];
   const cols = items.length === 4 ? ' facts--4' : items.length === 2 ? ' facts--2' : '';
   return (
     <div className={`scope-facts${old ? ' is-old' : ''} ${className}`} data-prov-scope="">

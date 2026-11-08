@@ -92,6 +92,13 @@
   .sh-h3__n { margin-left: var(--s-2); font-size: var(--t-13); font-weight: var(--w-regular); color: var(--c-ink-2); }
   .sh-cap { font-size: var(--t-13); line-height: 20px; color: var(--c-ink-2); overflow-wrap: anywhere; }
   .sh-cap [data-num] { color: var(--c-ink); }
+  /* the address sheet's first-seen line and a curated label's reason: inline from 1024 px, a disclosure on a phone */
+  .sh-first { margin-top: var(--s-1); }
+  .sh-why { max-width: 60ch; text-wrap: pretty; }
+  details.sh-why > summary { display: inline-flex; align-items: center; gap: 4px; min-height: 44px; cursor: pointer; list-style: none; color: var(--c-ink); font-size: var(--t-13); line-height: 20px; font-weight: var(--w-medium); text-decoration: underline; text-decoration-thickness: 1.5px; text-underline-offset: 4px; }
+  details.sh-why > summary::-webkit-details-marker { display: none; }
+  details.sh-why[open] > summary .ico { transform: rotate(180deg); }
+  details.sh-why > p { margin: 0 0 var(--s-2); }
   .sh-note { display: flex; align-items: flex-start; gap: var(--s-2); font-size: var(--t-13); line-height: 20px; color: var(--c-ink-2); }
   .sh-note .dot { margin-top: 6px; }
   .sh-msg { font-size: var(--t-13); line-height: 20px; color: var(--c-ink-2); }

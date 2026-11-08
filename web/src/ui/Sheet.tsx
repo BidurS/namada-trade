@@ -198,6 +198,11 @@ export interface ScopeItem {
   /** What the figure is ("Holders on Namada"). */
   label: string;
   p: Stamp | null | undefined;
+  /**
+   * A sentence about the figure, shown under its row in the sheet: where a phone keeps a sentence the desktop shows
+   * inline (the shielded page's ledger), so the figure's words live with its source.
+   */
+  text?: React.ReactNode;
 }
 
 /** The scope sheet for a SourceLine: each figure in the panel with its own source, time, age and state. */
@@ -223,6 +228,7 @@ export function ScopeSheet({ items, title, open, onClose }: { items: ScopeItem[]
                 <span className="dot" data-status={ui} />
                 {it.p ? scopeRowText(it.p, now) : 'no source recorded · no data'}
                 {it.p?.note && ui !== 'fresh' ? <span className="kv__sub">{it.p.note}</span> : null}
+                {it.text ? <span className="kv__text">{it.text}</span> : null}
               </dd>
             </React.Fragment>
           );

@@ -5,14 +5,15 @@
 // (CONTEXT_DEADLINE_MS), run once with no retry, and optional: a batch that fails or comes back late gives the context
 // that needs no read, and the alert goes out with the move alone. Nothing here can keep an alert from being posted.
 import type { ChainParams, Flow, IntelResponse } from '../../../shared/types';
-import { isInternal } from '../../../shared/alerts';
+import { INTERNAL_ADDRESSES, isInternal } from '../../../shared/alerts';
+import { RECORD_SINCE } from '../../../shared/record-since';
 import { QUOTE_KEYS, quotesNeeded, settleMetaOf, settleOf, type Settle } from '../../../shared/settle';
 import { CROSSING_PAIR_MS, isBotFlow, isOtherCoin, priceHowOf, priceRouteOf } from '../../../shared/flow-rules';
 import { bridgeDest } from '../../../shared/kinds';
 import { partiesOf } from '../../../shared/flow-words';
 import { label_plain, labelAuthorShort } from '../labels';
 import { NAM_AMOUNT, NOT_BOT, NOT_LEGACY_TWIN, RECEIVED_TWIN } from '../flows-query';
-import { timedOutSends, ibcRowOf, withdrawEpochs, UNBOND_WITHDRAW_STALE_MS, QUOTE_MATCH_MS, type UnbondWithdrawCache } from '../analytics';
+import { timedOutSends, ibcRowOf, withdrawEpochs, poolBeforeOf, poolFeeOf, poolShareOf, UNBOND_WITHDRAW_STALE_MS, QUOTE_MATCH_MS, type UnbondWithdrawCache } from '../analytics';
 import { priceHowAt, PRICE_HOW_KEY, type PriceHowLog } from '../price-how';
 import { chainOf } from '../util';
 import { crossingOf } from './discord';
@@ -30,6 +31,8 @@ export const TRADES_WINDOW_MS = 30 * DAY;
 export const HISTORY_COUNT_MAX = 1000;
 /** The chain parameters, the validator names and the price's read log are read again at most this often by an isolate. */
 export const CONTEXT_CACHE_MS = 15_000;
+/** A move out of the shielded pool of at least this many NAM is held against every move out on record (one count): is it the largest? */
+export const POOL_MOVE_LARGEST_MIN_NAM = 10_000;
 
 /** An earlier move of an address, for "Before this": `received`, the address was that move's receiver. */
 export interface PriorMove { id: string; kind: Flow['kind']; chain: Flow['chain']; amount: number; ts: number; received: boolean; crossing?: string | null }
@@ -67,6 +70,14 @@ export interface MoveContext {
   watched?: string[];
   /** the operator's channel: the whale size the move passed */
   whaleNam?: number;
+  /**
+   * a move out of the shielded pool (an unshield, or a crossing straight out of it over the bridge): what the pool held
+   * before it (`about`: the site's minute reading just before the block, `beforeAt` its time, not the block's own
+   * record of the balance after the inner transaction plus its legs), the move's share of that and of all NAM (the
+   * minute reading before the block, `allAt`), and whether no move out on record since the record's start was as large
+   * (null when not asked: under POOL_MOVE_LARGEST_MIN_NAM, or not read)
+   */
+  poolMove?: { beforeNam: number; about: boolean; beforeAt: number; sharePct: number; allNam: number | null; allAt: number | null; allSharePct: number | null; largest: boolean | null } | null;
 }
 
 /** An address the person of a move can be: a real one of either chain, never a protocol account. */
@@ -309,6 +320,43 @@ export async function readMoveContext(db: D1Database | undefined, flow: Flow, no
       });
     }
 
+    // A move out of the shielded pool: what the pool held before it. The block's own record of the pool's balance
+    // after the inner transaction (meta.maspPostNam) plus the inner transaction's legs, read as the row's siblings by
+    // block and inner hash (the block's rows are written before its alerts), else the minute reading of the pool just
+    // before the block ("about"); all NAM from the minute reading before the block; and, for a move of
+    // POOL_MOVE_LARGEST_MIN_NAM or more, whether any move out on record since the record's start was at least as large.
+    const poolOut = nam && flow.chain === 'namada' && flow.from === INTERNAL_ADDRESSES.masp && (flow.kind === 'unshield' || flow.kind === 'ibc_out');
+    const pm = { legsOut: flow.amount + poolFeeOf(flow.meta), legsIn: 0, reading: null as { ts: number; value: number } | null, total: null as { ts: number; value: number } | null, asLarge: null as number | null };
+    if (poolOut) {
+      const inner = typeof flow.meta?.innerTxHash === 'string' && flow.meta.innerTxHash ? flow.meta.innerTxHash : null;
+      const recorded = poolBeforeOf(flow.meta, 0) != null;
+      if (recorded && inner) {
+        reads.push({
+          stmt: db.prepare(`SELECT SUM(CASE WHEN f.from_addr = ?1 AND ${NAM_AMOUNT} THEN f.amount_num ELSE 0 END) outs, SUM(CASE WHEN f.to_addr = ?1 AND ${NAM_AMOUNT} THEN f.amount_num ELSE 0 END) ins,
+              SUM(COALESCE(json_extract(f.meta, '$.maspFeeNam'), 0)) fee FROM flows f WHERE f.chain = 'namada' AND f.height = ?2 AND json_extract(f.meta, '$.innerTxHash') = ?3 AND (f.from_addr = ?1 OR f.to_addr = ?1)`)
+            .bind(INTERNAL_ADDRESSES.masp, flow.height, inner),
+          fill: (rows) => { const r = rows[0]; if (r && Number(r.outs) > 0) { pm.legsOut = Number(r.outs) + (Number(r.fee) || 0); pm.legsIn = Number(r.ins) || 0; } },
+        });
+      }
+      if (!recorded) {
+        reads.push({
+          stmt: db.prepare(`SELECT ts, value FROM metrics WHERE key = 'supply.masp_shielded' AND ts <= ? ORDER BY ts DESC LIMIT 1`).bind(flow.ts),
+          fill: (rows) => { const r = rows[0]; if (r && Number(r.value) > 0) pm.reading = { ts: Number(r.ts), value: Number(r.value) }; },
+        });
+      }
+      reads.push({
+        stmt: db.prepare(`SELECT ts, value FROM metrics WHERE key = 'supply.total' AND ts <= ? ORDER BY ts DESC LIMIT 1`).bind(flow.ts),
+        fill: (rows) => { const r = rows[0]; if (r && Number(r.value) > 0) pm.total = { ts: Number(r.ts), value: Number(r.value) }; },
+      });
+      if (flow.amount >= POOL_MOVE_LARGEST_MIN_NAM) {
+        reads.push({
+          stmt: db.prepare(`SELECT COUNT(*) n FROM flows f INDEXED BY flows_from WHERE f.from_addr = ? AND f.chain = 'namada' AND f.kind IN ('unshield', 'ibc_out')
+              AND f.amount_num >= ? AND f.id != ? AND f.ts >= ? AND ${NAM_AMOUNT} AND ${NOT_LEGACY_TWIN}`).bind(INTERNAL_ADDRESSES.masp, flow.amount, flow.id, RECORD_SINCE.shieldedMoves),
+          fill: (rows) => { const n = Number(rows[0]?.n); pm.asLarge = Number.isFinite(n) ? n : null; },
+        });
+      }
+    }
+
     if (reads.length) {
       const late = new Promise<'late'>((resolve) => { timer = setTimeout(() => resolve('late'), deadlineMs); });
       const res = await Promise.race([db.batch(reads.map((r) => r.stmt)), late]);
@@ -354,6 +402,19 @@ export async function readMoveContext(db: D1Database | undefined, flow: Flow, no
     if (route) {
       const how = priceHowAt(kv[PRICE_HOW_KEY] as PriceHowLog | null | undefined, flow.ts);
       ctx.priceRoute = how?.how === 'route' ? how.refNam : null;
+    }
+    if (poolOut) {
+      const recorded = poolBeforeOf(flow.meta, pm.legsOut, pm.legsIn);
+      const reading = pm.reading && pm.reading.ts <= flow.ts ? pm.reading : null;
+      const before = recorded ?? reading?.value ?? null;
+      const sharePct = poolShareOf(flow.amount, before);
+      if (before != null && sharePct != null) {
+        ctx.poolMove = {
+          beforeNam: before, about: recorded == null, beforeAt: recorded != null ? flow.ts : reading!.ts, sharePct,
+          allNam: pm.total?.value ?? null, allAt: pm.total?.ts ?? null, allSharePct: pm.total ? (flow.amount / pm.total.value) * 100 : null,
+          largest: pm.asLarge == null ? null : pm.asLarge === 0,
+        };
+      }
     }
     return { flow: out, ctx };
   } catch (e) {

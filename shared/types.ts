@@ -728,6 +728,68 @@ export interface MaspPulseBucket {
   bridgeOutNam: number;
 }
 
+/**
+ * One recipient's moves out of the shielded pool in the moves-out window, ranked by `nam` (worker/src/analytics.ts
+ * groupMovesOut). `to` is the address the rows name: a receiver on Osmosis, a Namada address, or the bridge account
+ * when an older record names no receiver. The labels are the recipient's, as the rows carry them.
+ */
+export interface MoveOutGroup {
+  to: string;
+  toLabel: string | null;
+  toLabelPlain: string | null;
+  toLabelSource: string | null;
+  toLabelAuthor: string | null;
+  /** moves in the group and their NAM in all */
+  n: number;
+  nam: number;
+  /** the first and the last of them */
+  since: number;
+  last: number;
+  /** the group's largest move: its row id and kind (its record, and the share of the pool it took) */
+  largestId: string;
+  largestKind: FlowKind;
+  largestNam: number;
+}
+
+/**
+ * A move's share of the shielded pool's NAM before it. `beforeNam` is the pool's balance after the inner transaction
+ * (the block's own record of it, meta.maspPostNam) plus the move and its fee; when a row carries no such record, the
+ * site's minute reading of the pool just before the block, said with "about" (`about: true`). `prov` says which.
+ */
+export interface PoolShare {
+  beforeNam: number;
+  sharePct: number;
+  about: boolean;
+  prov: Provenance;
+}
+
+/**
+ * The shielded pool as a ledger since the record's start (kv masp.makeup, worker/src/series.ts maspMakeup, once a
+ * day): every NAM leg into the pool and out of it in the flow index, the pool's fees counted as out, the chain's own
+ * running total of the shielded rewards minted into the pool (the pool's max_total_rewards storage key, read at the
+ * head with its block and time; null when the key could not be read), and the pool's balance as last read.
+ */
+export interface MaspMakeup {
+  /** when the ledger was computed, and the record's start it counts from */
+  at: number;
+  since: number;
+  in: {
+    nam: number;
+    n: number;
+    /** shielded from Namada addresses (kind shield) and straight over the bridge (kind ibc_in into the pool) */
+    shield: { nam: number; n: number };
+    bridge: { nam: number; n: number };
+  };
+  out: {
+    /** NAM out of the pool, the fees it paid included */
+    nam: number;
+    n: number;
+    feesNam: number;
+  };
+  rewards: { nam: number; base: string; height: number; provider: string; at: number } | null;
+  balance: { nam: number; at: number } | null;
+}
+
 export interface BlindSpot {
   asOf: number;
   shielded: Sourced<number>;
@@ -751,8 +813,22 @@ export interface BlindSpot {
   lastBridgeAt?: number | null;
   /** bridgeIn7d + bridgeOut7d (kept for clients before 2026-10-18) */
   ibcShielded7d: number;
-  /** the largest recent moves out of the pool to an address (unshields and bridge crossings out), 30 days */
+  /**
+   * the largest recent moves out of the pool, 30 days: unshields to an address, and crossings straight out of the pool
+   * over the bridge (to the receiver the record names, or to the bridge account when it names none)
+   */
   unshields: Flow[];
+  /**
+   * The recipients of the window's moves out, ranked by their total (worker/src/analytics.ts groupMovesOut): a phone
+   * shows one row a recipient in place of the moves, a desktop a count beside each move. Absent on servers before
+   * 2026-11-07. `outRead`: how many moves out the groups and shares were counted over (MOVES_OUT_READ_MAX at most).
+   */
+  outGroups?: MoveOutGroup[];
+  outRead?: number;
+  /** By flow id, for the moves in `unshields`: the move's share of the pool's NAM before it, when that is known. */
+  outShares?: Record<string, PoolShare>;
+  /** The pool as a ledger since the record's start (kv masp.makeup, written by the daily job); null while never written. */
+  makeup?: MaspMakeup | null;
   /** Probabilistic timing/amount-correlated MASP round-trips (<24h dwell time) in the last 7 days, sent without the move in's sender and amount */
   passthroughs7d?: MaspPassthroughPair[];
   /** Total NAM that entered and exited the MASP as a matched <24h turnstile passthrough in the last 7 days */
@@ -849,6 +925,12 @@ export interface AddressReport {
   /** as Holder.change24h / change7d: from recorded chain reads, null when not known */
   change24h: number | null;
   change7d: number | null;
+  /**
+   * When this site first listed the address with NAM (holders.first_seen: set by the balance listings since the first
+   * complete one, shared/record-since.ts everyBalance). null when the row carries none: the address was already there,
+   * or is an Osmosis address. Absent on servers before 2026-11-07.
+   */
+  firstSeen?: number | null;
   links: { address: string; chain: Chain; transfers: number; volume: number; lastSeen: number }[];
   totalFlowsCount?: number;
   /**

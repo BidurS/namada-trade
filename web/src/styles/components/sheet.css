@@ -40,6 +40,8 @@
   .kv dd .dot { flex: none; }
   .kv .mono { font-family: var(--font-code); font-size: var(--t-12); }
   .kv__sub { display: block; width: 100%; color: var(--c-ink-2); font-size: var(--t-12); line-height: 16px; font-family: var(--font-code); }
+  /* a figure's sentence under its row (ScopeItem.text): the words a phone keeps in the sheet */
+  .kv__text { display: block; width: 100%; color: var(--c-ink); font-size: var(--t-13); line-height: 20px; max-width: 60ch; text-wrap: pretty; }
 
   @media (min-width: 640px) {
     .sheet { inset: 0; margin: auto; height: fit-content; width: min(460px, calc(100vw - 48px)); max-height: calc(100dvh - 48px); border: 1px solid var(--c-line-strong); border-top: 2px solid var(--accent); }

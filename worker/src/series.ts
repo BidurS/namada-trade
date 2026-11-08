@@ -14,9 +14,12 @@ import { runBatch, stmt, type Stmt } from './db';
 import { INTERNAL_LABELS, NAMADA, OSMOSIS } from './config';
 import { INTERNAL_ADDRS, osmosisStamp, osmosisTrustedStart } from './holders';
 import { fetchPairChart, fetchPairSummary, OSMOSIS_DATA_SOURCE, type PairChartPoint, type PairSummary } from './sources/osmosis-data';
-import { safeParseJson, timedOutSends, ibcRowOf } from './analytics';
-import type { BondListing } from './sources/namada';
-import type { PoolInfo, SourceHealth } from '../../shared/types';
+import { safeParseJson, timedOutSends, ibcRowOf, metricAt, MASP_MAKEUP_KV } from './analytics';
+import { maspTotalRewards, type BondListing } from './sources/namada';
+import { toNam } from './util';
+import { NAM_AMOUNT, NOT_LEGACY_TWIN } from './flows-query';
+import { RECORD_SINCE } from '../../shared/record-since';
+import type { MaspMakeup, PoolInfo, SourceHealth } from '../../shared/types';
 import {
   ROLLUP_KEYS, ROLLUP_HOUR_SQL, SWAP_HOUR_SQL, OSMOSIS_HOLDERS_SQL, POOL_HOURLY_SQL,
   DAY_FLOWS_SQL, REFUNDS_SQL, DELETE_EDGES_DAY_SQL, EDGE_SQL, ACTIVITY_SQL, LAST_IN_RANGE_SQL,
@@ -81,7 +84,7 @@ export const SERIES_META = {
 
 // ---------------------------------------------------------------- jobs bookkeeping
 
-interface DailyJob { day: string; snapNamada?: boolean; snapOsmosis?: boolean; flows?: boolean; names?: boolean; /** the hour the validator list was last asked for (once an hour while it fails) */ namesTried?: number }
+interface DailyJob { day: string; snapNamada?: boolean; snapOsmosis?: boolean; flows?: boolean; names?: boolean; /** the pool's ledger (maspMakeup) written with the chain's rewards total read */ makeup?: boolean; /** the hour the validator list was last asked for (once an hour while it fails) */ namesTried?: number }
 
 async function kvJson<T>(db: D1Database, keys: string[]): Promise<Record<string, T | null>> {
   const out: Record<string, T | null> = {};
@@ -507,6 +510,63 @@ export async function readDay(db: D1Database, day: string): Promise<DayAggregate
   return dayAggregates(rows.results || [], refunds.results || []);
 }
 
+// ---------------------------------------------------------------- daily: the pool as a ledger (kv masp.makeup, 2026-11-07)
+
+/** The chain read of the rewards total waits this long: one attempt, started inside the daily job's own part. */
+export const MAKEUP_REWARDS_TIMEOUT_MS = 10_000;
+const MASP = NAMADA.internal.masp;
+/** One kind's legs into the pool (`in`) or out of it (`out`, with the NAM fee the pool paid on each, meta.maspFeeNam). */
+export interface MakeupLegRow { kind: string; n: number; nam: number; fee_nam?: number | null }
+/** NAM legs into the pool by kind since `from`, NAM only, each transfer once (as the digest's maspIn counts a day). */
+export const MAKEUP_IN_SQL = `SELECT f.kind, COUNT(*) n, SUM(f.amount_num) nam FROM flows f INDEXED BY flows_to
+  WHERE f.to_addr = ? AND f.chain = 'namada' AND f.ts >= ? AND f.ts < ? AND ${NAM_AMOUNT} AND ${NOT_LEGACY_TWIN} GROUP BY f.kind`;
+/** NAM legs out of the pool by kind with the fee the pool paid on each (the digest's maspOut); a fee filed as its own row is the masp_fee kind. */
+export const MAKEUP_OUT_SQL = `SELECT f.kind, COUNT(*) n, SUM(f.amount_num) nam, SUM(COALESCE(json_extract(f.meta,'$.maspFeeNam'), 0)) fee_nam FROM flows f INDEXED BY flows_from
+  WHERE f.from_addr = ? AND f.chain = 'namada' AND f.ts >= ? AND f.ts < ? AND ${NAM_AMOUNT} AND ${NOT_LEGACY_TWIN} GROUP BY f.kind`;
+/** The NAM fees the pool paid on moves of other coins (rows with tokenSymbol whose maspFeeNam is NAM), as dayAggregates counts them. */
+export const MAKEUP_OTHER_FEES_SQL = `SELECT SUM(COALESCE(json_extract(f.meta,'$.maspFeeNam'), 0)) fee_nam FROM flows f INDEXED BY flows_from
+  WHERE f.from_addr = ? AND f.chain = 'namada' AND f.ts >= ? AND f.ts < ? AND f.meta LIKE '%"tokenSymbol":%' AND ${NOT_LEGACY_TWIN}`;
+
+/**
+ * The ledger from its parts: every leg in by kind (shield: from Namada addresses; ibc_in: straight over the bridge),
+ * every leg out with the fees the pool paid (the masp_fee rows, each row's maspFeeNam, the fees on other coins' moves),
+ * the chain's rewards total as read (null when it was not), and the pool's balance as last read. Nothing is estimated:
+ * a part that is not there is null, and the page leaves its sentence out.
+ */
+export function maspMakeupOf(
+  inRows: MakeupLegRow[], outRows: MakeupLegRow[], otherFeesNam: number,
+  rewards: { total: bigint; height: number; provider: string; at: number } | null, balance: { ts: number; value: number } | null, now: number,
+): MaspMakeup {
+  const sum = (rows: MakeupLegRow[], f: (r: MakeupLegRow) => number) => rows.reduce((a, r) => a + (Number(f(r)) || 0), 0);
+  const kind = (rows: MakeupLegRow[], k: string) => ({ nam: sum(rows.filter((r) => r.kind === k), (r) => r.nam), n: sum(rows.filter((r) => r.kind === k), (r) => r.n) });
+  const fees = sum(outRows, (r) => r.fee_nam ?? 0) + (Number(otherFeesNam) || 0) + kind(outRows, 'masp_fee').nam;
+  return {
+    at: now,
+    since: RECORD_SINCE.shieldedMoves,
+    in: { nam: sum(inRows, (r) => r.nam), n: sum(inRows, (r) => r.n), shield: kind(inRows, 'shield'), bridge: kind(inRows, 'ibc_in') },
+    out: { nam: sum(outRows, (r) => r.nam) + sum(outRows, (r) => r.fee_nam ?? 0) + (Number(otherFeesNam) || 0), n: sum(outRows, (r) => r.n), feesNam: fees },
+    rewards: rewards ? { nam: toNam(rewards.total), base: rewards.total.toString(), height: rewards.height, provider: rewards.provider, at: rewards.at } : null,
+    balance: balance ? { nam: balance.value, at: balance.ts } : null,
+  };
+}
+
+/**
+ * The ledger as of `now`: the three index reads and the pool's newest minute reading beside the chain read of the
+ * rewards total (sources/namada.ts maspTotalRewards, a must-exist read: a node answering no value is refused, and
+ * every node answering so, or none within MAKEUP_REWARDS_TIMEOUT_MS, leaves `rewards` null, never 0).
+ */
+export async function readMaspMakeup(db: D1Database, now: number, signal?: AbortSignal, read = (s?: AbortSignal) => maspTotalRewards({ signal: s, timeoutMs: MAKEUP_REWARDS_TIMEOUT_MS, retries: 0 })): Promise<MaspMakeup> {
+  const from = RECORD_SINCE.shieldedMoves;
+  const [inRows, outRows, other, balance, rewards] = await Promise.all([
+    db.prepare(MAKEUP_IN_SQL).bind(MASP, from, now).all<MakeupLegRow>().then((r) => r.results || []),
+    db.prepare(MAKEUP_OUT_SQL).bind(MASP, from, now).all<MakeupLegRow>().then((r) => r.results || []),
+    db.prepare(MAKEUP_OTHER_FEES_SQL).bind(MASP, from, now).first<{ fee_nam: number | null }>(),
+    metricAt(db, 'supply.masp_shielded', now),
+    read(signal).then((r) => ({ ...r, at: now }), (e) => { console.error('masp makeup: the rewards total was not read:', String(e).slice(0, 200)); return null; }),
+  ]);
+  return maspMakeupOf(inRows, outRows, Number(other?.fee_nam) || 0, rewards, balance, now);
+}
+
 // ---------------------------------------------------------------- daily: the snapshots
 
 export interface CohortRow { bucket?: string; category?: string; holders?: number; addrs?: number; addrs_with_nam?: number; nam?: number; spendable: number; staked: number }
@@ -564,6 +624,8 @@ export interface DailyCtx {
   late?: () => boolean;
   /** for tests */
   validators?: (signal?: AbortSignal) => Promise<unknown>;
+  /** for tests: the chain read of the shielded pool's running total of rewards (sources/namada.ts maspTotalRewards) */
+  maspRewards?: (signal?: AbortSignal) => Promise<{ total: bigint; height: number; provider: string }>;
 }
 export interface DailyResult { day: string; ran: string[]; waiting: string[]; failed: string[]; written: number }
 
@@ -593,7 +655,7 @@ export async function daily(env: Env, now: number, ctx: DailyCtx): Promise<Daily
   const day = isoDay(now);
   const kv = await kvJson<any>(env.DB, ['jobs.daily', 'balance.listing', 'bond.listing']);
   const job: DailyJob = kv['jobs.daily']?.day === day ? { ...kv['jobs.daily'] } : { day };
-  if (job.snapNamada && job.snapOsmosis && job.flows && job.names) return null;
+  if (job.snapNamada && job.snapOsmosis && job.flows && job.names && job.makeup) return null;
   const res: DailyResult = { day, ran: [], waiting: [], failed: [], written: 0 };
   const hourNow = Math.floor(now / H) * H;
 
@@ -606,7 +668,7 @@ export async function daily(env: Env, now: number, ctx: DailyCtx): Promise<Daily
     : null;
 
   /** One part: its rows and its flag in one batch. `build` returns null while the part waits. */
-  const part = async (name: string, flag: 'snapNamada' | 'snapOsmosis' | 'flows', build: () => Promise<Stmt[] | null>) => {
+  const part = async (name: string, flag: 'snapNamada' | 'snapOsmosis' | 'flows' | 'makeup', build: () => Promise<Stmt[] | null>) => {
     if (job[flag]) return;
     if (late()) { res.waiting.push(`${name}: the tick ran out of time`); return; }
     try {
@@ -645,6 +707,18 @@ export async function daily(env: Env, now: number, ctx: DailyCtx): Promise<Daily
     const masp = await env.DB.prepare(LAST_IN_RANGE_SQL).bind('supply.masp_shielded', today - D, today).first<{ ts: number; value: number }>();
     if (masp) stmts.push(stmt.metric(today - D, 'supply.masp_shielded.daily', masp.value));
     return stmts;
+  });
+  // The pool as a ledger (kv masp.makeup): the flow index's legs since the record's start, the pool's balance as last
+  // read, and the chain's running total of shielded rewards read at the head. Written whatever the chain read gave; the
+  // part is done for the day only once the rewards total was read, so a failed read is tried again next tick in the
+  // window (the page shows the sentences the row can carry: the rewards sentence needs the read).
+  await part('shielded makeup', 'makeup', async () => {
+    const m = await readMaspMakeup(env.DB, now, ctx.signal, ctx.maspRewards);
+    const row = kvStmt(MASP_MAKEUP_KV, m, now);
+    if (m.rewards) return [row];
+    res.written += await runBatch(env.DB, [row]);
+    res.waiting.push('shielded makeup: the chain’s total of shielded rewards could not be read, so the ledger was written without it; tried again next tick');
+    return null;
   });
 
   if (namesP) {

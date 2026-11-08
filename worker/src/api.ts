@@ -952,8 +952,10 @@ app.get('/api/address/:addr', async (c) => {
   const holder = holderRow && (holderRow.updated_at != null || holderRow.verified_at != null) ? holderRow : null;
 
   const fallbackInternal = INTERNAL_LABELS[addr];
+  // A curated or genesis label's note says why the label is there and the sheet shows it; a wallet's own tag may carry
+  // a note too (stmt.userTag), which is that wallet's words about someone else's address and is not served.
   const resolvedLabel = labelRow
-    ? { address: labelRow.address, chain: labelRow.chain, label: labelRow.label, category: labelRow.category, source: labelRow.source, note: labelRow.note }
+    ? { address: labelRow.address, chain: labelRow.chain, label: labelRow.label, category: labelRow.category, source: labelRow.source, note: labelRow.source === 'user' ? null : labelRow.note ?? null }
     : fallbackInternal ? { address: addr, chain, label: fallbackInternal.label, category: fallbackInternal.category, source: 'auto', note: null } : null;
   const label = resolvedLabel ? { ...resolvedLabel, label_plain: label_plain(resolvedLabel.label, addr, resolvedLabel.source), category_plain: category_plain(resolvedLabel.category, resolvedLabel.label), ...labelOrigin(resolvedLabel.source, labelRow?.author) } : null;
 
@@ -1062,6 +1064,9 @@ app.get('/api/address/:addr', async (c) => {
     address: addr, chain, label, balance,
     indexedBalance: holder?.balance_num ?? null, staking, rank, rankTotal,
     change24h: ch?.d24 ?? null, change7d: ch?.d7 ?? null,
+    // when this site first listed the address with NAM (holders.first_seen, set by the balance listings since the
+    // first complete one); a row without the mark was there before the listings began, and says nothing
+    firstSeen: holderRow?.first_seen != null && Number.isFinite(Number(holderRow.first_seen)) ? Number(holderRow.first_seen) : null,
     links: (links.results || []).map((l: any) => ({ address: addr === l.osmo_addr ? l.namada_addr : l.osmo_addr, chain: (addr === l.osmo_addr ? 'namada' : 'osmosis') as any, transfers: l.transfers, volume: l.volume_num, lastSeen: l.last_seen })),
     totalFlowsCount: totalFlowsRow?.c ?? flows.length,
     ...(gapped ? { flowsNote: osmosisGapCounts('This address\'s moves') } : {}),

@@ -6,7 +6,8 @@ import { readDeliverable, inQuietHours, stopChannelStmt, hookOkStmt, thresholdsO
 import { SITE } from '../../../shared/site';
 import { settleUsd, type Settle, type SettledCoin } from '../../../shared/settle';
 import { tagByline } from '../../../shared/labels';
-import { explorerTx, fmtAddr, fmtAge, fmtCoin, fmtNamRule, fmtPctRule, fmtUsdRule, labelNeedsAddr } from '../../../shared/format';
+import { explorerTx, fmtAddr, fmtAge, fmtCoin, fmtDayMonthYear, fmtNamRule, fmtPctRule, fmtSharePct, fmtUsdRule, labelNeedsAddr } from '../../../shared/format';
+import { RECORD_SINCE } from '../../../shared/record-since';
 import { bridgeDest, HUE_HEX, kindInfo } from '../../../shared/kinds';
 import { CHAIN_WORD, listWords, moveTitle, partiesOf, pastWords, proposalOpen, proposalStatusWords, proposalTypeWords, sidesOf, tagOfFlow, type Party } from '../../../shared/flow-words';
 import { chainOf } from '../util';
@@ -1429,6 +1430,27 @@ function settleField(s: Settle): Field {
 /** "Worth $1,678" or "under $1". */
 const worthWords = (v: number) => (v >= 1 ? fmtUsdRule(v) : 'under $1');
 
+/** A move out of the shielded pool of at least this share of its NAM says what the pool held before it (poolMoveWords). */
+export const POOL_MOVE_MIN_SHARE_PCT = 1;
+/**
+ * The "what this means" line of a large move out of the shielded pool (sources/discord-context.ts poolMove): what the
+ * pool held before it with its source (the chain's record of the block, or the site's reading just before it, said as
+ * "about"), the share of the pool and of all NAM the move took, each figure with its source, and, only when true, that
+ * no move out on this site's record since the record's start was as large. Nothing about the minted total, and nothing
+ * about when the receiver was first seen: the "Before this" line already says what the receiver did.
+ */
+export function poolMoveWords(pm: NonNullable<MoveContext['poolMove']>, height: number): string {
+  const held = `${pm.about ? 'about ' : ''}${fmtNamRule(pm.beforeNam)} NAM`;
+  const heldSrc = pm.about
+    ? `this site’s reading of the pool <t:${unix(pm.beforeAt)}:R>, before the block`
+    : `the chain’s record of ${Number.isFinite(height) ? `block ${height.toLocaleString('en-US')}` : 'this block'}`;
+  const all = pm.allSharePct != null && pm.allNam != null && pm.allAt != null
+    ? ` and ${fmtSharePct(pm.allSharePct)} of all NAM (${fmtNamRule(pm.allNam)} NAM, this site’s reading <t:${unix(pm.allAt)}:R>)`
+    : '';
+  const largest = pm.largest ? `, the largest move out by amount on this site’s record since ${fmtDayMonthYear(RECORD_SINCE.shieldedMoves)}` : '';
+  return `The shielded pool held ${held} before this (${heldSrc}); this took ${fmtPctRule(pm.sharePct, 1)} of it${all}${largest}.`;
+}
+
 /**
  * A run of earlier moves of one kind as one clause, newest first: "sold 49,491 NAM 5 min earlier", "sold 49,491,
  * 49,491 and 99,221 NAM in the 14 min before".
@@ -1564,7 +1586,8 @@ export function moveCard(flow: Flow, ctx: MoveContext = {}, late = false): Card 
 
   // ---- line 4: what the site's own page says such a move means, with its source
   let means = '';
-  if (dest === 'osmosis' && ctx.onDeck && ctx.onDeck.bridgedIn > 0) {
+  if (ctx.poolMove && ctx.poolMove.sharePct >= POOL_MOVE_MIN_SHARE_PCT) means = poolMoveWords(ctx.poolMove, f.height);
+  else if (dest === 'osmosis' && ctx.onDeck && ctx.onDeck.bridgedIn > 0) {
     means = `On deck at the receiver as of this post: ${fmtNamRule(ctx.onDeck.remaining)} NAM of ${fmtNamRule(ctx.onDeck.bridgedIn)} NAM bridged in over the last 7 days, not yet sold or sent back (this site's records).`;
   } else if ((dest === 'namada' && f.to === I.masp) || f.kind === 'shield') means = 'Inside the shielded pool the holder and its later moves are not visible.';
   else if (f.kind === 'unbond' && ctx.unlockAt) {

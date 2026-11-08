@@ -73,7 +73,29 @@
   /* the share of the week's moves that were not in an in-and-out pair: one sentence under the strip, its own stamp */
   .shd-pairs { margin-top: var(--s-4); max-width: 60ch; }
 
-  /* ---------- Largest moves out: three-line rows, a six-column table from 700 px ---------- */
+  /* ---------- the pool as a ledger (from 1024 px; a phone keeps the sentences in the strip's source sheet) ----------
+     In, + rewards, − out = balance as one thin bar a row on one NAM scale from zero: the two sides of the ledger in
+     --shielded and --c-ink-2 as the flow chart draws them, the rewards no transaction shows in --c-mark, a 2 px gap
+     between rows, the figure in text ink beside each bar; never a split of the balance into parts. */
+  .shd-ledger { margin-top: var(--s-5); max-width: 72ch; }
+  .shd-ledger .ipg-prose { margin: 0; }
+  .shd-ledger__bridge { margin-top: var(--s-3); max-width: 72ch; }
+  .shd-wf { display: grid; gap: 2px; margin: var(--s-3) 0 0; }
+  .shd-wf__row { display: grid; grid-template-columns: minmax(0, 15rem) minmax(0, 1fr); column-gap: var(--s-3); align-items: center; min-height: 22px; }
+  .shd-wf dt { font-size: var(--t-13); line-height: 20px; color: var(--c-ink-2); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .shd-wf__sign { display: inline-block; width: 1.2em; color: var(--c-ink); font-family: var(--font-code); }
+  .shd-wf dd { display: grid; grid-template-columns: minmax(0, 1fr) auto; column-gap: var(--s-3); align-items: center; margin: 0; }
+  .shd-wf__track { position: relative; display: block; height: 14px; }
+  .shd-wf__bar { position: absolute; top: 0; height: 100%; border-radius: 0 2px 2px 0; }
+  .shd-wf__in, .shd-wf__bal { background: var(--shielded); }
+  .shd-wf__rw { background: var(--c-mark); }
+  .shd-wf__out { background: var(--c-ink-2); border-radius: 2px 0 0 2px; }
+  .shd-wf__v { font: var(--w-medium) var(--t-12) / 16px var(--font-code); color: var(--c-ink); white-space: nowrap; }
+
+  /* ---------- Largest moves out: three-line rows (one a recipient) under 700 px, an eight-column table from 700 px ----------
+     Under 700 px a recipient's moves are one row: the group's total, its count since its first move and the largest move's
+     share of the pool when it took a tenth or more (in place of the dollar value). From 700 px each move is a row with
+     its share of the pool and its recipient's count as columns of their own. */
   .mor { container: mor / inline-size; display: grid; min-width: 0; }
   .mor__head { display: none; }
   .mor__row { display: grid; grid-template-columns: minmax(0, 1fr) auto; grid-template-areas: "kind amt" "to to" "cap rec"; column-gap: var(--s-3); row-gap: var(--s-1); align-items: center; padding: 14px 0 0; border-top: 1px solid var(--c-line); }
@@ -84,15 +106,17 @@
   .mor__addr { color: var(--c-ink-2); font-weight: var(--w-regular); }
   .mor__cap { grid-area: cap; font-size: var(--t-13); line-height: 20px; color: var(--c-ink-2); }
   .mor__rec { grid-area: rec; justify-self: end; }
-  .mor__when, .mor__usd { display: none; }
+  .mor__when, .mor__usd, .mor__share, .mor__n { display: none; }
   @container mor (min-width: 700px) {
-    .mor__head, .mor__row { grid-template-columns: 112px 128px minmax(0, 1fr) minmax(0, 1fr) minmax(0, 1.8fr) 76px; column-gap: var(--s-4); }
+    .mor__head, .mor__row { grid-template-columns: 104px 120px minmax(0, 1fr) 104px minmax(0, 1fr) minmax(0, 1.8fr) 56px 76px; column-gap: var(--s-4); }
     .mor__head { display: grid; padding: 0 0 var(--s-2); color: var(--c-ink-2); font-size: var(--t-12); line-height: 16px; font-weight: var(--w-medium); }
     .mor__head > span { align-self: end; }
-    .mor__row { grid-template-areas: "when kind amt usd to rec"; padding: 6px 0; min-height: 56px; }
-    .mor__when, .mor__usd { display: block; font-size: var(--t-13); line-height: 20px; color: var(--c-ink-2); }
+    .mor__row { grid-template-areas: "when kind amt share usd to n rec"; padding: 6px 0; min-height: 56px; }
+    .mor__when, .mor__usd, .mor__share, .mor__n { display: block; font-size: var(--t-13); line-height: 20px; color: var(--c-ink-2); }
     .mor__when { grid-area: when; }
     .mor__usd { grid-area: usd; text-align: right; }
+    .mor__share { grid-area: share; text-align: right; color: var(--c-ink); }
+    .mor__n { grid-area: n; text-align: right; }
     .mor__cap { display: none; }
     .mor__tow { display: none; }
     .mor__to { display: grid; gap: 0; font-size: var(--t-13); line-height: 20px; }

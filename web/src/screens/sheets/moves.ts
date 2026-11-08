@@ -8,6 +8,8 @@
 // a NAM figure.
 import type { AddressReport, Flow } from '../../../../shared/types';
 import { otherCoin } from '../../lib/flows';
+import { isOtherCoin, onePerCrossing } from '../../../../shared/flow-rules';
+import { INTERNAL_ADDRESSES } from '../../../../shared/alerts';
 
 /**
  * The sheet's moves, each bridge crossing once, and who the address moves NAM with (NAM only, each crossing once,
@@ -24,6 +26,22 @@ export const coinOf = (f: Flow): string => {
 export type Counterparty = AddressReport['counterparties'][number];
 
 /** Bridge crossings of NAM between `address` and `other`, over the given moves (each crossing once). */
+/**
+ * What the address received in NAM over `moves` (each bridge crossing once, other coins left out), and the part of it
+ * that came out of the shielded pool: every leg from the pool to this address, whatever its kind (an unshield, a
+ * crossing straight out of the pool, the pool's fee for a transaction it paid to this address). Dust that prints as 0
+ * counts as it is. `moves` is how many such legs there were.
+ */
+export function fromPoolOf(moves: readonly Flow[], address: string): { receivedNam: number; fromPoolNam: number; moves: number } {
+  let receivedNam = 0, fromPoolNam = 0, n = 0;
+  for (const f of onePerCrossing(moves.filter((x) => !isOtherCoin(x) && Number.isFinite(x.amount)))) {
+    if (f.to !== address || f.from === address) continue;
+    receivedNam += f.amount;
+    if (f.from === INTERNAL_ADDRESSES.masp) { fromPoolNam += f.amount; n += 1; }
+  }
+  return { receivedNam, fromPoolNam, moves: n };
+}
+
 export function crossingsWith(moves: Flow[], address: string, other: string): { n: number; nam: number; last: number | null } {
   let n = 0;
   let nam = 0;
