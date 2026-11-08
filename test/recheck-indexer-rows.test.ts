@@ -180,6 +180,14 @@ describe('rows recorded twice', () => {
       { kept: 'namada:BB:h0', dropped: 'namada:CC:h0', kind: 'ibc_in', height: 215, amount: 5, why: 'relay repeat' },
     ]);
   });
+  it('two bridge rows a few blocks apart that record different IBC packets are two crossings, not a repeat', () => {
+    const packet = (id: string, height: number, seq: string): Row => ({ ...row(id, height, 'ibc_in', id.slice(7, 9)), meta: JSON.stringify({ channel: 'channel-1', packetSequence: seq }) });
+    // the live reader's rows of blocks 7,913,775 to 7,913,792: 2,500,000 NAM three times, packets 7930, 7931 and 7932
+    expect(duplicates([packet('namada:AA:6', 7913775, '7930'), packet('namada:BB:6', 7913787, '7931'), packet('namada:CC:6', 7913792, '7932')])).toEqual([]);
+    // the same packet twice is a repeat; a row without a packet (the import's) is judged by the rule alone
+    expect(duplicates([packet('namada:AA:6', 100, '7930'), packet('namada:BB:6', 105, '7930')]).map((d) => d.dropped)).toEqual(['namada:BB:6']);
+    expect(duplicates([packet('namada:AA:6', 100, '7930'), row('namada:BB:h0', 105, 'ibc_in', 'BB')]).map((d) => d.dropped)).toEqual(['namada:BB:h0']);
+  });
   it('two legs of one transaction to different receivers are not repeats', () => {
     expect(duplicates([row('namada:AA:h0', 100, 'transfer', 'AA'), { ...row('namada:AA:h1', 100, 'transfer', 'AA'), to_addr: 'tnam1other' }])).toEqual([]);
   });

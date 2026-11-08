@@ -296,11 +296,20 @@ export const txsKey = (t: TxSummary): string => JSON.stringify({
 
 // ------------------------------------------------------------------ duplicates
 export interface Dup { kept: string; dropped: string; kind: string; height: number; amount: number; why: 'same inner tx' | 'relay repeat' }
+/** The IBC packet a live row records (meta.packetSequence, with its channel), or null for a row without one (the indexer import's). */
+export function packetOf(r: Row): string | null {
+  try {
+    const m = JSON.parse(r.meta ?? '{}');
+    return m.packetSequence != null ? `${m.channel ?? ''}/${m.packetSequence}` : null;
+  } catch { return null; }
+}
+
 /**
  * Rows recorded twice among the era's Namada rows: two rows of one inner transaction with the same kind, ends and
  * amount (the same move written by two sources or twice by one), and a bridge leg that repeats an earlier one with the
- * same kind, ends and amount within RELAY_REPEAT_BLOCKS (the repeated relay rule of 2026-10-17). The earlier row (lowest
- * height, then id) is the one kept.
+ * same kind, ends and amount within RELAY_REPEAT_BLOCKS (the repeated relay rule of 2026-10-17), unless the two rows
+ * name different IBC packets (meta.packetSequence, which the live reader records: two sends of the same amount a few
+ * blocks apart are two crossings, not one relayed twice). The earlier row (lowest height, then id) is the one kept.
  */
 export function duplicates(rows: Row[]): Dup[] {
   const sorted = [...rows].sort((a, b) => a.height - b.height || (a.id < b.id ? -1 : 1));
@@ -315,7 +324,8 @@ export function duplicates(rows: Row[]): Dup[] {
     if (r.kind === 'ibc_in' || r.kind === 'ibc_out') {
       const k = [r.kind, r.from_addr, r.to_addr, r.amount_num].join('|');
       const earlier = relays.get(k) ?? [];
-      const rep = earlier.find((e) => r.height - e.height <= RELAY_REPEAT_BLOCKS && r.height > e.height);
+      const packet = packetOf(r);
+      const rep = earlier.find((e) => r.height - e.height <= RELAY_REPEAT_BLOCKS && r.height > e.height && (packet == null || packetOf(e) == null || packetOf(e) === packet));
       if (rep) out.push({ kept: rep.id, dropped: r.id, kind: r.kind, height: r.height, amount: r.amount_num, why: 'relay repeat' });
       else relays.set(k, [...earlier, r]);
     }
@@ -615,7 +625,7 @@ function writeOutputs(opts: { judged: Judged[]; era: Row[]; dups: Dup[]; labels:
   L.push('');
   // the bridge totals of the era
   const eraIbc = era.filter((r) => r.kind === 'ibc_in' || r.kind === 'ibc_out');
-  const src = (r: Row) => { try { return String(JSON.parse(r.meta ?? '{}').source ?? 'live'); } catch { return 'live'; } };
+  const src = (r: Row) => { try { return String(JSON.parse(r.meta ?? '{}').source ?? 'no source in meta (the live reader)'); } catch { return 'no source in meta (the live reader)'; } };
   const sum = (rs: Row[]) => rs.reduce((a, r) => a + r.amount_num, 0);
   const notAppliedIds = new Set(notApplied.map((j) => j.row.id));
   L.push('## The bridge totals of the era');
@@ -638,13 +648,18 @@ function writeOutputs(opts: { judged: Judged[]; era: Row[]; dups: Dup[]; labels:
   const inAll = eraIbc.filter((r) => r.kind === 'ibc_in'), outAll = eraIbc.filter((r) => r.kind === 'ibc_out');
   const inAfter = inAll.filter((r) => !notAppliedIds.has(r.id) && !dupIds.has(r.id)), outAfter = outAll.filter((r) => !notAppliedIds.has(r.id) && !dupIds.has(r.id));
   L.push('');
-  L.push(`Before this check: ${fmtNam(sum(inAll))} NAM in, ${fmtNam(sum(outAll))} NAM out, a difference of ${fmtNam(sum(inAll) - sum(outAll))} NAM. Without the rows the chain did not apply and the rows recorded twice: ${fmtNam(sum(inAfter))} NAM in, ${fmtNam(sum(outAfter))} NAM out, a difference of ${fmtNam(sum(inAfter) - sum(outAfter))} NAM. The rows this check removes change the difference by ${fmtNam((sum(inAll) - sum(outAll)) - (sum(inAfter) - sum(outAfter)))} NAM. The rest of the difference is not explained by this check: it compares each stored row with its block, and cannot see a crossing no row records (docs/decisions.md, "Namada-side IBC outflows look under-recorded"). Whether the indexer-era rows now balance against the escrow is for the ibc_conservation check to say once the operator has applied the SQL.`);
+  const idx = (rs: Row[]) => rs.filter((r) => src(r) === 'namada-indexer'), scan = (rs: Row[]) => rs.filter((r) => src(r) === 'namada-rpc-block-results');
+  L.push(`The import's own rows: ${fmtNam(sum(idx(inAll)))} NAM in against ${fmtNam(sum(idx(outAll)))} NAM out, a difference of ${fmtNam(sum(idx(inAll)) - sum(idx(outAll)))} NAM; with the shielded pool's legs the block_results scan added on 2026-10-17 (${fmtNam(sum(scan(outAll)))} NAM out, ${fmtNam(sum(scan(inAll)))} NAM in), ${fmtNam((sum(idx(inAll)) + sum(scan(inAll))) - (sum(idx(outAll)) + sum(scan(outAll))))} NAM. Every row of the era: ${fmtNam(sum(inAll))} NAM in, ${fmtNam(sum(outAll))} NAM out, a difference of ${fmtNam(sum(inAll) - sum(outAll))} NAM.`);
+  L.push('');
+  L.push(`What this check changes: the rows the chain did not apply are ${fmtNam(sum(inAll.filter((r) => notAppliedIds.has(r.id))))} NAM of the in rows and ${fmtNam(sum(outAll.filter((r) => notAppliedIds.has(r.id))))} NAM of the out rows; the rows recorded twice ${fmtNam(sum(inAll.filter((r) => dupIds.has(r.id))))} NAM in and ${fmtNam(sum(outAll.filter((r) => dupIds.has(r.id))))} NAM out. Without them: ${fmtNam(sum(inAfter))} NAM in, ${fmtNam(sum(outAfter))} NAM out, a difference of ${fmtNam(sum(inAfter) - sum(outAfter))} NAM. The rest of the difference is not explained by this check: it compares each stored row with its block, and cannot see a crossing no row records (docs/decisions.md, "Namada-side IBC outflows look under-recorded"). ${notApplied.length ? 'Whether the indexer-era rows then balance against the escrow is for the ibc_conservation check to say once the operator has applied the SQL.' : 'The SQL file deletes nothing, so the ibc_conservation check reads the same rows as before.'}`);
   L.push('');
   L.push('## Method and limits');
   L.push('');
   L.push(`- One \`/block_results\` read per distinct block per node, cached under scripts/out/indexer_recheck/blocks/ (not in the repository). Both nodes must give the same tx/applied verdicts and token events for a block, event order aside; a block they differ on judges its rows "nodes disagree" and nothing is deleted for them.`);
-  L.push('- The judgement is the live decoders\' rule (worker/src/parse/namada-pos.ts): the wrapper event\'s code 0, the inner transaction\'s result Ok, no rejecting validity predicate. Whether the wrapper was atomic (a batch the chain commits whole or not at all) is in the transaction bytes, which this run does not read; on 2026-10-23 none of the 440 wrappers read for the bond restore was atomic.');
-  L.push('- A bond\'s or an unbond\'s amount is in the transaction bytes too and is not compared here; the row\'s delegator is checked against the staking keys the inner transaction changed instead.');
+  L.push('- The judgement is the live decoders\' rule (worker/src/parse/namada-pos.ts): the wrapper event\'s code 0, the inner transaction\'s result Ok, no rejecting validity predicate. A wrapper\'s code is one for its whole batch, so a row whose own result is Ok inside a wrapper whose code is not 0 (another inner transaction failed) is judged by the wrapper\'s atomic flag, read from the block\'s `/block` transaction bytes on both nodes (cached under blocks_txs/) and decoded with the Worker\'s own decoder: atomic, the chain dropped the whole batch; not atomic, the row\'s writes stand.');
+  L.push('- A bond\'s or an unbond\'s amount is in the transaction bytes too: it is compared for the rows whose bytes that step read, and the other rows\' delegator is checked against the staking keys the inner transaction changed instead.');
+  L.push('- "Event NAM at the row\'s side: none" means neither side of the row is a NAM account of the block\'s token event for that inner transaction. For an ibc_out row the import marked shielded (an `ibcUnshieldingTransfer`), the indexer named the fee payer as the source where the chain\'s event names the shielded pool, as docs/decisions.md recorded on 2026-10-17; the amount itself is the event\'s. An ibc_in row with no token event of its inner transaction is a bridge receipt whose NAM the chain credited under the relay\'s own event; the row stands on the indexer\'s record of the receipt.');
+  L.push('- A "relay repeat" is the importer\'s rule (the same kind, ends and amount within 20 blocks), not proof: where both rows record their IBC packet (the live reader\'s meta.packetSequence) and the packets differ, the rows are two crossings and are not listed; rows without a packet (the indexer import\'s) are listed by the rule alone, for the operator to look at.');
   L.push('- The SQL subtracts a row from the day\'s activity_daily (flows, nam) and flow_edges_daily (n, nam) rows as migration 0020 did. The day\'s distinct-address counts (senders, receivers, active) are not changed by subtraction; the days touched are listed in the SQL file for a rebuild with the cron\'s own code when the operator wants them exact. activity_daily holds Namada rows from 2026-08-14 only; flow_edges_daily since 2024-12-03.');
   L.push('');
   mkdirSync(join(opts.report, '..'), { recursive: true });
