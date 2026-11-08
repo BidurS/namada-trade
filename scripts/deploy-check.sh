@@ -266,6 +266,13 @@ for i in 1 2 3 4 5; do out=$(npx wrangler d1 execute namada-trade-db --remote --
 echo "$out" | python3 -c "
 import sys,json; r=json.load(sys.stdin)[0]['results'][0]; print('0020 curated labels and the removed row:', r)
 sys.exit(0 if r['curated'] == 5 and r['rows'] == 0 else 1)" || stop "migration 0020 is not in place: not deploying"
+# 0022 (a data migration: the shielded pool's fees the live scan filed as unshields re-filed as kind 'masp_fee', with the
+# daily edges): the Worker does not depend on it, so a skipped apply would show nowhere but the Activity list and the
+# shielded sums; the first and last of the migration's 79 rows must be fees now, and at least 79 fee rows must exist
+for i in 1 2 3 4 5; do out=$(npx wrangler d1 execute namada-trade-db --remote --json --command "SELECT (SELECT COUNT(*) FROM flows WHERE kind = 'masp_fee') fee, (SELECT COUNT(*) FROM flows WHERE id IN ('namada:B01C5E287A25C4E3EEE4602E65984C3BA041B64AC9D47F56C0AE623273C7CCB3:5', 'namada:77BFAC2578362FA7F8FF08CCAFB4CB52C55B42F67C7E7B555059CA00E402A3BB:1') AND kind != 'masp_fee') still" 2>&1) && ! echo "$out" | grep -q 7403 && break; echo "retrying (Cloudflare 7403)"; sleep 6; done
+echo "$out" | python3 -c "
+import sys,json; r=json.load(sys.stdin)[0]['results'][0]; print('0022 fee rows and rows still unshields:', r)
+sys.exit(0 if r['fee'] >= 79 and r['still'] == 0 else 1)" || stop "migration 0022 is not in place: not deploying"
 # the depth archive bucket (wrangler.jsonc r2_buckets DEPTH_R2): wrangler refuses to upload a Worker bound to a bucket
 # that does not exist, so the bucket is created once by hand before the first deploy of the binding (the code tolerates
 # the binding missing; the deploy does not)
