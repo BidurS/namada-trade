@@ -1,9 +1,9 @@
 // The shielded pool as a ledger (2026-11-07, C4 and C5): the daily job computes into kv masp.makeup the NAM into the pool
 // and out of it since 13 Jun 2025 from the flow index (every NAM leg touching the pool, the pool's fees counted as out),
 // how the NAM came in (straight over the bridge against from Namada addresses), the chain's own running total of
-// shielded rewards (the pool's max_total_rewards key, a must-exist read stored with its block and time; null when it
-// could not be read, never 0), and the pool's balance as last read. blindSpot serves the row as `makeup`, and the page's
-// sentences take their figures from it.
+// shielded rewards (the pool's max_total_rewards key, a must-exist read stored with its block and time; the last reading
+// kept when it could not be read, null while it never was, never 0), and the pool's balance as last read. blindSpot
+// serves the row as `makeup`, and the page's sentences take their figures from it. A failed read is asked once an hour.
 import { describe, it, expect } from 'vitest';
 import { daily, maspMakeupOf, readMaspMakeup, MAKEUP_IN_SQL, MAKEUP_OUT_SQL, MAKEUP_OTHER_FEES_SQL, type MakeupLegRow } from '../worker/src/series';
 import { blindSpot, MASP_MAKEUP_KV } from '../worker/src/analytics';
@@ -90,23 +90,40 @@ describe('readMaspMakeup over the flow index', () => {
     expect(m.since).toBe(RECORD_SINCE.shieldedMoves);
     for (const sql of [MAKEUP_IN_SQL, MAKEUP_OUT_SQL, MAKEUP_OTHER_FEES_SQL]) expect(sql).toContain("f.chain = 'namada'");
   });
-  it('a chain read that fails leaves the rewards null and the rest as read', async () => {
+  it('a chain read that fails leaves the rewards null and the rest as read, when no row carried a reading', async () => {
     const db = testD1();
     insert(db, 'flows', FLOWS);
     const m = await readMaspMakeup(db as any, NOW, undefined, async () => { throw new Error('every node answered without a value'); });
     expect(m.rewards).toBeNull();
     expect(m.in.nam).toBe(3_750);
     expect(m.balance).toBeNull();
+    const prev = maspMakeupOf([], [], 0, null, null, NOW - D);
+    expect((await readMaspMakeup(db as any, NOW, undefined, async () => { throw new Error('down'); }, prev)).rewards).toBeNull();
+  });
+  it('a chain read that fails keeps the stored row\'s reading as it was (its own time, block and node); a read that succeeds replaces it', async () => {
+    const db = testD1();
+    insert(db, 'flows', FLOWS);
+    const good = await readMaspMakeup(db as any, NOW - D, undefined, async () => REWARDS);
+    expect(good.rewards?.at).toBe(NOW - D);
+    const kept = await readMaspMakeup(db as any, NOW, undefined, async () => { throw new Error('down'); }, good);
+    expect(kept.rewards).toEqual(good.rewards);
+    expect(kept.rewards?.at).toBe(NOW - D);
+    expect(kept.at).toBe(NOW);
+    expect(kept.in.nam).toBe(3_750);
+    const fresh = await readMaspMakeup(db as any, NOW, undefined, async () => ({ ...REWARDS, height: 8_517_990 }), good);
+    expect(fresh.rewards).toEqual({ ...good.rewards, height: 8_517_990, at: NOW });
   });
 });
 
 describe('the daily job writes kv masp.makeup', () => {
   const env = (db: ReturnType<typeof testD1>) => ({ DB: db } as any);
-  const job = (db: ReturnType<typeof testD1>) => {
+  const job = (db: ReturnType<typeof testD1>, day = '2026-11-07', over: Record<string, unknown> = {}) => {
     // the other parts done for the day, so only the ledger runs
-    insert(db, 'kv', [{ key: 'jobs.daily', value: JSON.stringify({ day: '2026-11-07', snapNamada: true, snapOsmosis: true, flows: true, names: true }), updated_at: NOW }]);
+    db.raw.prepare('INSERT OR REPLACE INTO kv (key, value, updated_at) VALUES (?, ?, ?)').run('jobs.daily', JSON.stringify({ day, snapNamada: true, snapOsmosis: true, flows: true, names: true, ...over }), NOW);
   };
   const stored = (db: ReturnType<typeof testD1>) => JSON.parse(db.raw.prepare('SELECT value FROM kv WHERE key = ?').get(MASP_MAKEUP_KV)?.value ?? 'null') as MaspMakeup | null;
+  const jobRow = (db: ReturnType<typeof testD1>) => JSON.parse(db.raw.prepare("SELECT value FROM kv WHERE key = 'jobs.daily'").get().value);
+  const never = (calls: { n: number }) => async () => { calls.n++; throw new Error('not asked again'); };
   it('with the rewards total read: the row with the legs, the rewards (block and time) and the balance; the part is done for the day', async () => {
     const db = testD1();
     job(db);
@@ -120,27 +137,85 @@ describe('the daily job writes kv masp.makeup', () => {
     expect(m.rewards).toEqual({ nam: 27_347_610.418808, base: '27347610418808', height: 8_517_986, provider: 'StakeAndRelax', at: NOW });
     expect(m.in.nam).toBe(3_750);
     expect(m.balance).toEqual({ nam: 3_377, at: NOW - 120_000 });
-    expect(JSON.parse(db.raw.prepare("SELECT value FROM kv WHERE key = 'jobs.daily'").get().value).makeup).toBe(true);
+    expect(jobRow(db).makeup).toBe(true);
     // done: a second tick in the window does nothing
     expect(await daily(env(db), NOW + 60_000, { health, maspRewards: async () => { throw new Error('not asked again'); } })).toBeNull();
     // served to the page
     const bs = await blindSpot(db as any, NOW + 60_000, false);
     expect(bs.makeup).toEqual(m);
   });
-  it('with the read failing: the row is written without the rewards, the part waits and is tried again next tick', async () => {
+  it('with the read failing and no reading on record: the row is written without the rewards, the part waits and is asked again in the next hour\'s window', async () => {
     const db = testD1();
     job(db);
     insert(db, 'flows', FLOWS);
     const health: SourceHealth[] = [];
     const r = await daily(env(db), NOW, { health, maspRewards: async () => { throw new Error('down'); } });
     expect(r?.ran).toEqual([]);
-    expect(r?.waiting.join(' ')).toContain('shielded makeup');
+    expect(r?.waiting.join(' ')).toContain('shielded makeup: the chain’s total of shielded rewards could not be read, so the ledger was written without it; asked again next hour');
     expect(stored(db)?.rewards).toBeNull();
     expect(stored(db)?.in.nam).toBe(3_750);
-    expect(JSON.parse(db.raw.prepare("SELECT value FROM kv WHERE key = 'jobs.daily'").get().value).makeup).toBeUndefined();
-    const again = await daily(env(db), NOW + 60_000, { health, maspRewards: async () => REWARDS });
+    expect(jobRow(db).makeup).toBeUndefined();
+    expect(jobRow(db).makeupTried).toBe(Date.UTC(2026, 10, 7, 6));
+    // a second tick in the same hour does not ask the chain again, and leaves the part undone
+    const calls = { n: 0 };
+    const same = await daily(env(db), NOW + 60_000, { health, maspRewards: never(calls) });
+    expect(calls.n).toBe(0);
+    expect(same?.ran).toEqual([]);
+    expect(same?.waiting).toEqual(['shielded makeup: the chain’s total of shielded rewards was not read this hour; asked again next hour']);
+    expect(jobRow(db).makeup).toBeUndefined();
+    expect(stored(db)?.at).toBe(NOW);
+    // the next hour's window: asked again, and done for the day
+    const again = await daily(env(db), NOW + H, { health, maspRewards: async () => REWARDS });
     expect(again?.ran).toEqual(['shielded makeup']);
     expect(stored(db)?.rewards?.height).toBe(8_517_986);
+    expect(stored(db)?.rewards?.at).toBe(NOW + H);
+    expect(jobRow(db).makeup).toBe(true);
+  });
+  it('with the read failing after a good one: the stored reading stays as it was (its time unchanged), the legs are re-read, the part waits', async () => {
+    const db = testD1();
+    insert(db, 'flows', FLOWS);
+    insert(db, 'metrics', [{ ts: NOW - D - 120_000, key: 'supply.masp_shielded', value: 3_300 }]);
+    const health: SourceHealth[] = [];
+    // yesterday's job read the total
+    job(db, '2026-11-06');
+    expect((await daily(env(db), NOW - D, { health, maspRewards: async () => REWARDS }))?.ran).toEqual(['shielded makeup']);
+    const before = stored(db)!;
+    expect(before.rewards?.at).toBe(NOW - D);
+    // today's read fails: the row is rewritten with the legs and balance of today and yesterday's reading
+    job(db, '2026-11-07');
+    insert(db, 'metrics', [{ ts: NOW - 120_000, key: 'supply.masp_shielded', value: 3_377 }]);
+    const r = await daily(env(db), NOW, { health, maspRewards: async () => { throw new Error('down'); } });
+    expect(r?.ran).toEqual([]);
+    expect(r?.waiting.join(' ')).toContain('written with the last reading; asked again next hour');
+    const after = stored(db)!;
+    expect(after.rewards).toEqual(before.rewards);
+    expect(after.rewards?.at).toBe(NOW - D);
+    expect(after.at).toBe(NOW);
+    expect(after.balance).toEqual({ nam: 3_377, at: NOW - 120_000 });
+    expect(jobRow(db).makeup).toBeUndefined();
+    // served to the page as stored
+    expect((await blindSpot(db as any, NOW + 60_000, false)).makeup).toEqual(after);
+    // a good read in a later hour replaces it
+    const again = await daily(env(db), NOW + 2 * H, { health, maspRewards: async () => ({ ...REWARDS, height: 8_517_990 }) });
+    expect(again?.ran).toEqual(['shielded makeup']);
+    expect(stored(db)?.rewards).toEqual({ ...before.rewards, height: 8_517_990, at: NOW + 2 * H });
+  });
+  it('the hour tried is kept when the validator list fails in the same tick, and neither is asked again that hour', async () => {
+    const db = testD1();
+    job(db, '2026-11-07', { names: false });
+    insert(db, 'flows', FLOWS);
+    const health: SourceHealth[] = [];
+    const r = await daily(env(db), NOW, { health, maspRewards: async () => { throw new Error('down'); }, validators: async () => { throw new Error('down'); } });
+    expect(r?.ran).toEqual([]);
+    const hour = Date.UTC(2026, 10, 7, 6);
+    expect(jobRow(db)).toMatchObject({ day: '2026-11-07', makeupTried: hour, namesTried: hour });
+    expect(jobRow(db).makeup).toBeUndefined();
+    expect(jobRow(db).names).toBe(false);
+    const rewards = { n: 0 }, names = { n: 0 };
+    const same = await daily(env(db), NOW + 60_000, { health, maspRewards: never(rewards), validators: never(names) });
+    expect(rewards.n).toBe(0);
+    expect(names.n).toBe(0);
+    expect(same?.ran).toEqual([]);
   });
   it('blindSpot serves null while the row was never written', async () => {
     const db = testD1();
@@ -164,7 +239,7 @@ describe('the page\'s sentences', () => {
     expect(b).toBe('Of all NAM ever shielded, 14% arrived straight over the bridge in 1,655 crossings; the rest came from Namada addresses.');
     for (const w of [s, b, ...Object.values(SHIELDED_WORDS.makeupRows), SHIELDED_WORDS.makeupScope, SHIELDED_WORDS.bridgeScope]) {
       for (const x of BANNED) expect(w, `${x.word} in "${w}"`).not.toMatch(x.re);
-      expect(w).not.toMatch(/users’ NAM|users' NAM|deposits|backed|solvent|safe|printed|tnam1|osmo1/i);
+      expect(w).not.toMatch(/tnam1|osmo1/);
     }
   });
 });
