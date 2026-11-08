@@ -10,6 +10,7 @@ import { blockHasUnbond, parseNamadaUnbonds } from './parse/namada-unbond';
 import { blockHasBond, parseNamadaBonds } from './parse/namada-bond';
 import type { PosParse } from './parse/namada-pos';
 import { feePayersOf } from './parse/namada-tx';
+import { maspSeenOf, maspSeenStmts } from './masp-seen';
 import { blockMetas, blockResults, blockTxs, chainHead, headBound, headSince, namadaStatusAll, HEAD_AGREE_BLOCKS, HEAD_BOUND_BLOCK_MS, HEAD_VOTE_MAX_AGE_MS, RpcBreaker, LIVE_READ, type HeadVote, type ReadOpts, type Rpc } from './sources/namada';
 import type { NamadaBlock } from './parse/namada';
 import { runBatch, stmt, kvGet, kvGetJson, kvSet } from './db';
@@ -1388,6 +1389,17 @@ export class LiveHub extends DurableObject<Env> {
             if (!retryBlock && parsed.flows.length > 0) {
               this.broadcast({ type: 'flows', flows: parsed.flows });
               toAlert.push(...parsed.flows.filter((f) => now - f.ts <= LATE_ALERT_MAX_AGE_MS));
+            }
+          }
+          // The shielded transactions the block's results record, by the chain's own index (masp-seen.ts, migration
+          // 0021), in a batch of their own after the block's rows: a refused write (the table missing, a D1 error) is
+          // logged and costs this block's rows in masp_seen, never the block, and the hourly masp_tx_coverage check
+          // (cron.ts) then says this site's record lacks them. INSERT OR IGNORE, so a block read again changes nothing.
+          if (!retryBlock) {
+            const masp = maspSeenOf(blk);
+            if (masp.refused) console.error(`Namada block ${h}: ${masp.refused} shielded-transaction event(s) carry an index this reader could not use`);
+            if (masp.seen.length) {
+              try { await runBatch(this.env.DB, maspSeenStmts(masp.seen)); } catch (e) { console.error(`Namada block ${h}: its shielded transactions could not be recorded in masp_seen:`, e); }
             }
           }
         }

@@ -129,6 +129,14 @@ export const INTERNAL_LABELS: Record<string, { label: string; category: string }
   [OSMOSIS.transferModule]: { label: 'Osmosis IBC transfer module', category: 'module' },
 };
 
+/**
+ * Namada's shielded-transaction indexer (namada-masp-indexer, v1.4.7 when checked on 2026-11-07): the second source the
+ * masp_tx_coverage check compares this site's record of shielded transactions with (worker/src/sources/masp-indexer.ts).
+ * Read for each transaction's place on the chain only (block, transaction and batch index); nothing else it carries
+ * is stored, and no figure on the site comes from it.
+ */
+export const MASP_INDEXER = 'https://masp.namada.net';
+
 export const UA = 'NamadaTrade/1.0 (+cloudflare-worker)';
 
 /** The headers that carry the Keplr key (OSMOSIS.keplrRpc / keplrRest / keplrWs), which Keplr reads as the URL's key segment. */

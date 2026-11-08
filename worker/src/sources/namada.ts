@@ -787,7 +787,19 @@ export interface BondListing {
   entriesWithSlashes: number;
   slashes: SlashListingItem[];
   bytes: number;
+  /**
+   * Entries whose source is an internal address (a protocol account: the staking account, the shielded pool, the
+   * bridge escrow, public funding, governance, the multitoken account, or any other variant of Namada's enum), kept
+   * apart from `sources` so no protocol account is ever written as a staker, and counted in the totals above as the
+   * chain lists them. Empty on every listing read so far (v201.0.12 rejects bonds from internal addresses); the
+   * bond_sources check (cron.ts bondSourcesCheck) says so, or names what it found. Sorted by address. Absent only
+   * in a listing built without the parser.
+   */
+  internalSources?: InternalBondSource[];
 }
+
+/** A protocol account the bond listing names as a source, with its bonds net of slashing and its unbonds (base units). */
+export interface InternalBondSource { address: string; bondedBase: bigint; grossBase: bigint; slashedBase: bigint; unbondingBase: bigint }
 
 /**
  * Decode a /vp/pos/bonds_and_unbonds/to answer (every bond on the chain; the per-validator variant
@@ -796,9 +808,11 @@ export interface BondListing {
  * slashes: Vec<{ epoch u64, block u64, type u8, rate Amount }> }>, count first. A bond or unbond entry's `slashed`
  * is what a slash took from its `amount`, so net stake is amount − slashed (on 2026-10-20: 268,038,299 NAM gross, of
  * which 860,517 NAM slashed, against a total stake of 267,175,777 NAM; the 2,006 NAM left over are bonds still in
- * the pipeline, listed before they count). Throws on a cut or malformed answer, and on a source × validator entry
- * listed twice (the chain's map has each once; a repeat would only inflate the counts the next answers are checked
- * against, cron.ts bondGate).
+ * the pipeline, listed before they count). Throws on a cut or malformed answer, on an internal address as validator,
+ * and on a source × validator entry listed twice (the chain's map has each once; a repeat would only inflate the
+ * counts the next answers are checked against, cron.ts bondGate). An internal address as source is read like any
+ * other and kept in `internalSources`, never in `sources` (bond_sources check, 2026-11-07; before, such a listing
+ * was refused whole, so the check could never have seen one).
  */
 export function parseBondListing(value: string | null): BondListing {
   const bytes = base64Bytes(value ?? '');
@@ -810,13 +824,15 @@ export function parseBondListing(value: string | null): BondListing {
     uSlashed: bigint;
   }>();
   const slashes: SlashListingItem[] = [];
+  const internal = new Set<string>();
   const n = b.u32();
   let gross = 0n, slashed = 0n, unbondGross = 0n, unbondSlashed = 0n;
   let entriesWithUnbonds = 0, entriesWithSlashes = 0;
   for (let i = 0; i < n; i++) {
     const source = b.address();
     const validator = b.address();
-    if (source.internal || validator.internal) throw new Error(`bond listing: entry ${i} names an internal address`);
+    if (validator.internal) throw new Error(`bond listing: entry ${i} names an internal address as validator`);
+    if (source.internal) internal.add(source.address);
     let g = 0n, sl = 0n;
     for (let k = b.u32(); k > 0; k--) { b.u64(); g += b.amount(); if (b.u8() === 1) sl += b.amount(); }
     if (sl > g) throw new Error(`bond listing: entry ${i} has more slashed than bonded`);
@@ -869,6 +885,7 @@ export function parseBondListing(value: string | null): BondListing {
   }
   if (!b.done) throw new Error(`bond listing: ${bytes.length - b.offset} unread bytes`);
   const out = new Map<string, BondedSource>();
+  const internalSources: InternalBondSource[] = [];
   for (const [source, s] of sources) {
     let bondedBase = 0n, grossBase = 0n, slashedBase = 0n;
     const delegations: BondedSource['delegations'] = [];
@@ -876,6 +893,10 @@ export function parseBondListing(value: string | null): BondListing {
       const net = v.gross - v.slashed;
       bondedBase += net; grossBase += v.gross; slashedBase += v.slashed;
       if (net > 0n) delegations.push({ validator, amountNam: Number(net) / 1e6 });
+    }
+    if (internal.has(source)) {
+      internalSources.push({ address: source, bondedBase, grossBase, slashedBase, unbondingBase: s.uGross - s.uSlashed });
+      continue;
     }
     // sorted, so the same bonds always give the same JSON (the cron writes only rows whose JSON changed)
     delegations.sort((x, y) => (x.validator < y.validator ? -1 : x.validator > y.validator ? 1 : 0));
@@ -891,6 +912,7 @@ export function parseBondListing(value: string | null): BondListing {
       unbonds: s.unbonds,
     });
   }
+  internalSources.sort((x, y) => (x.address < y.address ? -1 : x.address > y.address ? 1 : 0));
   return {
     sources: out,
     entries: n,
@@ -904,6 +926,7 @@ export function parseBondListing(value: string | null): BondListing {
     entriesWithSlashes,
     slashes,
     bytes: bytes.length,
+    internalSources,
   };
 }
 
@@ -989,4 +1012,48 @@ export async function mintKeysAt(height: number, opts: ReadOpts = {}): Promise<M
     height,
     provider: inflation.provider,
   };
+}
+
+// ---------------------------------------------------------------- single-key reads of the trust checks (2026-11-07)
+//
+// The pos_remainder check (cron.ts posRemainderNext) reads the staking account's NAM at the bond listing's own block,
+// so a withdrawal between the listing and a read at the head never looks like a rise, and the staking inflation the
+// chain recorded for that block's epoch. The masp_ledger check (cron.ts maspLedgerCheck) reads the chain's running
+// total of shielded rewards and the shielded-reward epoch length at the head, once a day.
+
+/**
+ * A protocol account's NAM (base units) at `height`, as namProtocolBalance reads it at the head: an answer without a
+ * value, with one that is not an amount, for another block or with an error code (a node that no longer keeps the
+ * block: the nodes answer about 3,600 blocks back) is refused at its node and the next node is asked.
+ */
+export async function namProtocolBalanceAt(owner: string, height: number, opts: ReadOpts = {}) {
+  const r = await abci(namBalanceKey(owner), opts, orCode(notAnAmount), height);
+  return { balance: decodeU256LE(r.value), height: r.height, provider: r.provider };
+}
+
+/**
+ * The staking inflation (base units) minted into the staking account at the first block of the epoch `height` is
+ * in (<staking account>/last_inflation_amount, the key mintKeysAt reads), read at that block.
+ */
+export async function posLastInflationAt(height: number, opts: ReadOpts = {}) {
+  const r = await abci(`/shell/value/#${NAMADA.internal.pos}/last_inflation_amount`, opts, orCode(notAnAmount), height);
+  return { inflation: decodeU256LE(r.value), height: r.height, provider: r.provider };
+}
+
+/**
+ * The chain's running total of the shielded rewards minted into the shielded pool (base units): the key under the
+ * shielded pool's address that Namada's shielded-token storage names `max_total_rewards`, a token amount. Read at the
+ * head only: the key is written without diffs, so a node answers it for no past block (2026-11-07, two public nodes:
+ * 27,347,610.418808 NAM at the halt's last block, 8,517,986, and "No value found" 986 blocks back). The masp_ledger
+ * check keeps its own daily readings and takes the rise between two of them.
+ */
+export async function maspTotalRewards(opts: ReadOpts = {}) {
+  const r = await abci(`/shell/value/#${NAMADA.internal.masp}/max_total_rewards`, opts, notAnAmount);
+  return { total: decodeU256LE(r.value), height: r.height, provider: r.provider };
+}
+
+/** Epochs to a shielded-reward epoch (<parameters>/masp_epoch_multiplier, the parameter mintKeysAt reads), at the head. */
+export async function maspEpochMultiplier(opts: ReadOpts = {}) {
+  const r = await abci(`/shell/value/#${parametersAddress()}/masp_epoch_multiplier`, opts, notACount);
+  return { multiplier: decodeU64LE(r.value), height: r.height, provider: r.provider };
 }

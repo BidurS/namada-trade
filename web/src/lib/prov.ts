@@ -174,6 +174,11 @@ export const CHECK_TITLES: Record<string, string> = {
   osmosis_index: "This site's Osmosis records are listening and caught up",
   osmosis_stream_share: 'Osmosis moves reach this site as they happen',
   bridge_records_paired: 'Every bridge crossing is on record on both chains',
+  // the trust checks of 2026-11-07 (worker/src/cron.ts maspLedgerCheck, posRemainderNext, bondSourcesCheck, maspCoverageCheck)
+  masp_ledger: "The shielded pool's NAM moves add up to its balance change",
+  pos_remainder: "The staking account's balance moves only by staking, unstaking and rewards",
+  bond_sources: 'No protocol account appears as a staker',
+  masp_tx_coverage: "Every shielded transaction the chain recorded is in this site's record",
   // the depth module's four checks, titled where the module keeps its words (shared/depth.ts)
   ...DEPTH_CHECK_TITLES,
 };
@@ -196,6 +201,13 @@ const exactNam = (base: unknown): string | null => {
   const digits = (neg ? base.slice(1) : base).replace(/^0+(?=\d)/, '').padStart(7, '0');
   const whole = digits.slice(0, -6).replace(/\B(?=(\d{3})+(?!\d))/g, ',');
   return `${neg && /[1-9]/.test(digits) ? MINUS : ''}${whole}.${digits.slice(-6)}`;
+};
+/** A NAM amount from a float the worker summed, six decimals kept ("1,234.567890", "−0.000250"); null when it is not a number. */
+const nam6 = (v: unknown): string | null => {
+  const n = detailNum(v);
+  if (n == null) return null;
+  const s = Math.abs(n).toLocaleString('en-US', { minimumFractionDigits: 6, maximumFractionDigits: 6 });
+  return `${n < 0 && /[1-9]/.test(s) ? MINUS : ''}${s}`;
 };
 /** An epoch number as the chain names it ("2738", no grouping). */
 const epochNo = (n: number | null): string => (n == null ? '—' : String(Math.round(n)));
@@ -437,6 +449,105 @@ export function checkDetail(c: Check): string | null {
       const plus = repaired != null && repaired > 0 ? `; ${plural(repaired, 'more move', 'more moves')} written by a history repair ${repaired === 1 ? 'is' : 'are'} not counted` : '';
       if (late === 0) return `None found late: ${n === 1 ? 'the one Osmosis move' : `all ${plural(n, 'Osmosis move', 'Osmosis moves')}`} in the last 24 h ${n === 1 ? 'was' : 'were'} heard live${plus}`;
       return `${lateShare(late, n, detailNum(d.okBelowPct))} found late: ${fmtCount(late)} of ${plural(n, 'Osmosis move', 'Osmosis moves')} in the last 24 h ${late === 1 ? 'was' : 'were'} not heard live; the five-minute catch-up found ${late === 1 ? 'it' : 'them'}${plus}`;
+    }
+    case 'masp_ledger': {
+      // The shielded pool's day ledger (worker/src/cron.ts maspLedgerCheck): the moves in and out of the pool over a UTC
+      // day against its balance change, within 1 NAM; on a day a shielded-reward epoch started, the rest against the
+      // rise of the chain's total of shielded rewards. The day is named first; a day not judged says why.
+      const day = typeof d.day === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(d.day) ? fmtDayMonthYear(Date.parse(`${d.day}T00:00:00Z`)) : null;
+      if (!day) return null;
+      if (d.judged !== true) {
+        switch (d.notJudged) {
+          case 'scan-behind': {
+            const lag = detailNum(d.scanLagBlocks);
+            return `${day}: not judged yet, this site's block scan is ${lag != null ? `${plural(lag, 'block', 'blocks')} behind the chain` : "not at the chain's head"}, so the day's moves are not all on record; tried again in 15 minutes`;
+          }
+          case 'balance-not-read': return `${day}: not judged, the pool's balance was not read at the ${d.endRead === false ? 'end' : 'start'} of the day`;
+          case 'nothing-happened': return `${day}: no move into or out of the shielded pool, and its balance did not change`;
+          case 'reward-unknown': return `${day}: not judged, whether a shielded-reward epoch started in the day could not be told${typeof d.note === 'string' && d.note ? ` (${d.note})` : ''}`;
+          case 'reward-not-read': return `${day}: a shielded-reward day: not judged, the chain's total of shielded rewards was not read at both ends of the day`;
+          default: return `${day}: not judged`;
+        }
+      }
+      const inNam = nam6(d.inNam), outNam = nam6(d.outNam), fees = nam6(d.feesNam), delta = nam6(d.deltaNam), residual = detailNum(d.residualNam);
+      if (inNam == null || outNam == null || fees == null || delta == null || residual == null) return null;
+      const off = nam6(Math.abs(residual));
+      const line = `${day}: ${inNam} NAM in and ${outNam} NAM out (${fees} NAM of it the pool's fees); the pool's balance changed by ${delta} NAM, ${off === '0.000000' ? 'exactly' : `${off} NAM ${residual > 0 ? 'more' : 'less'} than`} the net of its moves`;
+      const reward = d.rewardDay === true ? nam6(d.rewardNam) : null;
+      const epoch = epochNo(detailNum(d.rewardEpoch));
+      if (c.status === 'warn') return `${line}${reward != null ? `, on a day a shielded-reward epoch (${epoch}) started whose rewards the chain's total of shielded rewards puts at ${reward} NAM` : ''}; judged again tomorrow`;
+      return reward != null ? `${line}: the shielded rewards credited as epoch ${epoch} started, which the chain's total of shielded rewards puts at ${reward} NAM` : line;
+    }
+    case 'pos_remainder': {
+      // The staking account's NAM outside bonds and unstaking between two complete bond listings (worker/src/cron.ts
+      // posRemainderNext): a rise within the staking inflation of an epoch that started between them plus the NAM newly
+      // slashed, a fall (not judged), or NAM that entered outside bonds and rewards. Both listings' blocks are named.
+      const h = detailNum(d.height), from = detailNum(d.fromHeight), to = detailNum(d.toHeight);
+      if (d.judged !== true) {
+        switch (d.notJudged) {
+          case 'first': return h == null ? null : `No earlier complete bond listing to compare with; the listing at block ${fmtCount(h)} is kept for the next`;
+          case 'same-block': return from == null ? null : `The chain has not moved since the bond listing at block ${fmtCount(from)}: nothing new to judge`;
+          case 'older': return h == null || from == null ? null : `The listing at block ${fmtCount(h)} is older than the one compared last (block ${fmtCount(from)}): not judged`;
+          case 'epochs-apart': {
+            const n = detailNum(d.epochsApart);
+            return n == null || from == null || h == null ? null : `${plural(Math.abs(n), 'epoch', 'epochs')} started between the listings at blocks ${fmtCount(from)} and ${fmtCount(h)}: not judged, the chain keeps only the last epoch's staking inflation`;
+          }
+          case 'no-figures': return 'The last bond listing carries no figures for this check yet; the next listing does';
+          default: return null;
+        }
+      }
+      const rise = exactNam(d.riseBase);
+      if (from == null || to == null || rise == null) return null;
+      const blocks = `the bond listings at blocks ${fmtCount(from)} and ${fmtCount(to)}`;
+      if (String(d.riseBase).startsWith('-')) return `Between ${blocks} the staking account's NAM outside bonds and unstaking fell by ${exactNam(unsigned(d.riseBase))} NAM (rewards claimed and withdrawals are not judged)`;
+      const allowed = exactNam(d.allowedBase);
+      if (c.status === 'warn') {
+        const over = exactNam(d.overBase) ?? rise;
+        return `NAM entered the staking account outside bonds and rewards: ${over} NAM between listings at blocks ${fmtCount(from)} and ${fmtCount(to)}${allowed != null ? ` (its NAM outside bonds and unstaking rose by ${rise} NAM, ${allowed} NAM of it what staking inflation and slashing account for)` : ''}; read again at the next listing`;
+      }
+      const parts: string[] = [];
+      const infl = exactNam(d.inflationBase);
+      if (d.epochStarted === true && infl != null) parts.push(`the ${infl} NAM of staking inflation the chain recorded as epoch ${epochNo(detailNum(d.toEpoch))} started`);
+      const slashed = exactNam(d.slashedRiseBase);
+      if (slashed != null && /^[0-9]*[1-9]/.test(String(d.slashedRiseBase))) parts.push(`the ${slashed} NAM newly slashed`);
+      return `Between ${blocks} the staking account's NAM outside bonds and unstaking rose by ${rise} NAM, ${parts.length ? `within ${parts.join(' and ')}` : 'within the 1 NAM allowed: no epoch started between them and nothing was newly slashed'}`;
+    }
+    case 'bond_sources': {
+      // The bond listing's sources against the protocol accounts (worker/src/cron.ts bondSourcesCheck): none, or each
+      // named with its bonded NAM. The protocol accounts are the only addresses a check line ever carries.
+      if (d.judged !== true) return 'Not judged: the bond listing was not read at the last try';
+      const h = detailNum(d.height);
+      const block = h != null ? ` at block ${fmtCount(h)}` : '';
+      const list = Array.isArray(d.internal) ? (d.internal as { address?: unknown; bondedBase?: unknown; bondedNam?: unknown }[]) : [];
+      if (list.length === 0) {
+        const n = detailNum(d.sources);
+        return `${n != null ? `None of the ${plural(n, 'source', 'sources')}` : 'No source'} in the bond listing${block} is a protocol account`;
+      }
+      const named = list.map((x) => `${typeof x.address === 'string' ? x.address : 'an internal address'} with ${exactNam(x.bondedBase) ?? fmtNamRule(detailNum(x.bondedNam))} NAM bonded`).join('; ');
+      return `${list.length === 1 ? 'A protocol account is' : `${fmtCount(list.length)} protocol accounts are`} listed as a staker in the bond listing${block}: ${named}`;
+    }
+    case 'masp_tx_coverage': {
+      // This site's record of shielded transactions against Namada's shielded-transaction indexer (worker/src/cron.ts
+      // maspCoverageCheck): every transaction the indexer lists for the blocks judged is on record, or the misses are
+      // named by block, transaction and batch index, nothing more.
+      if (d.judged !== true) {
+        const cursor = detailNum(d.cursor), judgedTo = detailNum(d.judgedTo), ih = detailNum(d.indexerHeight);
+        switch (d.notJudged) {
+          case 'first-run': return cursor == null ? null : `This site's record of shielded transactions starts at block ${fmtCount(cursor)}; the blocks after it are judged from the next hour`;
+          case 'no-new-heights': return judgedTo == null ? null : `No block scanned since block ${fmtCount(judgedTo)}: nothing new to compare`;
+          case 'indexer-behind': return ih == null || judgedTo == null ? null : `The indexer's last shielded transaction is at block ${fmtCount(ih)}, below the blocks waiting to be judged (from ${fmtCount(judgedTo + 1)}): nothing to compare yet`;
+          case 'no-cursor': return "This site's block scan has no position on record: nothing to compare";
+          default: return null;
+        }
+      }
+      const n = detailNum(d.indexerTxs), m = detailNum(d.missing), from = detailNum(d.from), to = detailNum(d.to);
+      if (n == null || m == null || from == null || to == null) return null;
+      const blocks = `blocks ${fmtCount(from)} to ${fmtCount(to)}`;
+      if (n === 0) return `No shielded transaction in ${blocks}, in the indexer's record or this site's`;
+      if (m === 0) return n === 1 ? `The one shielded transaction the indexer lists for ${blocks} is in this site's record` : `All ${plural(n, 'shielded transaction', 'shielded transactions')} the indexer lists for ${blocks} are in this site's record`;
+      const misses = Array.isArray(d.misses) ? (d.misses as { height?: unknown; blockIndex?: unknown; batchIndex?: unknown }[]) : [];
+      const named = misses.slice(0, 3).map((x) => `block ${fmtCount(detailNum(x.height))}, transaction ${fmtCount(detailNum(x.blockIndex))}, batch ${fmtCount(detailNum(x.batchIndex))}`).join('; ');
+      return `${fmtCount(m)} of ${plural(n, 'shielded transaction', 'shielded transactions')} the indexer lists for ${blocks} ${m === 1 ? 'is' : 'are'} not in this site's record: ${named}${m > 3 ? `; and ${fmtCount(m - 3)} more` : ''}`;
     }
     case 'depth_budget': {
       // The depth store's caps (worker/src/depth/budget.ts budgetCheckStmt): the rows written this month against the

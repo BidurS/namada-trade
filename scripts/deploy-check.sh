@@ -252,6 +252,13 @@ for i in 1 2 3 4 5; do out=$(npx wrangler d1 execute namada-trade-db --remote --
 echo "$out" | python3 -c "
 import sys,json; r=json.load(sys.stdin)[0]['results'][0]; print('0018 table and index:', r)
 sys.exit(0 if r['tables'] == 1 and r['n'] == 1 else 1)" || stop "migration 0018 is not in place: not deploying"
+# 0021 (masp_seen, the shielded transactions the block follower saw, by the chain's own index): the live hub writes them
+# in a batch of their own that only logs a refusal, so without the table every block's NAM rows are still written and the
+# hourly masp_tx_coverage check would say every transaction the indexer lists is missing from this site's record
+for i in 1 2 3 4 5; do out=$(npx wrangler d1 execute namada-trade-db --remote --json --command "SELECT (SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name = 'masp_seen') tables" 2>&1) && ! echo "$out" | grep -q 7403 && break; echo "retrying (Cloudflare 7403)"; sleep 6; done
+echo "$out" | python3 -c "
+import sys,json; r=json.load(sys.stdin)[0]['results'][0]; print('0021 table:', r)
+sys.exit(0 if r['tables'] == 1 else 1)" || stop "migration 0021 is not in place: not deploying"
 # 0020 (a data migration: the June-drain wallet's curated label, the 0019 note kept to the chain's facts, the one indexer bond
 # row the chain rejected removed): the Worker does not depend on it, so a skipped apply would show nowhere but the labels; its
 # own closing checks, read-only

@@ -7,7 +7,10 @@ import * as depth from './depth/index';
 import { KV_KEYS as DEPTH_KV } from './depth/sql';
 import { PRICE_HOW_KEY, priceHealth, priceHowAt, priceHowStmt, storedPriceSource, type PriceHowLog } from './price-how';
 import { QUOTE_KEYS } from '../../shared/settle';
-import { namProtocolBalance, namTotalSupply, namTotalStake, namadaEpochRead, mintKeysAt, namadaStatusAll, delegationsAt, answeringRpcs, listingHeads, QUICK, RpcBreaker, allNamBalances, allBonds, ListingTooLargeError, LISTING_MAX_VALUE_BYTES, type BalanceListing, type BondListing, type MintKeys, type ReadOpts, type Rpc } from './sources/namada';
+import { namProtocolBalance, namTotalSupply, namTotalStake, namadaEpochRead, mintKeysAt, namadaStatusAll, delegationsAt, answeringRpcs, listingHeads, QUICK, RpcBreaker, allNamBalances, allBonds, ListingTooLargeError, LISTING_MAX_VALUE_BYTES, namProtocolBalanceAt, posLastInflationAt, maspTotalRewards, maspEpochMultiplier, type BalanceListing, type BondListing, type MintKeys, type ReadOpts, type Rpc } from './sources/namada';
+import { MASP_INDEXER_HEALTH, MASP_INDEXER_MAX_HEIGHTS, maspIndexerHeight, maspIndexerTxs, type MaspIndexerTx } from './sources/masp-indexer';
+import { MASP_SEEN_RANGE_SQL, seenKey } from './masp-seen';
+import { MASP_ADDRESS, SQL as DIGEST_SQL } from './digest/sql';
 import { fetchIntelChecked } from './sources/intel';
 import { sendTelegramForum, sendTelegramGov, sendTelegramHour, telegramRun, TG_CRON_MS, TG_CRON_SENDS } from './sources/telegram';
 import { postGovOnX, postHourCrossingOnX, postHourLiquidityOnX, postHourOnX, repostNamada } from './sources/x';
@@ -35,7 +38,7 @@ import { prepareDigests, sendDigests, type DigestRun } from './digest/deliver';
 import { DIGEST_HEALTH_LOG_KV, HEALTH_LOG_PER_NAME } from './digest/operator';
 import { runOps } from './ops';
 import { postHaltNotice } from './halt-notice';
-import { CHECK_STALE_MS } from './digest/freshness';
+import { BASE_WINDOW_MS, CHECK_STALE_MS, MINUTE_BOUND_MS } from './digest/freshness';
 import { refreshFlowCounts } from './flow-counts';
 
 const INDEXER = 'https://indexer.namada.net/api/v1';
@@ -732,6 +735,370 @@ export function crossSourceShadow(otherBase: bigint, mintedBase: bigint, beforeB
   return { status: off < 0.01 ? 'warn' : 'fail', matched: null };
 }
 
+// ---------------------------------------------------------------- the trust checks of 2026-11-07
+//
+// Four rows, each 'warn' at most (owner rule of 2026-11-02: a new check never 'fail's at first), each carrying its
+// cadence (detail.everyMs) so the stale rule (digest/freshness.ts checkStaleMs) reads "no recent result" only once a
+// run is missed, and each 'idle' with a plain reason while the chain gives it nothing new to judge (the halt of
+// 2 November 2026: the nodes answer the last state, so the bond listings land with the same block and no day has a
+// move). Every figure is the chain's or this site's own record of it; a figure not read is said so, never 0.
+
+const DAY_MS = 24 * 3600_000;
+/** The start of the UTC day `ms` falls in. */
+export const dayStartOf = (ms: number): number => Math.floor(ms / DAY_MS) * DAY_MS;
+/** When a trust check's single-key reads must end, started `now` in a tick that ends at `deadlineAt` (the mint rule's own bound). */
+export const trustPhaseEnd = mintKeysPhaseEnd;
+/**
+ * The first shielded-reward epoch that started after epoch `a` and by epoch `b` (an epoch e in (a, b] with e % m == 0,
+ * m the chain's masp_epoch_multiplier), or null when none did.
+ */
+export function rewardEpochBetween(a: number, b: number, m: number): number | null {
+  if (!(m > 0) || !(b > a)) return null;
+  const first = Math.floor(a / m) * m + m;
+  return first <= b ? first : null;
+}
+
+// ---- masp_ledger: the shielded pool's day ledger (the daily digest's comparison, digest/figures.ts shapeMasp, as a row)
+//
+// Over a UTC day the shielded pool's NAM balance changes by what moved in (shields, bridge arrivals) less what moved
+// out (unshields, bridge sends) and the NAM fees the pool paid, within 1 NAM. The day is the one before, taken between
+// the last minute row of the pool's balance before each midnight (so a move counted in the wrong day shows on two
+// days in a row and is never lost), judged once the block scan is at the head (the day's moves all on record). On a
+// day a shielded-reward epoch started, the balance also rises by the rewards the chain credits to the pool's own NAM,
+// which no move records: that rest is held against the rise of the chain's running total of shielded rewards
+// (sources/namada.ts maspTotalRewards) between two of this check's own daily readings, taken at the head (the key
+// answers for no past block) and placed by their epoch, so the rise is exactly the rewards credited in the day's
+// epochs. On the halt no day has a move or a change: 'idle'.
+
+export const MASP_LEDGER_EVERY_MS = DAY_MS;
+/** A day not judged because the block scan was behind is tried again this much later. */
+export const MASP_LEDGER_RETRY_MS = 15 * 60_000;
+export const MASP_LEDGER_KV = 'masp.ledger';
+export const MASP_LEDGER_TOLERANCE_NAM = 1;
+/** Readings of the chain's total of shielded rewards kept in the state: the newest of each epoch read in, at most this many. */
+export const MASP_LEDGER_READINGS_KEPT = 8;
+export const MASP_LEDGER_TITLE = "The shielded pool's NAM moves over a UTC day (in, out and the fees it paid) add up to its balance change within 1 NAM; on a day a shielded-reward epoch started, the rest equals the rise of the chain's total of shielded rewards";
+
+/** One reading of the chain's total of shielded rewards, at the head, with the epoch the tick read beside it. */
+export interface MaspRewardReading { at: number; height: number; provider: string; epoch: number | null; totalBase: string }
+export interface MaspLedgerState { rewards: MaspRewardReading[] }
+/** The pool's NAM at one end of the day (the last minute row before that midnight) and the epoch read that minute. */
+export interface MaspDayEnd { ts: number; nam: number; epoch: number | null }
+/** The day's moves as the digest's queries sum them (digest/sql.ts maspIn, maspOut, maspOtherCoinFees), NAM. */
+export interface MaspDayLegs { shieldNam: number; ibcInNam: number; unshieldNam: number; ibcOutNam: number; feesNam: number; moves: number; otherKinds: { kind: string; n: number; nam: number }[] }
+export interface MaspDay { day: string; dayStart: number; dayEnd: number; start: MaspDayEnd | null; end: MaspDayEnd | null; legs: MaspDayLegs | null }
+
+/** The last pool-balance minute row before `at` (within a bound), with the epoch row of the same minute. */
+const MASP_DAY_END_SQL = `SELECT m.ts, m.value, (SELECT e.value FROM metrics e WHERE e.key = 'epoch' AND e.ts = m.ts) epoch
+  FROM metrics m WHERE m.key = 'supply.masp_shielded' AND m.ts >= ? AND m.ts < ? ORDER BY m.ts DESC LIMIT 1`;
+
+/**
+ * The day's figures from this site's own record: the pool's balance at both ends (the end within MINUTE_BOUND_MS of
+ * the midnight, the start within BASE_WINDOW_MS, as the digest reads a base), and between those two minutes the moves
+ * into and out of the pool by kind with the fees the pool paid. Legs are read only with both ends.
+ */
+export async function readMaspDay(db: D1Database, dayStart: number): Promise<MaspDay> {
+  const dayEnd = dayStart + DAY_MS;
+  const endOf = async (at: number, within: number): Promise<MaspDayEnd | null> => {
+    const r = await db.prepare(MASP_DAY_END_SQL).bind(at - within, at).first<{ ts: number; value: number; epoch: number | null }>();
+    if (!r || !Number.isFinite(Number(r.value))) return null;
+    return { ts: Number(r.ts), nam: Number(r.value), epoch: r.epoch != null && Number.isFinite(Number(r.epoch)) ? Number(r.epoch) : null };
+  };
+  const [start, end] = await Promise.all([endOf(dayStart, BASE_WINDOW_MS), endOf(dayEnd, MINUTE_BOUND_MS)]);
+  let legs: MaspDayLegs | null = null;
+  if (start && end) {
+    type Row = { kind: string; n: number; nam: number | null; fee_nam?: number | null };
+    const [ins, outs, fees] = await Promise.all([
+      db.prepare(DIGEST_SQL.maspIn).bind(MASP_ADDRESS, start.ts, end.ts).all<Row>(),
+      db.prepare(DIGEST_SQL.maspOut).bind(MASP_ADDRESS, start.ts, end.ts).all<Row>(),
+      db.prepare(DIGEST_SQL.maspOtherCoinFees).bind(MASP_ADDRESS, start.ts, end.ts).first<{ n: number; fee_nam: number | null }>(),
+    ]);
+    const i = ins.results || [], o = outs.results || [];
+    const pick = (rows: Row[], kind: string) => { const k = rows.find((x) => x.kind === kind); return { n: Number(k?.n ?? 0), nam: Number(k?.nam ?? 0) }; };
+    const shield = pick(i, 'shield'), ibcIn = pick(i, 'ibc_in'), unshield = pick(o, 'unshield'), ibcOut = pick(o, 'ibc_out');
+    // a kind the digest does not sum (none on record) is said in the detail, so a residual it would explain can be seen
+    const otherKinds = [...i.filter((x) => x.kind !== 'shield' && x.kind !== 'ibc_in'), ...o.filter((x) => x.kind !== 'unshield' && x.kind !== 'ibc_out')].map((x) => ({ kind: x.kind, n: Number(x.n), nam: Number(x.nam ?? 0) }));
+    const feesNam = o.reduce((s, x) => s + Number(x.fee_nam ?? 0), 0) + Number(fees?.fee_nam ?? 0);
+    const moves = [...i, ...o].reduce((s, x) => s + Number(x.n), 0) + Number(fees?.n ?? 0);
+    legs = { shieldNam: shield.nam, ibcInNam: ibcIn.nam, unshieldNam: unshield.nam, ibcOutNam: ibcOut.nam, feesNam, moves, otherKinds };
+  }
+  return { day: series.isoDay(dayStart), dayStart, dayEnd, start, end, legs };
+}
+
+/** Where the block scan stands against the chain this minute: behind when the day's moves may not all be on record. */
+export function scanPosition(cursor: { height: number } | null | undefined, headHeight: number | null | undefined): { behind: boolean; lagBlocks: number | null; note: string } {
+  if (!cursor) return { behind: true, lagBlocks: null, note: "this site's block scan has no position on record" };
+  if (headHeight == null || !(headHeight > 0)) return { behind: true, lagBlocks: null, note: 'no Namada node answered its height this minute, so the block scan cannot be placed against the chain' };
+  const lag = Math.max(0, headHeight - cursor.height);
+  if (lag > NAMADA_CURSOR_MAX_LAG) return { behind: true, lagBlocks: lag, note: `this site's block scan is ${n0(lag)} blocks behind the chain, so the day's moves are not all on record yet` };
+  return { behind: false, lagBlocks: lag, note: '' };
+}
+
+/** Whether the check runs this tick: the day before is not judged yet, or its last row asked to be tried again and MASP_LEDGER_RETRY_MS have passed. */
+export function maspLedgerDue(row: { checked_at: number; detail: Record<string, unknown> } | null, now: number): boolean {
+  const yesterday = series.isoDay(dayStartOf(now) - DAY_MS);
+  if (!row) return true;
+  if (row.detail.day !== yesterday) return true;
+  return row.detail.retry === true && now - row.checked_at >= MASP_LEDGER_RETRY_MS;
+}
+
+/**
+ * The rise of the chain's total of shielded rewards over the day's epochs (startEpoch, endEpoch], from the readings
+ * on record: the newest reading no shielded-reward epoch separates from the day's end epoch, less the newest earlier
+ * one no shielded-reward epoch separates from the day's start epoch. Each reading's total is then the total at that
+ * end of the day whatever minute it was taken, so the difference is exactly the rewards credited in the day's
+ * epochs. null when no two readings fit (the first day, a read that failed).
+ */
+export function maspRewardRise(rewards: MaspRewardReading[], startEpoch: number, endEpoch: number, m: number): { base: bigint; from: MaspRewardReading; to: MaspRewardReading } | null {
+  const fits = (r: MaspRewardReading, e: number) => r.epoch != null && rewardEpochBetween(Math.min(r.epoch, e), Math.max(r.epoch, e), m) == null;
+  const newestFirst = [...rewards].filter((r) => /^\d+$/.test(r.totalBase)).sort((a, b) => b.at - a.at);
+  const to = newestFirst.find((r) => fits(r, endEpoch));
+  if (!to) return null;
+  const from = newestFirst.find((r) => r.at < to.at && fits(r, startEpoch));
+  if (!from) return null;
+  return { base: BigInt(to.totalBase) - BigInt(from.totalBase), from, to };
+}
+
+/**
+ * The readings kept after this run's: one a run, the newest of each epoch (a run tried again within the same epoch
+ * replaces its own reading, so a day retried for hours never pushes the day before's reading out), the newest
+ * MASP_LEDGER_READINGS_KEPT in all, oldest first.
+ */
+export function keepReadings(prev: MaspRewardReading[], next: MaspRewardReading | null): MaspRewardReading[] {
+  const list = next ? [...prev.filter((r) => r.epoch == null || next.epoch == null || r.epoch !== next.epoch), next] : [...prev];
+  return list.sort((a, b) => a.at - b.at).slice(-MASP_LEDGER_READINGS_KEPT);
+}
+
+export interface MaspLedgerInputs {
+  day: MaspDay;
+  scan: ReturnType<typeof scanPosition>;
+  /** the chain's masp_epoch_multiplier read this run; null when not read */
+  multiplier: number | null;
+  /** the readings of the chain's total of shielded rewards on record, this run's included */
+  rewards: MaspRewardReading[];
+}
+
+/**
+ * The masp_ledger row for a day: 'ok' when the balance change equals the net of the moves within MASP_LEDGER_TOLERANCE_NAM
+ * (or, on a day a shielded-reward epoch started, exceeds it by the rise of the chain's total of shielded rewards, within
+ * the same); 'warn' otherwise, with the residual; 'idle' when the day cannot be judged yet (the scan behind: tried again),
+ * a balance end was not read, nothing moved and nothing changed (the halt), it cannot be told whether a shielded-reward
+ * epoch started, or on a shielded-reward day the rewards total was not read at both ends ("a shielded-reward day: not
+ * judged"). A residual below zero is never rewards.
+ */
+export function maspLedgerCheck(inp: MaspLedgerInputs, now: number): Stmt {
+  const { day, scan, multiplier, rewards } = inp;
+  const base = { everyMs: MASP_LEDGER_EVERY_MS, day: day.day, from: day.dayStart, to: day.dayEnd, toleranceNam: MASP_LEDGER_TOLERANCE_NAM, scanLagBlocks: scan.lagBlocks };
+  const idle = (notJudged: string, extra: Record<string, unknown>) => stmt.check('masp_ledger', 'idle', MASP_LEDGER_TITLE, { ...base, judged: false, notJudged, ...extra }, now);
+  if (scan.behind) return idle('scan-behind', { retry: true, note: scan.note });
+  const { start, end, legs } = day;
+  if (!start || !end || !legs) return idle('balance-not-read', { startRead: !!start, endRead: !!end, note: `the pool's balance was not read at the ${!end ? 'end' : 'start'} of the day` });
+  const inNam = legs.shieldNam + legs.ibcInNam, outNam = legs.unshieldNam + legs.ibcOutNam + legs.feesNam;
+  const deltaNam = end.nam - start.nam, netNam = inNam - outNam, residualNam = deltaNam - netNam;
+  const figures = {
+    startTs: start.ts, endTs: end.ts, startNam: start.nam, endNam: end.nam, deltaNam, inNam, outNam, feesNam: legs.feesNam, netNam, residualNam,
+    moves: legs.moves, legs: { shieldNam: legs.shieldNam, ibcInNam: legs.ibcInNam, unshieldNam: legs.unshieldNam, ibcOutNam: legs.ibcOutNam }, otherKinds: legs.otherKinds,
+    startEpoch: start.epoch, endEpoch: end.epoch,
+  };
+  if (legs.moves === 0 && Math.abs(deltaNam) < MASP_LEDGER_TOLERANCE_NAM) return idle('nothing-happened', { ...figures, note: 'no move into or out of the shielded pool, and its balance did not change' });
+  if (Math.abs(residualNam) <= MASP_LEDGER_TOLERANCE_NAM) return stmt.check('masp_ledger', 'ok', MASP_LEDGER_TITLE, { ...base, judged: true, ...figures, rewardDay: false }, now);
+  // More than the moves account for: on a day a shielded-reward epoch started, the rest may be the rewards the chain
+  // credited to the pool's own NAM, which its total of shielded rewards records. undefined: cannot be told.
+  const rewardEpoch = multiplier != null && start.epoch != null && end.epoch != null ? rewardEpochBetween(start.epoch, end.epoch, multiplier) : undefined;
+  if (residualNam > 0 && rewardEpoch !== null) {
+    if (rewardEpoch === undefined) return idle('reward-unknown', { ...figures, note: multiplier == null ? 'the shielded-reward epoch length was not read' : 'the epoch was not read with the balance at both ends of the day' });
+    const rise = maspRewardRise(rewards, start.epoch!, end.epoch!, multiplier!);
+    if (!rise) return idle('reward-not-read', { ...figures, rewardDay: true, rewardEpoch, note: 'a shielded-reward day: not judged' });
+    const rewardNam = toNam(rise.base);
+    const reading = (r: MaspRewardReading) => ({ at: r.at, height: r.height, epoch: r.epoch, provider: r.provider });
+    const ok = Math.abs(residualNam - rewardNam) <= MASP_LEDGER_TOLERANCE_NAM;
+    return stmt.check('masp_ledger', ok ? 'ok' : 'warn', MASP_LEDGER_TITLE, { ...base, judged: true, ...figures, rewardDay: true, rewardEpoch, rewardNam, rewardBase: rise.base.toString(), rewardReadings: { from: reading(rise.from), to: reading(rise.to) } }, now);
+  }
+  return stmt.check('masp_ledger', 'warn', MASP_LEDGER_TITLE, { ...base, judged: true, ...figures, rewardDay: rewardEpoch === undefined ? null : false }, now);
+}
+
+// ---- pos_remainder: the staking account's balance against the bond listing
+//
+// The staking account holds what is bonded, what is unstaking (both as the bond listing sums them, net of slashing)
+// and a remainder: unclaimed rewards, the staking inflation minted into the account at each epoch's first block, and
+// the NAM slashing took off bonds and unbonds. Between two complete listings a bond, an unbond or a withdrawal moves
+// the balance and the listing's sums alike, so the remainder may rise only by the inflation of an epoch that started
+// between them (the chain's record of it, read at the second listing's block) plus the NAM newly slashed; a rise
+// beyond that is NAM that entered the account outside bonds and rewards. The account's NAM is read at each listing's
+// own block (sources/namada.ts namProtocolBalanceAt), so a withdrawal between the listing and a read at the head
+// never looks like a rise. A fall (rewards claimed) is not judged. Only complete listings are compared; two listings
+// more than one epoch apart are not (the chain keeps only the last epoch's inflation), and the second becomes the one
+// compared next. On the halt the listings land with the same block: 'idle', nothing new to judge.
+
+export const POS_REMAINDER_KV = 'pos.remainder';
+export const POS_REMAINDER_EVERY_MS = BOND_LISTING_MS;
+/** After a failed read of the account at the listing's block the next try waits this long. */
+export const POS_REMAINDER_RETRY_MS = 5 * 60_000;
+/** Within this (1 NAM, base units) a rise counts as accounted for. */
+export const POS_REMAINDER_TOLERANCE_BASE = 1_000_000n;
+export const POS_REMAINDER_TITLE = "The staking account's NAM outside bonds and unstaking (the bond listing's remainder) rises between two complete listings by at most the staking inflation the chain recorded for an epoch that started between them plus the NAM newly slashed; a fall (rewards claimed) is not judged";
+
+/** One complete bond listing's figures for the remainder (base units as strings), as the state keeps the last one judged. */
+export interface PosListingFigures { height: number; epoch: number; at: number; provider: string; posBase: string; bondedBase: string; unbondingBase: string; slashedBase: string; unbondSlashedBase: string }
+export interface PosRemainderState {
+  /** the last complete listing judged (or kept as the first), with the account's NAM at its block */
+  last: PosListingFigures | null;
+  /** the completeAt of the listing the last row was written for */
+  rowFor: number | null;
+  failedAt?: number | null;
+}
+/** The reads judging a listing needs: the account's NAM at the listing's block, and the inflation when one epoch started since the listing compared last. */
+export type PosReads = { posBase: bigint; inflationBase: bigint | null; provider: string } | { error: string };
+
+/** The listing's base-unit sums, when its record carries them (a record written since 2026-11-07). */
+export function posListingFigures(rec: BondListingRecord): Pick<PosListingFigures, 'bondedBase' | 'unbondingBase' | 'slashedBase' | 'unbondSlashedBase'> | null {
+  const ok = (v: unknown): v is string => typeof v === 'string' && /^\d+$/.test(v);
+  return ok(rec.bondedBase) && ok(rec.unbondingBase) && ok(rec.slashedBase) && ok(rec.unbondSlashedBase)
+    ? { bondedBase: rec.bondedBase, unbondingBase: rec.unbondingBase, slashedBase: rec.slashedBase, unbondSlashedBase: rec.unbondSlashedBase } : null;
+}
+
+/** Whether this tick writes a row: a complete bond listing landed since the last row, and no read failed within POS_REMAINDER_RETRY_MS. */
+export function posRemainderDue(state: PosRemainderState | null | undefined, rec: BondListingRecord | null | undefined, now: number): boolean {
+  if (!rec || rec.remaining !== 0 || !rec.completeAt) return false;
+  if (state?.rowFor === rec.completeAt) return false;
+  return !(state?.failedAt != null && now - state.failedAt < POS_REMAINDER_RETRY_MS);
+}
+
+/**
+ * Which reads judging `rec` needs: the account's NAM at its block always, and the staking inflation at that block when
+ * exactly one epoch started since the listing compared last; null when the tick reads nothing (no figures in the
+ * record, the same block as last time, an older one, or several epochs apart: each is said in the row).
+ */
+export function posRemainderReads(state: PosRemainderState | null | undefined, rec: BondListingRecord): { inflation: boolean } | null {
+  if (!posListingFigures(rec)) return null;
+  const last = state?.last ?? null;
+  if (!last) return { inflation: false };
+  if (rec.height <= last.height) return null;
+  const apart = rec.epoch - last.epoch;
+  return apart === 1 ? { inflation: true } : apart === 0 ? { inflation: false } : null;
+}
+
+const remainderOf = (f: PosListingFigures): bigint => BigInt(f.posBase) - BigInt(f.bondedBase) - BigInt(f.unbondingBase);
+const slashedOf = (f: PosListingFigures): bigint => BigInt(f.slashedBase) + BigInt(f.unbondSlashedBase);
+
+/**
+ * One judgement of a complete bond listing against the last one: the next state and the row (null when a read failed:
+ * nothing is written and the next try waits POS_REMAINDER_RETRY_MS). 'ok' when the remainder rose by no more than the
+ * inflation of an epoch that started between the listings plus the NAM newly slashed, within POS_REMAINDER_TOLERANCE_BASE,
+ * or fell; 'warn' otherwise; 'idle' with the reason when nothing is judged (the first listing kept, the same block as
+ * last time, an older block, several epochs apart, a record without figures).
+ */
+export function posRemainderNext(state: PosRemainderState | null | undefined, rec: BondListingRecord, reads: PosReads | null, now: number): { state: PosRemainderState; row: Stmt | null } {
+  const s: PosRemainderState = { last: null, rowFor: null, failedAt: null, ...state };
+  const base = { everyMs: POS_REMAINDER_EVERY_MS, height: rec.height, epoch: rec.epoch, provider: rec.provider, listingAt: rec.at, listingCompleteAt: rec.completeAt, toleranceNam: 1 };
+  const idle = (notJudged: string, extra: Record<string, unknown>) => stmt.check('pos_remainder', 'idle', POS_REMAINDER_TITLE, { ...base, judged: false, notJudged, ...extra }, now);
+  const done = (row: Stmt) => { s.rowFor = rec.completeAt; s.failedAt = null; return { state: s, row }; };
+  const fig = posListingFigures(rec);
+  if (!fig) return done(idle('no-figures', { note: 'the last bond listing carries no figures for this check yet; the next listing does' }));
+  const last = s.last;
+  if (last && rec.height === last.height) return done(idle('same-block', { fromHeight: last.height, fromEpoch: last.epoch, note: `the chain has not moved since the listing at block ${n0(last.height)}` }));
+  if (last && rec.height < last.height) return done(idle('older', { fromHeight: last.height, fromEpoch: last.epoch, note: `the listing at block ${n0(rec.height)} is older than the one compared last (block ${n0(last.height)})` }));
+  if (!reads || 'error' in reads) { s.failedAt = now; return { state: s, row: null }; }
+  const figures: PosListingFigures = { height: rec.height, epoch: rec.epoch, at: rec.at, provider: reads.provider, posBase: reads.posBase.toString(), ...fig };
+  if (!last) { s.last = figures; return done(idle('first', { note: 'no earlier complete listing to compare with; this one is kept for the next' })); }
+  const apart = rec.epoch - last.epoch;
+  if (apart < 0 || apart > 1) { s.last = figures; return done(idle('epochs-apart', { fromHeight: last.height, fromEpoch: last.epoch, epochsApart: apart, note: `${n0(Math.abs(apart))} epochs between the listings at blocks ${n0(last.height)} and ${n0(rec.height)}: the chain keeps only the last epoch's staking inflation` })); }
+  if (apart === 1 && reads.inflationBase == null) { s.failedAt = now; return { state: s, row: null }; }
+  const riseBase = remainderOf(figures) - remainderOf(last);
+  const inflationBase = apart === 1 ? reads.inflationBase! : 0n;
+  const slashedRiseBase = slashedOf(figures) - slashedOf(last);
+  const allowedBase = inflationBase + slashedRiseBase;
+  const ok = riseBase <= allowedBase + POS_REMAINDER_TOLERANCE_BASE;
+  s.last = figures;
+  return done(stmt.check('pos_remainder', ok ? 'ok' : 'warn', POS_REMAINDER_TITLE, {
+    ...base, judged: true, fromHeight: last.height, toHeight: rec.height, fromEpoch: last.epoch, toEpoch: rec.epoch, fromAt: last.at, toAt: rec.at, fromProvider: last.provider, toProvider: reads.provider,
+    epochStarted: apart === 1, remainderFromBase: remainderOf(last).toString(), remainderToBase: remainderOf(figures).toString(), riseBase: riseBase.toString(),
+    inflationBase: apart === 1 ? inflationBase.toString() : null, slashedRiseBase: slashedRiseBase.toString(), allowedBase: allowedBase.toString(), overBase: (riseBase - allowedBase).toString(),
+    posBase: { from: last.posBase, to: figures.posBase }, bondedBase: { from: last.bondedBase, to: figures.bondedBase }, unbondingBase: { from: last.unbondingBase, to: figures.unbondingBase },
+  }, now));
+}
+
+// ---- bond_sources: no protocol account as a staker
+//
+// The bond listing names each bond's source. An internal address (the staking account, the shielded pool, the bridge
+// escrow, public funding, governance, the multitoken account, any other variant of Namada's enum) is read apart by the
+// parser (sources/namada.ts BondListing.internalSources; v201.0.12 rejects such bonds, and none has been listed so far)
+// and never written as a staker; this row says so, or names what it found. Written with every bond listing read,
+// applied or not, as the balance listing's sum row is.
+
+export const BOND_SOURCES_EVERY_MS = BOND_LISTING_MS;
+export const BOND_SOURCES_TITLE = "No protocol account (the staking account, the shielded pool, the bridge escrow, public funding, governance, the multitoken account or any other internal address) is a source in the chain's bond listing";
+/** The protocol accounts named by address (config.ts), beside the parser's internal flag. */
+export const PROTOCOL_SOURCES: ReadonlySet<string> = new Set([...INTERNAL_ADDRS, NAMADA.multitoken]);
+
+export function bondSourcesCheck(listing: (BondListing & { height: number; provider?: string }) | null, now: number, why?: string): Stmt {
+  const base = { everyMs: BOND_SOURCES_EVERY_MS, height: listing?.height ?? null, provider: listing?.provider ?? null };
+  if (!listing) return stmt.check('bond_sources', 'idle', BOND_SOURCES_TITLE, { ...base, judged: false, notJudged: 'not-read', note: (why ?? 'the bond listing was not read').slice(0, 160) }, now);
+  const found = new Map<string, { address: string; bondedBase: string; bondedNam: number; unbondingBase: string }>();
+  for (const s of listing.internalSources ?? []) found.set(s.address, { address: s.address, bondedBase: s.bondedBase.toString(), bondedNam: toNam(s.bondedBase), unbondingBase: s.unbondingBase.toString() });
+  for (const [address, b] of listing.sources) if (PROTOCOL_SOURCES.has(address)) found.set(address, { address, bondedBase: b.bondedBase.toString(), bondedNam: toNam(b.bondedBase), unbondingBase: b.unbondingBase.toString() });
+  const internal = [...found.values()].sort((x, y) => (x.address < y.address ? -1 : x.address > y.address ? 1 : 0));
+  return stmt.check('bond_sources', internal.length ? 'warn' : 'ok', BOND_SOURCES_TITLE, { ...base, judged: true, sources: listing.sources.size + internal.length, internal }, now);
+}
+
+// ---- masp_tx_coverage: this site's record of shielded transactions against Namada's shielded-transaction indexer
+//
+// The live hub records every shielded transaction a block's results name (masp-seen.ts, migration 0021). Once an
+// hour this check asks the indexer (sources/masp-indexer.ts) what it lists for the blocks scanned since the last run,
+// at most MASP_INDEXER_MAX_HEIGHTS of them and only blocks below the indexer's last transaction (its answer past it
+// is an error), and names any transaction of the indexer's missing here by block, transaction and batch index. A
+// coverage check only: the site reads no figure from this source and keeps nothing of a transaction but its place.
+// On the halt no block is scanned: 'idle'.
+
+export const MASP_COVERAGE_KV = 'masp.coverage';
+export const MASP_COVERAGE_EVERY_MS = 3600_000;
+/** The two reads of a run (the indexer's height, then a page) end within this of their start, and before the listing's reserve. */
+export const MASP_COVERAGE_PHASE_MS = 20_000;
+/** The misses a row names at most. */
+export const MASP_COVERAGE_MISSES_KEPT = 50;
+export const MASP_COVERAGE_TITLE = "Every shielded transaction Namada's shielded-transaction indexer (masp.namada.net) lists for the blocks this site's block follower scanned is in this site's record (masp_seen), by block, transaction and batch index";
+export interface MaspCoverageState { judgedTo: number; at: number }
+export type MaspCoverageWindow = { from: number; to: number } | { idle: 'first-run' | 'no-new-heights' | 'indexer-behind' | 'no-cursor' };
+
+/** Whether the check runs this tick: never run, or its last run is MASP_COVERAGE_EVERY_MS old. */
+export const maspCoverageDue = (lastAt: number | null, now: number): boolean => lastAt == null || now - lastAt >= MASP_COVERAGE_EVERY_MS;
+
+/**
+ * The blocks the next run judges: from the block after the last judged to the lowest of the scan's cursor, the block
+ * below the indexer's last transaction and MASP_INDEXER_MAX_HEIGHTS blocks on; or why there is none. The first run
+ * judges nothing and sets the record's start at the cursor (the hub records from this release on).
+ */
+export function maspCoverageWindow(state: MaspCoverageState | null | undefined, cursor: number | null, indexerHeight: number): MaspCoverageWindow {
+  if (cursor == null || !(cursor > 0)) return { idle: 'no-cursor' };
+  if (!state || !(state.judgedTo > 0)) return { idle: 'first-run' };
+  const from = state.judgedTo + 1;
+  if (cursor < from) return { idle: 'no-new-heights' };
+  if (indexerHeight - 1 < from) return { idle: 'indexer-behind' };
+  return { from, to: Math.min(cursor, indexerHeight - 1, from + MASP_INDEXER_MAX_HEIGHTS - 1) };
+}
+
+/** The row when nothing is judged, with why. */
+export function maspCoverageIdle(why: Exclude<MaspCoverageWindow, { from: number }>['idle'], ctx: { cursor: number | null; indexerHeight: number; judgedTo: number | null }, now: number): Stmt {
+  const note = why === 'first-run' ? `this site's record of shielded transactions starts at block ${n0(ctx.cursor ?? 0)}; the blocks after it are judged from the next run`
+    : why === 'no-new-heights' ? `no block scanned since block ${n0(ctx.judgedTo ?? 0)}: nothing new to compare`
+    : why === 'indexer-behind' ? `the indexer's last shielded transaction is at block ${n0(ctx.indexerHeight)}, below the blocks waiting to be judged (from ${n0((ctx.judgedTo ?? 0) + 1)}): nothing to compare yet`
+    : "this site's block scan has no position on record: nothing to compare";
+  return stmt.check('masp_tx_coverage', 'idle', MASP_COVERAGE_TITLE, { everyMs: MASP_COVERAGE_EVERY_MS, judged: false, notJudged: why, cursor: ctx.cursor, indexerHeight: ctx.indexerHeight, judgedTo: ctx.judgedTo, note }, now);
+}
+
+/** The row for a window: 'ok' when every transaction the indexer lists is in masp_seen, 'warn' with the misses by (height, block_index, batch_index). */
+export function maspCoverageCheck(w: { from: number; to: number }, txs: MaspIndexerTx[], seen: { height: number; block_index: number; batch_index: number }[], ctx: { cursor: number | null; indexerHeight: number }, now: number): Stmt {
+  const have = new Set(seen.map((r) => seenKey(Number(r.height), Number(r.block_index), Number(r.batch_index))));
+  const listed = new Set(txs.map((t) => seenKey(t.height, t.blockIndex, t.batchIndex)));
+  const misses = txs.filter((t) => !have.has(seenKey(t.height, t.blockIndex, t.batchIndex)));
+  return stmt.check('masp_tx_coverage', misses.length ? 'warn' : 'ok', MASP_COVERAGE_TITLE, {
+    everyMs: MASP_COVERAGE_EVERY_MS, judged: true, from: w.from, to: w.to, blocks: w.to - w.from + 1,
+    indexerTxs: txs.length, feePayments: txs.filter((t) => t.feePayment).length, seen: seen.length, onlyHere: seen.filter((r) => !listed.has(seenKey(Number(r.height), Number(r.block_index), Number(r.batch_index)))).length,
+    missing: misses.length, misses: misses.slice(0, MASP_COVERAGE_MISSES_KEPT).map((t) => ({ height: t.height, blockIndex: t.blockIndex, batchIndex: t.batchIndex })),
+    cursor: ctx.cursor, indexerHeight: ctx.indexerHeight,
+  }, now);
+}
+
 /**
  * One deadline for the whole tick. Cloudflare stops a scheduled run after 15 minutes and the trigger fires every
  * minute, so a tick that waits on a node that accepts requests and never answers must end well inside a minute:
@@ -1310,6 +1677,12 @@ export interface BondListingRecord {
   grossNam?: number; slashedNam?: number; pipelineNam?: number | null;
   /** sum of every unbond entry net of slashing (in-flight + withdrawable) decoded from the same listing; undefined when the answer had none */
   unbondingNam?: number;
+  /**
+   * The same listing's sums in base units, exact, for the pos_remainder check (posRemainderNext): the bonds net of
+   * slashing, the unbonds net of slashing, and what slashing took from each. Absent in a record written before
+   * 2026-11-07, which that check says it cannot judge.
+   */
+  bondedBase?: string; unbondingBase?: string; slashedBase?: string; unbondSlashedBase?: string;
   written: number; zeroed: number; remaining: number; ticks: number; durationMs: number;
   /** rows already at 0 from another source (the per-address reads before the listing) stamped as the listing's 0 */
   confirmed?: number;
@@ -1642,6 +2015,11 @@ async function writeListingSum(db: D1Database, row: Stmt, now: number): Promise<
   await appendHealthLog(db, await checkFlips(db, [row], now), now).catch(() => {});
   await runBatch(db, [row]).catch((e) => console.error('balances_sum_to_minted', e));
 }
+/** A check row written outside the tick's checks batch (the bond_sources row, with a bond listing), the same way. */
+async function writeCheckRow(db: D1Database, row: Stmt, now: number, label: string): Promise<void> {
+  await appendHealthLog(db, await checkFlips(db, [row], now), now).catch(() => {});
+  await runBatch(db, [row]).catch((e) => console.error(label, e));
+}
 
 /**
  * Read every NAM balance from the chain and reconcile the Namada holder rows with it: rows whose stored balance
@@ -1786,11 +2164,14 @@ export async function runBondListing(env: Env, health: SourceHealth[], now: numb
   } catch (e) {
     const why = listingReadFailure('bond', e);
     health.push({ name, ok: false, at: now, note: why.note });
+    await writeCheckRow(env.DB, bondSourcesCheck(null, now, why.note), now, 'bond_sources');
     const failed: BondListingRecord = { ...(prev ?? { at: 0, completeAt: null, height: 0, epoch, provider: '', sources: 0, stakers: 0, totalNam: 0, bytes: 0, written: 0, zeroed: 0, remaining: 0, ticks: 0, durationMs: 0 }), failedAt: now, error: why.error, failures: (prev?.failures ?? 0) + 1 };
     await kvSet(env.DB, 'bond.listing', failed).catch(() => {});
     return failed;
   }
   const gate = bondGate(listing, { ...ctx, prev });
+  // Whether the listing is applied or not, its sources are judged in a row of their own (bond_sources).
+  await writeCheckRow(env.DB, bondSourcesCheck(listing, now), now, 'bond_sources');
   if (!gate.ok) {
     const error = `Not applied: ${gate.reason}`;
     health.push({ name, ok: false, at: now, note: `The bond listing from ${listing.provider} was not applied: ${gate.reason}`.slice(0, 160) });
@@ -1807,6 +2188,8 @@ export async function runBondListing(env: Env, health: SourceHealth[], now: numb
     grossNam: Number(listing.grossBase) / 1e6, slashedNam: Number(listing.slashedBase) / 1e6, pipelineNam: ctx.stakeNam != null ? totalNam - ctx.stakeNam : null,
     // no 0 for a missing figure: a listing without unbonds leaves it undefined
     unbondingNam: listing.unbondingBase != null ? Number(listing.unbondingBase) / 1e6 : undefined,
+    // the same sums exact, for the pos_remainder check (a listing with no unbond entry sums them to 0, which is a figure)
+    bondedBase: listing.totalBase.toString(), unbondingBase: listing.unbondingBase.toString(), slashedBase: listing.slashedBase.toString(), unbondSlashedBase: listing.unbondSlashedBase.toString(),
     written: 0, zeroed: 0, remaining: 0, ticks, durationMs: 0, failedAt: null, failures: 0, refusedProvider: null,
   };
   try {
@@ -2453,6 +2836,96 @@ export async function runCron(env: Env) {
       if (lastShare !== undefined && streamShareDue(lastShare, now)) {
         const r = await env.DB.prepare(STREAM_SHARE_SQL).bind(now - STREAM_SHARE_WINDOW_MS, now).first<{ n: number | null; late: number | null; repaired: number | null }>().catch((e) => { console.error('stream share', e); return null; });
         if (r) checkStmts.push(streamShareCheck(Number(r.n ?? 0), Number(r.late ?? 0), now, Number(r.repaired ?? 0)));
+      }
+    }
+
+    // The trust checks of 2026-11-07 (above, from maspLedgerCheck). Each reads its last row or state first; a state
+    // that could not be read is not replaced (the row is not written and goes quiet, as the mint rule's does).
+    // The shielded pool's day ledger (masp_ledger): once a day for the UTC day before, when the block scan is at the
+    // head; two single-key reads at the head go with every run (the rewards total and the shielded-reward epoch
+    // length), in a phase of their own.
+    if (!late()) {
+      const ledgerRow = await env.DB.prepare(`SELECT checked_at, detail FROM checks WHERE key = 'masp_ledger'`).first<{ checked_at: number; detail: string }>()
+        .then((r) => (r ? { checked_at: Number(r.checked_at), detail: safeParseJson(r.detail, {}) as Record<string, unknown> } : null), () => undefined);
+      if (ledgerRow !== undefined && maspLedgerDue(ledgerRow, now)) {
+        const ledgerState = await kvGetJson<MaspLedgerState>(env.DB, MASP_LEDGER_KV).catch(() => undefined);
+        const day = ledgerState === undefined ? null : await readMaspDay(env.DB, dayStartOf(now) - DAY_MS).catch((e) => { console.error('masp ledger', e); return null; });
+        if (day) {
+          let reading: MaspRewardReading | null = null, multiplier: number | null = null;
+          const endAt = trustPhaseEnd(deadlineAt, Date.now());
+          if (endAt != null && !late()) {
+            const phase = phaseSignal(signal, endAt);
+            const ropts = { ...nread, rpcs: preferProvider(rpcs, epochRes?.provider), signal: phase.signal };
+            try {
+              const [r, m] = await Promise.all([maspTotalRewards(ropts).catch((e) => { console.error('masp total rewards', redact(String(e))); return null; }), maspEpochMultiplier(ropts).catch(() => null)]);
+              if (r) reading = { at: now, height: r.height, provider: r.provider, epoch, totalBase: r.total.toString() };
+              multiplier = m?.multiplier ?? null;
+            } finally { phase.done(); }
+          }
+          const rewards = keepReadings(ledgerState?.rewards ?? [], reading);
+          checkStmts.push(maspLedgerCheck({ day, scan: scanPosition(ix?.namadaCursor, headHeight), multiplier, rewards }, now), stmt.kvSet(MASP_LEDGER_KV, JSON.stringify({ rewards }), now));
+        }
+      }
+    }
+    // The staking account's remainder (pos_remainder): when a complete bond listing has landed since the last row,
+    // the account's NAM at the listing's own block and, when one epoch started since the listing compared last, the
+    // staking inflation at that block (one or two single-key reads, from the listing's node first).
+    if (!late() && posRemainderDue(undefined, bondPrev, now)) {
+      const prState = await kvGetJson<PosRemainderState>(env.DB, POS_REMAINDER_KV).catch(() => undefined);
+      if (prState !== undefined && posRemainderDue(prState, bondPrev, now)) {
+        const rec = bondPrev!;
+        let reads: PosReads | null = null;
+        const want = posRemainderReads(prState, rec);
+        if (want) {
+          const endAt = trustPhaseEnd(deadlineAt, Date.now());
+          if (endAt == null || late()) reads = { error: "the tick ran out of time before the staking account could be read at the listing's block" };
+          else {
+            const phase = phaseSignal(signal, endAt);
+            const ropts = { ...nread, rpcs: preferProvider(rpcs, rec.provider), signal: phase.signal };
+            try {
+              const pos = await namProtocolBalanceAt(NAMADA.internal.pos, rec.height, ropts);
+              const infl = want.inflation ? await posLastInflationAt(rec.height, ropts) : null;
+              reads = { posBase: pos.balance, inflationBase: infl?.inflation ?? null, provider: pos.provider };
+            } catch (e) {
+              console.error('pos remainder', redact(String(e)));
+              reads = { error: publicNote(String(e)).slice(0, 160) };
+            } finally { phase.done(); }
+          }
+        }
+        const r = posRemainderNext(prState, rec, reads, now);
+        if (r.row) checkStmts.push(r.row);
+        checkStmts.push(stmt.kvSet(POS_REMAINDER_KV, JSON.stringify(r.state), now));
+      }
+    }
+    // This site's record of shielded transactions against the indexer's (masp_tx_coverage): hourly, two reads of the
+    // indexer in a phase of their own; a read that fails writes nothing but the source's row.
+    if (!late()) {
+      const lastCov = await env.DB.prepare(`SELECT checked_at FROM checks WHERE key = 'masp_tx_coverage'`).first<{ checked_at: number }>().then((r) => r?.checked_at ?? null, () => undefined);
+      if (lastCov !== undefined && maspCoverageDue(lastCov, now)) {
+        const [covState, cursorRaw] = await Promise.all([kvGetJson<MaspCoverageState>(env.DB, MASP_COVERAGE_KV).catch(() => undefined), kvGet(env.DB, 'namada.cursor').catch(() => undefined)]);
+        const endAt = Math.min(deadlineAt - LISTING_RESERVE_MS, Date.now() + MASP_COVERAGE_PHASE_MS);
+        if (covState !== undefined && cursorRaw !== undefined && endAt > Date.now()) {
+          const cursor = Number(cursorRaw) > 0 ? Number(cursorRaw) : null;
+          const t0 = Date.now();
+          const phase = phaseSignal(signal, endAt);
+          try {
+            const indexerHeight = await maspIndexerHeight({ signal: phase.signal });
+            const w = maspCoverageWindow(covState, cursor, indexerHeight);
+            if ('idle' in w) {
+              checkStmts.push(maspCoverageIdle(w.idle, { cursor, indexerHeight, judgedTo: covState?.judgedTo ?? null }, now));
+              if (w.idle === 'first-run' && cursor) checkStmts.push(stmt.kvSet(MASP_COVERAGE_KV, JSON.stringify({ judgedTo: cursor, at: now } satisfies MaspCoverageState), now));
+              health.push({ name: MASP_INDEXER_HEALTH, ok: true, at: now, latencyMs: Date.now() - t0, note: `last block with a shielded transaction ${n0(indexerHeight)}; nothing to compare this hour (${w.idle.replace(/-/g, ' ')})` });
+            } else {
+              const txs = await maspIndexerTxs(w.from, w.to, { signal: phase.signal });
+              const seen = (await env.DB.prepare(MASP_SEEN_RANGE_SQL).bind(w.from, w.to).all<{ height: number; block_index: number; batch_index: number }>()).results || [];
+              checkStmts.push(maspCoverageCheck(w, txs, seen, { cursor, indexerHeight }, now), stmt.kvSet(MASP_COVERAGE_KV, JSON.stringify({ judgedTo: w.to, at: now } satisfies MaspCoverageState), now));
+              health.push({ name: MASP_INDEXER_HEALTH, ok: true, at: now, latencyMs: Date.now() - t0, note: `last block with a shielded transaction ${n0(indexerHeight)}; ${n0(txs.length)} transaction(s) listed for blocks ${n0(w.from)} to ${n0(w.to)}` });
+            }
+          } catch (e) {
+            console.error('masp indexer', redact(String(e)));
+            health.push({ name: MASP_INDEXER_HEALTH, ok: false, at: now, latencyMs: Date.now() - t0, note: publicNote(String(e)).slice(0, 160) });
+          } finally { phase.done(); }
+        }
       }
     }
 

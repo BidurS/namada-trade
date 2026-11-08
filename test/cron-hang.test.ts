@@ -38,6 +38,7 @@ function network(net: Net | ((url: string) => boolean)) {
       if (path.includes('/vp/pos/bond/')) res = json({ result: { response: { code: 1, info: 'RPC error: Cannot find bond', value: null, height: '1' } } });
       else {
         const value = path.includes('/shell/epoch') ? btoa(String.fromCharCode(155, 10, 0, 0, 0, 0, 0, 0))
+          : path.includes('masp_epoch_multiplier') ? btoa(String.fromCharCode(4, 0, 0, 0, 0, 0, 0, 0)) // a whole number, as the chain answers (the trust checks' daily read)
           : path.includes('/shell/prefix/') ? BAL.value
           : path.includes('/vp/pos/bonds_and_unbonds/to') ? BONDS.value
           : path.includes('delegations_at') ? null
