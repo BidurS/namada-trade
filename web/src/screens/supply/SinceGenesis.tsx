@@ -13,13 +13,17 @@ import { fmtCount, fmtDayMonthYear, fmtNamRule, fmtPctRule } from '../../lib/for
 import { SUPPLY_SOURCES } from '../../lib/prov';
 import { genesisShares, sinceGenesisParts } from './since-genesis';
 
-/** The dated split's stamp: the day it was re-derived and what from (a static figure with its date, as the proof block). */
+/**
+ * The dated split's stamp: the day it was re-derived and what from (a static figure with its date, as the proof block).
+ * Its note names the modelled part of the staking figure: the sentence's stamp is derived from this one and carries
+ * the note, so a phone, which shows the sentence alone, reaches "modelled" through the sentence's own stamp.
+ */
 const SPLIT_STAMP: Stamp = {
   source: 'public chain figures, re-derived (docs/data)',
   plain: 'Public chain figures, re-derived',
   at: SUPPLY_SPLIT.derivedAt,
   status: 'live',
-  note: `Re-derived ${fmtDayMonthYear(SUPPLY_SPLIT.derivedAt)} from ${SUPPLY_SPLIT.source}. The method and the coverage are in the repository's docs/data folder.`,
+  note: `Re-derived ${fmtDayMonthYear(SUPPLY_SPLIT.derivedAt)} from ${SUPPLY_SPLIT.source}, epoch by epoch where the indexer has a figure; about ${fmtNamRule(SUPPLY_SPLIT.modelled.stakingNam)} NAM of the staking figure is carried across by the formulas, modelled, not measured. The method and the coverage are in the repository's docs/data folder.`,
 };
 /** A server before 2026-11-07 does not send the chain's rewards total or the newest epoch's mint: said, never 0. */
 const notSent = (source: string, what: string): Stamp => ({ source, at: null, status: 'missing', note: `This server does not send ${what} yet.` });
@@ -36,7 +40,7 @@ export function SinceGenesis({ overview: o, wide }: { overview: Overview | null;
   const p = answer.parts;
   const from = String(SUPPLY_SPLIT.fromEpoch), to = String(SUPPLY_SPLIT.toEpoch);
   const sentence = p
-    ? SUPPLY_WORDS.sinceGenesis(fmtNamRule(p.genesisNam), fmtNamRule(p.nowNam), fmtNamRule(p.rewardsNam), from, fmtNamRule(p.stakingNam), fmtNamRule(p.publicFundingNam))
+    ? SUPPLY_WORDS.sinceGenesis(fmtNamRule(p.genesisNam), fmtNamRule(p.nowNam), fmtNamRule(p.rewardsNam), from, to, fmtNamRule(p.stakingNam), fmtNamRule(p.publicFundingNam))
     : null;
   const mint = o.supply.mint ?? null;
   const mintWords = mint?.nam != null && mint.epoch != null && mint.height != null

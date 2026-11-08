@@ -170,21 +170,29 @@ describe('the live scan reads the fee payer from the block for such a block', ()
       throw new Error(`unexpected ${url}`);
     }));
     const db = testD1();
-    const hub: any = Object.assign(Object.create(LiveHub.prototype), { env: { DB: db }, sessions: new Set(), lastPriceUsd: null, namadaHeight: 0, quote });
+    // one open socket, so what the hub broadcasts to a session can be read
+    const sent: string[] = [];
+    const hub: any = Object.assign(Object.create(LiveHub.prototype), { env: { DB: db }, sessions: new Set([{ send: (raw: string) => sent.push(raw) }]), lastPriceUsd: null, namadaHeight: 0, quote });
     const flows = () => db.raw.prepare('SELECT id, kind, to_addr, amount_num, meta FROM flows ORDER BY id').all()
       .map((r: any) => [r.id, r.kind, r.to_addr, r.amount_num, JSON.parse(r.meta).maspFeeNam ?? null]);
     const cursor = () => db.raw.prepare("SELECT value FROM kv WHERE key = 'namada.cursor'").get()?.value;
     const prices = () => db.raw.prepare('SELECT price_usd FROM flows ORDER BY id').all().map((r: any) => r.price_usd);
-    return { run: () => hub.scanNamada(), urls, flows, cursor, prices };
+    return { run: () => hub.scanNamada(), urls, flows, cursor, prices, sent };
   }
   const shape = () => [ev(W6957587, 'C'.repeat(64), [[MASP, NAMT, '62501']], [[PAYER, NAMT, '62500'], [RCPT4349059, NAMT, '1']])];
 
-  it('writes the reading tied to the wrapper\'s fee payer', async () => {
+  it('writes the reading tied to the wrapper\'s fee payer; the flows message a session receives carries no maspFeeNam while the stored row holds it', async () => {
     const s = scan(() => Response.json({ result: { block: { data: { txs: txsOf(6957587) } } } }), shape());
     await s.run();
     expect(s.urls.filter((u) => u.includes('/block?height='))).toHaveLength(1);
     expect(s.flows()).toEqual([[`namada:${W6957587}:0`, 'unshield', RCPT4349059, 0.000001, 0.0625]]);
     expect(s.cursor()).toBe(String(H));
+    // the hub's broadcast (live-hub.ts broadcast, analytics.ts publicMeta): the one line that keeps the fee out of the live stream
+    const msgs = s.sent.map((r) => JSON.parse(r)).filter((m) => m.type === 'flows');
+    expect(msgs).toHaveLength(1);
+    expect(msgs[0].flows.map((f: any) => f.id)).toEqual([`namada:${W6957587}:0`]);
+    expect(msgs[0].flows.every((f: any) => !('maspFeeNam' in (f.meta ?? {})))).toBe(true);
+    expect(JSON.stringify(msgs[0])).not.toContain('maspFeeNam');
   });
 
   it('tx bytes that cannot be fetched leave the events-only reading, and the scan moves on', async () => {

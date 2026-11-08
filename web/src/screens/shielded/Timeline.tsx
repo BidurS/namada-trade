@@ -1,13 +1,13 @@
 // What happened on Namada (the Shielded page, 2026-11-07): the public incidents timeline of web/src/generated/events.ts
 // INCIDENTS (scripts/incidents.ts, reviewed by hand), newest last, each row with its day, its plain words, the pages of
-// this site it concerns and the sources a reader can open. From 1024 px an open list under its heading; on a phone one
-// closed line, "Timeline", that opens it (a phone adds no list to the screen). A row still running carries "Ongoing".
+// this site it concerns and the sources a reader can open. From 1024 px only, an open list under its heading; under
+// 1024 px nothing is rendered (a phone's screen gains no line for it, as the chart markers are drawn from 1024 px
+// only). A row still running carries "Ongoing".
 import { INCIDENTS, type Incident } from '../../generated/events';
 import { TIMELINE_WORDS } from '../../../../shared/copy';
 import { routeByPath } from '../../../../shared/routes';
 import { Link } from '../../app/index';
 import { Icon, Tag, useMinWidth } from '../../ui';
-import { fmtCount } from '../../lib/format';
 import { incidentDays } from './timeline-words';
 
 function Row({ r }: { r: Incident }) {
@@ -49,33 +49,16 @@ function Row({ r }: { r: Incident }) {
 
 export function Timeline() {
   const wide = useMinWidth(1024);
-  const list = (
-    <ol className="shd-tl__list">
-      {INCIDENTS.map((r) => <Row key={r.id} r={r} />)}
-    </ol>
-  );
-  if (wide) {
-    return (
-      <section className="ipg-sec shd-tl" aria-labelledby="shd-tl-h" id="timeline">
-        <div className="ipg-sec__head">
-          <h2 id="shd-tl-h" className="h2">{TIMELINE_WORDS.heading}</h2>
-          <p className="lead ipg-lead">{TIMELINE_WORDS.lead}</p>
-        </div>
-        {list}
-      </section>
-    );
-  }
+  if (!wide) return null;
   return (
     <section className="ipg-sec shd-tl" aria-labelledby="shd-tl-h" id="timeline">
-      <details className="shd-tl__fold">
-        <summary>
-          <span id="shd-tl-h" className="shd-tl__sum">{TIMELINE_WORDS.summary}</span>
-          <span className="shd-tl__n" data-num="">{fmtCount(INCIDENTS.length)} dated events</span>
-          <Icon name="chev" className="ico" />
-        </summary>
-        <p className="shd-tl__lead">{TIMELINE_WORDS.lead}</p>
-        {list}
-      </details>
+      <div className="ipg-sec__head">
+        <h2 id="shd-tl-h" className="h2">{TIMELINE_WORDS.heading}</h2>
+        <p className="lead ipg-lead">{TIMELINE_WORDS.lead}</p>
+      </div>
+      <ol className="shd-tl__list">
+        {INCIDENTS.map((r) => <Row key={r.id} r={r} />)}
+      </ol>
     </section>
   );
 }

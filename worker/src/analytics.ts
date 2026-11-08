@@ -33,8 +33,10 @@ export function safeParseJson(str: string | null | undefined, fallback: any = {}
 /**
  * The meta keys a flow leaves behind when it leaves the Worker as JSON (rowToFlow, the hub's live stream): maspFeeNam,
  * the shielded pool's fee for the transaction, is its gas limit times its gas price, a setting of the wallet that built
- * it. The stored meta keeps the key for the pool's sums (digest/sql.ts maspOut, series.ts dayAggregates), which read
- * the rows themselves, never a public answer.
+ * it, and is not served as a field. The stored meta keeps the key for the pool's sums (digest/sql.ts maspOut, series.ts
+ * dayAggregates), which read the rows themselves. The block's own record of the pool's balance stays public (a flow's
+ * maspPostNam; the pool's balance before a move, in the blind-spot shares and the alert card), so a fee folded into a
+ * multi-target row stays derivable from it, and a single-target transaction's fee is listed outright as a masp_fee row.
  */
 const PRIVATE_META_KEYS = ['maspFeeNam'] as const;
 export function publicMeta<M extends Record<string, unknown> | null | undefined>(meta: M): M {
@@ -1282,7 +1284,8 @@ export async function blindSpot(db: D1Database, asOf: number, replay: boolean): 
     // straight out of the pool over the bridge, whether the record names the receiver (to_addr an Osmosis address,
     // rows since the 2026-10-22 rederive) or only the bridge account it went through (older records, to_addr the
     // escrow). The pool's fees are rows of their own kind (masp_fee) and are not moves out to anyone. The first
-    // MOVES_OUT_SHOWN are the list; every row read makes the groups by recipient.
+    // MOVES_OUT_SHOWN are the list; every row read counts in the groups by recipient, and the groups sent are those
+    // of the listed recipients, so the page names no address beyond the list.
     db.prepare(`${FLOW_SELECT} WHERE f.chain='namada' AND f.ts >= ? AND f.ts < ? AND f.from_addr = ?
                 AND ((f.kind = 'unshield' AND f.to_addr NOT IN (?,?,?,?)) OR (f.kind = 'ibc_out' AND (f.to_addr LIKE 'osmo1%' OR f.to_addr = ?)))
                 AND ${NAM_AMOUNT} AND ${NOT_LEGACY_TWIN}
@@ -1294,6 +1297,8 @@ export async function blindSpot(db: D1Database, asOf: number, replay: boolean): 
   ]);
   const outAll: Flow[] = (unshieldRows.results || []).map(rowToFlow);
   const unshields = outAll.slice(0, MOVES_OUT_SHOWN);
+  // the groups count every row read, and only a listed recipient's group is sent (the phone names no address the list does not)
+  const shownTo = new Set(unshields.map((f) => f.to));
   // Each listed move's share of the pool before it: the block's own record when the row carries it, else the minute
   // reading just before the block (one seek a row without the record; none for a row older than the minute series).
   const storedMeta: (Record<string, unknown> | null)[] = (unshieldRows.results || []).slice(0, MOVES_OUT_SHOWN).map((r: any) => safeParseJson(r.meta, null));
@@ -1369,7 +1374,7 @@ export async function blindSpot(db: D1Database, asOf: number, replay: boolean): 
     lastBridgeAt: bridgeLegs.length ? Math.max(...bridgeLegs.map((l) => l.ts)) : null,
     ibcShielded7d: bridgeIn7d + bridgeOut7d,
     unshields,
-    outGroups: groupMovesOut(outAll),
+    outGroups: groupMovesOut(outAll).filter((g) => shownTo.has(g.to)),
     outRead: outAll.length,
     outShares,
     makeup: makeup ?? null,

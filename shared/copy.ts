@@ -327,16 +327,16 @@ export const BODY: Record<string, PageCopy> = {
  * the protocol's acronym: a crossing "straight over the bridge".
  */
 export const SHIELDED_WORDS = {
-  /** the pool as a ledger since the record's start: what went in, what came out, the rewards no transaction shows, and the gap to today's balance */
+  /** the pool as a ledger: what went in and came out since the record's start, the rewards the chain has minted since it began (no transaction shows them), and the gap to today's balance */
   makeup: (since: string, inNam: string, outNam: string, rewardsNam: string, balanceNam: string, gapNam: string) =>
-    `Since ${since}, ${inNam} NAM was shielded and ${outNam} NAM unshielded. Another ${rewardsNam} NAM was minted into the pool as shielded rewards, which no transaction shows. In − out + rewards = today’s ${balanceNam} NAM, within ${gapNam} NAM.`,
+    `Since ${since}, ${inNam} NAM was shielded and ${outNam} NAM unshielded. Since the chain began it has minted ${rewardsNam} NAM into the pool as shielded rewards, which no transaction shows. In − out + rewards = today’s ${balanceNam} NAM, within ${gapNam} NAM.`,
   /** the ledger's four parts as the waterfall names them (the drawing's row labels) */
   makeupRows: { in: 'Shielded in', rewards: 'Shielded rewards minted', out: 'Unshielded', balance: 'Today’s balance' } as const,
   /** how NAM entered the pool: straight over the bridge against from Namada addresses */
   bridgeShare: (sharePct: string, crossings: string) =>
     `Of all NAM ever shielded, ${sharePct} arrived straight over the bridge in ${crossings}; the rest came from Namada addresses.`,
   /** what the ledger's sentences are counted from (their stamp's label in the section's source sheet) */
-  makeupScope: 'The pool as a ledger since this site’s record starts',
+  makeupScope: 'The pool as a ledger: moves since this site’s record starts, rewards the chain’s own total',
   bridgeScope: 'How NAM entered the pool',
   /** a recipient's moves out in the window, on a phone, where the group stands for its rows */
   group: (moves: string, nam: string, since: string) => `To the same address: ${moves}, ${nam} NAM since ${since}`,
@@ -360,8 +360,8 @@ export const SHIELDED_WORDS = {
 export const SUPPLY_WORDS = {
   heading: 'NAM since genesis',
   /** the one sentence (a phone shows it alone, in place of the "What this page shows" paragraph) */
-  sinceGenesis: (genesisNam: string, nowNam: string, rewardsNam: string, fromEpoch: string, stakingNam: string, publicFundingNam: string) =>
-    `Since genesis, NAM supply grew from ${genesisNam} to ${nowNam} NAM: ${rewardsNam} NAM minted into the shielded pool as shielded rewards (the chain’s own total), the rest staking inflation and public-funding inflation, which can be told apart only from epoch ${fromEpoch} on (${stakingNam} and ${publicFundingNam} NAM since then; before that, together).`,
+  sinceGenesis: (genesisNam: string, nowNam: string, rewardsNam: string, fromEpoch: string, toEpoch: string, stakingNam: string, publicFundingNam: string) =>
+    `Since genesis, NAM supply grew from ${genesisNam} to ${nowNam} NAM: ${rewardsNam} NAM minted into the shielded pool as shielded rewards (the chain’s own total), the rest staking inflation and public-funding inflation, which can be told apart only from epoch ${fromEpoch} on (${stakingNam} and ${publicFundingNam} NAM from epoch ${fromEpoch} to ${toEpoch}; before that, together).`,
   /** the bar's four parts, as its legend names them */
   parts: {
     rewards: 'Shielded rewards, minted into the pool (the chain’s own total)',
@@ -373,11 +373,11 @@ export const SUPPLY_WORDS = {
   caveat: (derivedOn: string, fromEpoch: string, toEpoch: string, measuredEpochs: string, epochs: string, modelledEpochs: string, modelledFrom: string, modelledTo: string, modelledStakingNam: string) =>
     `The split from epoch ${fromEpoch} to ${toEpoch} was re-derived ${derivedOn} from indexer.namada.net and the chain’s inflation formulas, epoch by epoch for ${measuredEpochs} of the ${epochs} epochs; for the rest, among them the ${modelledEpochs} epochs from ${modelledFrom} to ${modelledTo} that the indexer lacks, the formulas were carried across, so about ${modelledStakingNam} NAM of the staking figure is modelled, not measured. Before epoch ${fromEpoch} only the total growth is on record, so staking and public funding are said together there, and so is what was minted after epoch ${toEpoch}.`,
   /** the newest epoch's staking inflation, the chain's own record of it */
-  mintNow: (nam: string, epoch: string, block: string) => `${nam} NAM an epoch goes to stakers (chain record at epoch ${epoch}, block ${block}).`,
-  mintNotRead: 'How much NAM an epoch goes to stakers is not read yet: the chain records it as an epoch starts, and no epoch has started since this site began reading the record.',
+  mintNow: (nam: string, epoch: string, block: string) => `${nam} NAM of staking inflation was minted into the staking account as epoch ${epoch} started (the chain’s record, block ${block}).`,
+  mintNotRead: 'How much staking inflation an epoch mints is not read yet: the chain records it as an epoch starts, and no epoch has started since this site began reading the record.',
   /** the one large transfer into the public-funding account */
   transfer: (nam: string, block: string, day: string) =>
-    `The public-funding account also holds ${nam} NAM that arrived in one transfer at block ${block} (${day}): moved from another account, not newly minted.`,
+    `The public-funding account also received ${nam} NAM in one transfer at block ${block} (${day}): moved from another account, not newly minted.`,
   /** the source-line labels */
   scope: {
     total: 'All NAM in existence',
@@ -393,8 +393,6 @@ export const SUPPLY_WORDS = {
 export const TIMELINE_WORDS = {
   heading: 'What happened on Namada',
   lead: 'Dated events on the chain, each with a source you can open: releases, halts and the moves this site’s pages carry. Nothing here says how or why.',
-  /** the phone's one-line disclosure */
-  summary: 'Timeline',
   ongoing: 'Ongoing',
   pagesLead: 'On this site:',
   /** the chart key's line for the dotted markers */

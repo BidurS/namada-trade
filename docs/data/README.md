@@ -64,8 +64,8 @@ table's residuals only as the per-epoch distribution.
 
 ## The public-funding transfer
 
-The public-funding account's balance includes 52,378,111.75 NAM that arrived in one transparent transfer from a genesis
-account at block 5,725,013 (10 March 2026, 20:05 UTC, transaction 5E9C6830…2C8B29). It is a transfer between accounts,
+The public-funding account received 52,378,111.75 NAM in one transparent transfer from a genesis account at block
+5,725,013 (10 March 2026, 20:05 UTC, transaction 5E9C6830…2C8B29). It is a transfer between accounts,
 not newly minted NAM, and the page names it as such.
 
 ## Not stated

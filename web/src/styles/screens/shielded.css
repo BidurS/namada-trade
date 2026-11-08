@@ -92,8 +92,8 @@
   .shd-wf__out { background: var(--c-ink-2); border-radius: 2px 0 0 2px; }
   .shd-wf__v { font: var(--w-medium) var(--t-12) / 16px var(--font-code); color: var(--c-ink); white-space: nowrap; }
 
-  /* ---------- What happened on Namada (generated/events.ts INCIDENTS): on a phone one closed line, "Timeline", that opens
-     the list; from 1024 px the list open under its heading, the day in a column of its own. Each source is a link with a
+  /* ---------- What happened on Namada (generated/events.ts INCIDENTS): from 1024 px only, the list open under its
+     heading, the day in a column of its own (under 1024 px the section is not rendered). Each source is a link with a
      44 px hit area on its 20 px line; a row still running carries an outlined tag. ---------- */
   .shd-tl__list { display: grid; margin: 0; padding: 0; list-style: none; border-top: 1px solid var(--c-line); }
   .shd-tl__row { display: grid; gap: var(--s-1); padding: var(--s-4) 0; border-bottom: 1px solid var(--c-line); min-width: 0; }
@@ -105,12 +105,6 @@
   .shd-tl__src a::after { content: ""; position: absolute; inset: -12px 0; }
   .shd-tl__src .ico--inline { margin-left: 2px; }
   .shd-tl__pages { color: var(--c-ink-2); }
-  .shd-tl__fold > summary { display: flex; align-items: center; gap: var(--s-3); min-height: 52px; font-size: var(--t-15); line-height: 22px; font-weight: var(--w-medium); cursor: pointer; list-style: none; }
-  .shd-tl__fold > summary::-webkit-details-marker { display: none; }
-  .shd-tl__fold > summary .ico { width: 16px; height: 16px; flex: none; transition: transform var(--d-2) var(--ease-state); }
-  .shd-tl__fold[open] > summary .ico { transform: rotate(180deg); }
-  .shd-tl__n { margin-left: auto; color: var(--c-ink-2); font: var(--w-regular) var(--t-12) / 16px var(--font-code); white-space: nowrap; }
-  .shd-tl__lead { margin: 0 0 var(--s-3); font-size: var(--t-13); line-height: 20px; color: var(--c-ink-2); max-width: 64ch; }
   @media (min-width: 1024px) {
     .shd-tl__row { grid-template-columns: 11rem minmax(0, 1fr); column-gap: var(--s-5); }
     .shd-tl__when { grid-column: 1; grid-row: 1 / span 3; align-items: start; align-content: start; }

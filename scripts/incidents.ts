@@ -8,8 +8,9 @@
  * - Public facts only, in plain words: what happened, when, between which blocks; never how, never who. The release
  *   rows say that a release was published and link its notes; they describe nothing of what the notes change.
  * - Every row has at least one source with a URL: Namada's release notes on GitHub, or the chain itself, as the
- *   public explorer's page of the first block named (the same explorer shared/config.ts links records to). A halt's
- *   hours are measured from the header times of the last block before it and the first after it, read on
+ *   public explorer's page of the first block named (the same explorer shared/config.ts links records to). A statement
+ *   of Namada's the row repeats is a source of its own, named with where and when it was made, with or without a URL.
+ *   A halt's hours are measured from the header times of the last block before it and the first after it, read on
  *   2026-11-07 from two public nodes that agree (namada-rpc.stakeandrelax.net and namada-rpc.polkachu.com); the
  *   stakeandrelax answers are kept as test/fixtures/namada_blockchain_*.json and the test holds the rows to them.
  * - `at` is the moment a chart marks: the header time of the last block before a halt, or of the first block of a
@@ -24,7 +25,7 @@ import { HALT } from '../shared/halt.ts';
 export interface IncidentSource {
   /** the link's words ("Release notes, GitHub"; "The chain: blocks 7,912,187 to 7,912,188") */
   label: string;
-  /** absent only for a statement that has no page of its own (the team's words in a chat) */
+  /** absent for a statement this site does not link: the team's words in a chat, or a post this site names and does not link */
   url?: string;
 }
 
@@ -78,7 +79,7 @@ export const INCIDENTS: Incident[] = [
     title: 'Six transfers took the shielded pool’s other assets',
     text: 'Between blocks 6,966,393 and 6,966,885 (09:13 to 10:09 UTC), six transfers took the shielded pool’s USDC, ATOM, OSMO, NYM and TIA; no NAM moved. Namada announced an exploit on 20 June 2026.',
     pages: ['/shielded'],
-    sources: [chain(6_966_393, 6_966_885)],
+    sources: [chain(6_966_393, 6_966_885), { label: 'Namada’s announcement on X, 20 June 2026' }],
     mark: 'Assets out',
   },
   {
