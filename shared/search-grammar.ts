@@ -6,7 +6,7 @@
 // here so shared/ imports nothing from web/):
 //   sizes        >100k  >=1m  <5000  100k..1m  >100000 nam  at least 100k  under 5k  100k (k, m, b; NAM only)
 //   kinds        sell sold buy bought staked stake unstaking unstake unlocked withdraw bridged bridge shielded shield
-//                unshield reward rewards pool bot bots transfer trades crossings (and a few phrases, KIND_PHRASES)
+//                unshield reward rewards pool bot bots transfer trades crossings fee fees (and a few phrases, KIND_PHRASES)
 //   chain        namada  osmosis  on namada
 //   dates        last 7 days  last 24 h  7d  today  yesterday  since 2026-10-01  before 2026-10-01
 //                2026-09-01..2026-10-01  since 1 Oct 2026  (UTC midnights; hours are rolling, to the minute)
@@ -123,6 +123,7 @@ export const KIND_CHIP: Record<ParsedKind, string> = {
   lp_remove: 'Removed from pool only',
   pgf: 'Public funding only',
   pos_balance: 'Staking account transfers only',
+  masp_fee: 'Shielded pool fees only',
   ibc_in: 'Bridge, arriving side only',
   ibc_out: 'Bridge, leaving side only',
   dex: 'Trades and pool moves',
@@ -143,6 +144,7 @@ const KIND_WORDS: Record<string, ParsedKind> = {
   trade: 'dex', trades: 'dex', swap: 'dex', swaps: 'dex', pool: 'dex', pools: 'dex',
   bot: 'other', bots: 'other',
   transfer: 'transfer', transfers: 'transfer',
+  fee: 'masp_fee', fees: 'masp_fee',
 };
 
 /** Phrases for a kind, longest first. */

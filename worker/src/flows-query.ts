@@ -137,8 +137,15 @@ export const NOT_LEGACY_TWIN = `NOT (f.chain = 'namada' AND (f.meta IS NULL OR (
               AND w.id != f.id AND json_extract(w.meta, '$.innerTxHash') = f.tx_hash))`;
 /** A flow whose amount is another coin (shielding USDC, OSMO…) carries meta.tokenSymbol; NAM flows do not. */
 export const NAM_AMOUNT = `(f.meta IS NULL OR f.meta NOT LIKE '%"tokenSymbol":%')`;
+/**
+ * Not the shielded pool's fee for a transaction (kind 'masp_fee', parse/namada.ts namFlows: NAM out of the pool to the
+ * account that paid gas, under the parser's cap). The pool's sums count it; the lists show it only when the row itself
+ * is asked for: by its kind (?kind=masp_fee), an address, a record, a block or a text search. The feed and its groups
+ * (every kind, a chain, a size, bots out, each crossing once) leave it out, and so do the stored counts of those lists.
+ */
+export const NOT_FEE = `f.kind != 'masp_fee'`;
 
-/** The kinds of each group the list filters by. */
+/** The kinds of each group the list filters by ('masp_fee' is in none: NOT_FEE). */
 export const KIND_GROUPS: Record<string, readonly string[]> = {
   dex: ['buy', 'sell', 'lp_add', 'lp_remove'],
   ibc: ['ibc_in', 'ibc_out'],
@@ -166,7 +173,7 @@ export function flowsConditions(f: FlowsFilter, skipWindow = false): { conds: st
     const g = KIND_GROUPS[f.kind];
     if (g) conditions.push(`f.kind IN (${kindList(g)})`);
     else { conditions.push('f.kind = ?'); params.push(f.kind); }
-  }
+  } else if (!f.addr && !f.hash && f.height == null && !f.search) conditions.push(NOT_FEE);
   // A whale is 10,000 NAM: another coin's row (meta.tokenSymbol) is in that coin's units and never one.
   if (f.whale) conditions.push('f.amount_num >= 10000', NAM_AMOUNT);
   if (f.minNam != null && f.minNam > 0) { conditions.push('f.amount_num >= ?', NAM_AMOUNT); params.push(f.minNam); }
@@ -401,7 +408,7 @@ export function storedCountSql(f: FlowsFilter): { sql: string; params: unknown[]
     const grp = KIND_GROUPS[f.kind];
     if (grp) g.push(`c.kind IN (${kindList(grp)})`);
     else { g.push('c.kind = ?'); gp.push(f.kind); }
-  }
+  } else g.push("c.kind != 'masp_fee'"); // as NOT_FEE leaves the fee rows out of the list this counts
   if (f.onePerCrossing) g.push('c.twin = 0');
   if (f.excludeBots) g.push('c.bot = 0');
   if (size) { g.push('c.size >= ?'); gp.push(size); }

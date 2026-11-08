@@ -238,6 +238,9 @@ export function evaluateFlow(f: Flow, th: AlertThresholds = DEFAULT_THRESHOLDS):
   // Every rule's size and words are NAM (a hit says "<n> NAM" and carries amountNam): a move in another coin is no
   // hit at any size, as 50,000 OSMO leaving the shielded set is not 50,000 NAM.
   if (isOtherCoin(f)) return [];
+  // The shielded pool's fee for a transaction (kind 'masp_fee', under the parser's cap, paid to the account that paid
+  // gas) is no one's move: never a hit, whatever the thresholds.
+  if (f.kind === 'masp_fee') return [];
   const hits: AlertHit[] = [];
   for (const r of RULES) {
     const m = r.test(f, th[r.key]);

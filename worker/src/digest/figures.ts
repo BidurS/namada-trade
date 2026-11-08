@@ -235,6 +235,7 @@ export interface Bridge {
 
 export interface Masp {
   in: { shield: { n: number; nam: number }; ibcIn: { n: number; nam: number }; total: number };
+  /** feesNam: the pool's fees for transactions, however the rows keep them (meta.maspFeeNam, or rows of kind 'masp_fee') */
   out: { unshield: { n: number; nam: number }; ibcOut: { n: number; nam: number }; feesNam: number; total: number };
   net: number;
   balance: Figure<MetricFigure & { matches: boolean | null; differsBy: number | null }>;
@@ -867,7 +868,9 @@ export function shapeMasp(r: DigestReads, win: DigestWindow, a: Anchors): Figure
   const ins = rowsOf(r.maspIn, src), outs = rowsOf(r.maspOut, src), fees = firstRow(rowsOf(r.maspFees, src));
   const pick = (rows: MaspRow[], kind: string) => { const k = rows.find((x) => x.kind === kind); return { n: k?.n ?? 0, nam: k?.nam ?? 0 }; };
   const shield = pick(ins, 'shield'), ibcIn = pick(ins, 'ibc_in'), unshield = pick(outs, 'unshield'), ibcOut = pick(outs, 'ibc_out');
-  const feesNam = outs.reduce((s, x) => s + (x.fee_nam ?? 0), 0) + (fees?.fee_nam ?? 0);
+  // the pool's fees: the gas payer's leg kept on an unshield (fee_nam), on another coin's row (maspOtherCoinFees), or
+  // filed as a row of its own (kind 'masp_fee', parse/namada.ts namFlows); never counted as an unshielding
+  const feesNam = outs.reduce((s, x) => s + (x.fee_nam ?? 0), 0) + (fees?.fee_nam ?? 0) + pick(outs, 'masp_fee').nam;
   const inTotal = shield.nam + ibcIn.nam;
   const outTotal = unshield.nam + ibcOut.nam + feesNam;
   const net = inTotal - outTotal;

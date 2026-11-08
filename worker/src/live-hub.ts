@@ -23,6 +23,7 @@ import { sendTelegramMove, telegramRun, TG_LIVE_MS, TG_LIVE_SENDS } from './sour
 import { alarmBudget, alertsPausedIn, configureAlerts, fanoutBudget, flushAlerts, isNamWhale, noteNotSent, offeredForAlerts, sendDiscordWhaleAlert, sendsAlerts, spentOut, FANOUT_DEADLINE_MS, UsersUnreadError, WEBHOOK_TIMEOUT_MS, type AlertBudget, type PendingAlert } from './sources/discord';
 import { fetchJson, HttpError, redact, registerSecrets, FETCH_TEXT_MAX_BYTES, ReadBudgetError, ResponseTooLargeError, type ReadBudget } from './util';
 import { watchCronStall, OPS_STALL_LOOK_MS } from './ops';
+import { publicMeta } from './analytics';
 
 /** Moves found late (by the catch-up search, or by a Namada scan that was behind) alert only when they happened within this window. */
 export const LATE_ALERT_MAX_AGE_MS = 24 * 3600_000;
@@ -1967,7 +1968,8 @@ export class LiveHub extends DurableObject<Env> {
   }
 
   private broadcast(msg: LiveMessage) {
-    const raw = JSON.stringify(msg);
+    // a flow leaves the hub as it leaves the API: without the meta keys that stay in the store (analytics.ts publicMeta)
+    const raw = JSON.stringify(msg.type === 'flows' ? { ...msg, flows: msg.flows.map((f) => ({ ...f, meta: publicMeta(f.meta) })) } : msg);
     for (const ws of this.sessions) {
       try {
         ws.send(raw);

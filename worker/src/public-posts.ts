@@ -317,6 +317,7 @@ export function publicWho(m: PublicMove): string {
     case 'ibc_in': case 'ibc_out': case 'transfer': case 'pos_balance': return `From ${m.who} to ${m.other}`;
     case 'shield': return `From ${m.who} into the shielded pool`;
     case 'unshield': return `To ${m.who}, from the shielded pool`;
+    case 'masp_fee': return `To ${m.who}, the shielded pool's fee for a transaction`;
     case 'withdraw': case 'pgf': return `To ${m.who}`;
     case 'lp_add': case 'lp_remove': return `By ${m.who}${via ? `, ${via}` : ''}${m.alsoCoins ? `, with ${m.alsoCoins}` : ''}`;
     default: return m.refund ? `Refunded to ${m.who}: a send to Namada that timed out` : `By ${m.who}`;

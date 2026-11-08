@@ -12,7 +12,12 @@ export type FlowKind =
    *  side the staking account): not a holder staking or unstaking, and the chain's total stake does not move with it
    *  (docs/design/screener-plan.md 3.0). The 9 such rows on mainnet by 2026-11-02 are the 2026-08-31 drain of the
    *  staking account and its repayment (migrations/0019). */
-  | 'pos_balance';
+  | 'pos_balance'
+  /** The shielded pool's fee for one transaction, paid to the account that paid its gas: one NAM leg out of the pool,
+   *  at most MASP_FEE_CAP_NAM, to one account that can pay gas, in an inner transaction the chain marked with a
+   *  masp/fee-payment event (worker/src/parse/namada.ts namFlows). NAM that left the pool, so the pool's sums count
+   *  it; no public list shows it unless asked for by kind, by address, by record or by block (flows-query.ts NOT_FEE). */
+  | 'masp_fee';
 
 export interface Flow {
   id: string;

@@ -13,7 +13,7 @@ import type { Chain, FlowKind } from './types';
 export type TagKind =
   | 'buy' | 'sell' | 'shieldIn' | 'shieldOut' | 'staked' | 'unstaking' | 'unlocked'
   | 'toOsmosis' | 'toNamada' | 'bridgedIn' | 'bridgedOut' | 'poolAdd' | 'poolRemove' | 'bot' | 'pgf'
-  | 'transfer' | 'reward' | 'bridgeRefund' | 'posBalance';
+  | 'transfer' | 'reward' | 'bridgeRefund' | 'posBalance' | 'maspFee';
 
 export type Hue = 'buy' | 'sell' | 'ibc' | 'shield' | 'pos' | 'neutral';
 
@@ -63,6 +63,9 @@ export const KINDS: Record<TagKind, KindInfo> = {
   // or unstaking by a holder: on mainnet by 2026-11-02, the 2026-08-31 drain of the account and its repayment. A move's
   // title says which way it went (shared/flow-words.ts moveTitle); the tag names the kind.
   posBalance: { word: 'Staking account transfer', glyph: 'lock',  hue: 'pos',     expert: 'Transparent transfer out of or into the staking account, not a bond or a withdrawal', term: 'staking-account' },
+  // The shielded pool's fee for one transaction (shared/types.ts 'masp_fee'): NAM out of the pool to the account that
+  // paid the transaction's gas, under the parser's cap. Shown only where the row itself is asked for (an address sheet).
+  maspFee:    { word: 'Shielded pool fee',  glyph: 'shield',      hue: 'shield',  expert: 'MASP fee payment', term: 'shielded-set' },
 };
 
 /** The API's flow kind to the tag kind. */
@@ -83,6 +86,7 @@ export const FLOW_TO_TAG: Record<FlowKind, TagKind> = {
   transfer: 'transfer',
   rewards: 'reward',
   pos_balance: 'posBalance',
+  masp_fee: 'maspFee',
 };
 
 /** Where a bridge crossing took the NAM, from one of its records; null for other kinds or an unknown chain. */
