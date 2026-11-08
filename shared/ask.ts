@@ -4,7 +4,7 @@
 //
 // Nobody reads an answer before it is shown, so the code decides what may be shown:
 // - a question this site leaves alone is refused here, without a call (askRefusal);
-// - the reader's question and earlier exchanges are untrusted data: fenced, stripped of anything that could close the
+// - the reader's question and earlier questions are untrusted data: fenced, stripped of anything that could close the
 //   fence, and never part of what an answer's numbers may come from;
 // - every number in an answer must be in the supplied context, at the same scale (numbersIn), and an answer holds no
 //   link, mention, address, advice or judgement (checkAnswer);
@@ -119,10 +119,10 @@ const HIDDEN = /[\u0000-\u001f\u007f\u200b-\u200f\u2028-\u202f\u2060-\u206f\ufef
 /** A question or an earlier turn with nothing that could close its fence, and no hidden or control characters. */
 export const cleanText = (s: string): string => s.normalize('NFKC').replace(HIDDEN, ' ').replace(/[<>]/g, ' ').replace(/\s+/g, ' ').trim();
 
-/** The user turn: earlier exchanges and the question, fenced as data. */
+/** The user turn: the earlier questions and this one, fenced as data. */
 export function askUserMessage(question: string, history: AskTurn[]): string {
   const earlier = history.length
-    ? `<earlier_conversation>\n${history.map((t) => `<exchange>\n<reader_asked>${cleanText(t.q)}</reader_asked>\n<site_answered>${cleanText(t.a)}</site_answered>\n</exchange>`).join('\n')}\n</earlier_conversation>\n\n`
+    ? `<earlier_conversation>\n${history.map((t) => `<reader_asked>${cleanText(t.q)}</reader_asked>`).join('\n')}\n</earlier_conversation>\n\n`
     : '';
   return `${earlier}<reader_question>\n${cleanText(question)}\n</reader_question>`;
 }
@@ -194,16 +194,20 @@ export function checkAnswer(raw: string, figures: Pick<AskFigure, 'value'>[]): A
   return c;
 }
 
-/** The earlier exchanges the browser sent, if every one holds up; anything forged or malformed leaves none. */
+/**
+ * The earlier questions the browser sent, if every one holds up; anything malformed or refused leaves none. Only the
+ * questions are taken: an earlier answer arrives from the browser, so a caller could write one the site never gave, and
+ * the model would read it as the site's own. Anything sent beside a question is ignored. The reference and the figures
+ * are the same on the next question, so the model can work out what the earlier question was about.
+ */
 export function cleanHistory(raw: unknown): AskTurn[] {
   if (!Array.isArray(raw) || raw.length > ASK_HISTORY_MAX) return [];
   const out: AskTurn[] = [];
-  for (const t of raw as { q?: unknown; a?: unknown }[]) {
-    if (typeof t?.q !== 'string' || typeof t?.a !== 'string') return [];
+  for (const t of raw as { q?: unknown }[]) {
+    if (typeof t?.q !== 'string') return [];
     const q = cleanText(t.q);
     if (!q || q.length > ASK_QUESTION_MAX || askRefusal(q)) return [];
-    if (!checkWords(t.a).ok) return [];
-    out.push({ q, a: t.a });
+    out.push({ q });
   }
   return out;
 }

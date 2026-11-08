@@ -44,7 +44,7 @@ interface Turn {
 const RETRIES: TurnState[] = ['failed', 'rate', 'offline'];
 
 function history(turns: Turn[]): AskTurn[] {
-  return turns.filter((t) => t.state === 'answered').slice(-ASK_HISTORY_MAX).map((t) => ({ q: t.q, a: t.text }));
+  return turns.filter((t) => t.state === 'answered').slice(-ASK_HISTORY_MAX).map((t) => ({ q: t.q }));
 }
 
 function Stamps({ stamps }: { stamps: AskStamp[] }) {

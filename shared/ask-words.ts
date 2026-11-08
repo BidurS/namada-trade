@@ -25,8 +25,8 @@ export type AskStatus = 'answered' | 'refused' | 'not_covered' | 'failed' | 'res
 export interface AskPageLink { id: string; label: string; path: string }
 /** The source and time of one figure an answer states. */
 export interface AskStamp { label: string; source: string; at: number; old: boolean }
-/** One earlier exchange, as the browser sends it back: held in its memory only. */
-export interface AskTurn { q: string; a: string }
+/** One earlier question, as the browser sends it back: held in its memory only. Never an earlier answer: the server could not tell a real one from one a caller wrote. */
+export interface AskTurn { q: string }
 
 export interface AskAnswer {
   status: AskStatus;
@@ -80,6 +80,7 @@ export const ASK_WORDS = {
   unavailable: 'The Ask chat is not available right now.',
   restingDay: 'The Ask chat is resting until tomorrow: it has had all the questions it can take today.',
   restingMonth: 'The Ask chat is resting until next month: it has used all it can this month.',
+  restingAddress: 'The Ask chat has answered all the questions it takes from one connection today. It opens again tomorrow.',
   rate: 'That was a lot of questions at once; please wait a minute and try again.',
   offline: 'You seem to be offline; your question is still here to send again.',
   /** How many characters are left, or how many are too many. */

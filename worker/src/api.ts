@@ -147,9 +147,9 @@ function pageParam(c: any): number | Response {
 // ---------------------------------------------------------------- the Ask chat (worker/src/ask.ts)
 // Whether the chat is there and open: cached at the edge like the other reads, so a page load costs no D1 read of its own.
 app.get('/api/ask', async (c) => c.json(await askState({ db: c.env.DB, apiKey: c.env.ANTHROPIC_API_KEY, now: Date.now() })));
-// Nothing about a question is stored or logged; only the day's count and the month's spend.
+// Nothing about a question is stored or logged; only the day's counts and the month's spend (worker/src/ask.ts).
 app.post('/api/ask', async (c) => {
-  const { http, answer } = await answerAsk(await jsonObject(c), { db: c.env.DB, apiKey: c.env.ANTHROPIC_API_KEY, now: Date.now() });
+  const { http, answer } = await answerAsk(await jsonObject(c), { db: c.env.DB, apiKey: c.env.ANTHROPIC_API_KEY, now: Date.now(), ip: c.req.header('cf-connecting-ip'), origin: c.req.header('origin') });
   return c.json(answer, http as 200, { 'cache-control': 'no-store' });
 });
 

@@ -2,7 +2,8 @@
 //
 // One question is one model call and one second reading, inside about ten seconds, and nothing about it is kept: not
 // the question, not the answer, not the address. Only two counters are written, in kv: `ask.day` (questions today,
-// UTC) and `ask.spend` (dollars this month from each answer's usage). Without ANTHROPIC_API_KEY, or with ASK_SHOWN off,
+// UTC, and today's count per connection under a tag that cannot be read back: see addressTag) and `ask.spend` (dollars
+// this month from each answer's usage). Without ANTHROPIC_API_KEY, or with ASK_SHOWN off,
 // the endpoint answers unavailable.
 //
 // A call that times out may still be billed and has no usage to count, so ASK_DAY_CAP also bounds the month on its own:
@@ -20,6 +21,7 @@ import { ASK_QUESTION_MAX, ASK_SHOWN, ASK_WORDS, type AskAnswer, type AskState, 
 import { HALT } from '../../shared/halt';
 import { SUMMARY_MODEL_NAME } from '../../shared/proposal-summary';
 import { metricAt } from './analytics';
+import { clientKey } from './client-key';
 import { kvGetJson, kvSet } from './db';
 import type { Env } from './util';
 
@@ -27,6 +29,8 @@ export const ASK_DAY_KEY = 'ask.day';
 export const ASK_SPEND_KEY = 'ask.spend';
 /** Questions the whole site may ask in one UTC day. */
 export const ASK_DAY_CAP = 500;
+/** Questions one connection (client-key.ts: an IPv4 address, an IPv6 /64) may ask in one UTC day, so one caller cannot use up the day's questions for everyone. */
+export const ASK_ADDRESS_DAY_CAP = 25;
 /** No call once this month's counted spend reaches this. */
 export const ASK_MONTH_CAP_USD = 40;
 
@@ -81,15 +85,55 @@ const dayOf = (ms: number) => new Date(ms).toISOString().slice(0, 10);
 const monthOf = (ms: number) => new Date(ms).toISOString().slice(0, 7);
 
 /** One more question today, counted in one statement so two at once cannot both read the same count. Returns the new count. */
-async function countQuestion(db: D1Database, now: number): Promise<number> {
+/**
+ * What today's per-connection count is kept under: a keyed hash of the day and the connection, cut short. It cannot be
+ * turned back into an address without the key, the same connection has another tag tomorrow, and the whole map goes
+ * when the day's row is replaced.
+ */
+export async function addressTag(apiKey: string, day: string, ip: string | null | undefined): Promise<string> {
+  const enc = new TextEncoder();
+  const key = await crypto.subtle.importKey('raw', enc.encode(apiKey), { name: 'HMAC', hash: 'SHA-256' }, false, ['sign']);
+  const mac = new Uint8Array(await crypto.subtle.sign('HMAC', key, enc.encode(`ask-address:${day}:${clientKey(ip)}`)));
+  return `a${[...mac.slice(0, 6)].map((b) => b.toString(16).padStart(2, '0')).join('')}`;
+}
+
+/**
+ * One statement, so two questions at once cannot both pass a cap. A connection past its quota moves nothing, so its
+ * questions cannot use up the day's; `n` stops one past the day's cap and `hits` one past the connection's, which keeps
+ * the row to at most ASK_DAY_CAP tags however many addresses ask.
+ */
+async function countQuestion(db: D1Database, now: number, tag: string): Promise<{ n: number; hits: number }> {
   const day = dayOf(now);
+  const fresh = `json_object('day',?2,'n',1,'by',json_object(?4,1))`;
+  const hits = `COALESCE(json_extract(value,?5),0)`;
+  const withMap = `json(COALESCE(json_extract(value,'$.by'),'{}'))`;
   const row = await db.prepare(
-    `INSERT INTO kv (key,value,updated_at) VALUES (?1, json_object('day',?2,'n',1), ?3)
+    `INSERT INTO kv (key,value,updated_at) VALUES (?1, ${fresh}, ?3)
      ON CONFLICT(key) DO UPDATE SET updated_at=?3,
-       value = CASE WHEN json_extract(value,'$.day')=?2 THEN json_set(value,'$.n',json_extract(value,'$.n')+1) ELSE json_object('day',?2,'n',1) END
-     RETURNING json_extract(value,'$.n') AS n`,
-  ).bind(ASK_DAY_KEY, day, now).first<{ n: number }>();
-  return Number(row?.n ?? 1);
+       value = CASE
+         WHEN json_extract(value,'$.day') IS NOT ?2 THEN ${fresh}
+         WHEN json_extract(value,'$.n') > ${ASK_DAY_CAP} OR ${hits} > ${ASK_ADDRESS_DAY_CAP} THEN value
+         WHEN ${hits} = ${ASK_ADDRESS_DAY_CAP} THEN json_set(value,'$.by',${withMap},?5,${ASK_ADDRESS_DAY_CAP + 1})
+         ELSE json_set(value,'$.by',${withMap},'$.n',json_extract(value,'$.n')+1,?5,${hits}+1)
+       END
+     RETURNING json_extract(value,'$.n') AS n, json_extract(value,?5) AS hits`,
+  ).bind(ASK_DAY_KEY, day, now, tag, `$.by.${tag}`).first<{ n: number; hits: number | null }>();
+  return { n: Number(row?.n ?? 1), hits: Number(row?.hits ?? 1) };
+}
+
+/**
+ * Whether a POST may come from this page. The API answers every origin (api.ts cors()), so without this any other site
+ * could run the chat from its own visitors' browsers, spreading the questions over all their addresses. A request with
+ * no Origin is not a browser's cross-site request and is held by the limits as any other.
+ */
+const ASK_ORIGIN_HOSTS = new Set(['namada.trade', 'www.namada.trade', 'localhost', '127.0.0.1']);
+export function askOriginAllowed(origin: string | null | undefined): boolean {
+  if (origin == null || origin === '') return true;
+  try {
+    return ASK_ORIGIN_HOSTS.has(new URL(origin).hostname);
+  } catch {
+    return false;
+  }
 }
 
 async function addSpend(db: D1Database, now: number, usd: number): Promise<void> {
@@ -145,6 +189,10 @@ export interface AskDeps {
   clock?: () => number;
   /** ASK_SHOWN, unless a test asks. */
   shown?: boolean;
+  /** The connecting address (cf-connecting-ip), for the day's quota; never stored as written. */
+  ip?: string | null;
+  /** The request's Origin header (askOriginAllowed). */
+  origin?: string | null;
 }
 
 /** The chat's state for the page: whether to show the chat at all, and whether it is resting. */
@@ -162,8 +210,9 @@ function logFailure(what: string, e: unknown): void {
 }
 
 export async function answerAsk(body: unknown, deps: AskDeps): Promise<{ http: number; answer: AskAnswer }> {
-  const { db, apiKey, now, shown = ASK_SHOWN, clock = Date.now } = deps;
+  const { db, apiKey, now, shown = ASK_SHOWN, clock = Date.now, ip, origin } = deps;
   if (!shown || !apiKey) return { http: 503, answer: UNAVAILABLE };
+  if (!askOriginAllowed(origin)) return { http: 403, answer: INVALID };
   const call = deps.call ?? anthropicAsk(apiKey);
 
   const b = (body ?? {}) as { question?: unknown; history?: unknown };
@@ -177,7 +226,9 @@ export async function answerAsk(body: unknown, deps: AskDeps): Promise<{ http: n
   if (why) return { http: 200, answer: REFUSED };
 
   if ((await monthSpent(db, now)) >= ASK_MONTH_CAP_USD) return { http: 200, answer: plain('resting', ASK_WORDS.restingMonth) };
-  if ((await countQuestion(db, now)) > ASK_DAY_CAP) return { http: 200, answer: plain('resting', ASK_WORDS.restingDay) };
+  const counted = await countQuestion(db, now, await addressTag(apiKey, dayOf(now), ip));
+  if (counted.hits > ASK_ADDRESS_DAY_CAP) return { http: 200, answer: plain('resting', ASK_WORDS.restingAddress) };
+  if (counted.n > ASK_DAY_CAP) return { http: 200, answer: plain('resting', ASK_WORDS.restingDay) };
 
   const started = clock();
   const history = cleanHistory(b.history);
