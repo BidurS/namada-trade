@@ -19,7 +19,7 @@ const MASP = INTERNAL_ADDRESSES.masp;
 const ESCROW = INTERNAL_ADDRESSES.ibc;
 const A = 'tnam1qr4l8egaskk09460llz0qctac7sgemynpu8c7vvd';
 const B = 'tnam1qr8x5rly5mj8wly2ph0zqjkcqkju0g5jkggjn9k3';
-const OSMO = 'osmo1nn62s9hm7ns4lwqsl70y49xx5tpe0ft45evpvh';
+const OSMO = 'osmo1testsellerqqqqqqqqqqqqqqqqqqqqqqqqqqqq';
 const GAS = 'tnam1qq3t3lccqk4u69zjyaej63rrfpm4eha2v56llrku';
 const D = 86_400_000, H = 3_600_000;
 // the third minute of 06:00 UTC: inside the daily job's window, after the flow index's hour

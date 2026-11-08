@@ -16,7 +16,7 @@ import type { AddressReport, Flow } from '../shared/types';
 const MASP = INTERNAL_ADDRESSES.masp;
 const ADDR = 'tnam1qr4l8egaskk09460llz0qctac7sgemynpu8c7vvd';
 const OTHER = 'tnam1qr8x5rly5mj8wly2ph0zqjkcqkju0g5jkggjn9k3';
-const OSMO = 'osmo1nn62s9hm7ns4lwqsl70y49xx5tpe0ft45evpvh';
+const OSMO = 'osmo1testsellerqqqqqqqqqqqqqqqqqqqqqqqqqqqq';
 const FIRST = Date.UTC(2026, 10, 3, 9, 30);
 
 // the address answer's live chain reads fail at once, so the stored readings answer (the sheet's lines need no chain)

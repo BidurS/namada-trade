@@ -378,6 +378,8 @@ export function checkDetail(c: Check): string | null {
       return x == null ? null : `${fmtPctRule(Math.abs(x))} apart`;
     }
     case 'namada_index_lag': {
+      // 2026-11-08: while the chain makes no block (the halt), the index stands at its newest block and the row is idle.
+      if (d.notJudged === 'no-new-blocks') return 'at the chain\'s newest block: no new block to index';
       const x = detailNum(d.lagBlocks);
       return x == null ? null : `${plural(Math.abs(x), 'block', 'blocks')} behind`;
     }

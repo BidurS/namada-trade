@@ -16,7 +16,7 @@ afterEach(() => { vi.useRealTimers(); vi.unstubAllGlobals(); });
 
 const H = 3_600_000, D = 86_400_000;
 const CUT = OSMOSIS_GAP_UNTIL;
-const TRADER = 'osmo1nn62s9hm7ns4lwqsl70y49xx5tpe0ft45evpvh';
+const TRADER = 'osmo1testsellerqqqqqqqqqqqqqqqqqqqqqqqqqqqq';
 const NAMADA = 'tnam1qpjppur46s3ja5uwzsyamxwzvtwnkeeycyl472u3';
 const get = async <T,>(db: TestD1, path: string) => (await (await app.request(path, {}, { DB: db } as any)).json()) as T;
 let n = 0;

@@ -11,7 +11,7 @@ import type { Flow } from '../shared/types';
 
 const SELLER = 'tnam1qzdxrdjvkhlxmxqna5c09d3sst6d9mhufcu58su2';
 const MASP = 'tnam1pcqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqzmefah';
-const OSMO = 'osmo1nn62s9hm7ns4lwqsl70y49xx5tpe0ft45evpvh';
+const OSMO = 'osmo1testsellerqqqqqqqqqqqqqqqqqqqqqqqqqqqq';
 const unshield = (ts: number, amount: number, height: number): Flow => ({ id: `namada:U${height}:0`, chain: 'namada', height, ts, txHash: `U${height}`, kind: 'unshield', from: MASP, to: SELLER, amount });
 const send = (ts: number, amount: number, height: number, channel = 'channel-1', from = SELLER): Flow => ({ id: `namada:S${height}:0`, chain: 'namada', height, ts, txHash: `S${height}`, kind: 'ibc_out', from, to: OSMO, amount, meta: { channel } });
 const row = (f: Flow): UnshieldRow => ({ to: f.to!, amount: f.amount, ts: f.ts });
@@ -36,9 +36,9 @@ describe('a bridge send stamped with its shielded source', () => {
     expect(fromShieldedOf(s29)).toEqual({ nam: 800000, firstAt: 1793253102916, lastAt: 1793253102916, unshields: 1 });
     const hit = evaluateFlow(s29).find((h) => h.ruleId === 'exit_bridge')!;
     expect(hit.title).toBe('800,000 NAM sent to Osmosis from the shielded set');
-    expect(hit.detail).toBe('800,000 NAM left the shielded set to tnam1qzdxr…8su2 2 min before; it then sent 800,000 NAM to osmo1nn62s…vpvh');
+    expect(hit.detail).toBe('800,000 NAM left the shielded set to tnam1qzdxr…8su2 2 min before; it then sent 800,000 NAM to osmo1tests…qqqq');
     expect(hit.address).toBe(SELLER);
-    expect(evaluateFlow(s21).find((h) => h.ruleId === 'exit_bridge')!.detail).toBe('1,601,005 NAM left the shielded set to tnam1qzdxr…8su2 in 3 unshields, the last 8 min before; it then sent 1,500,000 NAM to osmo1nn62s…vpvh');
+    expect(evaluateFlow(s21).find((h) => h.ruleId === 'exit_bridge')!.detail).toBe('1,601,005 NAM left the shielded set to tnam1qzdxr…8su2 in 3 unshields, the last 8 min before; it then sent 1,500,000 NAM to osmo1tests…qqqq');
   });
 
   it('unshields more than an hour before, or under half of the send, or to another address, leave the send unstamped', () => {
@@ -59,7 +59,7 @@ describe('a bridge send stamped with its shielded source', () => {
     expect(fromShieldedOf(noble)).toBe(null);
     const direct = send(1793253211149, 200000, 8458676, 'channel-1', MASP); stampShieldedExits([direct], []);
     expect(fromShieldedOf(direct)).toEqual({ nam: 200000, firstAt: 1793253211149, lastAt: 1793253211149, unshields: 0, direct: true });
-    expect(evaluateFlow(direct).find((h) => h.ruleId === 'exit_bridge')!.detail).toBe('straight from the shielded set, to osmo1nn62s…vpvh');
+    expect(evaluateFlow(direct).find((h) => h.ruleId === 'exit_bridge')!.detail).toBe('straight from the shielded set, to osmo1tests…qqqq');
     const block = [OCT29[0], { ...SEND29(), height: OCT29[0].height, ts: OCT29[0].ts }];
     stampShieldedExits(block, []);
     expect(fromShieldedOf(block[1])).toMatchObject({ nam: 800000, unshields: 1 });

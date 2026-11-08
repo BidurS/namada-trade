@@ -273,6 +273,19 @@ for i in 1 2 3 4 5; do out=$(npx wrangler d1 execute namada-trade-db --remote --
 echo "$out" | python3 -c "
 import sys,json; r=json.load(sys.stdin)[0]['results'][0]; print('0022 fee rows and rows still unshields:', r)
 sys.exit(0 if r['fee'] >= 79 and r['still'] == 0 else 1)" || stop "migration 0022 is not in place: not deploying"
+# 0023 (genesis_alloc, the allocation table the operator loads, and cohort_daily's four new columns): the daily job's
+# genesis-cohorts part and /api/series/cohorts read them; without the table the API says 'not loaded' and the part
+# does nothing, so a skipped apply would hide the whole feature rather than break the tick
+for i in 1 2 3 4 5; do out=$(npx wrangler d1 execute namada-trade-db --remote --json --command "SELECT (SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name = 'genesis_alloc') tables, (SELECT COUNT(*) FROM pragma_table_info('cohort_daily') WHERE name IN ('shielded_out', 'alloc_nam', 'balance_height', 'bond_height')) n" 2>&1) && ! echo "$out" | grep -q 7403 && break; echo "retrying (Cloudflare 7403)"; sleep 6; done
+echo "$out" | python3 -c "
+import sys,json; r=json.load(sys.stdin)[0]['results'][0]; print('0023 table and columns:', r)
+sys.exit(0 if r['tables'] == 1 and r['n'] == 4 else 1)" || stop "migration 0023 is not in place: not deploying"
+# 0024 (masp_seen.ts, the block's own time, and the two daily tables masp_activity_daily and masp_coins_daily): the live
+# hub writes masp_seen with five values a row, so without the column every shielded-transaction row of a block is refused
+for i in 1 2 3 4 5; do out=$(npx wrangler d1 execute namada-trade-db --remote --json --command "SELECT (SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name IN ('masp_activity_daily', 'masp_coins_daily')) tables, (SELECT COUNT(*) FROM pragma_table_info('masp_seen') WHERE name = 'ts') n" 2>&1) && ! echo "$out" | grep -q 7403 && break; echo "retrying (Cloudflare 7403)"; sleep 6; done
+echo "$out" | python3 -c "
+import sys,json; r=json.load(sys.stdin)[0]['results'][0]; print('0024 tables and column:', r)
+sys.exit(0 if r['tables'] == 2 and r['n'] == 1 else 1)" || stop "migration 0024 is not in place: not deploying"
 # the depth archive bucket (wrangler.jsonc r2_buckets DEPTH_R2): wrangler refuses to upload a Worker bound to a bucket
 # that does not exist, so the bucket is created once by hand before the first deploy of the binding (the code tolerates
 # the binding missing; the deploy does not)

@@ -371,7 +371,7 @@ describe('reposting @namada', () => {
 });
 
 describe('the kill switch (kv x.on)', () => {
-  const SELLER = 'osmo1nn62s9hm7ns4lwqsl70y49xx5tpe0ft45evpvh';
+  const SELLER = 'osmo1testsellerqqqqqqqqqqqqqqqqqqqqqqqqqqqq';
   /** Every call to X, by URL; X answers as it would, so a call that is made would post. */
   function anyX() {
     const calls: string[] = [];

@@ -17,7 +17,7 @@ const M = 60_000, H = 3_600_000;
 // The two addresses of the crossing, their first characters as the Sources sheet showed them, padded to the length
 // of a real address of each chain.
 const SENDER = 'tnam1qzdxrdjvkhlxmxq'.padEnd(45, 'q');
-const RECEIVER = 'osmo1nn62s9hm7ns4lwq'.padEnd(43, 'q');
+const RECEIVER = 'osmo1testseller'.padEnd(43, 'q');
 const NAMADA_ID = 'namada:18856721FB637CF36C22B657137FCFFE600F744EB18541EB2120D6CDCA96960E:4';
 const OSMOSIS_ID = 'osmosis:BF8EB682121699CB7FE14D4E9F858A5EC5887D28479863F9E82D88BE7CD72597:ibc_in:11';
 const SENT_AT = Date.UTC(2026, 9, 29, 5, 53, 31);

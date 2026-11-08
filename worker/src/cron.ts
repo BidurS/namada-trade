@@ -2856,11 +2856,8 @@ export async function runCron(env: Env) {
     // (with why the catch-up search has not finished, when it has not: indexState's note).
     const ix = await indexState(env.DB, now).catch(() => null);
     if (ix) {
-      const c = ix.namadaCursor;
-      const lag = c && headHeight ? Math.max(0, headHeight - c.height) : null;
-      const quiet = c ? now - c.at > NAMADA_CURSOR_STALE_MS : true;
-      checkStmts.push(stmt.check('namada_index_lag', !c ? 'fail' : !quiet && (lag ?? 0) <= NAMADA_CURSOR_MAX_LAG ? 'ok' : (lag ?? 0) <= 500 && now - c.at < 30 * 60000 ? 'warn' : 'fail',
-        'This site\'s Namada flow index vs the Namada RPC head', { cursorHeight: c?.height ?? null, cursorWrittenAt: c?.at ?? null, rpcHeight: headHeight, lagBlocks: lag }, now));
+      const il = namadaIndexLagRow(ix.namadaCursor, headHeight, now);
+      checkStmts.push(stmt.check('namada_index_lag', il.status, 'This site\'s Namada flow index vs the Namada RPC head', il.detail, now));
       const l = ix.osmosisLive, sw = ix.osmosisSweep;
       const streaming = !!l && l.connected && now - l.at <= OSMOSIS_LIVE_STALE_MS;
       const swept = !!sw && now - sw.at <= OSMOSIS_SWEEP_STALE_MS;
@@ -3395,4 +3392,25 @@ export async function checkFlips(db: D1Database, stmts: Stmt[], now: number): Pr
   return next
     .filter((c) => was.has(c.key) && was.get(c.key) !== c.status)
     .map((c) => ({ name: `check:${c.key}`, at: now, ok: okOf(c.status), note: c.status }));
+}
+
+
+/**
+ * The namada_index_lag row: this site's block cursor against the nodes' agreed head. 'ok' when the cursor is fresh and
+ * within NAMADA_CURSOR_MAX_LAG blocks, 'warn' for a short lag with a cursor under 30 min old, 'fail' otherwise, and,
+ * from 2026-11-08, 'idle' when the cursor stands at the chain's newest block and has not moved for NAMADA_CURSOR_STALE_MS:
+ * the chain made no block to index (the halt of 2 November), which is nothing of this site's to judge (rule 3 of the
+ * release program: a check with nothing new to judge says idle, never fail). A cursor at the head that is fresh is 'ok'.
+ */
+export function namadaIndexLagRow(c: { height: number; at: number } | null | undefined, headHeight: number | null | undefined, now: number): { status: 'ok' | 'warn' | 'fail' | 'idle'; detail: Record<string, unknown> } {
+  const lag = c && headHeight ? Math.max(0, headHeight - c.height) : null;
+  const quiet = c ? now - c.at > NAMADA_CURSOR_STALE_MS : true;
+  const detail: Record<string, unknown> = { cursorHeight: c?.height ?? null, cursorWrittenAt: c?.at ?? null, rpcHeight: headHeight ?? null, lagBlocks: lag };
+  if (!c) return { status: 'fail', detail };
+  if (lag === 0 && quiet) {
+    return { status: 'idle', detail: { ...detail, judged: false, notJudged: 'no-new-blocks', note: `the index stands at the chain's newest block ${c.height.toLocaleString('en-US')}, written ${fmtUtcLong(c.at)}; no block since to index` } };
+  }
+  if (!quiet && (lag ?? 0) <= NAMADA_CURSOR_MAX_LAG) return { status: 'ok', detail };
+  if ((lag ?? 0) <= 500 && now - c.at < 30 * 60000) return { status: 'warn', detail };
+  return { status: 'fail', detail };
 }
