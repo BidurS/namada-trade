@@ -15,7 +15,9 @@ import { INTERNAL_LABELS, NAMADA, OSMOSIS } from './config';
 import { INTERNAL_ADDRS, osmosisStamp, osmosisTrustedStart } from './holders';
 import { fetchPairChart, fetchPairSummary, OSMOSIS_DATA_SOURCE, type PairChartPoint, type PairSummary } from './sources/osmosis-data';
 import { safeParseJson, timedOutSends, ibcRowOf, metricAt, MASP_MAKEUP_KV } from './analytics';
-import { maspTotalRewards, type BondListing } from './sources/namada';
+import { maspTotalRewards, maspCoinBalance, type BondListing } from './sources/namada';
+import { SCANNED_KV, scannedOf, dayScanned, readMaspActivityDay, maspActivityStmts } from './masp-activity';
+import { MASP_COINS_KV, maspCoinsOf, coinDayFigures, coinDayStmts } from './masp-coins';
 import { toNam } from './util';
 import { NAM_AMOUNT, NOT_LEGACY_TWIN } from './flows-query';
 import { RECORD_SINCE } from '../../shared/record-since';
@@ -81,11 +83,15 @@ export const SERIES_META = {
   'metrics:holders.*': { source: 'Namada node balance listing at height H (and the bond listing for stakers) · Keplr Osmosis bank list', start: 'first complete listing after deploy; new and emptied holders from the second' },
   'metrics:stake.*': { source: 'Namada node bond listing; shares against the chain total stake (/vp/pos/total_stake)', start: 'first complete bond listing after deploy' },
   'metrics:*_daily': { source: 'NamadaTrade flow index (masp.*, dex.*, active.*, bridge.*: Osmosis records for the bridge) · supply.masp_shielded.daily: last minute reading of the day', start: 'as flow_edges_daily; supply.masp_shielded.daily 13 Jun 2025 (chain history backfill)' },
+  masp_activity_daily: { source: 'NamadaTrade shielded-transaction record (masp_seen, the block follower) · flow index (the NAM legs at the pool)', start: 'the first UTC day the block follower scans whole after migration 0024 (the chain was halted at the release); never backfilled' },
+  'metrics:masp.txs_*_daily': { source: 'as masp_activity_daily', start: 'as masp_activity_daily' },
+  masp_coins_daily: { source: "Namada node (one read of the pool's balance key per coin a day) · the block record's post-balances (kv masp.coins) when the read fails", start: 'the first daily run after migration 0024 with a coin in kv masp.coins' },
+  'metrics:masp.coin.*.daily': { source: 'as masp_coins_daily, for the coins the token table names', start: 'as masp_coins_daily' },
 } as const;
 
 // ---------------------------------------------------------------- jobs bookkeeping
 
-interface DailyJob { day: string; snapNamada?: boolean; snapOsmosis?: boolean; /** the allocation cohorts (cohort_daily alloc.*), once the allocation table is loaded */ snapAlloc?: boolean; flows?: boolean; names?: boolean; /** the pool's ledger (maspMakeup) written with the chain's rewards total read */ makeup?: boolean; /** the hour the validator list was last asked for (once an hour while it fails) */ namesTried?: number; /** the hour the rewards total was last asked for (once an hour while it fails) */ makeupTried?: number }
+interface DailyJob { day: string; snapNamada?: boolean; snapOsmosis?: boolean; /** the allocation cohorts (cohort_daily alloc.*), once the allocation table is loaded */ snapAlloc?: boolean; flows?: boolean; names?: boolean; /** the pool's ledger (maspMakeup) written with the chain's rewards total read */ makeup?: boolean; /** the hour the validator list was last asked for (once an hour while it fails) */ namesTried?: number; /** the hour the rewards total was last asked for (once an hour while it fails) */ makeupTried?: number; /** the shielded transactions of the two days before (masp_activity_daily), once the block follower has scanned past yesterday */ activity?: boolean; /** the pool's coins (masp_coins_daily), once kv masp.coins names one */ coins?: boolean; /** the hour the coins were last read from the chain (once an hour while a read fails) */ coinsTried?: number }
 
 async function kvJson<T>(db: D1Database, keys: string[]): Promise<Record<string, T | null>> {
   const out: Record<string, T | null> = {};
@@ -668,11 +674,15 @@ export interface DailyCtx {
   validators?: (signal?: AbortSignal) => Promise<unknown>;
   /** for tests: the chain read of the shielded pool's running total of rewards (sources/namada.ts maspTotalRewards) */
   maspRewards?: (signal?: AbortSignal) => Promise<{ total: bigint; height: number; provider: string }>;
+  /** for tests: the chain read of the pool's balance of one coin (sources/namada.ts maspCoinBalance) */
+  coinBalance?: (token: string, signal?: AbortSignal) => Promise<{ base: string; height: number; provider: string }>;
 }
 export interface DailyResult { day: string; ran: string[]; waiting: string[]; failed: string[]; written: number }
 
 /** The validator list request: 10 s, one attempt, started beside the Osmosis reads (cron.ts runs hourly() and daily() together). */
 export const VALIDATOR_LIST_TIMEOUT_MS = 10_000;
+/** One coin's pool balance read (masp-coins.ts, part 'shielded coins'): 10 s, one attempt, per coin. */
+export const COIN_READ_TIMEOUT_MS = 10_000;
 
 /**
  * Once a day (kv jobs.daily), in the first JOB_WINDOW_MS of an hour, on a tick that reads no chain listing (unless
@@ -698,11 +708,18 @@ export async function daily(env: Env, now: number, ctx: DailyCtx): Promise<Daily
   if (ctx.listingTick && !closingAt(now)) return null;
   const late = () => ctx.late?.() ?? false;
   const day = isoDay(now);
-  const kv = await kvJson<any>(env.DB, ['jobs.daily', 'balance.listing', 'bond.listing', MASP_MAKEUP_KV, GENESIS_ALLOC_KV]);
+  const kv = await kvJson<any>(env.DB, ['jobs.daily', 'balance.listing', 'bond.listing', MASP_MAKEUP_KV, GENESIS_ALLOC_KV, SCANNED_KV, MASP_COINS_KV]);
   const job: DailyJob = kv['jobs.daily']?.day === day ? { ...kv['jobs.daily'] } : { day };
   // the allocation cohorts are part of the day's work only once the operator has loaded the allocation table
   const allocLoaded = !!kv[GENESIS_ALLOC_KV];
-  if (job.snapNamada && job.snapOsmosis && (job.snapAlloc || !allocLoaded) && job.flows && job.names && job.makeup) return null;
+  // the pool's coins are the day's work only once the hub has stored one (kv masp.coins, masp-coins.ts)
+  const coins = maspCoinsOf(kv[MASP_COINS_KV]);
+  const coinsStored = Object.keys(coins).length > 0;
+  // the shielded transactions of yesterday are the day's work only once the block follower has scanned past yesterday's
+  // end (kv namada.scanned, masp-activity.ts): on the halted chain it never does, and the day finishes without the part
+  const scanned = scannedOf(kv[SCANNED_KV]);
+  const activityDue = dayScanned(scanned, dayStart(now));
+  if (job.snapNamada && job.snapOsmosis && (job.snapAlloc || !allocLoaded) && job.flows && job.names && job.makeup && (job.activity || !activityDue) && (job.coins || !coinsStored)) return null;
   const res: DailyResult = { day, ran: [], waiting: [], failed: [], written: 0 };
   const hourNow = Math.floor(now / H) * H;
 
@@ -715,7 +732,7 @@ export async function daily(env: Env, now: number, ctx: DailyCtx): Promise<Daily
     : null;
 
   /** One part: its rows and its flag in one batch. `build` returns null while the part waits. */
-  const part = async (name: string, flag: 'snapNamada' | 'snapOsmosis' | 'snapAlloc' | 'flows' | 'makeup', build: () => Promise<Stmt[] | null>) => {
+  const part = async (name: string, flag: 'snapNamada' | 'snapOsmosis' | 'snapAlloc' | 'flows' | 'makeup' | 'activity' | 'coins', build: () => Promise<Stmt[] | null>) => {
     if (job[flag]) return;
     if (late()) { res.waiting.push(`${name}: the tick ran out of time`); return; }
     try {
@@ -768,6 +785,42 @@ export async function daily(env: Env, now: number, ctx: DailyCtx): Promise<Daily
     const masp = await env.DB.prepare(LAST_IN_RANGE_SQL).bind('supply.masp_shielded', today - D, today).first<{ ts: number; value: number }>();
     if (masp) stmts.push(stmt.metric(today - D, 'supply.masp_shielded.daily', masp.value));
     return stmts;
+  });
+  // The shielded transactions of the two days before (masp_activity_daily, masp-activity.ts), counted once the block
+  // follower's newest block (kv namada.scanned) is past yesterday's end: a day it has not finished is not written,
+  // never as 0, and is not the day's work (nothing is said on the tick; the series' own stamp says the day is not
+  // counted). A day the scan reaches only after that day's job is finished is counted the next day, since each run
+  // counts yesterday and the day before (the latter again, for blocks scanned late).
+  await part('shielded activity', 'activity', async () => {
+    if (!activityDue) return null;
+    const today = dayStart(now);
+    const stmts: Stmt[] = [];
+    for (const d of [today - D, today - 2 * D]) stmts.push(...maspActivityStmts(isoDay(d), await readMaspActivityDay(env.DB, d), scanned!, now));
+    return stmts;
+  });
+  // Every coin in the pool besides NAM (masp_coins_daily, masp-coins.ts): each coin kv masp.coins names is read from
+  // the chain once (one ABCI read of the pool's balance key for that token, 10 s each, one after another inside the
+  // tick's own deadline), and the day's row says whether it carries the read or the hub's last post-balance. The
+  // reads are asked once an hour while one fails (coinsTried), never every tick; a coin neither read nor seen with a
+  // post-balance gets no row. Not the day's work while the hub has stored no coin.
+  await part('shielded coins', 'coins', async () => {
+    if (!coinsStored) return null;
+    if (job.coinsTried === hourNow) { res.waiting.push('shielded coins: a coin\'s pool balance could not be read this hour; asked again next hour'); return null; }
+    const read = ctx.coinBalance ?? ((token: string, s?: AbortSignal) => maspCoinBalance(token, { signal: s, timeoutMs: COIN_READ_TIMEOUT_MS, retries: 0 }));
+    const reads: Record<string, { base: string; height: number; provider: string } | null> = {};
+    for (const token of Object.keys(coins)) {
+      if (late()) { reads[token] = null; continue; }
+      reads[token] = await read(token, ctx.signal).catch((e) => { console.error(`masp coins: the pool's balance of ${token.slice(0, 14)}… was not read:`, String(e).slice(0, 160)); return null; });
+    }
+    const { figures, notRead, unknown } = coinDayFigures(coins, reads, now);
+    const stmts = coinDayStmts(day, figures);
+    if (!notRead.length) return stmts;
+    // written with what there is; the part is done for the day only once every coin was read
+    const next: DailyJob = { ...job, coinsTried: hourNow };
+    res.written += await runBatch(env.DB, [...stmts, kvStmt('jobs.daily', next, now)]);
+    Object.assign(job, next);
+    res.waiting.push(`shielded coins: ${notRead.length} of ${Object.keys(coins).length} coins could not be read from the chain, so their rows carry the last post-balance${unknown.length ? ` (${unknown.length} with none, so no row)` : ''}; asked again next hour`);
+    return null;
   });
   // The pool as a ledger (kv masp.makeup): the flow index's legs since the record's start, the pool's balance as last
   // read, and the chain's running total of shielded rewards read at the head. Written whatever the chain read gave,

@@ -5,8 +5,13 @@
 import type { NamadaBlock } from './parse/namada';
 import type { Stmt } from './db';
 
-/** One shielded transaction a block's results record: the event's indexed-tx, and the word for the event(s) that named it. */
-export interface MaspSeen { height: number; blockIndex: number; batchIndex: number; kind: string }
+/**
+ * One shielded transaction a block's results record: the event's indexed-tx, the word for the event(s) that named it,
+ * and the block's time (`ts`, unix ms, from the block's own header as the hub read it; migration 0024, so the rows can
+ * be counted per UTC day by worker/src/masp-activity.ts). A row without it is from before that migration and is never
+ * counted in a day.
+ */
+export interface MaspSeen { height: number; blockIndex: number; batchIndex: number; kind: string; ts?: number | null }
 
 /** The event types that carry a shielded transaction's index, and the word each is recorded by. */
 export const MASP_EVENT_KINDS: Readonly<Record<string, string>> = { 'masp/transfer': 'transfer', 'masp/fee-payment': 'fee-payment' };
@@ -36,7 +41,7 @@ export function maspSeenOf(block: NamadaBlock): { seen: MaspSeen[]; refused: num
     const height = index(o?.block_height), blockIndex = index(o?.block_index), batchIndex = index(o?.batch_index);
     if (height == null || blockIndex == null || batchIndex == null || height !== block.height) { refused++; continue; }
     const k = seenKey(height, blockIndex, batchIndex);
-    const row = by.get(k) ?? { height, blockIndex, batchIndex, kind: '', kinds: new Set<string>() };
+    const row = by.get(k) ?? { height, blockIndex, batchIndex, kind: '', ts: block.ts, kinds: new Set<string>() };
     row.kinds.add(kind);
     by.set(k, row);
   }
@@ -46,14 +51,14 @@ export function maspSeenOf(block: NamadaBlock): { seen: MaspSeen[]; refused: num
   return { seen, refused };
 }
 
-/** Rows for masp_seen, INSERT OR IGNORE (a block read again changes nothing), 24 rows a statement (4 parameters a row; D1 binds at most 100). */
+/** Rows for masp_seen, INSERT OR IGNORE (a block read again changes nothing), 20 rows a statement (5 parameters a row; D1 binds at most 100). */
 export function maspSeenStmts(rows: MaspSeen[]): Stmt[] {
   const out: Stmt[] = [];
-  for (let i = 0; i < rows.length; i += 24) {
-    const part = rows.slice(i, i + 24);
+  for (let i = 0; i < rows.length; i += 20) {
+    const part = rows.slice(i, i + 20);
     out.push({
-      sql: `INSERT OR IGNORE INTO masp_seen (height, block_index, batch_index, kind) VALUES ${part.map(() => '(?,?,?,?)').join(',')}`,
-      params: part.flatMap((r) => [r.height, r.blockIndex, r.batchIndex, r.kind]),
+      sql: `INSERT OR IGNORE INTO masp_seen (height, block_index, batch_index, kind, ts) VALUES ${part.map(() => '(?,?,?,?,?)').join(',')}`,
+      params: part.flatMap((r) => [r.height, r.blockIndex, r.batchIndex, r.kind, Number.isFinite(r.ts) ? r.ts : null]),
     });
   }
   return out;

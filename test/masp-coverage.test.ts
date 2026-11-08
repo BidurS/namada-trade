@@ -37,22 +37,24 @@ const servedAt = (s: { params: unknown[] }, at: number) => checkOf({ key: s.para
 
 describe('what a block\'s results name (masp-seen.ts)', () => {
   it('reads the indexed-tx of each masp event, once: a fee payment at (0, 0), one at transaction 1 of its block, a transfer at batch index 1', () => {
-    expect(maspSeenOf(blockOf(8515250))).toEqual({ seen: [{ height: 8515250, blockIndex: 0, batchIndex: 0, kind: 'fee-payment' }], refused: 0 });
-    expect(maspSeenOf(blockOf(8515196))).toEqual({ seen: [{ height: 8515196, blockIndex: 0, batchIndex: 0, kind: 'fee-payment' }], refused: 0 });
-    expect(maspSeenOf(blockOf(7903391))).toEqual({ seen: [{ height: 7903391, blockIndex: 1, batchIndex: 0, kind: 'fee-payment' }], refused: 0 });
-    expect(maspSeenOf(blockOf(8512781))).toEqual({ seen: [{ height: 8512781, blockIndex: 0, batchIndex: 1, kind: 'transfer' }], refused: 0 });
+    expect(maspSeenOf(blockOf(8515250))).toEqual({ seen: [{ height: 8515250, blockIndex: 0, batchIndex: 0, kind: 'fee-payment', ts: 0 }], refused: 0 });
+    expect(maspSeenOf(blockOf(8515196))).toEqual({ seen: [{ height: 8515196, blockIndex: 0, batchIndex: 0, kind: 'fee-payment', ts: 0 }], refused: 0 });
+    expect(maspSeenOf(blockOf(7903391))).toEqual({ seen: [{ height: 7903391, blockIndex: 1, batchIndex: 0, kind: 'fee-payment', ts: 0 }], refused: 0 });
+    expect(maspSeenOf(blockOf(8512781))).toEqual({ seen: [{ height: 8512781, blockIndex: 0, batchIndex: 1, kind: 'transfer', ts: 0 }], refused: 0 });
     // a block without a masp event names nothing
     expect(maspSeenOf({ height: 1, ts: 0, events: [{ type: 'token/transfer', attributes: [] }] })).toEqual({ seen: [], refused: 0 });
   });
   it('one inner transaction named by both events is one row; an index that does not parse or names another block is refused, never guessed', () => {
     const ev = (type: string, idx: unknown) => ({ type, attributes: [{ key: 'indexed-tx', value: typeof idx === 'string' ? idx : JSON.stringify(idx) }] });
     const both = maspSeenOf({ height: 10, ts: 0, events: [ev('masp/fee-payment', { block_height: 10, block_index: 0, batch_index: 0 }), ev('masp/transfer', { block_height: 10, block_index: 0, batch_index: 0 }), ev('masp/transfer', { block_height: 10, block_index: 0, batch_index: 2 })] });
-    expect(both).toEqual({ seen: [{ height: 10, blockIndex: 0, batchIndex: 0, kind: 'fee-payment+transfer' }, { height: 10, blockIndex: 0, batchIndex: 2, kind: 'transfer' }], refused: 0 });
+    expect(both).toEqual({ seen: [{ height: 10, blockIndex: 0, batchIndex: 0, kind: 'fee-payment+transfer', ts: 0 }, { height: 10, blockIndex: 0, batchIndex: 2, kind: 'transfer', ts: 0 }], refused: 0 });
     const bad = maspSeenOf({ height: 10, ts: 0, events: [ev('masp/transfer', 'not json'), ev('masp/transfer', { block_height: 11, block_index: 0, batch_index: 0 }), ev('masp/transfer', { block_height: 10, block_index: -1, batch_index: 0 }), { type: 'masp/transfer', attributes: [] }] });
     expect(bad).toEqual({ seen: [], refused: 4 });
-    // 24 rows a statement, 4 parameters each
-    const stmts = maspSeenStmts(Array.from({ length: 50 }, (_, i) => ({ height: 1, blockIndex: i, batchIndex: 0, kind: 'transfer' })));
-    expect(stmts.map((s) => s.params.length)).toEqual([96, 96, 8]);
+    // 20 rows a statement, 5 parameters each (the block's time the fifth, migration 0024; a row without one carries null)
+    const stmts = maspSeenStmts(Array.from({ length: 50 }, (_, i) => ({ height: 1, blockIndex: i, batchIndex: 0, kind: 'transfer', ts: i < 10 ? 1_700_000_000_000 : undefined })));
+    expect(stmts.map((s) => s.params.length)).toEqual([100, 100, 50]);
+    expect(stmts[0].params[4]).toBe(1_700_000_000_000);
+    expect(stmts[0].params[54]).toBeNull();
     expect(stmts[0].sql).toMatch(/^INSERT OR IGNORE INTO masp_seen/);
   });
 });

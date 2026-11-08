@@ -326,6 +326,7 @@ export const BODY: Record<string, PageCopy> = {
  * (shared/format.ts), so no figure is typed here; the view puts the stamp beside the sentence. Bridge words, never
  * the protocol's acronym: a crossing "straight over the bridge".
  */
+const SHIELDED_ACTIVITY_NOUN = (one: boolean) => (one ? 'shielded transaction' : 'shielded transactions');
 export const SHIELDED_WORDS = {
   /** the pool as a ledger: what went in and came out since the record's start, the rewards the chain has minted since it began (no transaction shows them), and the gap to today's balance */
   makeup: (since: string, inNam: string, outNam: string, rewardsNam: string, balanceNam: string, gapNam: string) =>
@@ -350,6 +351,26 @@ export const SHIELDED_WORDS = {
   /** the moves-out list's lead, now that crossings straight out of the pool to the bridge account are listed too */
   outLead: 'The biggest single moves out of the shielded set, largest first: to a personal address, or straight over the bridge to the receiver the record names (older records name only the bridge account). Moves to staking and the other protocol accounts are left out.',
   outEmpty: 'Nothing left the shielded set for a personal address or over the bridge in 30 days.',
+  /**
+   * Activity inside the pool (2026-11-08): the transactions the chain recorded, counted per day from this site's own
+   * record of each block, never users. `txs` and `inside` arrive as words with their count ("12 shielded
+   * transactions", "9"), so the sentence types no figure.
+   */
+  activity: (txs: string, inside: string) => `${txs} in 7 days, ${inside} entirely inside the pool.`,
+  /** the noun, singular and plural, and the count in words */
+  activityNoun: SHIELDED_ACTIVITY_NOUN,
+  activityCount: (n: string, one: boolean) => `${n} ${SHIELDED_ACTIVITY_NOUN(one)}`,
+  /** what the sentence and the bars are counted from (their stamp's label in the source sheet) */
+  activityScope: 'Shielded transactions a day, from this site’s record of each block',
+  /** the record's start, said with the figures: earlier days are not counted */
+  activitySince: (day: string) => `Counted since ${day}; earlier days are not counted.`,
+  /** when not every day of the week is counted yet */
+  activityPartial: (days: string) => `${days} of the 7 days ${days === '1' ? 'is' : 'are'} counted so far.`,
+  /** the desktop chart's heading and unit line */
+  activityHead: 'Shielded transactions a day',
+  activityUnit: 'Each bar is one UTC day: every shielded transaction the chain recorded that day, the darker part those in a block with no NAM moving into or out of the pool (entirely inside it, in another coin, or paying a fee from it). Transactions, never users. A day without a bar was not counted.',
+  activityKey: { all: 'Shielded transactions', inside: 'Entirely inside the pool' } as const,
+  activityNone: 'No day is counted yet: a day is counted once the block follower has scanned past its end, from this release on.',
 } as const;
 
 /**

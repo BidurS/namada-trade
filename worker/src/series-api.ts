@@ -43,6 +43,7 @@ import { poolHoldsSomething } from '../../shared/pool-sides';
 import { NOT_READ, NOT_STORED, POOLS_SOURCE, PRICED_FROM_SQL, inRouterRun, notPricedWords, routerCapNote, routerRunsNote, routerRunsOf, storedPoolsProv, type RouterRun, type StoredPools } from './pool-sizes';
 import { osmosisGapCounts, osmosisGapWindows, reachesOsmosisGap, withOsmosisGap } from '../../shared/osmosis-gap';
 import { ApiInputError } from './api-route';
+import { MASP_ACTIVITY_KEYS } from './masp-activity';
 
 const H = 3_600_000, D = 86_400_000, MIN = 60_000;
 type DB = Env['DB'];
@@ -119,6 +120,18 @@ const hourlyClock = (unit: SeriesUnit, source: string, startNote: (s: string) =>
   // an hour's reading is written in the first minutes of the next hour (series.ts JOB_WINDOW_MS): due after that
   unit, agg: 'last', sparse: false, native: '1h', source, backfilled, maxAgeMs: 3 * H, graceMs: JOB_WINDOW_MS, gapWhy, startNote,
 });
+/**
+ * The shielded transactions a day (masp-activity.ts, migration 0024): counted from this site's record of each block's
+ * shielded transactions (masp_seen) and the flow index's NAM legs at the pool, for each UTC day the block follower has
+ * scanned whole. A day it has not finished is a gap, never 0; on the halted chain the newest counted day stays where
+ * the scan stopped, and the stamp says the writer has not run since.
+ */
+export const MASP_ACTIVITY_SOURCE = 'NamadaTrade shielded-transaction record (daily)';
+const dailyMaspKey = (what: string): SeriesKeyDef => ({
+  unit: 'count', agg: 'sum', sparse: false, native: '1d', source: MASP_ACTIVITY_SOURCE, backfilled: false, maxAgeMs: 2 * D, graceMs: 2 * H,
+  gapWhy: 'Not counted: the block follower had not scanned the whole day when the daily writer ran, or the writer did not run.',
+  startNote: (s) => `${what} for each UTC day since ${s}, counted by block, transaction and batch index from this site's own record of each block (the block follower records them from release 2 on). Earlier days are not counted.`,
+});
 const DAILY_FLOWS = 'D1 flow index (daily)';
 const dailyFlowKey = (unit: SeriesUnit, what: string): SeriesKeyDef => ({
   unit, agg: 'sum', sparse: false, native: '1d', source: DAILY_FLOWS, backfilled: true, maxAgeMs: 2 * D, graceMs: 2 * H, gapWhy: 'The daily writer did not record this day.', osmosisRecord: true,
@@ -183,6 +196,11 @@ export const SERIES_KEYS: Record<string, SeriesKeyDef> = {
   'dex.volume_nam_daily': dailyFlowKey('nam', 'NAM bought plus NAM sold on Osmosis'),
   'dex.traders_daily': dailyFlowKey('count', 'Addresses that traded on Osmosis'),
   'dex.hours_with_trades_daily': dailyFlowKey('count', 'Hours with at least one trade'),
+  [MASP_ACTIVITY_KEYS.txs]: dailyMaspKey('Shielded transactions the chain recorded'),
+  [MASP_ACTIVITY_KEYS.namIn]: dailyMaspKey('Shielded transactions in a block with NAM moving into the shielded pool'),
+  [MASP_ACTIVITY_KEYS.namOut]: dailyMaspKey('Shielded transactions in a block with NAM moving out of the shielded pool'),
+  [MASP_ACTIVITY_KEYS.bridge]: dailyMaspKey('Shielded transactions in a block with NAM crossing the bridge straight into or out of the shielded pool'),
+  [MASP_ACTIVITY_KEYS.inside]: dailyMaspKey('Shielded transactions in a block with no NAM moving into or out of the shielded pool (entirely inside it, in another coin, or paying a fee from it and nothing else)'),
   'holders.namada': hourlyClock('count', 'NamadaTrade holder index',
     (s) => `Addresses holding spendable or staked NAM on Namada (protocol accounts left out), counted at each complete chain balance listing since ${s}. No count of every address exists before then.`,
     'No complete balance listing finished in these hours.'),

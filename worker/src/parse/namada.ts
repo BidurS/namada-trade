@@ -27,7 +27,18 @@ export interface NamadaParsed {
    * again with it gives the reading tied to that account.
    */
   feePayerWanted: string[];
+  /**
+   * The shielded pool's balance of every coin besides NAM the block's events touched, by token address (masp-coins.ts,
+   * kv masp.coins): the pool's post-balance after the block's last token/transfer event that carried one for the coin
+   * (`base`, base units as the chain writes them, via 'post-balance'), or null when the coin's last event at the pool
+   * in the block was an IBC mint or burn, which carries no post-balance (via 'ibc'; the daily job reads the balance
+   * from the chain instead). NAM's own post-balance stays on the flows (meta.maspPostNam) and in the minute reading.
+   */
+  maspCoins: Record<string, MaspCoinSeen>;
 }
+
+/** The pool's balance of one coin as a block's events gave it (NamadaParsed.maspCoins). */
+export interface MaspCoinSeen { base: string | null; via: 'post-balance' | 'ibc' }
 
 type Entry = [[string, string], string];
 
@@ -304,7 +315,7 @@ function pairLegs(s: Leg[], d: Leg[]): { legs: { from: string | null; to: string
  * tx bytes). No event names it, so without it the shielded pool's fee is read from the events alone (namFlows).
  */
 export function parseNamadaBlock(block: NamadaBlock, priceUsd: number | null, feePayers?: ReadonlyMap<string, string>): NamadaParsed {
-  const out: NamadaParsed = { moves: [], flows: [], balances: [], links: [], feePayerWanted: [] };
+  const out: NamadaParsed = { moves: [], flows: [], balances: [], links: [], feePayerWanted: [], maspCoins: {} };
   const packets = ibcPackets(block);
   const usedPackets = new Set<number>();
   /** The wrapper's fee payer, undefined when not given (a wrapper read without it is noted in feePayerWanted). */
@@ -491,6 +502,8 @@ export function parseNamadaBlock(block: NamadaBlock, priceUsd: number | null, fe
       if (!tokenAddr || tokenAddr === NAM.namadaToken) return;
       const target = bareAccount(a['target-account'] || '');
       if (target !== I.masp) return;
+      // the coin's balance at the pool changed with no post-balance to read: the last word on it in this block is 'ibc'
+      out.maspCoins[tokenAddr] = { base: null, via: 'ibc' };
 
       const wrapperHash = (a.hash || a['inner-tx-hash'] || `blk${block.height}`).toUpperCase();
       const innerTxHash = (a['inner-tx-hash'] || '').toUpperCase();
@@ -540,9 +553,12 @@ export function parseNamadaBlock(block: NamadaBlock, priceUsd: number | null, fe
     const innerTxHash = (a['inner-tx-hash'] || '').toUpperCase();
     const descriptor = a['token-event-descriptor'] ?? '';
 
-    // Absolute post-balances: authoritative balance for each touched NAM account
+    // Absolute post-balances: authoritative balance for each touched NAM account; the shielded pool's of every other coin
     for (const p of entries(a['post-balances'])) {
-      if (p.token !== NAM.namadaToken) continue;
+      if (p.token !== NAM.namadaToken) {
+        if (p.account === I.masp && unitsOf(p.amount) !== null) out.maspCoins[p.token] = { base: p.amount, via: 'post-balance' };
+        continue;
+      }
       out.balances.push({ address: p.account, balance: p.amount, height: block.height });
     }
 

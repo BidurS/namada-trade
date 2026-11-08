@@ -11,7 +11,9 @@
 // SourceLine. Then, on black: Inside the shielded set (four facts and one SourceLine, the pool as
 // a ledger since the record's start with a waterfall and how NAM entered the pool, both inline from
 // 1024 px and in the strip's source sheet on a phone, then the share of the week's moves that were
-// not in such a pair, with its own stamp), Largest moves out in 30 days (from 700 px a table of
+// not in such a pair, with its own stamp; the shielded transactions of the last 7 days as one
+// sentence in the same sheet on a phone, and from 1024 px as one bar a day under the flow chart,
+// both from /api/series masp.txs_daily and masp.txs_inside_daily), Largest moves out in 30 days (from 700 px a table of
 // the moves with each move's share of the pool and its recipient's count of moves; under it one
 // row a recipient, the group in place of its moves; a row whose move the server paired with a
 // move in says so, with the server's confidence in words), and How to read this.
@@ -21,12 +23,12 @@
 // tab is visible and when it becomes visible again (supply/parts useLiveLoad); a refresh that fails
 // keeps them, marked old with the reason. A server that does not send the slices or the pairs
 // (one before 2026-10-20) leaves those figures as "—" with the reason, never a stand-in.
-import { useMemo, useState } from 'react';
-import type { BlindSpot, Flow, MaspMakeup, MaspPassthroughPair, MaspPulseBucket, MoveOutGroup, Overview, PoolShare } from '../../../../shared/types';
+import { useEffect, useMemo, useState } from 'react';
+import type { BlindSpot, Flow, MaspMakeup, MaspPassthroughPair, MaspPulseBucket, MoveOutGroup, Overview, PoolShare, SeriesResponse } from '../../../../shared/types';
 import { BODY, SHIELDED_WORDS } from '../../../../shared/copy';
 import type { ScreenProps } from '../../app/index';
 import { useOverview, useReplay } from '../../app/index';
-import { fetchBlindSpot } from '../../api';
+import { fetchBlindSpot, fetchSeries } from '../../api';
 import {
   Derived, EmptyState, Fact, HeroNumber, Notice, Num, ProvChip, ProvDot, ProvScope, Segmented, Skeleton, SkeletonBlock, SourceLine, SupplyBar, Tag, Term,
   derive, namShort, namTick, niceTicks, useMinWidth, useUiNow, type FactItem, type ScopeItem, type Stamp,
@@ -76,6 +78,8 @@ export default function ShieldedScreen({ route }: ScreenProps) {
   const [chartTab, setChartTab] = useState<'total' | 'flow'>('total');
   const [flowWin, setFlowWin] = useState(FLOW_WINDOW_DEFAULT);
   const load = useLiveLoad<BlindSpot>(at, 'blindspot', () => fetchBlindSpot(at));
+  // the shielded transactions a day (two series, 30 days), for the phone's sentence and the desktop's bars
+  const activity = useMaspActivity(at);
   // after a failed refresh the figures stay, every stamp marked old with the reason
   const data = useMemo(
     () => (load.data && load.refreshFailedAt ? ageOutStamps(load.data, refreshFailedNote(load.fetchedAt)) : load.data),
@@ -199,15 +203,19 @@ export default function ShieldedScreen({ route }: ScreenProps) {
           </div>
         ) : null}
         {data && chartTab === 'flow' ? (
-          <FlowChart
-            key={data.pulseSeries ? 'slices' : 'none'}
-            buckets={data.pulseSeries ?? null}
-            end={data.asOf}
-            cov={data.coverage}
-            window={flowWin}
-            onWindow={setFlowWin}
-            rewound={rewound}
-          />
+          <>
+            <FlowChart
+              key={data.pulseSeries ? 'slices' : 'none'}
+              buckets={data.pulseSeries ?? null}
+              end={data.asOf}
+              cov={data.coverage}
+              window={flowWin}
+              onWindow={setFlowWin}
+              rewound={rewound}
+            />
+            {/* desktop only: the shielded transactions a day, one bar a day under the flow chart (a phone says the week's count in the strip's sheet instead) */}
+            {wide ? <ActivityBars activity={activity} end={data.asOf} /> : null}
+          </>
         ) : data && trend.length ? (
           <SeriesChart
             points={trend.map((p) => ({ t: p.ts, v: p.value }))}
@@ -255,7 +263,7 @@ export default function ShieldedScreen({ route }: ScreenProps) {
         <div className="wrap">
           {data ? (
             <>
-              <Inside data={data} overview={o} now={now} rewound={rewound} />
+              <Inside data={data} overview={o} now={now} rewound={rewound} activity={activity} />
               <MovesOut data={data} overview={o} now={now} />
               <Timeline />
             </>
@@ -296,7 +304,7 @@ export default function ShieldedScreen({ route }: ScreenProps) {
 
 // ---------------------------------------------------------------- inside the shielded set
 
-function Inside({ data, overview: o, now, rewound }: { data: BlindSpot; overview: Overview | null; now: number; rewound: boolean }) {
+function Inside({ data, overview: o, now, rewound, activity }: { data: BlindSpot; overview: Overview | null; now: number; rewound: boolean; activity: MaspActivitySeries }) {
   const cov = data.coverage;
   const sp = data.shielded.prov;
   const total = o?.supply.prov ?? null;
@@ -334,6 +342,9 @@ function Inside({ data, overview: o, now, rewound }: { data: BlindSpot; overview
   // The pool as a ledger (the daily job's kv row, served as `makeup`): current, so not said on a rewound page. The
   // ledger sentence needs the chain's rewards total and the pool's balance; the bridge sentence needs the legs in only.
   const ledger = rewound ? null : ledgerOf(data.makeup ?? null, now);
+  // the week's shielded transactions as one sentence, in the strip's sheet beside the ledger's on a phone (the desktop draws them a day at a time under the flow chart)
+  const week = activityWeek(activity, data.asOf);
+  const weekScope: ScopeItem[] = week ? [{ label: SHIELDED_WORDS.activityScope, p: week.stamp, text: week.text }] : [];
   return (
     <ProvScope as="section" className="ipg-sec" aria-labelledby="shd-in-h" data-decision="D5">
       <div className="ipg-sec__head">
@@ -345,7 +356,7 @@ function Inside({ data, overview: o, now, rewound }: { data: BlindSpot; overview
         </p>
       </div>
       {/* a phone keeps the ledger's sentences in the strip's source sheet, each with its stamp; a desktop says them inline below */}
-      <Fact items={items} sourceLabel="Where the shielded figures come from" className="shd-facts" scopeExtra={!wide && ledger ? ledger.scope : []} />
+      <Fact items={items} sourceLabel="Where the shielded figures come from" className="shd-facts" scopeExtra={!wide ? [...(ledger ? ledger.scope : []), ...weekScope] : []} />
       {wide && ledger?.makeup ? (
         <div className="shd-ledger" data-prov-group="">
           <p className="ipg-prose">
@@ -372,6 +383,126 @@ function Inside({ data, overview: o, now, rewound }: { data: BlindSpot; overview
         <ProvDot p={stayedStamp} label="Share of the week's moves not paired with a move in" />
       </p>
     </ProvScope>
+  );
+}
+
+// ---------------------------------------------------------------- activity inside the pool (/api/series masp.txs_daily, masp.txs_inside_daily)
+
+/** The two daily series as fetched: null while loading or failed (`failed` says which). */
+interface MaspActivitySeries { at: number | null; all: SeriesResponse | null; inside: SeriesResponse | null; failed: boolean }
+const ACTIVITY_DAYS = 30;
+
+/**
+ * The shielded transactions a day over the last ACTIVITY_DAYS days, and of them those entirely inside the pool: two
+ * requests to /api/series, once per rewound time. Every figure arrives with its stamp; nothing here is typed.
+ */
+function useMaspActivity(at: number | null): MaspActivitySeries {
+  const [st, setSt] = useState<MaspActivitySeries>({ at, all: null, inside: null, failed: false });
+  useEffect(() => {
+    const ctl = new AbortController();
+    const from = (at ?? Date.now()) - ACTIVITY_DAYS * DAY;
+    Promise.all([
+      fetchSeries({ key: 'masp.txs_daily', from, step: '1d', asOf: at }, { signal: ctl.signal }),
+      fetchSeries({ key: 'masp.txs_inside_daily', from, step: '1d', asOf: at }, { signal: ctl.signal }),
+    ]).then(([all, inside]) => { if (!ctl.signal.aborted) setSt({ at, all, inside, failed: false }); }, () => { if (!ctl.signal.aborted) setSt({ at, all: null, inside: null, failed: true }); });
+    return () => ctl.abort();
+  }, [at]);
+  return st.at === at ? st : { at, all: null, inside: null, failed: false };
+}
+
+/**
+ * The week's sentence from the two series: the counted days in the 7 UTC days before `end`, summed, with how many of
+ * the 7 were counted when not all were, and the start of the record. Null while the series have not arrived or no
+ * day of the window is counted (the sheet then says nothing: no 0 stands in).
+ */
+function activityWeek(a: MaspActivitySeries, end: number): { text: string; stamp: Stamp } | null {
+  if (!a.all || !a.inside) return null;
+  const from = end - 7 * DAY;
+  const days = a.all.points.filter((p) => p.t >= from && p.t < end);
+  if (!days.length) return null;
+  const insideBy = new Map(a.inside.points.map((p) => [p.t, p.v]));
+  const txs = days.reduce((s, p) => s + p.v, 0);
+  const inside = days.reduce((s, p) => s + (insideBy.get(p.t) ?? 0), 0);
+  const parts = [SHIELDED_WORDS.activity(SHIELDED_WORDS.activityCount(fmtCount(txs), txs === 1), fmtCount(inside))];
+  if (days.length < 7) parts.push(SHIELDED_WORDS.activityPartial(fmtCount(days.length)));
+  if (a.all.start != null) parts.push(SHIELDED_WORDS.activitySince(fmtDayMonthYear(a.all.start)));
+  return { text: parts.join(' '), stamp: a.all.prov as Stamp };
+}
+
+const ACT_H = 120, ACT_L = 36, ACT_T = 8, ACT_B = 20;
+
+/**
+ * One bar a day under the flow chart (desktop): every shielded transaction the chain recorded that day, the darker
+ * part those in a block with no NAM moving into or out of the pool. Counts from /api/series; a day without a point
+ * draws no bar (it was not counted), and the record's start is said under the chart. Nothing is drawn before the
+ * series arrive.
+ */
+function ActivityBars({ activity: a, end }: { activity: MaspActivitySeries; end: number }) {
+  const [ref, { w }] = useSize<HTMLDivElement>();
+  if (!a.all || !a.inside) {
+    return a.failed ? (
+      <section className="chartsec shd-act" aria-labelledby="shd-act-h">
+        <h2 id="shd-act-h" className="chartsec__h">{SHIELDED_WORDS.activityHead}</h2>
+        <p className="cap">The shielded transactions a day did not load: the server did not answer.</p>
+      </section>
+    ) : null;
+  }
+  const stamp = a.all.prov as Stamp;
+  const scope: ScopeItem[] = [{ label: SHIELDED_WORDS.activityScope, p: stamp }];
+  const t0 = end - ACTIVITY_DAYS * DAY;
+  const insideBy = new Map(a.inside.points.map((p) => [p.t, p.v]));
+  const pts = a.all.points.filter((p) => p.t >= t0 && p.t < end);
+  const max = Math.max(1, ...pts.map((p) => p.v));
+  const yT = niceTicks(0, max, { maxTicks: 4, zero: true });
+  const X = lin(t0, end, ACT_L, Math.max(ACT_L + 1, w - 8));
+  const Y = lin(yT.lo, yT.hi, ACT_H - ACT_B, ACT_T);
+  const bw = Math.max(1, (X(t0 + DAY) - X(t0)) - 2);
+  const newest = pts[pts.length - 1];
+  return (
+    <section className="chartsec shd-act" aria-labelledby="shd-act-h" data-prov-scope="">
+      <div className="chartsec__top">
+        <div className="chartsec__title">
+          <h2 id="shd-act-h" className="chartsec__h">
+            {newest ? <><Num v={newest.v} fmt={fmtCount} /> {SHIELDED_WORDS.activityNoun(newest.v === 1)} on {fmtDayMonth(newest.t)}</> : SHIELDED_WORDS.activityHead}
+          </h2>
+          <p className="cap">{SHIELDED_WORDS.activityUnit}{a.all.start != null ? <> {SHIELDED_WORDS.activitySince(fmtDayMonthYear(a.all.start))}</> : null}</p>
+        </div>
+      </div>
+      {pts.length ? (
+        <div className="chart-box shd-act__box" ref={ref} role="img" aria-label={`${SHIELDED_WORDS.activityHead}: ${pts.map((p) => `${fmtDayMonth(p.t)} ${fmtCount(p.v)}, ${fmtCount(insideBy.get(p.t) ?? 0)} inside`).join('; ')}`}>
+          {w > 0 ? (
+            <svg width={w} height={ACT_H} viewBox={`0 0 ${w} ${ACT_H}`} aria-hidden="true">
+              {yT.ticks.map((t) => (
+                <g key={t}>
+                  <line className={t === 0 ? 'c-axis' : 'c-grid'} x1={ACT_L} x2={w - 8} y1={Y(t)} y2={Y(t)} />
+                  <text className="c-tick" x={ACT_L - 6} y={Y(t) + 4} textAnchor="end">{fmtCount(t)}</text>
+                </g>
+              ))}
+              <text className="c-tick" x={ACT_L} y={ACT_H - 6}>{fmtDayMonth(t0)}</text>
+              <text className="c-tick" x={w - 8} y={ACT_H - 6} textAnchor="end">{fmtDayMonth(end)}</text>
+              {pts.map((p) => {
+                const x = X(p.t) + 1, y0 = Y(0), ins = insideBy.get(p.t) ?? 0;
+                return (
+                  <g key={p.t}>
+                    {p.v > 0 ? <rect className="shd-act__all" x={x} y={Y(p.v)} width={bw} height={Math.max(0, y0 - Y(p.v))} /> : null}
+                    {ins > 0 ? <rect className="shd-act__inside" x={x} y={Y(ins)} width={bw} height={Math.max(0, y0 - Y(ins))} /> : null}
+                  </g>
+                );
+              })}
+            </svg>
+          ) : null}
+        </div>
+      ) : (
+        <p className="readout"><span className="readout__k">{SHIELDED_WORDS.activityNone}</span></p>
+      )}
+      {pts.length ? (
+        <ul className="key">
+          <li className="key__i"><span className="key__sw shd-act__sw--all" aria-hidden="true" />{SHIELDED_WORDS.activityKey.all}</li>
+          <li className="key__i"><span className="key__sw shd-act__sw--inside" aria-hidden="true" />{SHIELDED_WORDS.activityKey.inside}</li>
+        </ul>
+      ) : null}
+      <SourceLine items={scope} label="Where the shielded transaction counts come from" />
+    </section>
   );
 }
 
