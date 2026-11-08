@@ -73,7 +73,8 @@ export function anthropicAsk(apiKey: string): AskCall {
 export function askParams(rules: string, volatile: string, schema: Record<string, unknown>, user: string): AskParams {
   return {
     model: ASK_MODEL,
-    max_tokens: 1024,
+    // the model's thinking counts against this, so it is well above the longest answer allowed
+    max_tokens: 2048,
     system: [
       { type: 'text', text: askReferenceText(), cache_control: { type: 'ephemeral' } },
       { type: 'text', text: `${rules}\n\n${volatile}` },
@@ -310,8 +311,8 @@ export const ASK_SELFTEST: { question: string; history?: { q: string; a: string 
   { question: 'Who owns the largest shielded balance?' },
   { question: 'What is the weather in Paris?' },
 ];
-/** The second run's rows, with the reason for each failure; the first run stays in `ask.selftest` to compare against. */
-const SELFTEST_KEY = 'ask.selftest.2';
+/** This run's rows, with the reason for each failure; the earlier runs stay in `ask.selftest` and `ask.selftest.2` to compare against. */
+const SELFTEST_KEY = 'ask.selftest.3';
 /** Questions a tick asks at most: two, about twenty seconds at the very worst, so a tick is never held for long. */
 const SELFTEST_PER_TICK = 2;
 
