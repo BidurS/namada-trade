@@ -443,21 +443,30 @@ describe('the review run while the chat is off', () => {
     const db = testD1() as unknown as D1Database;
     const env = { DB: db, ANTHROPIC_API_KEY: 'k' };
     await runAskSelfTest(env, NOW, { call, shown: false });
-    let rows = (await kvGetJson<AskSelfTestRow[]>(db, 'ask.selftest'))!;
+    let rows = (await kvGetJson<AskSelfTestRow[]>(db, 'ask.selftest.2'))!;
     expect(rows.map((r) => r.question)).toEqual(ASK_SELFTEST.slice(0, 2).map((t) => t.question));
     for (let i = 0; i < ASK_SELFTEST.length; i++) await runAskSelfTest(env, NOW, { call, shown: false });
-    rows = (await kvGetJson<AskSelfTestRow[]>(db, 'ask.selftest'))!;
+    rows = (await kvGetJson<AskSelfTestRow[]>(db, 'ask.selftest.2'))!;
     expect(rows).toHaveLength(ASK_SELFTEST.length);
     let calls = 0;
     await runAskSelfTest(env, NOW, { call: async (p, t) => { calls++; return call(p, t); }, shown: false });
     expect(calls).toBe(0);
   });
 
+  it('keeps why an answer failed as a fixed code, with none of the model’s words', async () => {
+    const db = testD1() as unknown as D1Database;
+    const bad: AskCall = async () => ({ text: JSON.stringify({ answer: 'SECRETWORD is 7777777.', pages: ['shielded'], answerable: true }), stopReason: 'end_turn', usage: { input: 1, output: 1, cacheWrite: 0, cacheRead: 0 } });
+    await runAskSelfTest({ DB: db, ANTHROPIC_API_KEY: 'k' }, NOW, { call: bad, shown: false });
+    const rows = (await kvGetJson<AskSelfTestRow[]>(db, 'ask.selftest.2'))!;
+    expect(rows[0]).toMatchObject({ status: 'failed', reason: 'check: a number not in the context' });
+    expect(JSON.stringify(rows)).not.toContain('SECRETWORD');
+  });
+
   it('does nothing with the chat on or without a key', async () => {
     const db = testD1() as unknown as D1Database;
     await runAskSelfTest({ DB: db, ANTHROPIC_API_KEY: 'k' }, NOW, { call, shown: true });
     await runAskSelfTest({ DB: db, ANTHROPIC_API_KEY: undefined }, NOW, { call, shown: false });
-    expect(await kvGetJson(db, 'ask.selftest')).toBeNull();
+    expect(await kvGetJson(db, 'ask.selftest.2')).toBeNull();
   });
 });
 

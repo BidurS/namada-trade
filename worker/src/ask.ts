@@ -209,7 +209,13 @@ function logFailure(what: string, e: unknown): void {
   console.error(`ask: ${what}${typeof status === 'number' ? ` (status ${status})` : ''}`);
 }
 
-export async function answerAsk(body: unknown, deps: AskDeps): Promise<{ http: number; answer: AskAnswer }> {
+/**
+ * Why an answer failed, as one of a fixed set of codes (never the model's words or an error's text). Only the review run
+ * stores it; POST /api/ask sends the answer alone, so a reader sees the same fixed sentence whatever the reason.
+ */
+const failed = (reason: string): { http: number; answer: AskAnswer; reason: string } => ({ http: 200, answer: FAILED, reason });
+
+export async function answerAsk(body: unknown, deps: AskDeps): Promise<{ http: number; answer: AskAnswer; reason?: string }> {
   const { db, apiKey, now, shown = ASK_SHOWN, clock = Date.now, ip, origin } = deps;
   if (!shown || !apiKey) return { http: 503, answer: UNAVAILABLE };
   if (!askOriginAllowed(origin)) return { http: 403, answer: INVALID };
@@ -240,30 +246,32 @@ export async function answerAsk(body: unknown, deps: AskDeps): Promise<{ http: n
     raw = await call(askParams(ASK_RULES, volatile, ASK_SCHEMA as unknown as Record<string, unknown>, askUserMessage(question, history)), ASK_ANSWER_TIMEOUT_MS);
   } catch (e) {
     logFailure('the answer call failed', e);
-    return { http: 200, answer: FAILED };
+    return failed('answer: the call failed');
   }
   await addSpend(db, now, usageUsd(raw.usage));
-  if (raw.stopReason === 'refusal' || raw.stopReason === 'max_tokens') return { http: 200, answer: FAILED };
+  if (raw.stopReason === 'refusal' || raw.stopReason === 'max_tokens') return failed(`answer: stopped (${raw.stopReason})`);
 
   let parsed: { answer?: unknown; pages?: unknown; answerable?: unknown };
-  try { parsed = JSON.parse(raw.text); } catch { return { http: 200, answer: FAILED }; }
+  try { parsed = JSON.parse(raw.text); } catch { return failed('answer: not the asked shape'); }
   if (parsed?.answerable === false) return { http: 200, answer: NOT_COVERED };
-  if (parsed?.answerable !== true || typeof parsed.answer !== 'string') return { http: 200, answer: FAILED };
+  if (parsed?.answerable !== true || typeof parsed.answer !== 'string') return failed('answer: not the asked shape');
 
   const pages = pagesFrom(parsed.pages);
   const check = checkAnswer(parsed.answer, figures);
-  if (!check.ok || !pages.length) return { http: 200, answer: FAILED };
+  if (!check.ok) return failed(`check: ${check.reason}`);
+  if (!pages.length) return failed('check: no page named');
 
   // The second reading, when it fits; an answer that could not be read is not shown.
   const left = started + ASK_BUDGET_MS - clock();
-  if (left < ASK_READING_MIN_MS) return { http: 200, answer: FAILED };
+  if (left < ASK_READING_MIN_MS) return failed('reading: no time left');
   try {
     const read = await call(askParams(ASK_READING_RULES, volatile, ASK_READING_SCHEMA as unknown as Record<string, unknown>, askReadingMessage(check.text)), Math.min(ASK_READING_TIMEOUT_MS, left));
     await addSpend(db, now, usageUsd(read.usage));
-    if (read.stopReason === 'refusal' || read.stopReason === 'max_tokens' || JSON.parse(read.text)?.supported !== true) return { http: 200, answer: FAILED };
+    if (read.stopReason === 'refusal' || read.stopReason === 'max_tokens') return failed(`reading: stopped (${read.stopReason})`);
+    if (JSON.parse(read.text)?.supported !== true) return failed('reading: not supported');
   } catch (e) {
     logFailure('the second reading failed', e);
-    return { http: 200, answer: FAILED };
+    return failed('reading: the call failed');
   }
 
   const stamps = figuresUsed(figures, check.text).map(({ label, source, at, old }) => ({ label, source, at, old }));
@@ -286,11 +294,12 @@ export const ASK_SELFTEST: { question: string; history?: { q: string; a: string 
   { question: 'Who owns the largest shielded balance?' },
   { question: 'What is the weather in Paris?' },
 ];
-const SELFTEST_KEY = 'ask.selftest';
+/** The second run's rows, with the reason for each failure; the first run stays in `ask.selftest` to compare against. */
+const SELFTEST_KEY = 'ask.selftest.2';
 /** Questions a tick asks at most: two, about twenty seconds at the very worst, so a tick is never held for long. */
 const SELFTEST_PER_TICK = 2;
 
-export interface AskSelfTestRow { question: string; status: string; text: string; pages: string[]; ms: number }
+export interface AskSelfTestRow { question: string; status: string; text: string; pages: string[]; ms: number; reason?: string }
 
 /** One tick of the review run. Never throws; stops for good once every question has an answer on record. */
 export async function runAskSelfTest(env: Pick<Env, 'DB' | 'ANTHROPIC_API_KEY'>, now: number, opts: { call?: AskCall; shown?: boolean; clock?: () => number } = {}): Promise<void> {
@@ -301,8 +310,8 @@ export async function runAskSelfTest(env: Pick<Env, 'DB' | 'ANTHROPIC_API_KEY'>,
     if (rows.length >= ASK_SELFTEST.length) return;
     for (const t of ASK_SELFTEST.slice(rows.length, rows.length + SELFTEST_PER_TICK)) {
       const t0 = clock();
-      const { answer } = await answerAsk(t, { db: env.DB, apiKey: env.ANTHROPIC_API_KEY, now, shown: true, call, clock });
-      rows.push({ question: t.question, status: answer.status, text: answer.text, pages: answer.pages.map((p) => p.id), ms: clock() - t0 });
+      const { answer, reason } = await answerAsk(t, { db: env.DB, apiKey: env.ANTHROPIC_API_KEY, now, shown: true, call, clock });
+      rows.push({ question: t.question, status: answer.status, text: answer.text, pages: answer.pages.map((p) => p.id), ms: clock() - t0, ...(reason ? { reason } : {}) });
     }
     await kvSet(env.DB, SELFTEST_KEY, rows);
   } catch {
