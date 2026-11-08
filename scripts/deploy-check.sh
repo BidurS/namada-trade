@@ -311,6 +311,9 @@ check "CSP is enforced"                1 "$(curl -s -I "$H/" | grep -ci '^conten
 # a day the Trade page asks for (30 days back): another day is limited on a miss (worker/src/http.ts seriesFromDays)
 day=$(python3 -c "import datetime; print((datetime.datetime.now(datetime.timezone.utc) - datetime.timedelta(days=30)).strftime('%Y-%m-%d'))")
 check "series answers by day"          200 "$(curl -s -o /dev/null -w '%{http_code}' "$H/api/series?key=price.usd&from=$day&step=1h")"
+# the supply ledger of 2026-11-07: the sparse series of the newest epoch's mint, and the overview's two fields, each with a stamp whose status is one of the three
+check "supply.mint series answers"     200 "$(curl -s -o /dev/null -w '%{http_code}' "$H/api/series?key=supply.mint&from=$day&step=1h")"
+check "overview carries the supply ledger fields" 1 "$(curl -s "$H/api/overview" | python3 -c "import sys,json; s=json.load(sys.stdin)['supply']; print(1 if all(k in s and s[k]['prov']['status'] in ('live','stale','missing') for k in ('mint','shieldedRewards')) else 0)")"
 check "an encoded parameter name is a 404" 404 "$(curl -s -o /dev/null -w '%{http_code}' "$H/api/alerts/rules?%62igSwap=1&bigSwap=2")"
 check "a caller alert size is a 400"     400 "$(curl -s -o /dev/null -w '%{http_code}' "$H/api/alerts/recent?bigSwap=1")"
 check "a count the app never sends is a 400" 400 "$(curl -s -o /dev/null -w '%{http_code}' "$H/api/flows?count=x")"

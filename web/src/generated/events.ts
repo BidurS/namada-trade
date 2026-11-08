@@ -313,6 +313,9 @@ export const INCIDENTS: Incident[] = [
       {
         "label": "The chain: blocks 6,966,393 to 6,966,885",
         "url": "https://namada.valopers.com/blocks/6966393"
+      },
+      {
+        "label": "Namada’s announcement on X, 20 June 2026"
       }
     ],
     "mark": "Assets out"

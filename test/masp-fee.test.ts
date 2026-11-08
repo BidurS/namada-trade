@@ -297,7 +297,7 @@ describe('the pool\'s sums add the fee back', () => {
   });
 });
 
-describe('public answers never carry the gas setting (meta.maspFeeNam)', () => {
+describe('public answers carry no maspFeeNam field (the fee stays derivable from the block\'s recorded pool balances, and a single-target transaction\'s fee is a masp_fee row)', () => {
   const T = Date.UTC(2026, 10, 2, 18, 0);
   const stored = { id: `namada:${W2}:1`, chain: 'namada', height: 8510819, ts: T - 120_000, tx_hash: W2, kind: 'unshield', from_addr: MASP, to_addr: RCPT2, amount_num: 15_000_000, meta: JSON.stringify({ descriptor: 'transfer-from-wasm', innerTxHash: I2, maspFeeNam: 0.134937, maspPostNam: POST2, priceSource: 'spot' }) };
   it('publicMeta drops the key and keeps every other; rowToFlow applies it; the store keeps the key', () => {

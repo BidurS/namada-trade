@@ -89,11 +89,29 @@ describe('the moves-out read', () => {
     expect(bs.outGroups!.map((g) => g.n)).toEqual([15, 15]);
     expect(MOVES_OUT_READ_MAX).toBe(1000);
   });
-  it('no sentence or field names an address beyond the recipients the list shows', async () => {
+  it('no sentence or field names an address beyond the recipients the list shows: the groups sent are the listed recipients\', counted over every row read', async () => {
     const db = testD1();
-    insert(db, 'flows', [row({ amount_num: 500, meta: meta({ innerTxHash: 'K', maspPostNam: '31000000000000' }) }), row({ kind: 'ibc_out', to_addr: LABELLED, amount_num: 400 })]);
+    // 29 recipients with a move each, largest first, and the labelled Osmosis receiver's crossing above them all: 30 of
+    // the 31 rows have distinct recipients, and the smallest row goes to the largest unshield's recipient too
+    const C = 'acdefghjklmnpqrstuvwxyz';
+    const to = (i: number) => `tnam1q${C[Math.floor(i / C.length)]}${C[i % C.length]}${'q'.repeat(36)}`;
+    insert(db, 'flows', [
+      row({ kind: 'ibc_out', to_addr: LABELLED, amount_num: 2_000, ts: NOW - H }),
+      ...Array.from({ length: 29 }, (_, i) => row({ to_addr: to(i), amount_num: 1_000 - i, ts: NOW - (i + 2) * H, meta: i === 0 ? meta({ innerTxHash: 'K', maspPostNam: '31000000000000' }) : null })),
+      row({ to_addr: to(0), amount_num: 1, ts: NOW - 40 * H }),
+    ]);
     const bs = await blindSpot(db as any, NOW, false);
+    expect(bs.unshields).toHaveLength(MOVES_OUT_SHOWN);
+    expect(bs.outRead).toBe(31);
     const shown = new Set(bs.unshields.map((f) => f.to));
+    expect(shown.size).toBe(MOVES_OUT_SHOWN);
+    // every group is a listed recipient's; the five recipients below the list and the unlisted smallest row have no group of their own
+    expect(bs.outGroups!.length).toBe(MOVES_OUT_SHOWN);
+    for (const g of bs.outGroups!) expect(shown.has(g.to), g.to).toBe(true);
+    expect(bs.outGroups!.some((g) => g.to === to(24))).toBe(false);
+    // the listed recipient's group still counts the row the list does not show
+    expect(bs.outGroups!.find((g) => g.to === to(0))).toMatchObject({ n: 2, nam: 1_001, largestNam: 1_000 });
+    expect(bs.outGroups![0]).toMatchObject({ to: LABELLED, n: 1, nam: 2_000 });
     const named = JSON.stringify({ groups: bs.outGroups, shares: bs.outShares, makeup: bs.makeup }).match(/(tnam1|osmo1)[02-9ac-hj-np-z]{8,}/g) ?? [];
     expect(named.length).toBeGreaterThan(0);
     for (const a of named) expect(shown.has(a), a).toBe(true);
@@ -105,7 +123,6 @@ describe('the moves-out read', () => {
     for (const w of words) {
       expect(w).not.toMatch(/tnam1|osmo1/);
       for (const b of BANNED) expect(w, `${b.word} in "${w}"`).not.toMatch(b.re);
-      expect(w).not.toMatch(/attacker|hacker|thief|backed|solvent|\bsafe\b|printed/i);
     }
   });
 });

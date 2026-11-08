@@ -119,9 +119,9 @@ describe('the since-genesis sentence', () => {
   });
 
   it('the words carry exactly the figures given and type none of their own (N2); the new screens pass the copy lint', () => {
-    const t = SUPPLY_WORDS.sinceGenesis('1,000,000,000', '1,148,774,450', '27,347,610', '1207', '30,514,699', '10,295,703');
-    expect(t).toBe('Since genesis, NAM supply grew from 1,000,000,000 to 1,148,774,450 NAM: 27,347,610 NAM minted into the shielded pool as shielded rewards (the chain’s own total), the rest staking inflation and public-funding inflation, which can be told apart only from epoch 1207 on (30,514,699 and 10,295,703 NAM since then; before that, together).');
-    expect(t.replace(/1,000,000,000|1,148,774,450|27,347,610|1207|30,514,699|10,295,703/g, '')).not.toMatch(/\d/);
+    const t = SUPPLY_WORDS.sinceGenesis('1,000,000,000', '1,148,774,450', '27,347,610', '1207', '2737', '30,514,699', '10,295,703');
+    expect(t).toBe('Since genesis, NAM supply grew from 1,000,000,000 to 1,148,774,450 NAM: 27,347,610 NAM minted into the shielded pool as shielded rewards (the chain’s own total), the rest staking inflation and public-funding inflation, which can be told apart only from epoch 1207 on (30,514,699 and 10,295,703 NAM from epoch 1207 to 2737; before that, together).');
+    expect(t.replace(/1,000,000,000|1,148,774,450|27,347,610|1207|2737|30,514,699|10,295,703/g, '')).not.toMatch(/\d/);
     // every other sentence of the words file, given letters for figures, has no digit of its own
     const letters = [
       SUPPLY_WORDS.caveat('D', 'A', 'B', 'C', 'E', 'F', 'G', 'H', 'I'),
@@ -133,8 +133,8 @@ describe('the since-genesis sentence', () => {
       expect(s, s).not.toMatch(/\d/);
       expect(s, s).not.toMatch(BANNED);
     }
-    expect(SUPPLY_WORDS.mintNow('19,961.144868', '2738', '8,514,219')).toBe('19,961.144868 NAM an epoch goes to stakers (chain record at epoch 2738, block 8,514,219).');
-    expect(SUPPLY_WORDS.transfer('52,378,111.75', '5,725,013', '10 Mar 2026')).toBe('The public-funding account also holds 52,378,111.75 NAM that arrived in one transfer at block 5,725,013 (10 Mar 2026): moved from another account, not newly minted.');
+    expect(SUPPLY_WORDS.mintNow('19,961.144868', '2738', '8,514,219')).toBe('19,961.144868 NAM of staking inflation was minted into the staking account as epoch 2738 started (the chain’s record, block 8,514,219).');
+    expect(SUPPLY_WORDS.transfer('52,378,111.75', '5,725,013', '10 Mar 2026')).toBe('The public-funding account also received 52,378,111.75 NAM in one transfer at block 5,725,013 (10 Mar 2026): moved from another account, not newly minted.');
     for (const f of ['web/src/screens/supply/SinceGenesis.tsx', 'web/src/screens/supply/index.tsx', 'web/src/screens/shielded/Timeline.tsx', 'web/src/screens/shielded/index.tsx', 'web/src/screens/trade/index.tsx', 'web/src/ui/PriceChart.tsx', 'web/src/ui/SeriesChart.tsx']) {
       expect(numLintFile(join(ROOT, f)), f).toEqual([]);
       expect(lintFile(join(ROOT, f)), f).toEqual([]);

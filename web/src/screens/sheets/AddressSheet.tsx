@@ -189,9 +189,12 @@ function Ranks({ r, stamp }: { r: AddressReport; stamp: Stamp }) {
  * "First seen 3 Nov 2026 by this site, which has listed every Namada balance since 20 Oct 2026." The date is the balance
  * listing that first found the address with NAM (holders.first_seen); an address without the mark was already there
  * when the listings began (shared/record-since.ts everyBalance) and gets no line. The stamp is the holder index's.
+ * Shown in the side panel only (from 1024 px): a phone's bottom sheet gains no line for it.
  */
 function FirstSeen({ at }: { at: number }) {
+  const wide = useMinWidth(1024);
   const stamp: Stamp = { source: TECH.holderIndex, plain: 'Holder index', at, status: 'live' };
+  if (!wide) return null;
   return (
     <p className="sh-cap sh-first" data-prov-group="">
       {ADDRESS_WORDS.firstSeen(fmtDayMonthYear(at), fmtDayMonthYear(RECORD_SINCE.everyBalance))}
@@ -201,14 +204,15 @@ function FirstSeen({ at }: { at: number }) {
 }
 
 /**
- * Why a curated or genesis label is on the address: the label row's own note, inline in the side panel (from 1024 px)
- * and behind a "Why this label" disclosure in the phone's bottom sheet. A wallet's own tag has no reason shown: the
- * server does not send one, and a tag (source 'user') is skipped here too.
+ * Why a genesis label is on the address: the label row's own note, inline in the side panel (from 1024 px) and behind
+ * a "Why this label" disclosure in the phone's bottom sheet. A curated label's note is not shown: the curated notes are
+ * shown once a later migration rewords them in the site's words. A wallet's own tag has no reason shown: the server
+ * does not send one, and a tag (source 'user') is skipped here too.
  */
 function WhyLabel({ label }: { label: NonNullable<AddressReport['label']> }) {
   const wide = useMinWidth(1024);
   const source = label.label_source ?? label.source;
-  if (!label.note || source === 'user') return null;
+  if (!label.note || source !== 'genesis') return null;
   if (wide) return <p className="sh-cap sh-why" data-testid="sh-why">{label.note}</p>;
   return (
     <details className="sh-why" data-testid="sh-why">
@@ -230,6 +234,8 @@ function Report({
   overviewCoverage: [Stamp, Stamp] | null;
   onClose: () => void;
 }) {
+  // the from-pool sentence is a side-panel line (from 1024 px); a phone's bottom sheet gains no line for it
+  const wide = useMinWidth(1024);
   const bal = r.balance.value;
   const st = r.staking ?? null;
   const balStamp: Stamp = { ...r.balance.prov };
@@ -420,7 +426,7 @@ function Report({
         ) : null}
 
         {tradeWords ? <p className="sh-cap" data-testid="sh-trades">{tradeWords}</p> : null}
-        {poolWords ? (
+        {wide && poolWords ? (
           <p className="sh-cap" data-testid="sh-from-pool" data-prov-group="">
             {poolWords}{' '}<ProvDot p={recordStamp} label="NAM received that came out of the shielded pool" />
           </p>
