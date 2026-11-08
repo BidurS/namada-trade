@@ -6,7 +6,7 @@ import { DAY_MS, DAILY_DAYS, HISTORY_FETCH_DAYS } from '../../shared/history';
 import { TRADES_TAPE_LIMIT } from '../../shared/types';
 import { QUOTE_NAM_MIN, QUOTE_NAM_MAX, roundQuoteNam, HEAT_DAYS, CHANGES_LIMIT_MAX } from '../../shared/depth';
 
-export const CACHEABLE_API = /^\/api\/(overview|pools|pressure|blindspot|orderflow|flows|holders|search|metrics\/history|quote\/curve|alerts\/rules|alerts\/recent|intel|series|series\/changes|series\/volume|series\/pairs|series\/trades|series\/values|depth|depth\/quote|depth\/history|depth\/heat|depth\/owners|depth\/changes|integrity|donation|health)$/;
+export const CACHEABLE_API = /^\/api\/(overview|pools|pressure|blindspot|orderflow|flows|holders|search|metrics\/history|quote\/curve|alerts\/rules|alerts\/recent|intel|series|series\/changes|series\/volume|series\/pairs|series\/trades|series\/values|series\/cohorts|depth|depth\/quote|depth\/history|depth\/heat|depth\/owners|depth\/changes|integrity|donation|health)$/;
 
 const THRESHOLDS = ['ibcInventory', 'unlock', 'bigSwap', 'unshield', 'bond', 'exitBridge', 'liquidity'];
 /**
@@ -35,6 +35,7 @@ export const CACHE_PARAMS: Record<string, string[]> = {
   '/api/series/pairs': [],
   '/api/series/trades': ['before', 'maker', 'min', 'limit', 'at'],
   '/api/series/values': ['at'],
+  '/api/series/cohorts': ['at'],
   // The depth routes (worker/src/api-depth.ts DEPTH_PARAMS lists exactly these; test/depth-api.test.ts checks it)
   '/api/depth': [],
   '/api/depth/quote': ['side', 'nam'],

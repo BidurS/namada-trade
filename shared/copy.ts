@@ -389,6 +389,54 @@ export const SUPPLY_WORDS = {
   dated: (day: string) => `Static, dated ${day}`,
 } as const;
 
+/**
+ * The Supply page's genesis cohorts (2026-11-07, migration 0023): what the addresses funded at genesis hold now, by
+ * cohort, against their allocations. Every figure arrives already formatted (N2); web/src/screens/supply/cohorts.ts
+ * computes the parts from /api/series/cohorts. Plain words: what the addresses hold and where NAM went, never why.
+ */
+export const COHORT_WORDS = {
+  heading: 'Genesis cohorts',
+  /** the one sentence (a phone shows it alone, under the since-genesis sentence) */
+  line: (allPct: string, backersPct: string, foundationPct: string, teamPct: string, publicPct: string, shieldedNam: string) =>
+    `Genesis cohorts hold ${allPct} of their allocations: backers ${backersPct}, foundation ${foundationPct}, team ${teamPct}, public sale ${publicPct}; ${shieldedNam} NAM of theirs has moved into the shielded pool.`,
+  lead: 'What the addresses funded at genesis hold now, by cohort, against what they were allocated: spendable and staked NAM from the chain listings, and the NAM they have sent into the shielded pool since this site’s record began.',
+  notLoaded: 'The allocation table is not loaded yet, so the cohorts cannot be counted.',
+  noSnapshot: 'No daily snapshot of the cohorts exists yet: one is written on a day both chain listings complete.',
+  /** the cohort table's heads */
+  columns: { cohort: 'Cohort', addrs: 'Addresses', alloc: 'At genesis', held: 'Holds now', share: 'Share held', shielded: 'Into the shielded pool' } as const,
+  /** the chart */
+  chart: {
+    what: 'Share of the genesis allocation held',
+    unit: 'Percent of each cohort’s NAM at genesis that its addresses hold, spendable and staked, from the daily snapshot.',
+    empty: 'No snapshot in this window.',
+  } as const,
+  /** the large allocations */
+  large: {
+    heading: (minNam: string) => `Allocations of ${minNam} NAM or more`,
+    lead: 'Each with what it holds now and what has left it, as the flow index records it.',
+    holds: 'Holds now',
+    left: 'What left it',
+    spendable: 'spendable',
+    staked: 'staked',
+    atGenesis: (nam: string) => `${nam} NAM at genesis`,
+    shielded: (nam: string, moves: string) => `${nam} NAM moved into the shielded pool (${moves})`,
+    sentTo: 'sent to',
+    sentOn: (addrs: string) => `has since sent to ${addrs}`,
+    more: (nam: string, addrs: string) => `and ${nam} NAM to ${addrs} more`,
+    none: 'No move out of it is on record.',
+    cut: (moves: string) => `counted over its newest ${moves} moves`,
+    rewound: 'Under Rewind the holdings of these allocations are not shown: balances were not recorded over time.',
+    notIndexed: 'The holder index has no reading for this address.',
+  } as const,
+  /** the source-line labels */
+  scope: {
+    cohorts: 'The cohorts’ holdings and shielded moves, from the daily snapshot',
+    table: 'The allocation table, from the genesis file',
+    holdings: 'What each large allocation holds now, from the holder index',
+    moves: 'What left each large allocation, from the flow index',
+  } as const,
+} as const;
+
 /** The incidents timeline's words (web/src/generated/events.ts INCIDENTS; the Shielded page and the chart markers). */
 export const TIMELINE_WORDS = {
   heading: 'What happened on Namada',

@@ -19,12 +19,13 @@ import { maspTotalRewards, type BondListing } from './sources/namada';
 import { toNam } from './util';
 import { NAM_AMOUNT, NOT_LEGACY_TWIN } from './flows-query';
 import { RECORD_SINCE } from '../../shared/record-since';
+import { ALLOC_ALL, ALLOC_CATEGORIES, GENESIS_ALLOC_KV, cohortKey, type AllocCategory } from '../../shared/genesis';
 import type { MaspMakeup, PoolInfo, SourceHealth } from '../../shared/types';
 import {
   ROLLUP_KEYS, ROLLUP_HOUR_SQL, SWAP_HOUR_SQL, OSMOSIS_HOLDERS_SQL, POOL_HOURLY_SQL,
   DAY_FLOWS_SQL, REFUNDS_SQL, DELETE_EDGES_DAY_SQL, EDGE_SQL, ACTIVITY_SQL, LAST_IN_RANGE_SQL,
   HOLDER_COHORTS_NAMADA_SQL, HOLDER_COHORTS_OSMOSIS_SQL, COHORT_LABELLED_SQL,
-  HOLDER_COHORT_ROW_SQL, COHORT_ROW_SQL, STAKERS_SQL, LISTING_ROW_SQL, VALIDATOR_ROW_SQL,
+  HOLDER_COHORT_ROW_SQL, COHORT_ROW_SQL, ALLOC_COHORTS_SQL, ALLOC_SHIELDED_SQL, ALLOC_COHORT_ROW_SQL, STAKERS_SQL, LISTING_ROW_SQL, VALIDATOR_ROW_SQL,
   UNBOND_QUEUE_STORED_SQL, UNBOND_QUEUE_ROWS, unbondQueueUpsertSql, unbondQueueDeleteSql, PREV_BALANCE_LISTING_SQL, LAST_POOL_PRICE_SQL,
 } from './series-sql';
 
@@ -67,7 +68,7 @@ const dayStart = (ms: number) => Math.floor(ms / D) * D;
 export const SERIES_META = {
   pool_hourly: { source: 'Osmosis SQS (pools) · Osmosis data API (pair summary)', start: 'deploy day of migration 0007 (per-pool readings were not kept before)' },
   holder_cohorts_daily: { source: 'Namada node balance listing and bond listing (holder index) · Keplr Osmosis bank list', start: 'first daily snapshot after migration 0007; no earlier balance of every address exists anywhere a Worker can reach' },
-  cohort_daily: { source: 'Genesis allocations (labels, source genesis) · holder index', start: 'as holder_cohorts_daily' },
+  cohort_daily: { source: 'Genesis allocations (labels, source genesis; from migration 0023 the allocation table genesis_alloc, rows alloc.*) · holder index · flow index (moves into the shielded pool)', start: 'as holder_cohorts_daily; the alloc.* rows from the first daily snapshot after the allocation table is loaded' },
   flow_edges_daily: { source: 'NamadaTrade flow index', start: 'per kind: staking 3 Dec 2024, transfers and shielding 13 Jun 2025, bridge in 20 Jun 2025, every kind 14 Aug 2026 (screener-plan 3.2); backfilled from flows' },
   activity_daily: { source: 'NamadaTrade flow index', start: '14 Aug 2026 for every kind (Osmosis 31 Jul / 11 Aug 2026); backfilled from flows' },
   validator_daily: { source: 'Namada node bond listing · names and commission from indexer.namada.net /pos/validator/all', start: 'deploy day of migration 0007' },
@@ -84,7 +85,7 @@ export const SERIES_META = {
 
 // ---------------------------------------------------------------- jobs bookkeeping
 
-interface DailyJob { day: string; snapNamada?: boolean; snapOsmosis?: boolean; flows?: boolean; names?: boolean; /** the pool's ledger (maspMakeup) written with the chain's rewards total read */ makeup?: boolean; /** the hour the validator list was last asked for (once an hour while it fails) */ namesTried?: number; /** the hour the rewards total was last asked for (once an hour while it fails) */ makeupTried?: number }
+interface DailyJob { day: string; snapNamada?: boolean; snapOsmosis?: boolean; /** the allocation cohorts (cohort_daily alloc.*), once the allocation table is loaded */ snapAlloc?: boolean; flows?: boolean; names?: boolean; /** the pool's ledger (maspMakeup) written with the chain's rewards total read */ makeup?: boolean; /** the hour the validator list was last asked for (once an hour while it fails) */ namesTried?: number; /** the hour the rewards total was last asked for (once an hour while it fails) */ makeupTried?: number }
 
 async function kvJson<T>(db: D1Database, keys: string[]): Promise<Record<string, T | null>> {
   const out: Record<string, T | null> = {};
@@ -602,6 +603,35 @@ export function cohortStmts(day: string, rows: CohortRow[], asOf: number): Stmt[
   return rows.filter((r) => r.category).map((r) => ({ sql: COHORT_ROW_SQL, params: [day, r.category, r.addrs ?? 0, r.addrs_with_nam ?? 0, r.spendable ?? 0, r.staked ?? 0, asOf] }));
 }
 
+export interface AllocCohortRow { category: string; addrs: number; addrs_with_nam: number; spendable: number; staked: number; alloc_nam: number }
+export interface AllocShieldRow { category: string; nam: number | null; n: number }
+
+/**
+ * The allocation cohorts' rows (cohort_daily, categories 'alloc.<cohort>' and 'alloc.all'): per cohort its addresses,
+ * those holding NAM, spendable and staked (the holder index as of the listings), the NAM its addresses have sent into
+ * the shielded pool since this site's record began (0 when the index holds no such move: the index was read), its NAM
+ * at genesis, and the two listings' blocks. 'alloc.all' adds every cohort up. A category the table does not know is
+ * left out. Nothing when the table gave no row.
+ */
+export function allocCohortStmts(day: string, rows: AllocCohortRow[], shielded: AllocShieldRow[], asOf: number, heights: { balance: number | null; bond: number | null }): Stmt[] {
+  const sh = new Map(shielded.map((r) => [r.category, Number(r.nam) || 0]));
+  const known = rows.filter((r): r is AllocCohortRow & { category: AllocCategory } => (ALLOC_CATEGORIES as readonly string[]).includes(r.category));
+  if (!known.length) return [];
+  const n = (v: unknown) => Number(v) || 0;
+  const row = (category: string, r: { addrs: number; addrs_with_nam: number; spendable: number; staked: number; alloc_nam: number }, out: number): Stmt =>
+    ({ sql: ALLOC_COHORT_ROW_SQL, params: [day, category, n(r.addrs), n(r.addrs_with_nam), n(r.spendable), n(r.staked), asOf, out, n(r.alloc_nam), heights.balance, heights.bond] });
+  const all = { addrs: 0, addrs_with_nam: 0, spendable: 0, staked: 0, alloc_nam: 0 };
+  let allOut = 0;
+  const out: Stmt[] = [];
+  for (const r of known) {
+    const o = sh.get(r.category) ?? 0;
+    out.push(row(cohortKey(r.category), r, o));
+    all.addrs += n(r.addrs); all.addrs_with_nam += n(r.addrs_with_nam); all.spendable += n(r.spendable); all.staked += n(r.staked); all.alloc_nam += n(r.alloc_nam); allOut += o;
+  }
+  out.push(row(ALLOC_ALL, all, allOut));
+  return out;
+}
+
 /**
  * The 'none' cohort without a second pass over the holders: every holder is in exactly one size line, and the
  * labelled addresses holding NAM are holders (same union, same stake rule), so the rest is the totals minus them.
@@ -654,7 +684,8 @@ export const VALIDATOR_LIST_TIMEOUT_MS = 10_000;
  *   SNAPSHOT_MAX_AGE_MS (Namada) or the Osmosis holder count's stamp is that fresh (Osmosis: osmosisHolders, so a
  *   holder list no pass of which added up to the supply in that time does not count); `as_of` is the older listing,
  *   or that stamp; a day whose listings never become fresh stays a gap (and the holder-size snapshot of a day can
- *   never be rebuilt, which is why it is written alone and first);
+ *   never be rebuilt, which is why it is written alone and first); the allocation cohorts (cohort_daily alloc.*,
+ *   migration 0023) under the same listing rule once the allocation table is loaded (kv genesis.alloc);
  * - from DAY_FLOWS_FROM_HOUR, the flow index of the two days before (flow_edges_daily, activity_daily, the daily
  *   keys; the day before yesterday again for rows that arrived late) and supply.masp_shielded.daily of yesterday;
  * - the validator list (names, commission, state) into kv validators.names for validator_daily: the request starts
@@ -667,9 +698,11 @@ export async function daily(env: Env, now: number, ctx: DailyCtx): Promise<Daily
   if (ctx.listingTick && !closingAt(now)) return null;
   const late = () => ctx.late?.() ?? false;
   const day = isoDay(now);
-  const kv = await kvJson<any>(env.DB, ['jobs.daily', 'balance.listing', 'bond.listing', MASP_MAKEUP_KV]);
+  const kv = await kvJson<any>(env.DB, ['jobs.daily', 'balance.listing', 'bond.listing', MASP_MAKEUP_KV, GENESIS_ALLOC_KV]);
   const job: DailyJob = kv['jobs.daily']?.day === day ? { ...kv['jobs.daily'] } : { day };
-  if (job.snapNamada && job.snapOsmosis && job.flows && job.names && job.makeup) return null;
+  // the allocation cohorts are part of the day's work only once the operator has loaded the allocation table
+  const allocLoaded = !!kv[GENESIS_ALLOC_KV];
+  if (job.snapNamada && job.snapOsmosis && (job.snapAlloc || !allocLoaded) && job.flows && job.names && job.makeup) return null;
   const res: DailyResult = { day, ran: [], waiting: [], failed: [], written: 0 };
   const hourNow = Math.floor(now / H) * H;
 
@@ -682,7 +715,7 @@ export async function daily(env: Env, now: number, ctx: DailyCtx): Promise<Daily
     : null;
 
   /** One part: its rows and its flag in one batch. `build` returns null while the part waits. */
-  const part = async (name: string, flag: 'snapNamada' | 'snapOsmosis' | 'flows' | 'makeup', build: () => Promise<Stmt[] | null>) => {
+  const part = async (name: string, flag: 'snapNamada' | 'snapOsmosis' | 'snapAlloc' | 'flows' | 'makeup', build: () => Promise<Stmt[] | null>) => {
     if (job[flag]) return;
     if (late()) { res.waiting.push(`${name}: the tick ran out of time`); return; }
     try {
@@ -696,16 +729,30 @@ export async function daily(env: Env, now: number, ctx: DailyCtx): Promise<Daily
     }
   };
 
-  await part('snapshot namada', 'snapNamada', async () => {
+  /** Both chain listings complete within SNAPSHOT_MAX_AGE_MS: their older completion time, else the reason the snapshot waits. */
+  const listingsAsOf = (): { asOf: number } | { why: string } => {
     const b = Number(kv['balance.listing']?.completeAt) || 0, s = Number(kv['bond.listing']?.completeAt) || 0;
     const asOf = Math.min(b, s);
-    if (!(b > 0 && s > 0 && now - asOf < SNAPSHOT_MAX_AGE_MS)) {
-      res.waiting.push(`snapshot namada: ${!b || !s ? 'no complete listing yet' : `the older listing is ${((now - asOf) / H).toFixed(1)} h old`}`);
-      return null;
-    }
+    if (!(b > 0 && s > 0 && now - asOf < SNAPSHOT_MAX_AGE_MS)) return { why: !b || !s ? 'no complete listing yet' : `the older listing is ${((now - asOf) / H).toFixed(1)} h old` };
+    return { asOf };
+  };
+  await part('snapshot namada', 'snapNamada', async () => {
+    const l = listingsAsOf();
+    if ('why' in l) { res.waiting.push(`snapshot namada: ${l.why}`); return null; }
+    const asOf = l.asOf;
     const [cohorts, labelled] = await Promise.all([env.DB.prepare(HOLDER_COHORTS_NAMADA_SQL).all<CohortRow>(), env.DB.prepare(COHORT_LABELLED_SQL).all<CohortRow>()]);
     const lab = labelled.results || [];
     return [...holderCohortStmts(day, 'namada', cohorts.results || [], asOf), ...cohortStmts(day, [...lab, noneCohort(cohorts.results || [], lab)], asOf), ...unionStmts(cohorts.results || [], asOf)];
+  });
+  // The allocation cohorts (migration 0023): as the Namada snapshot, once the operator has loaded the allocation table
+  // (scripts/genesis-alloc.ts writes kv genesis.alloc with it); until then the part is not the day's work, reads nothing and says nothing.
+  await part('snapshot genesis cohorts', 'snapAlloc', async () => {
+    if (!allocLoaded) return null; // not the day's work (said by /api/series/cohorts, not on every tick)
+    const l = listingsAsOf();
+    if ('why' in l) { res.waiting.push(`snapshot genesis cohorts: ${l.why}`); return null; }
+    const [rows, shielded] = await Promise.all([env.DB.prepare(ALLOC_COHORTS_SQL).all<AllocCohortRow>(), env.DB.prepare(ALLOC_SHIELDED_SQL).bind(MASP, l.asOf).all<AllocShieldRow>()]);
+    if (!rows.results?.length) { res.waiting.push('snapshot genesis cohorts: the allocation table is empty'); return null; }
+    return allocCohortStmts(day, rows.results, shielded.results || [], l.asOf, { balance: Number(kv['balance.listing']?.height) || null, bond: Number(kv['bond.listing']?.height) || null });
   });
   await part('snapshot osmosis', 'snapOsmosis', async () => {
     const oh = await osmosisHolders(env.DB);

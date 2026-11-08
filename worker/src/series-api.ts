@@ -18,7 +18,11 @@ import type {
   Provenance, Sourced, SeriesStep, SeriesUnit, SeriesAgg, SeriesSample, SeriesSource, SeriesGap, SeriesResponse,
   PriceChange, PriceChangeWindow, PoolChangeWindow, PriceChangesResponse, PriceReading, VolumeWindow, ExecutedVolume, VolumeResponse,
   PairRow, PairsResponse, TradeRow, TradeGroup, TradesResponse, TradePattern, ValueInput, ValueFigure, ValuesResponse,
+  GenesisCohortsResponse, GenesisCohortRow, GenesisLargeAllocation, GenesisSentTo,
 } from '../../shared/types';
+import { ALLOC_ALL, ALLOC_CATEGORIES, ALLOC_PLAIN, GENESIS_ALLOC_KV, GENESIS_DIGEST, GENESIS_URL, allocCategoryOf, cohortKey } from '../../shared/genesis';
+import { INTERNAL_ADDRS, stakeNum } from './holders';
+import { NAM_AMOUNT, NOT_LEGACY_TWIN } from './flows-query';
 import {
   SERIES_STEP_MS, SERIES_MAX_POINTS, PRICE_CHANGE_WINDOW_MS, POOL_CHANGE_WINDOW_MS, PRICE_BASE_MAX_LAG_SHARE,
   VOLUME_WINDOW_MS, VOLUME_DISAGREE_PCT, TRADE_FOLD_MS, TRADE_FOLD_UNDER_NAM,
@@ -307,8 +311,10 @@ export interface SeriesQuery { key: string; from?: string; to?: string; step?: s
 export async function readSeries(db: DB, q: SeriesQuery, asOf: number, replay: boolean): Promise<SeriesResponse> {
   const pool = POOL_KEY_RE.exec(q.key);
   if (pool) return readPoolSeries(db, q.key, pool[1], pool[2] as PoolColumn, q, asOf, replay);
+  const cohort = COHORT_KEY_RE.exec(q.key);
+  if (cohort) return readCohortSeries(db, q.key, cohort[1], cohort[2] as CohortColumn, q, asOf, replay);
   const def = SERIES_KEYS[q.key];
-  if (!def) throw new SeriesInputError(404, 'No such series.', `Unknown key "${String(q.key).slice(0, 60)}". Served keys: ${Object.keys(SERIES_KEYS).join(', ')}, and pool_hourly.<pool id>.<${Object.keys(POOL_SERIES_COLUMNS).join(' | ')}>.`);
+  if (!def) throw new SeriesInputError(404, 'No such series.', `Unknown key "${String(q.key).slice(0, 60)}". Served keys: ${Object.keys(SERIES_KEYS).join(', ')}, pool_hourly.<pool id>.<${Object.keys(POOL_SERIES_COLUMNS).join(' | ')}>, and cohort_daily.alloc.<${[...ALLOC_CATEGORIES, 'all'].join(' | ')}>.<${Object.keys(COHORT_SERIES_COLUMNS).join(' | ')}>.`);
   const toAsked = parseTimeParam(q.to, 'to', true);
   const fromAsked = parseTimeParam(q.from, 'from', false);
   const to = Math.min(toAsked ?? asOf, asOf);
@@ -493,6 +499,221 @@ async function readPoolSeries(db: DB, key: string, pool: string, col: PoolColumn
     native.push({ t: hour, at: finite(POOL_SERIES_COLUMNS[col].router ? r.at : r.osmosis_at) ?? hour, v, n: 1 });
   }
   return seriesAnswer(def, key, native, finite(st?.start), null, { from, to, step, pointMs: H }, asOf, replay, sizeFrom);
+}
+
+// ================================================================ the genesis cohorts (cohort_daily alloc.*, migration 0023)
+
+/** The source word of the allocation cohorts' rows (plain words in web/src/lib/prov.ts). */
+export const COHORT_SOURCE = 'Genesis allocations · holder index · D1 flow index (daily snapshot)';
+/** The source word of the allocation table itself (kv genesis.alloc, written by scripts/genesis-alloc.ts). */
+export const GENESIS_TABLE_SOURCE = 'Genesis allocations (namada-mainnet-genesis balances.toml)';
+/** A snapshot older than this is old: the daily job writes one a day when both chain listings complete. */
+export const COHORT_MAX_AGE_MS = 2 * D;
+/** The Supply page lists the allocations of this many NAM or more (11 on the pinned file), at most COHORT_LARGE_MAX. */
+export const COHORT_LARGE_MIN_NAM = 15_000_000;
+export const COHORT_LARGE_MAX = 25;
+/** A large allocation's plain transfers are read newest first up to this many; its three largest recipients are named. */
+export const COHORT_MOVES_MAX = 500;
+export const COHORT_SENT_TO_NAMED = 3;
+
+/** The cohort_daily columns served as series: `cohort_daily.alloc.<cohort>.<column>`. */
+export const COHORT_SERIES_COLUMNS = {
+  held: { unit: 'nam', what: 'NAM the cohort’s addresses hold, spendable and staked' },
+  spendable: { unit: 'nam', what: 'Spendable NAM the cohort’s addresses hold' },
+  staked: { unit: 'nam', what: 'NAM the cohort’s addresses have staked' },
+  shielded_out: { unit: 'nam', what: 'NAM the cohort’s addresses have sent into the shielded pool since this site’s record began, cumulative' },
+  alloc_nam: { unit: 'nam', what: 'The cohort’s NAM at genesis' },
+  addrs: { unit: 'count', what: 'Addresses in the cohort' },
+  addrs_with_nam: { unit: 'count', what: 'Addresses in the cohort holding spendable or staked NAM' },
+  held_share: { unit: 'pct', what: 'The share of its NAM at genesis the cohort holds, spendable and staked' },
+} as const satisfies Record<string, { unit: SeriesUnit; what: string }>;
+type CohortColumn = keyof typeof COHORT_SERIES_COLUMNS;
+const COHORT_KEY_RE = new RegExp(`^cohort_daily\\.(alloc\\.(?:${[...ALLOC_CATEGORIES, 'all'].join('|')}))\\.(${Object.keys(COHORT_SERIES_COLUMNS).join('|')})$`);
+
+/** One cohort's days in [?2, ?3] (days as 'YYYY-MM-DD'), on the primary key (category, day): rows read = the days in range. */
+export const COHORT_RANGE_SQL = `SELECT day, as_of, addrs, addrs_with_nam, spendable, staked, shielded_out, alloc_nam, balance_height, bond_height
+  FROM cohort_daily WHERE category = ?1 AND day >= ?2 AND day <= ?3 ORDER BY day`;
+/** The cohort's first stored day (its honest start): 1 row read. */
+export const COHORT_START_SQL = `SELECT MIN(day) AS start FROM cohort_daily WHERE category = ?1`;
+/** The newest snapshot day at or before ?2 for a category (?1): one seek on the primary key. */
+export const COHORT_NEWEST_SQL = `SELECT day FROM cohort_daily WHERE category = ?1 AND day <= ?2 ORDER BY day DESC LIMIT 1`;
+/** Every allocation cohort's row of one day (?1): a primary-key seek per category. */
+export const COHORT_DAY_SQL = `SELECT * FROM cohort_daily WHERE category IN (${[...ALLOC_CATEGORIES, 'all' as const].map((c) => `'${cohortKey(c)}'`).join(',')}) AND day = ?1`;
+/**
+ * The largest allocations (?1 NAM or more, ?2 at most) with what each holds now (the holder index, the list's stake
+ * rule) and its label: the genesis_alloc_amount index, then primary-key lookups; protocol accounts left out.
+ */
+export const COHORT_LARGE_SQL = `SELECT g.address, g.amount_num alloc, g.category, h.balance_num sp, ${stakeNum('s.')} st, (h.balance_num IS NOT NULL OR s.address IS NOT NULL) has_row, l.label, l.source
+  FROM genesis_alloc g LEFT JOIN holders h ON h.chain = 'namada' AND h.address = g.address LEFT JOIN stakes s ON s.address = g.address LEFT JOIN labels l ON l.address = g.address
+  WHERE g.amount_num >= ?1 AND g.address NOT IN (${INTERNAL_ADDRS.map((a) => `'${a}'`).join(',')}) ORDER BY g.amount_num DESC LIMIT ?2`;
+/** One address's NAM into the shielded pool up to ?2 (flows_from, named: without statistics the planner would walk every shield row): NAM only, older twins left out. */
+export const COHORT_SHIELDED_SQL = `SELECT SUM(f.amount_num) nam, COUNT(*) n FROM flows f INDEXED BY flows_from WHERE f.from_addr = ?1 AND f.kind = 'shield' AND f.ts <= ?2 AND ${NAM_AMOUNT} AND ${NOT_LEGACY_TWIN}`;
+/** One address's plain transfers out, newest first, up to ?3 (flows_from): grouped by recipient in code, never a sort in SQLite. */
+export const COHORT_TRANSFERS_SQL = `SELECT f.to_addr, f.amount_num, f.ts FROM flows f INDEXED BY flows_from WHERE f.from_addr = ?1 AND f.kind = 'transfer' AND f.ts <= ?2 AND ${NAM_AMOUNT} AND ${NOT_LEGACY_TWIN} ORDER BY f.ts DESC LIMIT ?3`;
+/** The addresses one recipient sent plain transfers to after ?2 and up to ?3, newest first, up to ?4 rows (flows_from); counted distinct in code. */
+export const COHORT_SENT_ON_SQL = `SELECT f.to_addr FROM flows f INDEXED BY flows_from WHERE f.from_addr = ?1 AND f.kind = 'transfer' AND f.ts > ?2 AND f.ts <= ?3 ORDER BY f.ts DESC LIMIT ?4`;
+/** The labels of up to n addresses (primary key). */
+export const labelsSql = (n: number) => `SELECT address, label, source FROM labels WHERE address IN (${Array.from({ length: n }, (_, i) => `?${i + 1}`).join(',')})`;
+
+const dayMs = (day: string) => Date.parse(`${day}T00:00:00Z`);
+const isoDayOf = (ms: number) => new Date(ms).toISOString().slice(0, 10);
+
+interface CohortDbRow { day: string; as_of: number; addrs: number; addrs_with_nam: number; spendable: number; staked: number; shielded_out: number | null; alloc_nam: number | null; balance_height: number | null; bond_height: number | null }
+
+/** A column's value on a stored row; null when the row cannot give it (a share of a zero allocation, a row without the column). */
+function cohortValue(r: CohortDbRow, col: CohortColumn): number | null {
+  const sp = Number(r.spendable) || 0, st = Number(r.staked) || 0, alloc = finite(r.alloc_nam);
+  switch (col) {
+    case 'held': return sp + st;
+    case 'spendable': return sp;
+    case 'staked': return st;
+    case 'shielded_out': return finite(r.shielded_out);
+    case 'alloc_nam': return alloc;
+    case 'addrs': return finite(r.addrs);
+    case 'addrs_with_nam': return finite(r.addrs_with_nam);
+    case 'held_share': return alloc != null && alloc > 0 ? ((sp + st) / alloc) * 100 : null;
+  }
+}
+
+/** What the newest row's figures rest on: the file's reviewed copy and the listings the holdings were read from. */
+function cohortNote(r: CohortDbRow | null): string {
+  if (!r) return '';
+  const blocks = r.balance_height != null && r.bond_height != null ? ` (balances at block ${r.balance_height}, bonds at block ${r.bond_height})` : '';
+  return `Allocations from the genesis file's reviewed copy (sha256 ${GENESIS_DIGEST.slice(0, 12)}…); holdings as of the chain listings completed ${fmtDayTime(Number(r.as_of))}${blocks}; snapshot of ${r.day}.`;
+}
+
+export function cohortKeyDef(category: string, col: CohortColumn): SeriesKeyDef {
+  const c = COHORT_SERIES_COLUMNS[col];
+  const who = ALLOC_PLAIN[allocCategoryOf(category) ?? 'all'];
+  return {
+    unit: c.unit, agg: 'last', sparse: false, native: '1d', source: COHORT_SOURCE, backfilled: false, maxAgeMs: COHORT_MAX_AGE_MS, graceMs: 2 * H,
+    gapWhy: 'No snapshot was written for these days: the two chain listings did not both complete within six hours of the daily job, or the allocation table was not loaded.',
+    startNote: (st) => `${c.what}, for ${who.charAt(0).toLowerCase()}${who.slice(1)}, once a day since ${st}, from the allocation table, the holder index and the flow index; nothing earlier exists.`,
+  };
+}
+
+/** `cohort_daily.alloc.<cohort>.<column>`: one allocation cohort's days as a series, stamped with the file's digest and the listings. */
+async function readCohortSeries(db: DB, key: string, category: string, col: CohortColumn, q: SeriesQuery, asOf: number, replay: boolean): Promise<SeriesResponse> {
+  const def = cohortKeyDef(category, col);
+  const toAsked = parseTimeParam(q.to, 'to', true);
+  const fromAsked = parseTimeParam(q.from, 'from', false);
+  const to = Math.min(toAsked ?? asOf, asOf);
+  const from = fromAsked ?? to - 30 * D;
+  if (!(from < to)) throw new SeriesInputError(400, '`from` must be before `to` (and before the rewound time, if any).');
+  const step = chooseStep(def, from, to, q.step);
+  const [rows, st] = await Promise.all([
+    later(() => db.prepare(COHORT_RANGE_SQL).bind(category, isoDayOf(from), isoDayOf(to - 1)).all<CohortDbRow>()),
+    later(() => db.prepare(COHORT_START_SQL).bind(category).first<{ start: string | null }>()),
+  ]);
+  const native: NativePoint[] = [];
+  let newest: CohortDbRow | null = null;
+  for (const r of rows.results || []) {
+    const v = cohortValue(r, col);
+    const t = dayMs(r.day);
+    if (v == null || !Number.isFinite(t) || t < from || t >= to) continue;
+    native.push({ t, at: finite(r.as_of) ?? t, v, n: 1 });
+    newest = r;
+  }
+  const start = st?.start ? finite(dayMs(st.start)) : null;
+  const ans = seriesAnswer(def, key, native, start, null, { from, to, step, pointMs: D }, asOf, replay);
+  const note = cohortNote(newest);
+  return note ? { ...ans, prov: { ...ans.prov, note: [ans.prov.note, note].filter(Boolean).join(' ') } } : ans;
+}
+
+interface AllocKv { digest?: string; url?: string; reviewedOn?: string; writtenAt?: number; n?: number }
+interface LargeDbRow { address: string; alloc: number; category: string; sp: number | null; st: number | null; has_row: number; label: string | null; source: string | null }
+
+/** A plain name for a label the API serves (the site's label_plain; a wallet's own tag is shown as typed). */
+const plainOf = (label: string | null, address: string, source: string | null): string | null => label_plain(label, address, source);
+
+/**
+ * GET /api/series/cohorts: the newest daily snapshot of the allocation cohorts with its stamp, the allocation table's
+ * provenance (kv genesis.alloc), and the largest allocations with what each holds now and what left it. Reads: the kv
+ * row, the newest day and its eight rows, the large rows on the amount index (COHORT_LARGE_MAX at most), then per large
+ * row its shield sum and its newest COHORT_MOVES_MAX plain transfers in one batch, and in a second batch the recipients'
+ * labels and each named recipient's onward sends. Under Rewind the large rows are not served: holdings are current.
+ */
+export async function readGenesisCohorts(db: DB, asOf: number, replay: boolean): Promise<GenesisCohortsResponse> {
+  const [kvRow, newest, cov] = await Promise.all([
+    later(() => db.prepare('SELECT value FROM kv WHERE key = ?1').bind(GENESIS_ALLOC_KV).first<{ value: string }>()),
+    later(() => db.prepare(COHORT_NEWEST_SQL).bind(ALLOC_ALL, isoDayOf(asOf)).first<{ day: string }>()),
+    coverageOf(db, asOf, replay),
+  ]);
+  const kv: AllocKv | null = kvRow ? (safeParseJson(kvRow.value, null) as AllocKv | null) : null;
+  const table: GenesisCohortsResponse['table'] = {
+    loaded: !!kv, digest: kv?.digest ?? null, reviewedOn: kv?.reviewedOn ?? null, url: GENESIS_URL, allocations: finite(kv?.n ?? null), loadedAt: finite(kv?.writtenAt ?? null), pinned: kv?.digest === GENESIS_DIGEST,
+  };
+  const day = newest?.day ?? null;
+  const dayRows = day ? ((await db.prepare(COHORT_DAY_SQL).bind(day).all<CohortDbRow & { category: string }>()).results || []) : [];
+  const cohorts: GenesisCohortRow[] = [];
+  for (const c of [...ALLOC_CATEGORIES, 'all'] as const) {
+    const r = dayRows.find((x) => x.category === cohortKey(c));
+    if (!r) continue;
+    const sp = Number(r.spendable) || 0, st = Number(r.staked) || 0, alloc = finite(r.alloc_nam) ?? 0;
+    cohorts.push({
+      cohort: c, plain: ALLOC_PLAIN[c], addrs: Number(r.addrs) || 0, addrsWithNam: Number(r.addrs_with_nam) || 0, spendableNam: sp, stakedNam: st, heldNam: sp + st,
+      shieldedOutNam: finite(r.shielded_out), allocNam: alloc, heldSharePct: alloc > 0 ? ((sp + st) / alloc) * 100 : null,
+    });
+  }
+  const all = dayRows.find((x) => x.category === ALLOC_ALL) ?? null;
+  const listings = { at: finite(all?.as_of ?? null), balanceHeight: finite(all?.balance_height ?? null), bondHeight: finite(all?.bond_height ?? null) };
+  let prov: Provenance;
+  if (!kv) prov = { source: COHORT_SOURCE, at: null, status: 'missing', note: 'The allocation table is not loaded, so no cohort can be counted.' };
+  else if (!all) prov = { source: COHORT_SOURCE, at: null, status: 'missing', note: 'No daily snapshot of the cohorts is written yet: one is written on a day both chain listings complete.' };
+  else {
+    const at = Number(all.as_of);
+    const old = !replay && asOf - at > COHORT_MAX_AGE_MS;
+    prov = { source: COHORT_SOURCE, at, status: old ? 'stale' : 'live', note: [old ? `The newest snapshot is of ${all.day}: no day since has had both chain listings complete.` : '', cohortNote(all)].filter(Boolean).join(' ') };
+  }
+
+  // the largest allocations, live only
+  const large: GenesisLargeAllocation[] = [];
+  const bal = Number(finite(listings.at)) || null;
+  let holdingsProv: Provenance = replay
+    ? { source: 'NamadaTrade holder index', at: null, status: 'missing', note: 'Balances were not recorded over time; the large allocations are shown live only.' }
+    : { source: 'NamadaTrade holder index', at: bal, status: bal != null && asOf - bal <= COHORT_MAX_AGE_MS ? 'live' : bal != null ? 'stale' : 'missing', note: bal != null ? `Spendable and staked NAM as of the chain listings completed ${fmtDayTime(bal)}.` : 'No complete chain listing is on record.' };
+  if (!replay && kv) {
+    const rows = (await db.prepare(COHORT_LARGE_SQL).bind(COHORT_LARGE_MIN_NAM, COHORT_LARGE_MAX).all<LargeDbRow>()).results || [];
+    if (rows.length) {
+      const reads = await db.batch(rows.flatMap((r) => [db.prepare(COHORT_SHIELDED_SQL).bind(r.address, asOf), db.prepare(COHORT_TRANSFERS_SQL).bind(r.address, asOf, COHORT_MOVES_MAX)]));
+      type Sent = { nam: number; moves: number; firstTs: number };
+      const perRow = rows.map((r, i) => {
+        const sh = (reads[2 * i].results?.[0] ?? {}) as { nam: number | null; n: number | null };
+        const moves = (reads[2 * i + 1].results || []) as { to_addr: string | null; amount_num: number; ts: number }[];
+        const by = new Map<string, Sent>();
+        for (const m of moves) {
+          if (!m.to_addr || m.to_addr === r.address || INTERNAL_ADDRS.includes(m.to_addr)) continue;
+          const x = by.get(m.to_addr) ?? { nam: 0, moves: 0, firstTs: Number(m.ts) };
+          x.nam += Number(m.amount_num) || 0; x.moves += 1; x.firstTs = Math.min(x.firstTs, Number(m.ts));
+          by.set(m.to_addr, x);
+        }
+        const ranked = [...by.entries()].sort((a, b) => b[1].nam - a[1].nam || a[0].localeCompare(b[0]));
+        return { r, shieldedOutNam: Number(sh.nam) || 0, shieldedMoves: Number(sh.n) || 0, named: ranked.slice(0, COHORT_SENT_TO_NAMED), rest: ranked.slice(COHORT_SENT_TO_NAMED), movesRead: moves.length };
+      });
+      const recipients = [...new Set(perRow.flatMap((p) => p.named.map(([a]) => a)))];
+      const labelReads = recipients.length ? await db.batch([
+        db.prepare(labelsSql(recipients.length)).bind(...recipients),
+        ...perRow.flatMap((p) => p.named.map(([a, x]) => db.prepare(COHORT_SENT_ON_SQL).bind(a, x.firstTs, asOf, COHORT_MOVES_MAX))),
+      ]) : [];
+      const labels = new Map(((labelReads[0]?.results || []) as { address: string; label: string; source: string }[]).map((l) => [l.address, l]));
+      let k = 1;
+      for (const p of perRow) {
+        const sentTo: GenesisSentTo[] = p.named.map(([address, x]) => {
+          const onward = new Set(((labelReads[k++]?.results || []) as { to_addr: string | null }[]).map((o) => o.to_addr).filter((a): a is string => !!a && a !== address));
+          const l = labels.get(address) ?? null;
+          return { address, labelPlain: l ? plainOf(l.label, address, l.source) : null, labelSource: l?.source ?? null, nam: x.nam, moves: x.moves, sentOnTo: l ? null : onward.size };
+        });
+        large.push({
+          address: p.r.address, labelPlain: plainOf(p.r.label, p.r.address, p.r.source), labelSource: p.r.source, cohort: p.r.category, allocNam: Number(p.r.alloc) || 0,
+          spendableNam: p.r.has_row ? Number(p.r.sp) || 0 : null, stakedNam: p.r.has_row ? Number(p.r.st) || 0 : null,
+          shieldedOutNam: p.shieldedOutNam, shieldedMoves: p.shieldedMoves, sentTo,
+          sentToMore: { addrs: p.rest.length, nam: p.rest.reduce((a, [, x]) => a + x.nam, 0) }, movesRead: p.movesRead, movesCut: p.movesRead >= COHORT_MOVES_MAX,
+        });
+      }
+    }
+  }
+  if (!kv) holdingsProv = { ...holdingsProv, status: 'missing', note: 'The allocation table is not loaded.' };
+  return { asOf, day, listings, table, cohorts, prov, large, largeMinNam: COHORT_LARGE_MIN_NAM, holdingsProv, movesProv: cov.namada };
 }
 
 // ================================================================ GET /api/series/changes

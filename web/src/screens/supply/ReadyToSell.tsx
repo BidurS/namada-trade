@@ -36,7 +36,7 @@ const pct0 = (x: number) => fmtPctRule(x, 0);
 const NOT_SENT: Stamp = { source: 'D1 flow index', plain: 'Flow index', at: null, status: 'missing', note: 'The server did not send this part.' };
 const pct1 = (x: number) => fmtPctRule(x, 1);
 
-export function ReadyToSell({ data, overview: o, isMine }: { data: Pressure; overview: Overview | null; isMine: (a: string | null | undefined) => boolean }) {
+export function ReadyToSell({ data, overview: o, isMine, wide = true }: { data: Pressure; overview: Overview | null; isMine: (a: string | null | undefined) => boolean; /** from 1024 px; a phone drops the lead under the heading (the hero's definition line says it) in favour of the genesis cohorts' sentence (SinceGenesis.tsx) */ wide?: boolean }) {
   const now = useUiNow();
   // Osmosis records only (crossings in, sales, sends back): the Osmosis flow index's stamp for what each receiver has
   // left (its sells read from 30 days before the window), else the chain's own, else both indexes together
@@ -61,9 +61,11 @@ export function ReadyToSell({ data, overview: o, isMine }: { data: Pressure; ove
     <ProvScope as="section" className="ipg-sec ipg-col--7" aria-labelledby="rts-h" data-decision="D2">
       <div className="ipg-sec__head">
         <h2 id="rts-h" className="h2">Ready to sell on Osmosis</h2>
-        <p className="lead ipg-lead">
-          <Term id="ready-to-sell">NAM that crossed to Osmosis</Term> in {lastWindow(data.windowDays)} and has not been sold or sent back, by the address that received it.
-        </p>
+        {wide ? (
+          <p className="lead ipg-lead">
+            <Term id="ready-to-sell">NAM that crossed to Osmosis</Term> in {lastWindow(data.windowDays)} and has not been sold or sent back, by the address that received it.
+          </p>
+        ) : null}
         {o ? (
           <dl className="ipg-kv">
             <div><dt>All NAM held on Osmosis, wallets and pools</dt><dd><Num v={o.supply.osmosis} prov={o.supply.osmosisProv} fmt={fmtNamRule} unit="NAM" showAge={false} /></dd></div>

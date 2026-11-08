@@ -70,6 +70,10 @@ export const PLAIN_SOURCE: Record<string, string> = {
   // running total of shielded rewards (the daily ledger's read of the pool's max_total_rewards key)
   'Namada block record (pool balance after the move)': 'Namada block record',
   'Namada RPC (shielded rewards total)': 'Namada node',
+  // the genesis cohorts (worker/src/series-api.ts COHORT_SOURCE, GENESIS_TABLE_SOURCE): the allocation table from the
+  // public genesis file, joined with the holder index and the flow index once a day
+  'Genesis allocations · holder index · D1 flow index (daily snapshot)': 'Genesis file, holder index and flow index',
+  'Genesis allocations (namada-mainnet-genesis balances.toml)': 'Genesis file',
   'Namada RPC status': 'Namada node',
   'Namada nodes': 'Namada nodes',
   'namada-rpc': 'Namada node',

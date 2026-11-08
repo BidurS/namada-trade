@@ -74,6 +74,47 @@
   .sp-gen__pct { font: var(--w-regular) var(--t-12) / 16px var(--font-code); color: var(--c-ink-2); }
   .sp-gen .cap { max-width: 72ch; text-wrap: pretty; }
 
+  /* ---------- Genesis cohorts (from 1024 px; a phone carries the one sentence inside the since-genesis section): the
+     share held per cohort over time as a small line chart (one line per cohort, the y axis in percent), the cohorts
+     as rows, and the largest allocations as three-cell rows. One hue per cohort, reused by the chart, its legend and
+     nothing else; the shielded hue is not among them (nothing here is the pool). ---------- */
+  .sp-coh__what { margin: 0; font-size: var(--t-13); line-height: 20px; color: var(--c-ink); }
+  .sp-coh__chart { display: grid; gap: var(--s-2); }
+  .sp-coh__plot { position: relative; height: 160px; }
+  .sp-coh__plot > svg { position: absolute; inset: 0; display: block; overflow: visible; }
+  .sp-coh__empty { position: absolute; inset: 0; display: grid; place-items: center; margin: 0; }
+  .sp-coh__grid { stroke: var(--c-line); stroke-width: 1; }
+  .sp-coh__tick { font: var(--w-regular) 11px / 1 var(--font-code); fill: var(--c-ink-2); }
+  .sp-coh__line { fill: none; stroke: currentColor; stroke-width: 2; stroke-linejoin: round; stroke-linecap: round; }
+  .sp-coh__dot { fill: currentColor; }
+  .sp-coh__c--backer { color: var(--c-mark); background: var(--c-mark); }
+  .sp-coh__c--foundation { color: var(--c-ink); background: var(--c-ink); }
+  .sp-coh__c--team { color: var(--buy); background: var(--buy); }
+  .sp-coh__c--public { color: var(--sell); background: var(--sell); }
+  .sp-coh__c--future { color: var(--c-ink-2); background: var(--c-ink-2); }
+  .sp-coh__c--validators, .sp-coh__c--ecosystem { color: var(--c-line-strong); background: var(--c-line-strong); }
+  .sp-coh__line, .sp-coh__dot { background: none; }
+  .sp-coh__legend { display: flex; flex-wrap: wrap; gap: var(--s-2) var(--s-5); margin: 0; padding: 0; list-style: none; font-size: var(--t-13); line-height: 20px; color: var(--c-ink-2); }
+  .sp-coh__li { display: inline-flex; align-items: center; gap: var(--s-2); }
+  .sp-coh__sw { display: inline-block; width: 10px; height: 10px; }
+  .sp-coh__v { color: var(--c-ink); font-family: var(--font-code); }
+  /* the cohorts: six columns, figures right-aligned, the all-together row set off */
+  .sp-coh__tbl { display: grid; }
+  .sp-coh__row { display: grid; grid-template-columns: minmax(0, 2fr) repeat(5, minmax(0, 1fr)); column-gap: var(--s-3); align-items: baseline; padding: 10px 0; border-top: 1px solid var(--c-line); font-size: var(--t-13); line-height: 20px; }
+  .sp-coh__row--head { border-top: 0; color: var(--c-ink-2); font-size: var(--t-12); line-height: 16px; font-weight: var(--w-medium); }
+  .sp-coh__row--all { border-top: 2px solid var(--c-line-strong); font-weight: var(--w-medium); }
+  .sp-coh__row .r { text-align: right; font-family: var(--font-code); }
+  .sp-coh__row--head .r { font-family: inherit; }
+  /* the largest allocations: who, what it holds, what left it */
+  .sp-coh__large { display: grid; gap: var(--s-3); }
+  .sp-coh__ltbl { display: grid; }
+  .sp-coh__lrow { display: grid; grid-template-columns: minmax(0, 5fr) minmax(0, 3fr) minmax(0, 6fr); column-gap: var(--s-4); align-items: start; padding: 12px 0; border-top: 1px solid var(--c-line); font-size: var(--t-13); line-height: 20px; }
+  .sp-coh__lrow--head { border-top: 0; color: var(--c-ink-2); font-size: var(--t-12); line-height: 16px; font-weight: var(--w-medium); }
+  .sp-coh__who, .sp-coh__holds, .sp-coh__left { display: grid; gap: 4px; min-width: 0; }
+  .sp-coh__sub { color: var(--c-ink-2); }
+  .sp-coh__on { color: var(--c-ink-2); }
+  .sp-coh__left .cap, .sp-coh__holds .cap { margin: 0; }
+
   /* ---------- the band's six figures: Osmosis in the first row, staking in the second (3 columns);
      2 x 3 on phones. Hairlines between columns, a hairline above every row after the first. ---------- */
   .sp-facts .facts { grid-template-columns: repeat(2, minmax(0, 1fr)); row-gap: var(--s-4); }
