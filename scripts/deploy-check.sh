@@ -368,6 +368,17 @@ check "the bridges answer carries a list and a stamp" 1 "$(curl -s "$H/api/bridg
 # while no day is on record), the days on record and two stamps whose status is one of the three; with no row every figure is null
 check "/validators answers"            200 "$(curl -s -o /dev/null -w '%{http_code}' "$H/validators")"
 check "the validators answer carries its rows, its days and two stamps" 1 "$(curl -s "$H/api/validators" | python3 -c "import sys,json; d=json.load(sys.stdin); ok=isinstance(d['validators'], list) and isinstance(d['days'], list) and all(d[k]['status'] in ('live','stale','missing') for k in ('prov','namesProv')) and all(k in d for k in ('day','totalNam','count','third','twoThirds','prev')); print(1 if ok and (len(d['validators']) > 0) == (d['count'] is not None) else 0)")"
+# the site for a program (2026-11-10): a page as Markdown, every page in one file, the tool server (initialize answered
+# while shared/site.ts has it on, a 404 while off) and the IndexNow key file, which holds the key
+check "/index.md is Markdown"          1 "$(curl -s -o /dev/null -w '%{http_code} %{content_type}' "$H/index.md" | grep -c '^200 text/markdown' || true)"
+check "/llms-full.txt answers"         200 "$(curl -s -o /dev/null -w '%{http_code}' "$H/llms-full.txt")"
+if grep -q 'mcpLive: true' shared/site.ts; then
+  check "/mcp answers initialize"      1 "$(curl -s -X POST -H 'content-type: application/json' -H 'accept: application/json, text/event-stream' --data '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-06-18","capabilities":{},"clientInfo":{"name":"deploy-check","version":"1"}}}' "$H/mcp" | python3 -c "import sys,json; d=json.load(sys.stdin); print(1 if d['result']['serverInfo']['name'] == 'namadatrade' else 0)" 2>/dev/null || echo 0)"
+else
+  check "/mcp is off"                  404 "$(curl -s -o /dev/null -w '%{http_code}' -X POST "$H/mcp")"
+fi
+indexnow_key=$(grep -oE "indexNow: '[0-9a-f]{32}'" shared/site.ts | grep -oE '[0-9a-f]{32}' || true)
+check "the IndexNow key file is the key" "$indexnow_key" "$(curl -s "$H/$indexnow_key.txt")"
 # (the answer is kept at the edge for some seconds, so a copy from before the deploy may be read first: asked again, four times at most)
 integrity_tick() { curl -s "$H/api/integrity" | python3 -c "import sys,json; d=json.load(sys.stdin); print(1 if 'lastTickAt' in d and (d['lastTickAt'] is None or isinstance(d['lastTickAt'], int)) else 0)" 2>/dev/null || echo 0; }
 got=0; for i in 1 2 3 4; do got=$(integrity_tick); [ "$got" = 1 ] && break; sleep 8; done

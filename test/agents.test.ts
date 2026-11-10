@@ -3,15 +3,15 @@
 // its Markdown; and the tool server at /mcp (initialize, tools/list, the three tools, its refusals). The Worker's
 // fetch handler is driven end to end with a stand-in static host, as test/seo-hosts.test.ts drives it.
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { readFileSync } from 'node:fs';
+import { readFileSync, readdirSync } from 'node:fs';
 import { join } from 'node:path';
 import { ROUTES, GUIDE_ROUTES, SITE } from '../shared/routes';
 import { GUIDES } from '../shared/guides';
 import { API_CATALOG } from '../shared/api-catalog';
-import { AGENT_ROUTES, documentedPath, markdownPath, markdownRoute, pageMarkdown, wantsMarkdown, MCP_VERSIONS } from '../worker/src/agents';
+import { AGENT_ROUTES, documentedPath, notOffered, markdownPath, markdownRoute, pageMarkdown, wantsMarkdown, MCP_VERSIONS } from '../worker/src/agents';
 import { BANNED } from './banned-words';
-import { ASK_SHOWN } from '../shared/ask-words';
-import { SUMMARIES_SHOWN } from '../shared/proposal-summary';
+import { pageHtml, guideHtml, AGENT_NOTES } from '../worker/src/seo';
+import { CACHE_PARAMS } from '../worker/src/http';
 import { networkStatus } from '../shared/halt';
 
 vi.mock('cloudflare:workers', () => ({ DurableObject: class {} }));
@@ -85,6 +85,9 @@ describe('pages as Markdown', () => {
     expect(md.split('NAM price: $0.001020').length).toBe(2);
     cached = null;
     expect(await (await get('/index.md')).text()).not.toContain('NAM price:');
+    // one without the time it was read is left out too, never an error
+    const home = AGENT_ROUTES.find((r) => r.path === '/')!;
+    expect(pageMarkdown(home, { price: { ...FACTS.price, at: Number.NaN } } as any)).not.toContain('NAM price:');
   });
 
   it('Accept: text/markdown gives the Markdown at the page\'s own address; a browser still gets the page', async () => {
@@ -150,21 +153,66 @@ describe('pages as Markdown', () => {
   });
 });
 
-describe('what a program is never told', () => {
-  it('nothing behind a switched-off feature (the Ask chat, proposal summaries) is in the Markdown, the full file, the page list or the routes get_data calls', async () => {
+describe('a program is told what the pages say, and nothing more', () => {
+  // the words of a text, without its markup, its numbers or its addresses: what a reader of either form reads
+  const words = (t: string) => t.toLowerCase().replace(/[^a-z]+/g, ' ').trim();
+  // an element's accessible name (the related guides' "Related") is said by the page too
+  const htmlWords = (h: string) => words(h.replace(/<[a-z]+\b[^>]*\baria-label="([^"]*)"[^>]*>/g, ' $1 ').replace(/<[^>]+>/g, ' ')
+    .replace(/&amp;/g, '&').replace(/&lt;/g, '<').replace(/&gt;/g, '>').replace(/&quot;/g, '"').replace(/&#39;/g, "'"));
+  const mdWords = (l: string) => words(l.replace(/\[([^\]]*)\]\([^)]*\)/g, ' $1 ').replace(/https?:\/\/\S+/g, ' '));
+
+  it('every line of a page\'s Markdown is said by the page as served, with its figures and without', () => {
+    for (const f of [null, FACTS as any]) {
+      for (const r of AGENT_ROUTES) {
+        const html = htmlWords(r.guide ? guideHtml(r) : pageHtml(r, f));
+        for (const line of pageMarkdown(r, f).split('\n')) {
+          const w = mdWords(line);
+          if (w) expect(html, `${r.path}: ${line.slice(0, 120)}`).toContain(w);
+        }
+      }
+    }
+  });
+
+  it('/llms-full.txt is the pages\' Markdown under the words of /llms.txt, and nothing else', async () => {
     const full = await (await get('/llms-full.txt')).text();
-    const llms = await (await get('/llms.txt')).text();
+    const order = [...AGENT_ROUTES.filter((r) => r.guide), ...AGENT_ROUTES.filter((r) => !r.guide)];
+    expect(full).toBe(`# ${SITE.name}
+
+> ${SITE.description} ${SITE.disclaimer}
+
+${AGENT_NOTES} Every figure below states its source and the time it was read; a figure that was not read is left out.
+
+${order.map((r) => pageMarkdown(r, null).trimEnd()).join('\n\n---\n\n')}
+`);
+  });
+
+  it('get_data calls exactly the documented routes that answer a tool result: every route the Worker names is judged by the catalog', () => {
+    // every address of the API the Worker's code names, as written in it, and every cached read
+    const dir = join(__dirname, '..', 'worker', 'src');
+    const named = new Set<string>(Object.keys(CACHE_PARAMS));
+    for (const file of readdirSync(dir).filter((x) => x.endsWith('.ts'))) {
+      for (const m of readFileSync(join(dir, file), 'utf8').matchAll(/['`](\/api\/[a-zA-Z0-9/_.-]*[a-zA-Z0-9])['`]/g)) named.add(m[1]);
+    }
+    const offered = new Set(API_CATALOG.filter((e) => !notOffered(e.path) && !e.path.includes('{')).map((e) => e.path));
+    expect(named.size).toBeGreaterThan(offered.size);
+    for (const p of named) expect(documentedPath(p), p).toBe(offered.has(p));
+  });
+
+  it('the tool server names only pages and documented routes, and its words are the site\'s', async () => {
     const { mcp } = await import('../worker/src/agents');
     const rpc = async (method: string, params?: unknown) => JSON.stringify(await (await mcp(new Request('https://namada.trade/mcp', { method: 'POST', body: JSON.stringify({ jsonrpc: '2.0', id: 1, method, params }) }), { ASSETS } as any, async () => new Response('{}'))).json());
-    const said = [full, llms, await rpc('tools/list'), await rpc('tools/call', { name: 'list_pages', arguments: {} }), await rpc('initialize', {})].join('\n');
-    if (!ASK_SHOWN) {
-      expect(said).not.toMatch(/\/api\/ask|\/ask\b|Ask chat|ask a question/i);
-      for (const p of ['/api/ask', '/api/ask/limits', '/api/me/ask']) expect(documentedPath(p), p).toBe(false);
-      expect(AGENT_ROUTES.some((r) => /ask/i.test(r.id))).toBe(false);
+    const said = [await rpc('tools/list'), await rpc('tools/call', { name: 'list_pages', arguments: {} }), await rpc('initialize', {})].join('\n');
+    const catalog = API_CATALOG.map((e) => e.path);
+    for (const [p] of said.matchAll(/(?<![\w.])\/api(?:\/[a-z0-9_{}-]+)*/g)) expect(catalog.some((c) => c === p || c.startsWith(`${p}/`)), p).toBe(true);
+    const pages = new Set(AGENT_ROUTES.map((r) => r.path));
+    for (const [, p] of said.matchAll(/\\n- (\/[^ ]*) — /g)) expect(pages.has(p), p).toBe(true);
+    // while the network is halted, the server's own words say so before anything else is read
+    const status = networkStatus();
+    if (status) {
+      expect(said).toContain(status.said);
+      const list = JSON.parse(await rpc('tools/call', { name: 'list_pages', arguments: {} })).result.content[0].text as string;
+      expect(list.startsWith(`${status.title}.`)).toBe(true);
     }
-    if (!SUMMARIES_SHOWN) expect(said).not.toMatch(/short summary|summar(y|ies) (of|for) (a |the )?proposal/i);
-    // and nothing of the site's inside: no stored key's name, no operator route, no spend
-    expect(said).not.toMatch(/\bkv\b|\/api\/(cron|me|auth|webhooks|telegram|labels)\b|ANTHROPIC|api key|Claude|\btokens? (used|spent)\b/i);
   });
 
   it('while the network is halted, every page\'s Markdown and the full file open with the status the page shows', async () => {
@@ -197,7 +245,7 @@ describe('/mcp', () => {
     expect(other.result.protocolVersion).toBe(MCP_VERSIONS[0]);
     const tools = ((await (await post({ jsonrpc: '2.0', id: 2, method: 'tools/list' })).json()) as any).result.tools;
     expect(tools.map((t: any) => t.name)).toEqual(['list_pages', 'read_page', 'get_data']);
-    for (const t of tools) { expect(t.annotations.readOnlyHint).toBe(true); expect(t.inputSchema.type).toBe('object'); expect(t.description).not.toMatch(BANNED); }
+    for (const t of tools) { expect(t.annotations.readOnlyHint).toBe(true); expect(t.annotations.openWorldHint).toBe(t.name === 'get_data'); expect(t.inputSchema.type).toBe('object'); expect(t.description).not.toMatch(BANNED); }
   });
 
   it('answers a notification with 202 and nothing, a ping with an empty result, an unknown method with -32601', async () => {
@@ -223,6 +271,20 @@ describe('/mcp', () => {
     for (const init of [{}, { method: 'POST', body: '{"jsonrpc":"2.0","id":1,"method":"ping"}' }, { method: 'OPTIONS' }]) expect((await get('/mcp', init)).status).toBe(404);
   });
 
+  it('once on, a POST through the Worker is answered: initialize, the tool list and a tool call, never stored', async () => {
+    if (!SITE.mcpLive) return;
+    const send = (body: unknown) => get('/mcp', { method: 'POST', headers: { 'content-type': 'application/json', accept: 'application/json, text/event-stream' }, body: JSON.stringify(body) });
+    const init = await send({ jsonrpc: '2.0', id: 1, method: 'initialize', params: { protocolVersion: '2025-06-18', capabilities: {}, clientInfo: { name: 't', version: '1' } } });
+    expect(init.status).toBe(200);
+    expect(init.headers.get('cache-control')).toBe('no-store');
+    expect(((await init.json()) as any).result.serverInfo.name).toBe('namadatrade');
+    expect((await send({ jsonrpc: '2.0', method: 'notifications/initialized' })).status).toBe(202);
+    expect(((await (await send({ jsonrpc: '2.0', id: 2, method: 'tools/list' })).json()) as any).result.tools).toHaveLength(3);
+    const list = ((await (await send({ jsonrpc: '2.0', id: 3, method: 'tools/call', params: { name: 'list_pages', arguments: {} } })).json()) as any).result;
+    expect(list.isError).toBe(false);
+    for (const r of AGENT_ROUTES) expect(list.content[0].text).toContain(`- ${r.path} — `);
+  });
+
   it('a GET is refused with 405 through the Worker, never indexed, and a preflight is allowed', async () => {
     if (!SITE.mcpLive) return;
     const g = await get('/mcp');
@@ -244,20 +306,23 @@ describe('/mcp', () => {
     expect((await call('read_page', { path: '/' })).result.isError).toBe(false);
     for (const p of ['/settings', '/nope', '', 5, '../etc/passwd', '.md']) expect((await call('read_page', { path: p })).result.isError, String(p)).toBe(true);
     expect((await call('no_such_tool', {})).error.code).toBe(-32602);
+    const odd = (await (await post({ jsonrpc: '2.0', id: 9, method: 'tools/call', params: { name: { toString: 1 }, arguments: {} } })).json()) as any;
+    expect(odd.error.code).toBe(-32602);
+    expect((await call('read_page', { path: { toString: 1 } })).result.isError).toBe(true);
   });
 
   it('get_data calls only a documented route, with the caller\'s address and its parameters', async () => {
-    for (const e of API_CATALOG) expect(documentedPath(e.path.replace(/\{[^}]+\}/, 'tnam1qqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqq')), e.path).toBe(!e.path.startsWith('/api/export/'));
+    for (const e of API_CATALOG) expect(documentedPath(e.path.replace(/\{[^}]+\}/, 'tnam1qqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqq')), e.path).toBe(!notOffered(e.path));
     // nothing the URL parser would rewrite into another route passes: a backslash, dot segments, an encoded dot
-    for (const p of ['/api/address/..\\me\\settings', '/api/address/..\\..\\ws', '/api/address/%2e%2e', '/api/address/..', '/api/address/.', '/api/export/flows', '/api/export/holders']) {
+    for (const p of ['/api/address/..\\..\\overview', '/api/address/..\\..\\ws', '/api/address/%2e%2e', '/api/address/..', '/api/address/.', '/api/export/flows', '/api/export/holders']) {
       expect(documentedPath(p), p).toBe(false);
       expect((await call('get_data', { path: p })).result.isError, p).toBe(true);
     }
-    for (const p of ['/api/me/settings', '/api/auth/nonce', '/api/cron', '/api/overview/../me/settings', '/api/overview?x=1', 'https://evil.example/api/overview', '/api/address/a/b', '/ws', '']) expect(documentedPath(p), p).toBe(false);
+    for (const p of ['/api/overview/../holders', '/api/overview?x=1', 'https://other.example/api/overview', '/api/address/a/b', '/ws', '']) expect(documentedPath(p), p).toBe(false);
     api.mockClear();
     const ok = await call('get_data', { path: '/api/flows', query: { limit: 5, kind: 'sell', nested: { a: 1 } } });
     expect(JSON.parse(ok.result.content[0].text)).toEqual({ path: '/api/flows?limit=5&kind=sell', ip: '203.0.113.9' });
-    const no = await call('get_data', { path: '/api/me/settings' });
+    const no = await call('get_data', { path: '/api/nope' });
     expect(no.result.isError).toBe(true);
     expect(api).toHaveBeenCalledTimes(1);
     for (const c of api.mock.calls) expect(new URL(c[0].url).pathname).toBe('/api/flows');
@@ -265,6 +330,10 @@ describe('/mcp', () => {
     const limited = await call('get_data', { path: '/api/overview' });
     expect(limited.result.isError).toBe(true);
     expect(limited.result.content[0].text).toContain('429');
+    const failing = JSON.stringify({ ok: false, rows: 'z'.repeat(800) });
+    api.mockResolvedValueOnce(new Response(failing, { status: 503 }));
+    expect((await call('get_data', { path: '/api/health' })).result.content[0].text).toContain(failing);
+    for (const p of ['/api/export/flows', '/api/depth/heat']) expect((await call('get_data', { path: p })).result.content[0].text, p).toContain('more than a tool result can hold');
   });
 
   it('tool calls are counted per address, and an answer too long is refused whole, never cut', async () => {
