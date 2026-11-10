@@ -19,6 +19,7 @@ import { DAILY_DAYS } from './data';
 import type { Depth } from './model';
 import { PAID_WINDOWS, WINDOW_WORD, turnoverPct, vsPaidPct } from './series';
 import { osmosisGapWindows, reachesOsmosisGap } from '../../../../shared/osmosis-gap';
+import { ANY_TRADE_HOURS_HAD } from '../../../../shared/price-trades';
 
 export interface BuyersProps {
   volume: HistoryLoad<VolumeResponse>;
@@ -136,7 +137,7 @@ export function Buyers({ volume, daily, overview, depth, rewound = false }: Buye
             ) : null}
             {v.windows.d30 ? (
               <p className="cap">
-                <span data-num="">{fmtCount(v.windows.d30.hoursWithTrade)}</span> of the last <span data-num="">{fmtCount(v.windows.d30.hours)}</span> hours had a trade. An average over few trades moves with each one.
+                <span data-num="">{fmtCount(v.windows.d30.hoursWithTrade)}</span> of the last <span data-num="">{fmtCount(v.windows.d30.hours)}</span> hours {ANY_TRADE_HOURS_HAD}. An average over few trades moves with each one.
               </p>
             ) : null}
             {gapped.length ? <p className="cap tk-gap">{osmosisGapWindows(gapped.map((w) => WINDOW_SPAN[w] ?? WINDOW_WORD[w]))}</p> : null}

@@ -166,6 +166,13 @@ export default function SupplyScreen({ route }: ScreenProps) {
     ? { ...data.unbondTermStructureProv, plain: 'Namada node', note: [`The chain's own list of every unstaking request still in its wait, of every size, read from a Namada node.`, data.unbondTermStructureProv.note].filter(Boolean).join(' ') }
     : null;
   const fromChain = term != null && termStamp != null && termStamp.status !== 'missing' && Number.isFinite(term.inFlightNam);
+  // One figure, one value: the same list also says how much NAM is past its wait and not withdrawn, of every size.
+  // When it was read, the strip's first staking figure is that, so a 0 that counts only the large recent requests
+  // never sits above a sentence that states the whole; the list's own figure is said under it, as what the list holds.
+  const readyFromChain = fromChain && Number.isFinite(term!.withdrawableNowNam);
+  const termReadyStamp: Stamp | null = readyFromChain && data?.unbondTermStructureProv
+    ? { ...data.unbondTermStructureProv, plain: 'Namada node', note: [`The chain's own list of every unstaking request whose wait is over and that was not withdrawn, of every size, read from a Namada node.`, data.unbondTermStructureProv.note].filter(Boolean).join(' ') }
+    : null;
   const ulFact = (v: number | undefined, p: Stamp | null) =>
     data && p ? <Num v={v ?? null} prov={p} fmt={fmtNamRule} unit="NAM" showAge={false} showReason={false} /> : err ? <Num v={null} prov={FAILED} /> : <SkeletonBlock height={28} width={110} />;
   // the size of the requests a staking figure counts, on its own line under the label
@@ -194,17 +201,25 @@ export default function SupplyScreen({ route }: ScreenProps) {
       scope: o ? { label: 'Net bought on Osmosis, 24 hours (bots left out)', p: o.dex.coverage } : undefined,
     },
     {
-      n: ulFact(sums?.ready.nam, readyStamp),
+      n: readyFromChain ? ulFact(term!.withdrawableNowNam, termReadyStamp) : ulFact(sums?.ready.nam, readyStamp),
       label: (
         <>
           {/* the list below, with the Unstaking filter on and these requests first */}
           <a className="sp-factlink" href={`#${UNLOCKS_ID}`} onClick={() => setUlFilter('out')}>
             unstaked, wait over, not withdrawn
           </a>
-          {sizeLine(`counting ${minWords}`)}
+          {sizeLine(readyFromChain ? "counting requests of every size, from the chain's own list" : `counting ${minWords}`)}
+          {/* what the list below holds of such requests, named as the list's figure: it counts the large recent ones only */}
+          {readyFromChain && data && sums ? (
+            <span className="sp-fact__size sp-fact__listed">
+              the list below holds <Num v={sums.ready.nam} prov={readyStamp} fmt={fmtNamRule} unit="NAM" showAge={false} showReason={false} />, {minWords}
+            </span>
+          ) : null}
         </>
       ),
-      scope: readyStamp ? { label: `Unstaked NAM whose wait is over and that was not withdrawn, ${minWords}`, p: readyStamp } : undefined,
+      scope: readyFromChain
+        ? { label: "Unstaked NAM whose wait is over and that was not withdrawn, requests of every size, from the chain's own list", p: termReadyStamp }
+        : readyStamp ? { label: `Unstaked NAM whose wait is over and that was not withdrawn, ${minWords}`, p: readyStamp } : undefined,
     },
     {
       n: fromChain ? ulFact(term!.inFlightNam, termStamp) : allW ? ulFact(allW.nam, allStamp) : ulFact(sums?.waiting.nam, waitingStamp),

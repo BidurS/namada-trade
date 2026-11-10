@@ -239,6 +239,12 @@ test.describe('unstaking days and origins, every viewport', () => {
     const still = page.locator('.sp-facts .fact').nth(4);
     await expect(still.locator('.fact__n')).toContainText('1,403,000');
     await expect(still.locator('.fact__l')).toContainText("from the chain's own list");
+    // and its "wait over, not withdrawn" is the same list's figure, of every size, with what the list below holds
+    // said under it as the list's own figure: a 0 that counts the large recent requests never stands for the whole
+    const over = page.locator('.sp-facts .fact').nth(3);
+    await expect(over.locator('.fact__n')).toContainText('7,654,321');
+    await expect(over.locator('.fact__l')).toContainText("counting requests of every size, from the chain's own list");
+    await expect(over.locator('.fact__l')).toContainText('the list below holds');
     await expect(days.locator('.ul-days__box svg text.c-tick').first()).toBeAttached();
     await expect(days.locator('.ul-days__box button, .ul-days__box [tabindex]')).toHaveCount(0);
     // day 1: the chain's 3,000 NAM, no address; day 5: the chain's 900,000, of which the listed 400,000 of an address that sold before

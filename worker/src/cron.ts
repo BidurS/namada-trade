@@ -19,6 +19,7 @@ import { postGovOnX, postHourCrossingOnX, postHourLiquidityOnX, postHourOnX, rep
 import { namFloors, publicHour } from './public-posts';
 import { sendDiscordForumAlert, sendDiscordGovAlert, sendsAlerts, alertBudget, flushAlerts, sweepNoticeChannels, RUN_ALERT_POSTS, RUN_ALERT_WINDOW_MS, type GovContext } from './sources/discord';
 import { NAM, NAMADA, OSMOSIS } from './config';
+import { PRICE_TRADE_MIN_NAM } from '../../shared/price-trades';
 import { fetchJson, toNam, isRealAddress, FETCH_TEXT_MAX_BYTES, publicNote, redact, registerSecrets } from './util';
 import type { BridgesRecord, IntelResponse, SourceHealth } from '../../shared/types';
 import { BRIDGES_KV, BRIDGES_PHASE_MS, bridgeSums, currentHeld, osmosisRow, rowName, runBridges } from './bridges';
@@ -343,7 +344,7 @@ export const LISTING_RETRY_MS = 5 * 60_000;
  * stored 'USDC' is a label, which only the reference pool's other coin (Noble USDC) is sure to deserve.
  */
 export const SINGLE_POOL_USDC_SWAP = `chain='osmosis' AND counter_denom='USDC' AND kind IN ('buy','sell')
-       AND amount_num >= 50 AND counter_amount > 0 AND pool_id IN (${OSMOSIS.pricePoolIds.map((p) => `'${p}'`).join(',')})`;
+       AND amount_num >= ${PRICE_TRADE_MIN_NAM} AND counter_amount > 0 AND pool_id IN (${OSMOSIS.pricePoolIds.map((p) => `'${p}'`).join(',')})`;
 /** How old the last hour with such a trade may be for the price check to compare against it. */
 export const PRICE_CHECK_WINDOW_MS = 6 * 3600000;
 

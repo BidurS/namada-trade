@@ -25,6 +25,7 @@ import type { Stamp } from '../lib/prov';
 import { fmtAgo, fmtCount, fmtDayClock, fmtDayMonth, fmtDayMonthYear, fmtNamRule, fmtUsdRule, fmtUtcClock } from '../lib/format';
 import { hoursWithData, lin, nearestIndex, niceTicks, pathOf, stackLabels, takeaway, tickLabel } from './chartMath';
 import { DAY_MS, FEW_POINTS, HOUR_MS, HOURLY_HISTORY_DAYS, SPARSE_SHARE, spanWords, spansWords } from './chartConst';
+import { PRICE_HOURS_HAD } from '../../../shared/price-trades';
 import { useSize } from './useSize';
 import { Segmented } from './Segmented';
 import { SourceLine } from './SourceLine';
@@ -448,9 +449,9 @@ export function PriceChart({
           {lastQ ? 'A quote is what the pools offer now; a trade price is what someone actually paid. ' : null}
           {hourly ? (
             withTrades < hours * SPARSE_SHARE ? (
-              <>Trades are sparse: only <span data-num="">{withTrades}</span> of the <span data-num="">{hours}</span> hours since {fmtDayMonth(countFrom)} had one, so each is a dot, joined to the next only when that hour traded too{fewQuoted}.</>
+              <>Trades are sparse: only <span data-num="">{withTrades}</span> of the <span data-num="">{hours}</span> hours since {fmtDayMonth(countFrom)} {PRICE_HOURS_HAD}, so each is a dot, joined to the next only when that hour had one too{fewQuoted}.</>
             ) : (
-              <><span data-num="">{withTrades}</span> of the <span data-num="">{hours}</span> hours since {fmtDayMonth(countFrom)} had a trade{fewQuoted}.</>
+              <><span data-num="">{withTrades}</span> of the <span data-num="">{hours}</span> hours since {fmtDayMonth(countFrom)} {PRICE_HOURS_HAD}{fewQuoted}.</>
             )
           ) : (
             <>At this range the server keeps {bucketMs != null && bucketMs > HOUR_MS ? `at most one point per ${spanWords(bucketMs)}` : 'fewer points'}: the chart shows the <span data-num="">{E.length}</span> since {fmtDayMonth(first?.t)}, joined only between neighbouring points, and a gap is not an hour without a trade{fewQuoted}.</>
@@ -470,7 +471,7 @@ export function PriceChart({
         <p className="sr-only">
           First {isPrice ? 'executed price' : 'reading'} {fmtV(first.v)}, lowest {fmtV(low.v)}, highest {fmtV(high.v)}, last {fmtV(last.v)}.
           {P.length ? ` Pool price, not trades: ${fmtCount(P.length)} points from ${fmtDayMonthYear(P[0].t)}, last ${fmtV(P[P.length - 1].v)}.` : ''}
-          {showBars ? ` NAM traded: ${barPts.filter(inWin).length} hours with trades in the window.` : ''}
+          {showBars ? ` NAM traded: ${barPts.filter(inWin).length} hours of the window have a bar.` : ''}
         </p>
       ) : null}
     </section>

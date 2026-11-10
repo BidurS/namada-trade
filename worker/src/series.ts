@@ -12,6 +12,7 @@ import type { Env } from './util';
 import { fetchJson } from './util';
 import { runBatch, stmt, type Stmt } from './db';
 import { INTERNAL_LABELS, NAMADA, OSMOSIS } from './config';
+import { PRICE_TRADE_MIN_NAM } from '../../shared/price-trades';
 import { INTERNAL_ADDRS, osmosisStamp, osmosisTrustedStart } from './holders';
 import { fetchPairChart, fetchPairSummary, OSMOSIS_DATA_SOURCE, type PairChartPoint, type PairSummary } from './sources/osmosis-data';
 import { safeParseJson, timedOutSends, ibcRowOf, metricAt, MASP_MAKEUP_KV } from './analytics';
@@ -116,7 +117,7 @@ export function medianOf(sorted: number[]): number {
 
 /** A swap the executed price trusts (cron.ts SINGLE_POOL_USDC_SWAP, in code): one pool, and a pool trusted for the price. */
 export const singlePoolUsdc = (r: SwapRow) =>
-  r.counter_denom === 'USDC' && (r.kind === 'buy' || r.kind === 'sell') && r.amount_num >= 50 && (r.counter_amount ?? 0) > 0 && r.pool_id != null && OSMOSIS.pricePoolIds.includes(r.pool_id);
+  r.counter_denom === 'USDC' && (r.kind === 'buy' || r.kind === 'sell') && r.amount_num >= PRICE_TRADE_MIN_NAM && (r.counter_amount ?? 0) > 0 && r.pool_id != null && OSMOSIS.pricePoolIds.includes(r.pool_id);
 
 const metaOf = (m: SwapRow['meta']): Record<string, any> => (typeof m === 'string' ? safeParseJson(m, {}) ?? {} : m ?? {});
 

@@ -16,7 +16,7 @@ import { Inside, PairsList } from '../../ui/PairsList';
 import { NBSP, fmtAgo, fmtCount, fmtNamRule, fmtPctRule, fmtUsdWhole } from '../../lib/format';
 import type { Depth } from './model';
 import { counterName, pairName, restOf, splitPools } from './model';
-import { biggestShare, oneSidedWords, poolSides, pricedTotal, totalNotKnownWords } from '../../../../shared/pool-sides';
+import { biggestShare, oneSidedWords, poolCounts, poolSides, pricedTotal, totalNotKnownWords } from '../../../../shared/pool-sides';
 import type { HistoryLoad } from './data';
 import { DepthLine } from '../depth/Line';
 import { SITE_SYMBOL } from '../../../../shared/depth';
@@ -37,6 +37,9 @@ function PairsBody({ r, osmosisLine }: { r: PairsResponse; osmosisLine: ReactNod
   const stamp: Stamp = { ...r.prov, plain: 'Osmosis pools' };
   // the pools' money only when the priced pools hold the NAM a total needs (shared/pool-sides.ts pricedTotal); each
   // pool's share is of that total, and none without it
+  // One figure, one value: the count beside the total is the pools that hold something, as the header's count is
+  // (the stored pool list); a pool the pair summary lists that the pool list does not is said apart, never counted in.
+  const { holding, unread } = poolCounts(r.pairs);
   const sum = pricedTotal(r.pairs);
   const total = sum.usd;
   const totalStamp: Stamp | undefined = total == null ? { ...stamp, status: 'missing', note: totalNotKnownWords(sum) } : undefined;
@@ -59,8 +62,9 @@ function PairsBody({ r, osmosisLine }: { r: PairsResponse; osmosisLine: ReactNod
       oldSentence={<>The pool list did not answer just now. These figures are its last answer, from {fmtAgo(stamp.at, now)}, so they are shown dimmed.</>}
     >
       <p className="lead">
-        <Num as="b" v={r.pairs.length} fmt={fmtCount} /> pools hold <Num as="b" v={total} prov={totalStamp} fmt={fmtUsdWhole} />. The biggest holds{' '}
+        <Num as="b" v={holding} fmt={fmtCount} /> {holding === 1 ? 'pool holds' : 'pools hold'} <Num as="b" v={total} prov={totalStamp} fmt={fmtUsdWhole} />. The biggest holds{' '}
         <Num as="b" v={share} fmt={(n) => fmtPctRule(n, 1)} showReason={false} /> of it.
+        {unread > 0 ? <> <span data-num="">{fmtCount(unread)}</span> more {unread === 1 ? 'is' : 'are'} listed by Osmosis and not in the pool list read here, so nothing is counted for {unread === 1 ? 'it' : 'them'}.</> : null}
       </p>
       {/* the two volume sources, each with its own stamp in view: the Osmosis pair summary's update time and the flow index's */}
       <p className="cap tk-osmo">

@@ -106,3 +106,15 @@ export function oneSidedWords(sides: PoolSides, coin: string | null): { depth: s
   if (sides === 'coin') return { depth: `Only ${coin ?? 'the other coin'} inside`, line: 'no NAM inside: it can be sold into, not bought from' };
   return null;
 }
+
+/**
+ * How many of the listed pools hold something, and how many are listed with nothing read inside them. A pool holds
+ * something when a reading of either side is above zero. A pool with no reading of either side is one the pair
+ * summary lists and the pool list read here does not (the pool list names only pools that hold something): it is
+ * counted apart and never as holding. The first figure is the one the header and the ticket state.
+ */
+export function poolCounts(pools: readonly { namReserve: number | null; counterReserve: number | null }[]): { holding: number; unread: number } {
+  const holding = pools.filter((p) => (p.namReserve ?? 0) > 0 || (p.counterReserve ?? 0) > 0).length;
+  const unread = pools.filter((p) => p.namReserve == null && p.counterReserve == null).length;
+  return { holding, unread };
+}
