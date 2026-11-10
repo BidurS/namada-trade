@@ -39,6 +39,10 @@ export function Bridges({ route }: ScreenProps) {
       : missing('this site', 'Not stated: the bridge account, the stuck transfers or a chain that can be read has no current figure, and the rest is never made with a part missing.', 'This site')
     : null);
 
+  // The list's source line sums up the readings behind the figures shown. A row with no figure says why beside its
+  // dash, so it is left out of that line while any row has a figure: one chain that cannot be read must not make the
+  // line say the whole list has no data. With no figure at all, every row counts and the line says so.
+  const anyFigure = (d?.channels ?? []).some((r) => r.held.value != null);
   const rows: FigRow[] = (d?.channels ?? []).map((r) => ({
     // the channel is part of the label, so two channels to one chain are two rows with two names
     label: `NAM on ${chainName(r)}, ${r.channel}`,
@@ -46,7 +50,7 @@ export function Bridges({ route }: ScreenProps) {
     // a row without a figure says why beside its dash (the figure's own stamp carries the reason)
     note: `${r.channel} to ${r.counterpartyChannel}${r.open ? '' : ', not open'}`,
     value: <Fig loading={loading} h={26} v={r.held.value} prov={r.held.prov} fmt={fmtNamRule} unit="NAM" />,
-    p: r.held.prov,
+    p: r.held.value != null || !anyFigure ? r.held.prov : undefined,
   }));
 
   return (

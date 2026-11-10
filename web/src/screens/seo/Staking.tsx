@@ -96,6 +96,7 @@ export function Staking({ route }: ScreenProps) {
               { label: 'Highest commission', note: 'among the same validators', value: <Fig loading={intel.loading} h={26} v={cMax} prov={valP} fmt={pctTrim} showReason={false} />, p: valP },
             ]}
           />
+          <GoLink to="/validators">Every validator and its stake</GoLink>
         </QSection>
 
         <QSection id="q-wait" h2={copy.sections![1].h2} paras={copy.sections![1].paras}>

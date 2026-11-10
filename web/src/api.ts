@@ -3,6 +3,7 @@ import type {
   Pressure, BlindSpot, OrderflowResponse, AlertRuleInfo, Provenance, UserSettings, SessionInfo,
   FlowsResponse, HoldersResponse, AlertsRecentResponse, Flow, Holder, HoldersBy, SearchResponse, NotServedBody,
   SeriesResponse, SeriesStep, PriceChangesResponse, VolumeResponse, PairsResponse, TradesResponse, ValuesResponse, GenesisCohortsResponse, IntegrityResponse, BridgesResponse,
+  ValidatorsResponse, ValidatorHistoryResponse,
 } from '../../shared/types';
 
 export type {
@@ -410,6 +411,13 @@ export const fetchAddressReport = (address: string) => get<AddressReport>(`/api/
 export const fetchIntegrity = () => get<IntegrityResponse>('/api/integrity');
 /** GET /api/bridges: every bridge channel with the NAM its chain holds (current only: the route takes no time). */
 export const fetchBridges = () => get<BridgesResponse>('/api/bridges');
+/**
+ * GET /api/validators: every validator with stake on one UTC day (left out: the newest day on record). The route
+ * takes no time of its own: a rewound page asks for the day of its moment (web/src/screens/seo/Validators.tsx).
+ */
+export const fetchValidators = (day?: string | null) => get<ValidatorsResponse>(`/api/validators${day ? `?${new URLSearchParams({ day })}` : ''}`);
+/** GET /api/validators/history: one validator's newest `days` days on record, oldest first. Rejects with a 404 ApiError when it has no row. */
+export const fetchValidatorHistory = (validator: string, days: number) => get<ValidatorHistoryResponse>(`/api/validators/history?${new URLSearchParams({ validator, days: String(days) })}`);
 export const fetchIntel = () => get<IntelResponse>('/api/intel');
 
 /** Address, transaction and label search. Rejects when the server does not answer: a failure is not "no match". */

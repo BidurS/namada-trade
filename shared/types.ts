@@ -430,6 +430,73 @@ export interface BridgesResponse {
   prov: Provenance;
 }
 
+// ---------------------------------------------------------------- the validators (worker/src/validators.ts)
+
+/** One validator on one UTC day, as validator_daily holds it (migration 0007): only validators with stake have a row. */
+export interface ValidatorRow {
+  validator: string;
+  /** The name the indexer's list gives it (the chain's own text, as stored); null when that list does not have it or was not read. */
+  name: string | null;
+  /** NAM bonded to it, net of slashing. */
+  stake: number;
+  /** `stake` over the day's total, as a fraction; null when the total is 0. */
+  share: number | null;
+  /** How many addresses are bonded to it. */
+  delegators: number;
+  /** The commission it keeps, as a fraction; null when the indexer's list does not say. */
+  commission: number | null;
+  /** The indexer's word for its state (shared/validators.ts validatorStateOf); null when not read. */
+  state: string | null;
+  /** `stake` less its stake on `prev`; null when `prev` has no row for it, or there is no `prev`. */
+  changeNam: number | null;
+}
+
+/** GET /api/validators: every validator with stake on one UTC day, from the first complete bond listing of that day. */
+export interface ValidatorsResponse {
+  asOf: number;
+  /** The day served (YYYY-MM-DD, UTC); null when no day is on record. */
+  day: string | null;
+  /** The days on record, newest first, at most VALIDATOR_DAYS_MAX. */
+  days: string[];
+  /** The day's rows, largest stake first, at most VALIDATORS_MAX. */
+  validators: ValidatorRow[];
+  /** The sum of the day's stakes (every row of the day, not only the rows served); null when the day has no row. */
+  totalNam: number | null;
+  /** How many validators have stake on the day; null when the day has no row. */
+  count: number | null;
+  /**
+   * The smallest number of validators, largest first, whose stake together is more than one third of `totalNam`, and
+   * more than two thirds. A statement about how the staked NAM is spread. Null when the day has no row or no stake.
+   */
+  third: number | null;
+  twoThirds: number | null;
+  /** The previous day on record, which `changeNam` compares with; null when the day served is the first. */
+  prev: string | null;
+  /** The listing's stamp: the time and block of the day's listing. 'missing' with the reason when nothing is on record or the read failed. */
+  prov: Provenance;
+  /** The stamp of names, commission and state: the newest read of the indexer's list among the day's rows. */
+  namesProv: Provenance;
+}
+
+/** One day of one validator. */
+export interface ValidatorDay {
+  day: string;
+  stake: number;
+  delegators: number;
+  commission: number | null;
+  state: string | null;
+}
+
+/** GET /api/validators/history: one validator's newest days on record, oldest first. */
+export interface ValidatorHistoryResponse {
+  validator: string;
+  /** The newest name among the days answered; null when none of them has one. */
+  name: string | null;
+  days: ValidatorDay[];
+  /** The stamp of the newest day answered. */
+  prov: Provenance;
+}
+
 // ---------------------------------------------------------------- overview
 
 export interface PoolInfo {

@@ -12,7 +12,7 @@ export type GuideRouteId = `guide-${GuideSlug}`;
 export type RouteId =
   | 'home' | 'trade' | 'depth' | 'supply' | 'shielded' | 'activity' | 'holders' | 'alerts' | 'settings'
   | 'staking' | 'osmosis' | 'learn' | 'faq' | 'guides' | GuideRouteId
-  | 'developers' | 'status' | 'methodology' | 'privacy' | 'terms' | 'bridges';
+  | 'developers' | 'status' | 'methodology' | 'privacy' | 'terms' | 'bridges' | 'validators';
 
 /** The six tabs, in this order everywhere (system.md section 3). */
 export type TabId = 'home' | 'trade' | 'supply' | 'shielded' | 'activity' | 'alerts';
@@ -116,6 +116,15 @@ export const ROUTES: RouteDef[] = [
     description: 'The staking rate the network reports, how much NAM is staked and its share, and the unstaking wait from the chain\'s own settings, each with its time.',
   },
   {
+    // Every validator with its stake (docs/design/platform-plan.md, release C): the rows the bond listing
+    // writes once a day, with live figures, linked from the footer after Staking, from the Staking page and from the
+    // served pages' navigation. /validator and /validator-set are the words people type for it (ROUTE_ALIASES).
+    path: '/validators', id: 'validators', label: 'Validators', index: true,
+    h1: 'Who validates Namada, and how is the staked NAM spread?',
+    title: 'Namada validators: stake, share and commission',
+    description: 'Every Namada validator with the NAM staked with it, its share of all staked NAM, the addresses staked with it, its commission and its state, day by day.',
+  },
+  {
     path: '/osmosis', id: 'osmosis', label: 'NAM on Osmosis', index: true,
     h1: 'NAM on Osmosis: pools, liquidity and what a trade costs',
     title: 'NAM on Osmosis: pools, liquidity, trade cost',
@@ -214,6 +223,7 @@ export const ROUTE_ALIASES: Record<string, string> = {
   learn: '/learn/how-nam-trading-works',
   guide: GUIDES_PATH,
   bridge: '/bridges', channels: '/bridges', ibc: '/bridges',
+  validator: '/validators', 'validator-set': '/validators',
   // the words people type for the platform pages
   api: '/developers', docs: '/developers', 'api-docs': '/developers', developer: '/developers',
   health: '/status', uptime: '/status',

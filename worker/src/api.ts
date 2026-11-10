@@ -57,6 +57,8 @@ import { SINGLE_POOL_USDC_SWAP, MINT_RULE_KV, type MintRuleState } from './cron'
 import { checkStaleMs } from './digest/freshness';
 import { readHealth } from './ops';
 import { bridgesAnswer } from './bridges';
+import { validatorsAnswer, validatorHistoryAnswer } from './validators';
+import { route } from './api-route';
 import { answerAsk, askState } from './ask';
 
 /** A check that has not run for this long is served as 'stale': its last result is kept, but it no longer counts as
@@ -2049,6 +2051,13 @@ app.get('/api/integrity', async (c) => {
 // the bridge account's own balance, the NAM in transfers known to be stuck and what is left that no chain read accounts
 // for. Current only: nothing here is recorded over time. Three small reads by key, no parameter, no session.
 app.get('/api/bridges', async (c) => c.json(await bridgesAnswer(c.env.DB, Date.now())));
+
+// Every validator with stake on one UTC day, and one validator over its days (worker/src/validators.ts): the rows the
+// bond listing writes once a day, read by day on the index of migration 0025 and by validator on the table's key.
+// The clock decides only whether the day served is current. A value a route does not take is refused in plain words
+// and never stored (api-route.ts route); no session.
+app.get('/api/validators', route('/api/validators', (c) => validatorsAnswer(c.env.DB, Date.now(), c.req.query('day'))));
+app.get('/api/validators/history', route('/api/validators/history', (c) => validatorHistoryAnswer(c.env.DB, Date.now(), c.req.query('validator'), c.req.query('days'))));
 
 // The probe of an uptime service outside Cloudflare (scale plan, Stage 1 item 4): whether the cron completed a tick
 // in the last 5 minutes and no incident is open (worker/src/ops.ts healthAnswer), 503 otherwise. Two kv rows by key in

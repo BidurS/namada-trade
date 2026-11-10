@@ -6,7 +6,7 @@ import { DAY_MS, DAILY_DAYS, HISTORY_FETCH_DAYS } from '../../shared/history';
 import { TRADES_TAPE_LIMIT } from '../../shared/types';
 import { QUOTE_NAM_MIN, QUOTE_NAM_MAX, roundQuoteNam, HEAT_DAYS, CHANGES_LIMIT_MAX } from '../../shared/depth';
 
-export const CACHEABLE_API = /^\/api\/(overview|pools|pressure|blindspot|orderflow|flows|holders|search|metrics\/history|quote\/curve|alerts\/rules|alerts\/recent|intel|series|series\/changes|series\/volume|series\/pairs|series\/trades|series\/values|series\/cohorts|depth|depth\/quote|depth\/history|depth\/heat|depth\/owners|depth\/changes|integrity|bridges|donation|health|ask)$/;
+export const CACHEABLE_API = /^\/api\/(overview|pools|pressure|blindspot|orderflow|flows|holders|search|metrics\/history|quote\/curve|alerts\/rules|alerts\/recent|intel|series|series\/changes|series\/volume|series\/pairs|series\/trades|series\/values|series\/cohorts|depth|depth\/quote|depth\/history|depth\/heat|depth\/owners|depth\/changes|integrity|bridges|validators|validators\/history|donation|health|ask)$/;
 
 const THRESHOLDS = ['ibcInventory', 'unlock', 'bigSwap', 'unshield', 'bond', 'exitBridge', 'liquidity'];
 /**
@@ -49,6 +49,10 @@ export const CACHE_PARAMS: Record<string, string[]> = {
   '/api/integrity': [],
   // Every bridge channel with what its chain holds (worker/src/bridges.ts): three reads by key, no parameter, no session
   '/api/bridges': [],
+  // The validators of one UTC day and one validator over its days (worker/src/validators.ts): the day's rows on the
+  // index of migration 0025, a validator's on the table's key; no session
+  '/api/validators': ['day'],
+  '/api/validators/history': ['validator', 'days'],
   '/api/donation': [],
   // The uptime probe's answer (worker/src/ops.ts): two kv rows by key, no parameter, no session
   '/api/health': [],
@@ -178,6 +182,10 @@ export function isReplay(url: URL): boolean {
     const limit = url.searchParams.get('limit');
     if (limit != null && limit !== String(CHANGES_LIMIT_MAX)) return true;
   }
+  // The validators of a day other than the newest, and one validator's days: a copy for each day and for each address
+  // (any whole Namada address can be asked for, and one with no row is answered afresh each time): limited on a miss.
+  if (p === '/api/validators' && url.searchParams.has('day')) return true;
+  if (p === '/api/validators/history') return true;
   if (p === '/api/flows' || p === '/api/holders') {
     // a size, a cursor or a date jump: every value is its own cache entry
     // so is an address (every start of 8 to 62 characters of every address, or a whole one); a hub's count reads

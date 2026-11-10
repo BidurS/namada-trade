@@ -186,7 +186,7 @@ describe('/openapi.json', () => {
     expect(codes('/api/health')).toEqual(['200', '429', '503']);
     // a 400 is listed exactly where the catalog's own words say a value is refused or a parameter must be sent
     for (const e of API_CATALOG) expect('400' in doc.paths[e.path].get.responses, e.path).toBe(refuses(e));
-    expect(API_CATALOG.filter((e) => e.notFound).map((e) => e.path).sort()).toEqual(['/api/depth', '/api/depth/owners', '/api/depth/quote', '/api/metrics/history', '/api/series']);
+    expect(API_CATALOG.filter((e) => e.notFound).map((e) => e.path).sort()).toEqual(['/api/depth', '/api/depth/owners', '/api/depth/quote', '/api/metrics/history', '/api/series', '/api/validators/history']);
   });
 });
 

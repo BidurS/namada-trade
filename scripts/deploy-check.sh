@@ -286,6 +286,12 @@ for i in 1 2 3 4 5; do out=$(npx wrangler d1 execute namada-trade-db --remote --
 echo "$out" | python3 -c "
 import sys,json; r=json.load(sys.stdin)[0]['results'][0]; print('0024 tables and column:', r)
 sys.exit(0 if r['tables'] == 2 and r['n'] == 1 else 1)" || stop "migration 0024 is not in place: not deploying"
+# 0025 (validator_daily by day): /api/validators names the index in every read by day (worker/src/validators.ts INDEXED BY),
+# so without it the route answers that the listing could not be read and the validators page states no figure
+for i in 1 2 3 4 5; do out=$(npx wrangler d1 execute namada-trade-db --remote --json --command "SELECT COUNT(*) n FROM sqlite_master WHERE type='index' AND name = 'validator_daily_day'" 2>&1) && ! echo "$out" | grep -q 7403 && break; echo "retrying (Cloudflare 7403)"; sleep 6; done
+echo "$out" | python3 -c "
+import sys,json; n=json.load(sys.stdin)[0]['results'][0]['n']; print('0025 index:', n)
+sys.exit(0 if n == 1 else 1)" || stop "migration 0025 is not in place: not deploying"
 # the depth archive bucket (wrangler.jsonc r2_buckets DEPTH_R2): wrangler refuses to upload a Worker bound to a bucket
 # that does not exist, so the bucket is created once by hand before the first deploy of the binding (the code tolerates
 # the binding missing; the deploy does not)
@@ -358,6 +364,10 @@ check "the API page lists the routes without JavaScript" 1 "$(curl -s "$H/develo
 # tick after the deploy has read the chain's channels) and a stamp whose status is one of the three
 check "/bridges answers"               200 "$(curl -s -o /dev/null -w '%{http_code}' "$H/bridges")"
 check "the bridges answer carries a list and a stamp" 1 "$(curl -s "$H/api/bridges" | python3 -c "import sys,json; d=json.load(sys.stdin); print(1 if isinstance(d['channels'], list) and d['prov']['status'] in ('live','stale','missing') and 'beyondNam' in d and 'prov' in d['held'] and 'prov' in d['stuck'] else 0)")"
+# every validator (release C, 2026-11-10; migration 0025): the page answers, and its data answers with the day's rows (none
+# while no day is on record), the days on record and two stamps whose status is one of the three; with no row every figure is null
+check "/validators answers"            200 "$(curl -s -o /dev/null -w '%{http_code}' "$H/validators")"
+check "the validators answer carries its rows, its days and two stamps" 1 "$(curl -s "$H/api/validators" | python3 -c "import sys,json; d=json.load(sys.stdin); ok=isinstance(d['validators'], list) and isinstance(d['days'], list) and all(d[k]['status'] in ('live','stale','missing') for k in ('prov','namesProv')) and all(k in d for k in ('day','totalNam','count','third','twoThirds','prev')); print(1 if ok and (len(d['validators']) > 0) == (d['count'] is not None) else 0)")"
 # (the answer is kept at the edge for some seconds, so a copy from before the deploy may be read first: asked again, four times at most)
 integrity_tick() { curl -s "$H/api/integrity" | python3 -c "import sys,json; d=json.load(sys.stdin); print(1 if 'lastTickAt' in d and (d['lastTickAt'] is None or isinstance(d['lastTickAt'], int)) else 0)" 2>/dev/null || echo 0; }
 got=0; for i in 1 2 3 4; do got=$(integrity_tick); [ "$got" = 1 ] && break; sleep 8; done

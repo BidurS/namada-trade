@@ -260,3 +260,79 @@
     .api-row { grid-template-columns: minmax(0, 14rem) minmax(0, 1fr); column-gap: var(--s-5); align-items: start; }
   }
 }
+
+/* ==========================================================================
+   The validators view (/validators, docs/design/platform-plan.md release C).
+   The same band and section language as the pages above. What is new is the
+   list of every validator: a role="table" grid with no <table> element whose
+   cells are direct children of their row (as DataList, components/data.css).
+   Below 640 px of its own width a row is three lines (name and stake, state
+   and share, then addresses, commission and change under their own words);
+   from 640 px six columns line up under a head row, with the state under the
+   name and the change under the stake; from 930 px all eight. The name is the
+   row's link (a 44 px hit area around its 22 px line). One validator opened
+   in place is a block above the list.
+   ========================================================================== */
+@layer components {
+  /* eight columns do not fit beside a heading: this section's heading sits above its body at every width */
+  @media (min-width: 1024px) {
+    .seo-sec--wide .seo-sec__h { grid-column: 1 / -1; position: static; max-width: none; }
+    .seo-sec--wide .seo-sec__b { grid-column: 1 / -1; }
+  }
+
+  .val-scope { gap: var(--s-4); }
+  .val-tools { display: grid; gap: var(--s-4); min-width: 0; }
+  .val-tools__sort { display: grid; min-width: 0; }
+  @media (min-width: 640px) {
+    .val-tools { grid-template-columns: minmax(0, 24rem) max-content; justify-content: space-between; align-items: end; column-gap: var(--s-6); }
+  }
+
+  .val-list { container: val / inline-size; display: grid; min-width: 0; border-top: 2px solid var(--c-ink); }
+  .val-head { display: none; }
+  .val { position: relative; display: grid; grid-template-columns: 24px repeat(6, minmax(0, 1fr)); grid-template-areas: "rk id id id tot tot tot" "rk st st st pct pct pct" "rk del del com com chg chg"; column-gap: var(--s-2); row-gap: 2px; align-items: start; min-height: 64px; padding: 14px 0 16px; border-bottom: 1px solid var(--c-line); }
+  .val.is-sel { background: var(--c-hover); }
+  .val__rk { grid-area: rk; font: var(--w-medium) var(--t-12) / 22px var(--font-code); color: var(--c-ink-2); }
+  .val__id { grid-area: id; display: grid; gap: 2px; min-width: 0; }
+  .val__name { position: relative; justify-self: start; min-width: 44px; max-width: 100%; color: inherit; font-size: var(--t-15); line-height: 22px; font-weight: var(--w-medium); text-decoration: underline; text-decoration-thickness: 1px; text-underline-offset: 3px; text-decoration-color: color-mix(in srgb, currentColor 35%, transparent); overflow-wrap: anywhere; }
+  .val__name::after { content: ""; position: absolute; inset: -11px -4px; }   /* the 22 px line plus 11 + 11 = 44 px */
+  .val__name:hover { text-decoration-color: currentColor; }
+  .val__addr { font: var(--w-regular) var(--t-12) / 18px var(--font-code); color: var(--c-ink-2); overflow-wrap: anywhere; }
+  .val__tot { grid-area: tot; min-width: 0; text-align: right; font-size: var(--t-15); line-height: 22px; font-weight: var(--w-medium); }
+  .val__pct { grid-area: pct; display: grid; justify-items: end; align-content: start; gap: 4px; min-width: 0; font-size: var(--t-13); line-height: 20px; color: var(--c-ink-2); }
+  .val__bar { display: block; width: 100%; max-width: 96px; height: 2px; background: linear-gradient(90deg, var(--c-ink-2) var(--w), var(--c-line) var(--w)); }
+  .val__st { grid-area: st; min-width: 0; font-size: var(--t-13); line-height: 20px; color: var(--c-ink-2); }
+  .val__del, .val__com, .val__chg { display: grid; align-content: start; min-width: 0; margin-top: var(--s-2); font-size: var(--t-13); line-height: 20px; }
+  .val__del { grid-area: del; }
+  .val__com { grid-area: com; }
+  .val__chg { grid-area: chg; justify-items: end; text-align: right; }
+  .val__k { font-size: var(--t-12); line-height: 16px; color: var(--c-ink-2); }
+  .val__chg .u { display: none; }   /* said once in the cell's words ("Change, NAM"): a change of millions fits a phone's third of a row */
+  .is-old .val__name { color: var(--c-ink); }
+
+  @container val (min-width: 640px) {
+    .val-head, .val { grid-template-columns: 28px minmax(0, 1fr) 128px 96px 76px 92px; column-gap: var(--s-3); }
+    .val-head { display: grid; align-items: end; padding: var(--s-2) 0; border-bottom: 1px solid var(--c-line); color: var(--c-ink-2); font-size: var(--t-12); line-height: 16px; font-weight: var(--w-medium); }
+    .val-head__st, .val-head__chg { display: none; }
+    .val { grid-template-areas: "rk id tot pct del com" "rk st chg . . ."; }
+    .val__del, .val__com { margin-top: 0; justify-items: end; text-align: right; line-height: 22px; }
+    .val__del .val__k, .val__com .val__k { display: none; }
+    .val__chg { display: block; margin-top: 0; color: var(--c-ink-2); }
+  }
+  @container val (min-width: 930px) {
+    .val-head, .val { grid-template-columns: 32px minmax(0, 1.4fr) 132px 96px 84px 96px minmax(0, 1fr) 132px; }
+    .val-head__st, .val-head__chg { display: block; }
+    .val { grid-template-areas: "rk id tot pct del com st chg"; align-items: center; min-height: 56px; }
+    .val__st, .val__chg { line-height: 22px; }
+    .val__chg { color: inherit; }
+    .val__chg .val__k { display: none; }
+    .val__chg .u { display: inline; }
+  }
+
+  /* one validator, opened in place: its name and address, a way to close it, then its figures and its line */
+  .val-one { display: grid; gap: var(--s-4); min-width: 0; padding: var(--s-5) 0; border-top: 2px solid var(--c-ink); border-bottom: 1px solid var(--c-line); scroll-margin-top: calc(var(--header-h) + var(--s-4)); }
+  .val-one__top { display: flex; flex-wrap: wrap; align-items: flex-start; justify-content: space-between; gap: var(--s-3) var(--s-4); }
+  .val-one__t { display: grid; gap: 2px; min-width: 0; }
+  .val-one__h { font-size: var(--t-18); line-height: var(--lh-18); font-weight: var(--w-semi); overflow-wrap: anywhere; }
+  .val-one__a { font: var(--w-regular) var(--t-12) / 18px var(--font-code); color: var(--c-ink-2); overflow-wrap: anywhere; }
+  .seo-fig dd .val-one__state { font-size: var(--t-18); line-height: var(--lh-18); letter-spacing: 0; }
+}

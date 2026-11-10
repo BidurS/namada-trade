@@ -1,5 +1,5 @@
 // The platform pages (docs/design/platform-plan.md, release A): /developers, /status, /methodology, /privacy and
-// /terms, and the bridges page (release B). What the cross-route gates cannot say for them on their own: that every sentence of the page's copy
+// /terms, the bridges page (release B) and the validators page (release C). What the cross-route gates cannot say for them on their own: that every sentence of the page's copy
 // (shared/copy.ts BODY, the words the server-rendered page states) is visible text in the app, that each page
 // passes the layout rules of the content pages, and that the API page's reference is the catalog. The layout checks
 // run in every project of the G6 matrix; the rest run once (375).
@@ -9,8 +9,8 @@ import { API_CATALOG, API_GROUPS } from '../../shared/api-catalog';
 import { API_LIMITS } from '../../shared/api-limits';
 import { expect, gotoRoute, layoutAudit, onlyIn, test } from './helpers';
 
-/** The pages this spec covers: the five platform pages and the bridges page (release B), which is built the same way. */
-const PAGES = [...PLATFORM_ROUTES, routeByPath('/bridges')!];
+/** The pages this spec covers: the five platform pages, and the bridges page (release B) and the validators page (release C), which are built the same way. */
+const PAGES = [...PLATFORM_ROUTES, routeByPath('/bridges')!, routeByPath('/validators')!];
 
 /** Every plain-language sentence of a page, in order. */
 const sentencesOf = (id: string): string[] => {

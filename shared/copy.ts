@@ -29,7 +29,9 @@ export type FactKey =
   | 'checks'     // how many of the site's cross-checks pass, of all of them, as of the newest check
   | 'tick'       // when the site's last reading of every source completed
   | 'bridgeAccount'  // NAM in Namada's bridge account, one account for every channel
-  | 'bridgeHeld';    // NAM the chains read hold between them, and how many chains that is
+  | 'bridgeHeld'     // NAM the chains read hold between them, and how many chains that is
+  | 'validatorCount' // how many validators have NAM staked with them, on the newest day on record
+  | 'validatorThird'; // how few of them, largest first, hold more than a third of the staked NAM
 
 /**
  * What the two derived values on the Trade page count (no figures). The series API sends the same sentences with
@@ -349,6 +351,15 @@ export const BODY: Record<string, PageCopy> = {
         ],
       },
     ],
+  },
+  // The validators view (docs/design/platform-plan.md, release C). Two paragraphs: the list of validators is the
+  // page's evidence, and its figures are the page's own (web/src/screens/seo/Validators.tsx).
+  validators: {
+    paras: [
+      'Namada is run by its validators: the operators that produce its blocks, with whom NAM is staked. This page lists every validator that has stake, with the NAM staked with it, its share of all staked NAM, the number of addresses staked with it, its commission and its state.',
+      'The figures are the first complete listing of each UTC day, read from a Namada node, while names, commission and state come from the network indexer\'s list and may be missing. How few validators together hold more than a third, and more than two thirds, of the staked NAM describes how that NAM is spread, and nothing more.',
+    ],
+    facts: ['validatorCount', 'validatorThird'],
   },
   // The platform pages (docs/design/platform-plan.md, release A). The API page's list of routes is not typed here:
   // it is drawn from shared/api-catalog.ts by the view and by the server-rendered page.

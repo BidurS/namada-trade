@@ -23,7 +23,9 @@ import { CHECK_STALE_MS, checkStaleMs } from './digest/freshness';
 import { readHealth } from './ops';
 import { BRIDGES_KV, bridgeSums, currentHeld } from './bridges';
 import { kvGetJson } from './db';
-import type { BridgesRecord } from '../../shared/types';
+import type { BridgesRecord, ValidatorsResponse } from '../../shared/types';
+import { validatorsAnswer } from './validators';
+import { spreadSentence } from '../../shared/validators';
 
 export type { FactKey };
 export { BODY };
@@ -74,6 +76,20 @@ export function bridgeFacts(escrow: { ts: number; value: number } | null, rec: B
 }
 
 /**
+ * The validators page's two figures, from the answer GET /api/validators gives for the newest day on record: how many
+ * validators have stake, and how few of them, largest first, hold more than a third of the staked NAM (a statement of
+ * how the stake is spread, nothing else). Both carry the listing's own source and time. Each is left out when it was
+ * not read: an empty table or a failed read states nothing, never a zero.
+ */
+export function validatorFacts(v: Pick<ValidatorsResponse, 'count' | 'third' | 'prov'> | null | undefined): Facts {
+  const f: Facts = {};
+  if (!v || v.prov.status === 'missing' || v.prov.at == null) return f;
+  if (v.count != null) f.validatorCount = { text: `Validators with NAM staked with them: ${num(v.count)}`, at: v.prov.at, source: v.prov.source };
+  if (v.third != null) f.validatorThird = { text: spreadSentence(v.third, num(v.third), 'a third'), at: v.prov.at, source: v.prov.source };
+  return f;
+}
+
+/**
  * Does a route's served page state live figures? Its copy says so (shared/copy.ts BODY: the facts under its lead or
  * under a section). A guide states none and never waits on the database; a words-first page that carries the day
  * its text was checked (`updated`) and also lists figures, as the methodology page does, is served with them.
@@ -92,7 +108,7 @@ export async function facts(env: Env): Promise<Facts> {
   const db = env.DB;
   const now = Date.now();
   const listed = await listingTimes(db);
-  const [price, total, bonded, shielded, osmosis, liquidity, pools, priced, holderFig, vol, cov, params, depthLatest, checkRows, health, escrow, bridges] = await Promise.all([
+  const [price, total, bonded, shielded, osmosis, liquidity, pools, priced, holderFig, vol, cov, params, depthLatest, checkRows, health, escrow, bridges, validators] = await Promise.all([
     // Staked: the chain's own total stake, not the staking account's balance (which also holds NAM on its way out).
     metricAt(db, 'price.usd', now), metricAt(db, 'supply.total', now), metricAt(db, 'supply.total_stake', now), metricAt(db, 'supply.masp_shielded', now),
     // The pools' money: each pool's coins at their own prices (pool-sizes.ts), and how many pools that total counts.
@@ -112,6 +128,8 @@ export async function facts(env: Env): Promise<Facts> {
     // The bridges page's two figures: the bridge account's own balance, and the record of what each chain holds.
     metricAt(db, 'supply.ibc_escrow', now),
     kvGetJson<BridgesRecord>(db, BRIDGES_KV).catch(() => null),
+    // The validators page's two figures: the newest day's listing, as /api/validators answers it (worker/src/validators.ts).
+    validatorsAnswer(db, now).catch(() => null),
   ]);
   const pct = (n: number) => (total ? `${((n / total.value) * 100).toFixed(1)}% of all NAM` : '');
   // While the network is halted a Namada figure's stamp says so beside its time: the reading is days old for a reason.
@@ -158,6 +176,7 @@ export async function facts(env: Env): Promise<Facts> {
   }
   Object.assign(f, statusFacts(checkRows, health?.lastTickAt, now));
   Object.assign(f, bridgeFacts(escrow, bridges, now, namadaNodes));
+  Object.assign(f, validatorFacts(validators));
   if (params?.apr) f.apr = { text: `Staking rate reported by the network indexer: ${(params.apr * 100).toFixed(1)}% a year, before validator commission; it changes with the share staked and is not a promise`, at: params.fetchedAt, source: 'indexer.namada.net' };
   await cache.put(key, new Response(JSON.stringify(f), { headers: { 'content-type': 'application/json', 'cache-control': 'public, max-age=120' } })).catch(() => {});
   return f;
@@ -219,9 +238,9 @@ function factList(keys: FactKey[], f: Facts | null, shown: Set<FactKey>): string
 const paras = (ps: string[]) => ps.map((p) => `<p style="${S.p}">${esc(p)}</p>`).join('\n');
 
 function navHtml(): string {
-  // the tabs, the explainer pages, then the platform pages: every page is one link away for a reader without JavaScript
-  const bridges = routeByPath('/bridges');
-  const links = [...TABS.map((t) => routeByPath(t.path)!), ...EXPLAINER_ROUTES.filter((r) => !TABS.some((t) => t.path === r.path)), ...(bridges ? [bridges] : []), ...PLATFORM_ROUTES];
+  // the tabs, the explainer pages, the validators and the bridges, then the platform pages: every page is one link away for a reader without JavaScript
+  const more = ['/validators', '/bridges'].map((p) => routeByPath(p)).filter((r): r is RouteDef => !!r);
+  const links = [...TABS.map((t) => routeByPath(t.path)!), ...EXPLAINER_ROUTES.filter((r) => !TABS.some((t) => t.path === r.path)), ...more, ...PLATFORM_ROUTES];
   return `<nav aria-label="Pages" style="${S.nav}">${links.map((x) => `<a href="${x.path}" style="${S.a}">${esc(x.label)}</a>`).join('')}</nav>`;
 }
 

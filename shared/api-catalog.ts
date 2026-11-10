@@ -17,7 +17,7 @@
 import type {
   AddressReport, AlertRuleInfo, AlertsRecentResponse, BlindSpot, BridgesResponse, FlowsResponse, GenesisCohortsResponse, HealthAnswer, HoldersResponse,
   IntegrityResponse, IntelResponse, OrderflowResponse, Overview, PairsResponse, PoolInfo, Pressure, PriceChangesResponse, PriceQuote,
-  Provenance, QuoteCurveResponse, SearchResponse, SeriesResponse, TradesResponse, ValuesResponse, VolumeResponse,
+  Provenance, QuoteCurveResponse, SearchResponse, SeriesResponse, TradesResponse, ValidatorHistoryResponse, ValidatorsResponse, ValuesResponse, VolumeResponse,
 } from './types';
 import type {
   DepthChangesResponse, DepthHeatResponse, DepthHistoryResponse, DepthOwnersApiResponse, DepthQuoteResponse, DepthResponse,
@@ -30,6 +30,7 @@ import { FLOW_TO_TAG } from './kinds';
 import { SUMMARIES_SHOWN } from './proposal-summary';
 import { CURSOR_MAX_LENGTH, LIMIT_MAX, LIMIT_MIN, PAGE_SIZE } from './paging';
 import { ADDRESS_PREFIX_MIN, HASH_MAX, HASH_PREFIX_MIN, INPUT_MAX } from './search-grammar';
+import { VALIDATOR_DAYS_MAX, VALIDATOR_HISTORY_DAYS } from './validators';
 
 /**
  * A proposal's short summary is part of an answer only while the summaries are shown (shared/proposal-summary.ts
@@ -321,6 +322,27 @@ const addressFields = {
   flows: 'Its newest recorded moves, in the shape of the moves list.',
   counterparties: 'The addresses it moved NAM with over those moves: NAM in, NAM out and a count for each, with labels, each bridge crossing counted once.',
 } satisfies Record<keyof AddressReport, string>;
+
+const validatorsFields = {
+  asOf: 'When the answer was made.',
+  day: 'The UTC day the rows are of; null when no day is on record.',
+  days: 'The newest days on record, newest first.',
+  validators: 'Every validator with stake on that day, largest stake first: its address, the name the Namada indexer gives it, the NAM staked with it and that stake’s share of the day’s total as a fraction, the number of addresses staked with it, its commission as a fraction, its state in the indexer’s own word, and the change of its stake since the previous day on record. Name, commission and state are null where the indexer’s list did not have them; the change is null where the previous day has no row for the validator.',
+  totalNam: 'The NAM staked with every validator on that day, added up; null when the day has no row.',
+  count: 'How many validators have stake on that day; null when the day has no row.',
+  third: 'The smallest number of validators, largest first, whose stake together is more than one third of the total: a statement of how the staked NAM is spread. Null when the day has no row.',
+  twoThirds: 'The same for more than two thirds of the total.',
+  prev: 'The previous day on record, which the change of each stake is measured against; null when there is none.',
+  prov: 'The stamp of the stakes: the Namada node’s listing they were read from, its time and its block. Its note says so when no listing of a newer day is on record, and why when nothing could be read.',
+  namesProv: 'The stamp of names, commission and state: when the indexer’s list was read. Its note says so when that list was not read for the day.',
+} satisfies Record<keyof ValidatorsResponse, string>;
+
+const validatorHistoryFields = {
+  validator: 'The validator asked for.',
+  name: 'The newest name the Namada indexer gave it among the days answered; null when none of them has one.',
+  days: 'Its days on record, oldest first: the day, the NAM staked with it, the number of addresses staked with it, its commission as a fraction and its state in the indexer’s own word, the last two null where the indexer’s list did not have them.',
+  prov: 'The stamp of the newest day answered: the Namada node’s listing it was read from, its time and its block.',
+} satisfies Record<keyof ValidatorHistoryResponse, string>;
 
 // ---------------------------------------------------------------- supply
 
@@ -705,6 +727,24 @@ export const API_CATALOG: ApiEndpoint[] = [
     ],
     fields: {},
     csv: true,
+  },
+  {
+    path: '/api/validators', group: 'holders', title: 'Validators',
+    what: 'Every validator with NAM staked with it on one UTC day, largest stake first, with how that stake is spread across them. The stakes are the first complete listing of each day, read from a Namada node; names, commission and state are the Namada indexer’s.',
+    params: [
+      { name: 'day', type: 'day', what: 'The day to answer for. Left out: the newest day on record. A value that is not a day, and a day with no listing on record, is refused.' },
+    ],
+    fields: validatorsFields,
+  },
+  {
+    path: '/api/validators/history', group: 'holders', title: 'One validator over time',
+    what: 'One validator’s stake, the number of addresses staked with it, its commission and its state on each of its newest days on record, oldest first.',
+    params: [
+      { name: 'validator', type: 'address', required: true, what: 'The validator’s whole Namada address. Anything else is refused.' },
+      { name: 'days', type: 'whole', min: 1, max: VALIDATOR_DAYS_MAX, fallback: String(VALIDATOR_HISTORY_DAYS), what: 'How many of its newest days to answer with. Anything but a plain whole number in the range is refused.' },
+    ],
+    fields: validatorHistoryFields,
+    notFound: 'A validator with no row on record.',
   },
 
   // ---------------------------------------------------------------- supply
