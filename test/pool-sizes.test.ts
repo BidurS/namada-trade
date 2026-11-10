@@ -159,11 +159,36 @@ describe('a pool\'s size from its reserves', () => {
     // the depth module's metadata names six decimals: 9 coins inside, not priced for want of a price (the reason it has)
     const [b] = sizePools({ pools: [p], poolsAt: T, depth: null, price, tokens: { [um]: { symbol: 'UM', decimals: 6 } } });
     expect(b.counterReserve).toBe(9);
-    expect(b.sizeProv!.note).toBe(notPricedWords(noCoinPrice('the other coin')));
+    // and names the coin, so the reason says which coin has no price
+    expect(b.sizeProv!.note).toBe(notPricedWords(noCoinPrice('UM')));
+    expect(b).toMatchObject({ counterSymbol: 'UM', pair: 'NAM / UM' });
     // the base units are never stored
     expect('counterBase' in a || 'counterBase' in b).toBe(false);
     expect(counterDecimals(um, { [um]: { decimals: 6 } })).toBe(6);
     expect(counterDecimals(um, { [um]: { decimals: -1 } })).toBeNull();
+  });
+
+  it('a coin the pool list cut short takes the name the depth minute gives the same pool and coin, so one pool has one name on every route', () => {
+    const atone = 'ibc/BC26A7A805ECD6822719472BCB7842A48EF09DF206182F8F259B2593EB5D23FB';
+    const p = listed('3405', atone, 'ibc/BC26A7…', 66_753.5, 721.28, 60);
+    const price = { usd: 0.0009, at: T - 20_000, source: 'Osmosis SQS' };
+    // with nothing that names it, it stays as the list has it
+    expect(sizePools({ pools: [p], poolsAt: T, depth: null, price })[0]).toMatchObject({ counterSymbol: 'ibc/BC26A7…', pair: 'NAM / ibc/BC26A7…' });
+    // the depth minute's own name for pool 3405's coin
+    const minute = depthMinute(0.0009, [{ id: '3405', pair: 'NAM / ATONE', counterDenom: atone, counterSymbol: 'ATONE', counterUsd: 0.07, nam: 66_753.5, counter: 721.28, counterValueUsd: 50.49 }]);
+    expect(sizePools({ pools: [p], poolsAt: T, depth: minute, price })[0]).toMatchObject({ id: '3405', counterSymbol: 'ATONE', pair: 'NAM / ATONE' });
+    // the same pool id with another coin is not that coin: the name is not taken
+    const other = depthMinute(0.0009, [{ id: '3405', counterDenom: 'ibc/OTHER', counterSymbol: 'ATONE', nam: 1, counter: 1, counterValueUsd: 1 }]);
+    expect(sizePools({ pools: [p], poolsAt: T, depth: other, price })[0].counterSymbol).toBe('ibc/BC26A7…');
+    // the metadata read names it when the minute does not cover the pool
+    expect(sizePools({ pools: [p], poolsAt: T, depth: null, price, tokens: { [atone]: { symbol: 'ATONE', decimals: 6 } } })[0]).toMatchObject({ counterSymbol: 'ATONE', pair: 'NAM / ATONE' });
+    // metadata is a third party's text: only a symbol-shaped word is a name
+    for (const bad of ['', 'A TONE', '<b>X</b>', 'ibc/ABC', 'x'.repeat(17), '1INCH/USD']) {
+      expect(sizePools({ pools: [p], poolsAt: T, depth: null, price, tokens: { [atone]: { symbol: bad, decimals: 6 } } })[0].counterSymbol, bad).toBe('ibc/BC26A7…');
+    }
+    // a coin the list names itself keeps the list's name
+    const usdc = listed('3005', USDC, 'USDC', 100, 1, 10);
+    expect(sizePools({ pools: [usdc], poolsAt: T, depth: null, price, tokens: { [USDC]: { symbol: 'XUSD', decimals: 6 } } })[0].counterSymbol).toBe('USDC');
   });
 
   it('the other coin\'s decimals are the code\'s own: Noble USDC 6, allETH 18, a coin it does not name none', () => {

@@ -100,6 +100,25 @@ export function counterDecimals(denom: string, tokens?: CoinMeta | null): number
 /** The coin's name in words for a note ("USDC", "OSMO"), never a raw denomination. */
 const coinName = (p: Pick<PoolInfo, 'counterSymbol'>) => (!p.counterSymbol || p.counterSymbol === 'UNKNOWN' || p.counterSymbol.includes('/') || p.counterSymbol.endsWith('…') ? 'the other coin' : p.counterSymbol);
 
+/** Has the pool list named the pool's other coin, or only cut its denomination short? */
+const unnamed = (p: Pick<PoolInfo, 'counterSymbol'>) => !p.counterSymbol || p.counterSymbol === 'UNKNOWN' || p.counterSymbol.includes('/') || p.counterSymbol.endsWith('…');
+/** A coin's symbol as a third party's metadata gives it: letters, digits and a dot, of a symbol's length; anything else is not a name. */
+const SYMBOL = /^[A-Za-z][A-Za-z0-9.]{0,15}$/;
+
+/**
+ * One figure, one value, for a name too: the pool list names only the coins it knows (USDC, OSMO) and cuts any other
+ * denomination short, while the depth minute names the same coin from the quote service's metadata. A pool the list
+ * left unnamed takes the name the depth minute gives the same pool with the same coin, else the name the depth
+ * module's metadata read gives that coin; with neither it stays as the list has it. Nothing but a symbol-shaped
+ * word is taken.
+ */
+function namedPool<T extends Pick<PoolInfo, 'id' | 'counterDenom' | 'counterSymbol' | 'pair'>>(p: T, input: Pick<SizeInput, 'depth' | 'tokens'>): T {
+  if (!unnamed(p)) return p;
+  const d = input.depth?.pools.find((x) => x.id === p.id && x.counterDenom === p.counterDenom);
+  const symbol = [d?.counterSymbol, input.tokens?.[p.counterDenom]?.symbol].find((s): s is string => typeof s === 'string' && SYMBOL.test(s));
+  return symbol ? { ...p, counterSymbol: symbol, pair: `NAM / ${symbol}` } : p;
+}
+
 export interface SizeInput {
   /** the router's pool list this tick (sources/sqs.ts fetchNamPools): reserves, fee, type */
   pools: PoolInfo[];
@@ -123,7 +142,8 @@ export interface SizeInput {
  */
 export function sizePools(input: SizeInput): PoolInfo[] {
   // a counter the list gave in base units only takes the decimals the depth module read; the base units are never stored
-  const sized = input.pools.map(({ counterBase, ...p }) => {
+  const sized = input.pools.map(({ counterBase, ...raw }) => {
+    const p = namedPool(raw, input);
     const dec = p.counterReserve == null && counterBase ? counterDecimals(p.counterDenom, input.tokens) : null;
     const q: PoolInfo = dec != null && Number.isFinite(Number(counterBase) / 10 ** dec) ? { ...p, counterReserve: Number(counterBase) / 10 ** dec } : p;
     return fromDepth(input.depth, q) ?? fromList(input, q);
