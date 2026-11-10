@@ -5,6 +5,7 @@
 // there is a proposal to show. On a phone the section adds no line: with no vote open it is not shown, and with votes
 // open the closed "Recently decided" line takes the place of the lead sentence (supply.css).
 import type { GovernanceProposal, Pressure } from '../../../../shared/types';
+import { Link } from '../../app/index';
 import { Icon, ProvScope, SourceLine } from '../../ui';
 import { fmtNamRule, fmtPctRule, fmtUtcLong } from '../../lib/format';
 import { safeHttpUrl } from '../../../../shared/flow-rules';
@@ -39,12 +40,13 @@ export function Votes({ data }: { data: Pressure }) {
           </ul>
         </details>
       ) : null}
+      <Link to="/governance" className="link votes__all">Every vote on its own page</Link>
       <SourceLine items={[{ label: 'Proposals and their votes', p: data.proposalsProv ?? { source: 'indexer.namada.net', at: null, status: 'stale', note: 'Read from the Namada indexer; this server does not say when.' } }]} label="Where the votes come from" />
     </ProvScope>
   );
 }
 
-function VoteRow({ p }: { p: GovernanceProposal }) {
+export function VoteRow({ p }: { p: GovernanceProposal }) {
   const total = p.yayNam + p.nayNam + p.abstainNam;
   const pc = (n: number) => (total > 0 ? (n / total) * 100 : null);
   // the link is the proposal's own text (on-chain): only http(s), and the host is said, since anyone can write it

@@ -354,6 +354,27 @@ export const BODY: Record<string, PageCopy> = {
   },
   // The validators view (docs/design/platform-plan.md, release C). Two paragraphs: the list of validators is the
   // page's evidence, and its figures are the page's own (web/src/screens/seo/Validators.tsx).
+  governance: {
+    paras: [
+      'NAM holders who stake vote on proposals: changes to the network\'s rules, to how much new NAM is made, and to where the NAM held for public funding goes. This page lists the proposals in voting and the latest ones decided.',
+      'Each proposal shows the NAM that voted yes, no and abstain as the network\'s indexer counts it, with the time of that reading. A proposal\'s title and its discussion link are its author\'s own text.',
+    ],
+    facts: [],
+    sections: [
+      {
+        h2: 'What can a vote change?',
+        paras: [
+          'A proposal can change a rule of the network, name who looks after the public funding or pay from it, or record a decision that changes no rule. One that changes how much NAM is made, or moves public funds, changes where NAM is and how much there is, which is why the Supply page lists the open votes too.',
+        ],
+      },
+      {
+        h2: 'How much NAM is held for public funding?',
+        paras: [
+          'A share of the new NAM the network makes goes to an account held for public funding. Proposals decide who receives from it. The figure is that account\'s balance as a Namada node reports it.',
+        ],
+      },
+    ],
+  },
   validators: {
     paras: [
       'Namada is run by its validators: the operators that produce its blocks, with whom NAM is staked. This page lists every validator that has stake, with the NAM staked with it, its share of all staked NAM, the number of addresses staked with it, its commission and its state.',

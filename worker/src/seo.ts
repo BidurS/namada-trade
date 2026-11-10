@@ -238,8 +238,8 @@ function factList(keys: FactKey[], f: Facts | null, shown: Set<FactKey>): string
 const paras = (ps: string[]) => ps.map((p) => `<p style="${S.p}">${esc(p)}</p>`).join('\n');
 
 function navHtml(): string {
-  // the tabs, the explainer pages, the validators and the bridges, then the platform pages: every page is one link away for a reader without JavaScript
-  const more = ['/validators', '/bridges'].map((p) => routeByPath(p)).filter((r): r is RouteDef => !!r);
+  // the tabs, the explainer pages, the validators, the votes and the bridges, then the platform pages: every page is one link away for a reader without JavaScript
+  const more = ['/validators', '/governance', '/bridges'].map((p) => routeByPath(p)).filter((r): r is RouteDef => !!r);
   const links = [...TABS.map((t) => routeByPath(t.path)!), ...EXPLAINER_ROUTES.filter((r) => !TABS.some((t) => t.path === r.path)), ...more, ...PLATFORM_ROUTES];
   return `<nav aria-label="Pages" style="${S.nav}">${links.map((x) => `<a href="${x.path}" style="${S.a}">${esc(x.label)}</a>`).join('')}</nav>`;
 }

@@ -12,3 +12,4 @@ export { Status } from './Status';
 export { Methodology, Privacy, Terms } from './Plain';
 export { Bridges } from './Bridges';
 export { Validators } from './Validators';
+export { Governance } from './Governance';

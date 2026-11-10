@@ -88,6 +88,7 @@ const LOADERS: Partial<Record<ViewId, Loader>> = {
   guides: () => seo().then((m) => ({ default: m.Guides })),
   bridges: () => seo().then((m) => ({ default: m.Bridges })),
   validators: () => seo().then((m) => ({ default: m.Validators })),
+  governance: () => seo().then((m) => ({ default: m.Governance })),
   developers: () => seo().then((m) => ({ default: m.Developers })),
   status: () => seo().then((m) => ({ default: m.Status })),
   methodology: () => seo().then((m) => ({ default: m.Methodology })),

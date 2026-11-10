@@ -12,7 +12,7 @@ export type GuideRouteId = `guide-${GuideSlug}`;
 export type RouteId =
   | 'home' | 'trade' | 'depth' | 'supply' | 'shielded' | 'activity' | 'holders' | 'alerts' | 'settings'
   | 'staking' | 'osmosis' | 'learn' | 'faq' | 'guides' | GuideRouteId
-  | 'developers' | 'status' | 'methodology' | 'privacy' | 'terms' | 'bridges' | 'validators';
+  | 'developers' | 'status' | 'methodology' | 'privacy' | 'terms' | 'bridges' | 'validators' | 'governance';
 
 /** The six tabs, in this order everywhere (system.md section 3). */
 export type TabId = 'home' | 'trade' | 'supply' | 'shielded' | 'activity' | 'alerts';
@@ -125,6 +125,15 @@ export const ROUTES: RouteDef[] = [
     description: 'Every Namada validator with the NAM staked with it, its share of all staked NAM, the addresses staked with it, its commission and its state, day by day.',
   },
   {
+    // The votes on a page of their own (docs/design/platform-plan.md, release C): the proposals in voting and the
+    // latest decided, as the Supply tab shows them, and the NAM held for public funding. /votes, /proposals and
+    // /gov are the words people type for it (ROUTE_ALIASES).
+    path: '/governance', id: 'governance', label: 'Votes', index: true,
+    h1: 'What is Namada voting on, and what did it decide?',
+    title: 'Namada governance: votes and public funding',
+    description: 'The Namada proposals in voting with their votes in NAM, the latest decided proposals, and the NAM held for public funding, each with its source and time.',
+  },
+  {
     path: '/osmosis', id: 'osmosis', label: 'NAM on Osmosis', index: true,
     h1: 'NAM on Osmosis: pools, liquidity and what a trade costs',
     title: 'NAM on Osmosis: pools, liquidity, trade cost',
@@ -224,6 +233,7 @@ export const ROUTE_ALIASES: Record<string, string> = {
   guide: GUIDES_PATH,
   bridge: '/bridges', channels: '/bridges', ibc: '/bridges',
   validator: '/validators', 'validator-set': '/validators',
+  votes: '/governance', proposals: '/governance', gov: '/governance', vote: '/governance',
   // the words people type for the platform pages
   api: '/developers', docs: '/developers', 'api-docs': '/developers', developer: '/developers',
   health: '/status', uptime: '/status',

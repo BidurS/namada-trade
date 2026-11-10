@@ -282,5 +282,6 @@
   @media (max-width: 639px) {
     .ipg-sec.votes-sec--past, .votes-sec .ipg-lead { display: none; }
   }
+  .votes__all { display: inline-flex; align-items: center; min-height: 44px; font-size: var(--t-13); }
   .votes__past > summary { cursor: pointer; min-height: 44px; display: flex; align-items: center; font-size: var(--t-13); font-weight: var(--w-medium); }
 }
