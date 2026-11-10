@@ -196,6 +196,11 @@ export const SERIES_KEYS: Record<string, SeriesKeyDef> = {
   'dex.volume_nam_daily': dailyFlowKey('nam', 'NAM bought plus NAM sold on Osmosis'),
   'dex.traders_daily': dailyFlowKey('count', 'Addresses that traded on Osmosis'),
   'dex.hours_with_trades_daily': dailyFlowKey('count', 'Hours with at least one trade'),
+  // Addresses that sent or received NAM in a UTC day, one series a chain (series.ts dayAggregates: the chain's own
+  // addresses, protocol accounts and pools left out, bot round trips left out). Each chain's count is that chain's
+  // own record and a bridge move is on both, so the two series are two figures: nothing may add them together.
+  'active.namada_daily': { ...dailyFlowKey('count', 'Addresses on Namada that sent or received NAM, protocol accounts left out,'), osmosisRecord: false },
+  'active.osmosis_daily': dailyFlowKey('count', 'Addresses on Osmosis that sent or received NAM, pools left out,'),
   [MASP_ACTIVITY_KEYS.txs]: dailyMaspKey('Shielded transactions the chain recorded'),
   [MASP_ACTIVITY_KEYS.namIn]: dailyMaspKey('Shielded transactions in a block with NAM moving into the shielded pool'),
   [MASP_ACTIVITY_KEYS.namOut]: dailyMaspKey('Shielded transactions in a block with NAM moving out of the shielded pool'),
