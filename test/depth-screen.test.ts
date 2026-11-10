@@ -9,7 +9,7 @@ import { describe, it, expect } from 'vitest';
 import { depthFixture } from './depth-fixtures';
 import { BANNED } from './banned-words';
 import type { DepthHistoryResponse, DepthQuoteResponse, DepthResponse } from '../shared/depth';
-import { CURVE_POOL_POINTS_MAX, DEPTH_SIZES, LADDER_FOLD_PCT, LADDER_MID_PCT, DEPTH_PAGE_WORDS, RESERVES_WORDS, bookBidUnder, cliffWords, marketWords, sellQuotable, bidQuotable } from '../shared/depth';
+import { CURVE_POOL_POINTS_MAX, DEPTH_SIZES, LADDER_FOLD_PCT, LADDER_MID_PCT, DEPTH_PAGE_WORDS, RESERVES_WORDS, SELL_INTO_POOLS, bookBidUnder, cliffWords, marketWords, sellQuotable, bidQuotable } from '../shared/depth';
 import { buildGrid, cumOn, thinIndices } from '../shared/depth-grid';
 import { fmtNamRule, fmtSharePct, fmtSig, fmtUsdRule } from '../shared/format';
 import {
@@ -73,7 +73,7 @@ describe('when not to act, computed from the answer', () => {
     const flat = { ...D, answer: { ...D.answer, sell: D.answer.sell.map((f, i) => ({ ...f, usd: D.answer.sizes[i] * D.ref.usd * 0.999 })) } };
     expect(cliffOf(flat, 'sell')).toBeNull();
   });
-  it('the book: its nearest bid is 65.6 % under the pool price after fees (the figure is measured against the after-fee price the sentence names, not the bare reference), so the sentence says to sell into the pools', () => {
+  it('the book: its nearest bid is 65.6 % under the pool price after fees (the figure is measured against the after-fee price the sentence names, not the bare reference), so the sentence says where a sale fetches more, as a fact', () => {
     const b = bookRule(D)!;
     expect(b.bookId).toBe('3008');
     expect(b.underPct).toBeGreaterThan(60);
@@ -86,6 +86,9 @@ describe('when not to act, computed from the answer', () => {
     // against the bare reference the figure would read a tenth of a percent higher: the sentence says "after fees", so it does not
     expect(b.underPct).toBeLessThan((1 - 0.00035 / D.ref.usd) * 100);
     expect(bookBidUnder(`${b.underPct.toFixed(1)}%`, poolName(D, '3008'))).toContain('order book 3008’s nearest bid is 65.6% under');
+    // what is so, never what to do: the site gives no instruction (owner decision: descriptive only)
+    expect(bookBidUnder('65.6%', 'order book 3008')).toBe('The order book 3008’s nearest bid is 65.6% under the pool price after fees: a sale fetches more in the pools than at that bid.');
+    expect(SELL_INTO_POOLS).toBe('the order book’s nearest bid is under the pool price after fees: a sale fetches more in the pools than at that bid');
     // a book whose bid is at the price: no sentence
     const near = { ...D, book: { levels: D.book.levels.map((l) => (l.pool === '3008' && l.side === 'bid' ? { ...l, loUsd: D.ref.usd, hiUsd: D.ref.usd } : l)) } };
     expect(bookRule(near)).toBeNull();

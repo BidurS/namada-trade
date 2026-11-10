@@ -460,8 +460,11 @@ export const counterUsdHow = (coin: string, usd: number, at: string): string =>
   `${coin} at the quote service’s price list, ${usd} USD, ${at}; converting ${coin} to USDC would cost another hop`;
 export const USDC_AS_ONE = 'Noble USDC counted as one US dollar';
 
-/** The rule for a book whose nearest bid sits far under the pools' price. */
-export const SELL_INTO_POOLS = 'the order book’s nearest bid is under the pool price after fees: sell into the pools, not the book';
+/**
+ * What is so of a book whose nearest bid sits far under the pools' price. A description, never an instruction: the
+ * site says what a sale fetches where, and tells no reader what to do (owner decision: descriptive only).
+ */
+export const SELL_INTO_POOLS = 'the order book’s nearest bid is under the pool price after fees: a sale fetches more in the pools than at that bid';
 
 /** The honest start under the time view. */
 export const HONEST_START = 'Depth has been recorded since the first stored minute; nothing on the chain gives earlier depth.';
@@ -598,7 +601,8 @@ export const cliffWords = (above: string, symbol: string, sizeA: string, pctA: s
   `Above the first ${above} ${symbol} each extra ${symbol} fetches less: selling ${sizeA} averages ${pctA}, ${sizeB} averages ${pctB}.`;
 export const cliffBuyWords = (above: string, symbol: string, sizeA: string, pctA: string, sizeB: string, pctB: string) =>
   `Above the first ${above} ${symbol} each extra ${symbol} costs more: buying ${sizeA} averages ${pctA}, ${sizeB} averages ${pctB}.`;
-export const bookBidUnder = (pct: string, book: string) => `The ${book}’s nearest bid is ${pct} under the pool price after fees: sell into the pools, not the book.`;
+/** The same of one book, with the distance measured: what a sale fetches where, said as a fact (never "sell into ..."). */
+export const bookBidUnder = (pct: string, book: string) => `The ${book}’s nearest bid is ${pct} under the pool price after fees: a sale fetches more in the pools than at that bid.`;
 /** The reading's share of what rests on its side: the bids' USD selling (`total` is a USD figure), the asks' coins buying (`total` is a coin figure with its symbol, since an ask side's USD would be read off the curve's far tail at prices that will never trade). */
 export const marketWords = (side: 'sell' | 'buy', total: string, nam: string, symbol: string, share: string) =>
   side === 'sell' ? `This is a ${total} market on the bid side: selling ${nam} ${symbol} takes ${share} of it.` : `This is a ${total} market on the ask side: buying ${nam} ${symbol} takes ${share} of it.`;

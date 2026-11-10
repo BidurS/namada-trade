@@ -325,7 +325,8 @@ describe.skipIf(!ready)('the depth page, built, on the fixtures (375, 320 and 12
         await text(page.locator('.dp-split__c')).toContain('pool 3005');
         await count(page.locator('.dp-facts .fact')).toBe(6);
         await count(page.locator('.dp-say p')).toBe(3);
-        await text(page.locator('.dp-say')).toContain('sell into the pools, not the book');
+        // a description of what a sale fetches where, never an instruction to the reader
+        await text(page.locator('.dp-say')).toContain('a sale fetches more in the pools than at that bid');
         await seen(page.locator('.dp-ticket .srcb'));
         if (w >= 1024) {
           // the split: the ladder left, the curve right, both shown
