@@ -10,8 +10,11 @@ import { describe, it, expect, vi, afterEach } from 'vitest';
 import { readFileSync } from 'node:fs';
 import { runCron, ibcConservation, IBC_COMPARED, IBC_NOT_COMPARED } from '../worker/src/cron';
 import { checkDetail, CHECK_TITLES } from '../web/src/lib/prov';
+import { BRIDGES_KV, voucherDenom } from '../worker/src/bridges';
+import { kvGetJson, kvSet } from '../worker/src/db';
+import { NAM } from '../worker/src/config';
 import { testD1 } from './d1-sqlite';
-import type { Check } from '../shared/types';
+import type { BridgeChannelRow, BridgesRecord, Check } from '../shared/types';
 
 afterEach(() => { vi.useRealTimers(); vi.unstubAllGlobals(); });
 
@@ -75,7 +78,11 @@ describe('the bridge check judges the two sides of the gap apart', () => {
     expect(c.detail.compared).toBe(IBC_COMPARED);
     expect(c.detail.notCompared).toBe(IBC_NOT_COMPARED);
     expect(c.title).toMatch(/one for every channel/);
-    expect(c.title).toMatch(/no other chain is read/);
+    // since 2026-11-10 the other chains a channel leads to are read too (worker/src/bridges.ts); this tick's node
+    // served no channel list, so the figure for them is null (above), neither list of chains is made, and nothing
+    // is taken off the gap
+    expect(c.title).toMatch(/and on the other chains read/);
+    expect(c.detail).toMatchObject({ otherChainsRead: null, otherChainsUnread: null });
     // the stuck-packet list still works: the seed is kept (its status could not be re-read) and subtracted
     expect(c.detail.stuckPackets).toHaveLength(1);
     expect(c.detail.stuckPackets[0]).toMatchObject({ nam: 1614, channel: 'channel-5', stale: true });
@@ -95,6 +102,66 @@ describe('the bridge check judges the two sides of the gap apart', () => {
     expect(bridgeCheck(db)).toMatchObject({ status: 'fail', detail: { driftNam: -19_990, over: 'osmosis' } });
   });
 
+  // The record the bridge pass keeps (kv bridge.channels), as a tick finds it: Osmosis, Noble with a figure, Stride
+  // never answered, Penumbra not readable. `heldAt` is when Noble's figure was read.
+  const record = async (nobleNam: number, heldAt: number): Promise<BridgesRecord> => {
+    const row = async (channel: string, counterpartyChannel: string, chainId: string, chain: string, held: BridgeChannelRow['held']): Promise<BridgeChannelRow> =>
+      ({ channel, counterpartyPort: 'transfer', counterpartyChannel, chainId, chain, open: true, denom: await voucherDenom('transfer', counterpartyChannel, NAM.namadaToken), held });
+    return {
+      at: heldAt, channelsAt: PLAIN - 3600_000, triedAt: PLAIN - 3600_000, height: 8_343_000, provider: 'TestNode',
+      rows: [
+        await row('channel-0', 'channel-308', 'stride-1', 'Stride', { value: null, prov: { source: 'Stride node', at: null, status: 'missing', note: 'Stride did not answer at the last reading.' } }),
+        await row('channel-1', NAM.osmoChannel, 'osmosis-1', 'Osmosis', { value: 10, prov: { source: 'Osmosis node', at: heldAt, status: 'live' } }),
+        await row('channel-4', 'channel-13', 'penumbra-1', 'Penumbra', { value: null, prov: { source: 'Penumbra', at: null, status: 'missing', note: 'not read' } }),
+        await row('channel-5', 'channel-136', 'noble-1', 'Noble', { value: nobleNam, prov: { source: 'Noble node', at: heldAt, status: 'live' } }),
+      ],
+    };
+  };
+
+  it('NAM another chain was read to hold is counted on the chains\' side, and the detail names the chains read and not read', async () => {
+    const db = testD1();
+    // 11,624 in the account: 10 on Osmosis, 1,614 stuck, 9,000 on Noble as read a minute ago: 1,000 over
+    await kvSet(db as any, BRIDGES_KV, await record(9_000, PLAIN - 60_000));
+    network(11_624n, 10n);
+    await tick({ DB: db, KEPLR_KEY: 'k' }, PLAIN);
+    const c = bridgeCheck(db)!;
+    expect(c.status).toBe('warn');
+    expect(c.detail).toMatchObject({ rawGapNam: 11_614, stuckNam: 1614, driftNam: 1_000, over: 'escrow', otherChainsNam: 9_000, otherChainsRead: ['Noble'], otherChainsUnread: ['Stride', 'Penumbra'] });
+    expect(checkDetail({ key: 'ibc_conservation', status: c.status, title: c.title, detail: c.detail, checkedAt: 0 })).toBe(
+      'The Namada bridge holds 1,000 NAM more than Osmosis and the 1 other chain read hold, counting 1,614 NAM stuck in a transfer to Noble that was refused and never refunded (26 Jun 2026); Stride and Penumbra are not read, so the difference may be NAM sent there');
+  });
+
+  it('with the rest of the account found on another chain the check passes', async () => {
+    const db = testD1();
+    await kvSet(db as any, BRIDGES_KV, await record(10_000, PLAIN - 60_000));
+    network(11_624n, 10n);
+    await tick({ DB: db, KEPLR_KEY: 'k' }, PLAIN);
+    expect(bridgeCheck(db)).toMatchObject({ status: 'ok', detail: { rawGapNam: 11_614, driftNam: 0, over: null, otherChainsNam: 10_000, otherChainsRead: ['Noble'] } });
+  });
+
+  it('a figure too old to stand for now is not counted: the chain is named as not read and the check is as it was', async () => {
+    const db = testD1();
+    // read forty minutes ago, and this tick's read of it fails (the stubbed node answers about another coin)
+    await kvSet(db as any, BRIDGES_KV, await record(10_000, PLAIN - 40 * 60_000));
+    network(11_624n, 10n);
+    await tick({ DB: db, KEPLR_KEY: 'k' }, PLAIN);
+    const c = bridgeCheck(db)!;
+    expect(c.status).toBe('warn');
+    expect(c.detail).toMatchObject({ driftNam: 10_000, over: 'escrow', otherChainsNam: null, otherChainsRead: [], otherChainsUnread: ['Stride', 'Penumbra', 'Noble'] });
+    // the figure is kept with its own time, marked old; it is not replaced and not counted
+    const rec = await kvGetJson<BridgesRecord>(db as any, BRIDGES_KV);
+    expect(rec!.rows.find((r) => r.chainId === 'noble-1')!.held).toMatchObject({ value: 10_000, prov: { at: PLAIN - 40 * 60_000, status: 'stale' } });
+  });
+
+  it('another chain\'s older figure cannot make a fault of two readings that agree', async () => {
+    const db = testD1();
+    // the account and Osmosis agree (with the stuck transfer); Noble's node says it holds 50,000 more
+    await kvSet(db as any, BRIDGES_KV, await record(50_000, PLAIN - 60_000));
+    network(1_624n, 10n);
+    await tick({ DB: db, KEPLR_KEY: 'k' }, PLAIN);
+    expect(bridgeCheck(db)).toMatchObject({ status: 'warn', detail: { driftNam: -50_000, over: 'osmosis', otherChainsNam: 50_000 } });
+  });
+
   it('the rule, at its edges', () => {
     expect(ibcConservation(11_624, 10, 1614)).toEqual({ status: 'warn', over: 'escrow', rawGapNam: 11_614, driftNam: 10_000 });
     expect(ibcConservation(1_000_000, 10, 0)).toMatchObject({ status: 'warn', over: 'escrow' }); // never 'fail' on this side
@@ -112,7 +179,8 @@ describe('the bridge check says what it compares', () => {
   const noble = { nam: 1614, sentAt: '2026-06-26T11:13:59Z', note: 'stuck in a transfer to Noble that was refused and never refunded' };
 
   it('the title says the bridge locks NAM for every chain', () => {
-    expect(CHECK_TITLES.ibc_conservation).toBe('NAM locked at the Namada bridge (for every chain) matches NAM on Osmosis');
+    // since 2026-11-10 the check counts every chain read, so the title names the chains, not Osmosis alone
+    expect(CHECK_TITLES.ibc_conservation).toBe('NAM locked at the Namada bridge matches NAM on the chains it bridges to');
   });
   it('the bridge holding more is said as that, with what it may be', () => {
     expect(checkDetail(c({ driftNam: 10_000, stuckNam: 1614, stuckPackets: [noble], over: 'escrow' }))).toBe(

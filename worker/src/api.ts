@@ -56,6 +56,7 @@ import { DAY_HOURS, HISTORY_ALL_DAYS } from '../../shared/history';
 import { SINGLE_POOL_USDC_SWAP, MINT_RULE_KV, type MintRuleState } from './cron';
 import { checkStaleMs } from './digest/freshness';
 import { readHealth } from './ops';
+import { bridgesAnswer } from './bridges';
 import { answerAsk, askState } from './ask';
 
 /** A check that has not run for this long is served as 'stale': its last result is kept, but it no longer counts as
@@ -2043,6 +2044,11 @@ app.get('/api/integrity', async (c) => {
   const answer: IntegrityResponse = { checks, sources: publicSources(health), at: Date.now(), ...(lastTickAt !== undefined ? { lastTickAt } : {}) };
   return c.json(answer);
 });
+
+// Every bridge channel and the NAM each chain holds through it (worker/src/bridges.ts): the record the tick keeps, with
+// the bridge account's own balance, the NAM in transfers known to be stuck and what is left that no chain read accounts
+// for. Current only: nothing here is recorded over time. Three small reads by key, no parameter, no session.
+app.get('/api/bridges', async (c) => c.json(await bridgesAnswer(c.env.DB, Date.now())));
 
 // The probe of an uptime service outside Cloudflare (scale plan, Stage 1 item 4): whether the cron completed a tick
 // in the last 5 minutes and no incident is open (worker/src/ops.ts healthAnswer), 503 otherwise. Two kv rows by key in

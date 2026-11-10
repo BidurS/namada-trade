@@ -15,7 +15,7 @@
 // is a moment counted from another parameter, as a range's start is, has no such place and is said in words). Imports are
 // from shared/ only (types, and the constants a bound is read from).
 import type {
-  AddressReport, AlertRuleInfo, AlertsRecentResponse, BlindSpot, FlowsResponse, GenesisCohortsResponse, HealthAnswer, HoldersResponse,
+  AddressReport, AlertRuleInfo, AlertsRecentResponse, BlindSpot, BridgesResponse, FlowsResponse, GenesisCohortsResponse, HealthAnswer, HoldersResponse,
   IntegrityResponse, IntelResponse, OrderflowResponse, Overview, PairsResponse, PoolInfo, Pressure, PriceChangesResponse, PriceQuote,
   Provenance, QuoteCurveResponse, SearchResponse, SeriesResponse, TradesResponse, ValuesResponse, VolumeResponse,
 } from './types';
@@ -27,8 +27,17 @@ import { CHANGES_LIMIT_MAX, HEAT_DAYS, HEAT_DEFAULT_DAYS, QUOTE_NAM_MAX, QUOTE_N
 import { ALERT_WINDOW_DAYS, DEFAULT_THRESHOLDS, type AlertThresholds } from './alerts';
 import { DAY_HOURS, HISTORY_ALL_DAYS } from './history';
 import { FLOW_TO_TAG } from './kinds';
+import { SUMMARIES_SHOWN } from './proposal-summary';
 import { CURSOR_MAX_LENGTH, LIMIT_MAX, LIMIT_MIN, PAGE_SIZE } from './paging';
 import { ADDRESS_PREFIX_MIN, HASH_MAX, HASH_PREFIX_MIN, INPUT_MAX } from './search-grammar';
+
+/**
+ * A proposal's short summary is part of an answer only while the summaries are shown (shared/proposal-summary.ts
+ * SUMMARIES_SHOWN): the reference says so then, and says nothing of it before.
+ */
+const SUMMARY_CLAUSE = SUMMARIES_SHOWN
+  ? { inProgress: ' and, where one is written, a short summary', listed: ', with a short summary where one is written' }
+  : { inProgress: '', listed: '' };
 
 /** The groups the reference is read in, in this order. */
 export type ApiGroup = 'market' | 'depth' | 'moves' | 'holders' | 'supply' | 'series' | 'alerts' | 'site';
@@ -337,7 +346,7 @@ const pressureFields = {
   pipelineSummary: 'NAM bridged to the listed addresses, split into groups by where it came from, and the NAM remaining with the addresses that sell most of what reaches them.',
   bondedTrend: 'NAM staked over time: the last reading of each period, oldest first.',
   movers: 'The Osmosis addresses with the largest net buying or selling over the window, bot trades left out: net NAM over the window and over the last day, counts of buys and sells, and the time of the last trade.',
-  proposals: 'The governance proposals in voting or waiting to start, with their votes in NAM and, where one is written, a short summary.',
+  proposals: `The governance proposals in voting or waiting to start, with their votes in NAM${SUMMARY_CLAUSE.inProgress}.`,
   proposalsProv: 'When the proposals were read (a stamp).',
   decided: 'The latest proposals that passed or were rejected, newest first.',
   ibcRefunded7d: 'NAM in sends to Namada over the window that timed out and were refunded; left out of the NAM bridged back.',
@@ -375,6 +384,17 @@ const blindSpotFields = {
   coverage: 'How far the record of moves reaches on both chains together (a stamp).',
   coverageByChain: 'The same for each chain on its own.',
 } satisfies Record<keyof BlindSpot, string>;
+
+const bridgesFields = {
+  asOf: 'When the answer was made.',
+  account: 'NAM in Namada’s bridge account, which holds the NAM sent out over every channel, with its stamp.',
+  channels: 'Every bridge channel that names its other side, in the chain’s own order: Namada’s id of the channel and the other chain’s, the chain it leads to and its name, whether it is open, the name that chain gives NAM, and the NAM that chain holds through it with a stamp. A chain that is not read has no figure and the reason in its stamp’s note.',
+  held: 'The NAM the chains with a current figure hold between them, with a stamp dated by the oldest of those readings; empty when no chain has one.',
+  unread: 'The names of the chains with no current figure.',
+  stuck: 'NAM in transfers that were refused or timed out on the other chain and never refunded, with a stamp dated by the oldest reading of a transfer’s status; empty when that list was not read.',
+  beyondNam: 'The account less the NAM the chains read hold and less the NAM in such transfers. Null unless the account is current, that list was read and every chain that can be read has a current figure: it is never made with a part missing.',
+  prov: 'The stamp of the channel list: the Namada node and block it was read from, and when.',
+} satisfies Record<keyof BridgesResponse, string>;
 
 // ---------------------------------------------------------------- series
 
@@ -509,7 +529,7 @@ const alertsRecentFields = {
 const intelFields = {
   topics: 'Recent topics on the Namada forum: title, link, category, counts of posts, replies, views and likes, and times.',
   latestPosts: 'The newest forum posts: the topic, the author’s name, the time and an excerpt.',
-  proposals: 'Governance proposals as the Namada indexer lists them: title, kind, status, the epochs of the vote and the votes in NAM for, against and abstaining, with a short summary where one is written.',
+  proposals: `Governance proposals as the Namada indexer lists them: title, kind, status, the epochs of the vote and the votes in NAM for, against and abstaining${SUMMARY_CLAUSE.listed}.`,
   validators: 'Validators: address, name, voting power in NAM, commission and state.',
   indexerEpoch: 'The epoch the Namada indexer reported; null when not read.',
   fetchedAt: 'When this copy was read.',
@@ -702,6 +722,12 @@ export const API_CATALOG: ApiEndpoint[] = [
     what: 'The shielded pool seen from outside: how much NAM it holds and its share of all NAM, what went in and came out over the last day and week, the largest moves out, and the pool as a ledger since the record began.',
     params: [AT],
     fields: blindSpotFields,
+  },
+  {
+    path: '/api/bridges', group: 'supply', title: 'Bridges',
+    what: 'Every bridge channel Namada has opened, the chain each leads to and the NAM that chain holds through it, set against the NAM in Namada’s bridge account. Current only: this route does not rewind.',
+    params: [],
+    fields: bridgesFields,
   },
 
   // ---------------------------------------------------------------- series

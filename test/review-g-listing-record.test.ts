@@ -90,7 +90,8 @@ const healthOf = (db: any) => JSON.parse(db.raw.prepare("SELECT value FROM kv WH
 const rawRecord = (db: any, key: string): string | null => db.raw.prepare('SELECT value FROM kv WHERE key = ?').get(key)?.value ?? null;
 const record = <T,>(db: any, key: string): T | null => { const r = rawRecord(db, key); return r ? JSON.parse(r) : null; };
 const bondReads = (calls: string[]) => calls.filter((u) => decodeURIComponent(u).includes('bonds_and_unbonds/to'));
-const balanceReads = (calls: string[]) => calls.filter((u) => decodeURIComponent(u).includes('/shell/prefix/'));
+// the balance listing: the prefix read of the balance keys (the bridge's channel reads are prefix reads too, and are not it)
+const balanceReads = (calls: string[]) => calls.filter((u) => /\/shell\/prefix\/.*\/balance/.test(decodeURIComponent(u)));
 const checkRow = (db: any, key: string) => db.raw.prepare('SELECT status, detail, checked_at FROM checks WHERE key = ?').get(key);
 const metricAt = (db: any, key: string, ts: number) => db.raw.prepare('SELECT value FROM metrics WHERE key = ? AND ts = ?').get(key, ts)?.value ?? null;
 

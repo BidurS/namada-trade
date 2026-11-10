@@ -21,6 +21,9 @@ import { API_CATALOG, API_GROUPS } from '../../shared/api-catalog';
 import { API_LIMITS } from '../../shared/api-limits';
 import { CHECK_STALE_MS, checkStaleMs } from './digest/freshness';
 import { readHealth } from './ops';
+import { BRIDGES_KV, bridgeSums, currentHeld } from './bridges';
+import { kvGetJson } from './db';
+import type { BridgesRecord } from '../../shared/types';
 
 export type { FactKey };
 export { BODY };
@@ -55,6 +58,22 @@ export function statusFacts(checkRows: { status: string; detail: string | null; 
 }
 
 /**
+ * The bridges page's two figures: the NAM in Namada's bridge account, and the NAM the chains with a current figure
+ * hold between them, dated by the oldest of those readings (the sum is no newer than its oldest part). Each is left
+ * out when it was not read: no chain read is not "0 NAM on 0 chains".
+ */
+export function bridgeFacts(escrow: { ts: number; value: number } | null, rec: BridgesRecord | null, now: number, namadaSource = 'Namada nodes'): Facts {
+  const f: Facts = {};
+  if (escrow) f.bridgeAccount = { text: `In Namada's bridge account, for every channel: ${num(escrow.value)} NAM`, at: escrow.ts, source: namadaSource };
+  const sums = bridgeSums(rec, now);
+  const read = (rec?.rows ?? []).filter((r) => currentHeld(r, now) != null).length;
+  if (sums.heldNam != null && sums.heldAt != null && read) {
+    f.bridgeHeld = { text: `Held by the ${num(read)} ${read === 1 ? 'chain' : 'chains'} read: ${num(sums.heldNam)} NAM`, at: sums.heldAt, source: 'each chain\'s own node' };
+  }
+  return f;
+}
+
+/**
  * Does a route's served page state live figures? Its copy says so (shared/copy.ts BODY: the facts under its lead or
  * under a section). A guide states none and never waits on the database; a words-first page that carries the day
  * its text was checked (`updated`) and also lists figures, as the methodology page does, is served with them.
@@ -73,7 +92,7 @@ export async function facts(env: Env): Promise<Facts> {
   const db = env.DB;
   const now = Date.now();
   const listed = await listingTimes(db);
-  const [price, total, bonded, shielded, osmosis, liquidity, pools, priced, holderFig, vol, cov, params, depthLatest, checkRows, health] = await Promise.all([
+  const [price, total, bonded, shielded, osmosis, liquidity, pools, priced, holderFig, vol, cov, params, depthLatest, checkRows, health, escrow, bridges] = await Promise.all([
     // Staked: the chain's own total stake, not the staking account's balance (which also holds NAM on its way out).
     metricAt(db, 'price.usd', now), metricAt(db, 'supply.total', now), metricAt(db, 'supply.total_stake', now), metricAt(db, 'supply.masp_shielded', now),
     // The pools' money: each pool's coins at their own prices (pool-sizes.ts), and how many pools that total counts.
@@ -90,6 +109,9 @@ export async function facts(env: Env): Promise<Facts> {
     // The status page's two figures: every cross-check's stored result (one small table), and the last completed tick.
     db.prepare('SELECT status, detail, checked_at FROM checks').all<{ status: string; detail: string | null; checked_at: number }>().then((r) => r.results ?? []).catch(() => null),
     readHealth(db, now).then((r) => r.body).catch(() => null),
+    // The bridges page's two figures: the bridge account's own balance, and the record of what each chain holds.
+    metricAt(db, 'supply.ibc_escrow', now),
+    kvGetJson<BridgesRecord>(db, BRIDGES_KV).catch(() => null),
   ]);
   const pct = (n: number) => (total ? `${((n / total.value) * 100).toFixed(1)}% of all NAM` : '');
   // While the network is halted a Namada figure's stamp says so beside its time: the reading is days old for a reason.
@@ -135,6 +157,7 @@ export async function facts(env: Env): Promise<Facts> {
     if (Number.isFinite(depthLatest.within.bidUsd10)) f.depthBid = { text: bidQuotable(fmtUsdRule(depthLatest.within.bidUsd10), fmtPctRule(DEPTH_OFFSETS_PCT[OFFSET_10_INDEX], 0)), at: depthLatest.at, source: DEPTH_PLAIN_SOURCE };
   }
   Object.assign(f, statusFacts(checkRows, health?.lastTickAt, now));
+  Object.assign(f, bridgeFacts(escrow, bridges, now, namadaNodes));
   if (params?.apr) f.apr = { text: `Staking rate reported by the network indexer: ${(params.apr * 100).toFixed(1)}% a year, before validator commission; it changes with the share staked and is not a promise`, at: params.fetchedAt, source: 'indexer.namada.net' };
   await cache.put(key, new Response(JSON.stringify(f), { headers: { 'content-type': 'application/json', 'cache-control': 'public, max-age=120' } })).catch(() => {});
   return f;
@@ -197,7 +220,8 @@ const paras = (ps: string[]) => ps.map((p) => `<p style="${S.p}">${esc(p)}</p>`)
 
 function navHtml(): string {
   // the tabs, the explainer pages, then the platform pages: every page is one link away for a reader without JavaScript
-  const links = [...TABS.map((t) => routeByPath(t.path)!), ...EXPLAINER_ROUTES.filter((r) => !TABS.some((t) => t.path === r.path)), ...PLATFORM_ROUTES];
+  const bridges = routeByPath('/bridges');
+  const links = [...TABS.map((t) => routeByPath(t.path)!), ...EXPLAINER_ROUTES.filter((r) => !TABS.some((t) => t.path === r.path)), ...(bridges ? [bridges] : []), ...PLATFORM_ROUTES];
   return `<nav aria-label="Pages" style="${S.nav}">${links.map((x) => `<a href="${x.path}" style="${S.a}">${esc(x.label)}</a>`).join('')}</nav>`;
 }
 

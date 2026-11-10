@@ -86,6 +86,7 @@ const LOADERS: Partial<Record<ViewId, Loader>> = {
   faq: () => seo().then((m) => ({ default: m.Faq })),
   notfound: () => seo().then((m) => ({ default: m.NotFound })),
   guides: () => seo().then((m) => ({ default: m.Guides })),
+  bridges: () => seo().then((m) => ({ default: m.Bridges })),
   developers: () => seo().then((m) => ({ default: m.Developers })),
   status: () => seo().then((m) => ({ default: m.Status })),
   methodology: () => seo().then((m) => ({ default: m.Methodology })),

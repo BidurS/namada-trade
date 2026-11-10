@@ -27,7 +27,9 @@ export type FactKey =
   | 'depthSell'  // what selling the depth page's quoted size fetches across every Osmosis pool, from the newest depth minute
   | 'depthBid'   // USD of bids within the quoted distance of the price across every pool, from the same minute
   | 'checks'     // how many of the site's cross-checks pass, of all of them, as of the newest check
-  | 'tick';      // when the site's last reading of every source completed
+  | 'tick'       // when the site's last reading of every source completed
+  | 'bridgeAccount'  // NAM in Namada's bridge account, one account for every channel
+  | 'bridgeHeld';    // NAM the chains read hold between them, and how many chains that is
 
 /**
  * What the two derived values on the Trade page count (no figures). The series API sends the same sentences with
@@ -319,6 +321,34 @@ export const BODY: Record<string, PageCopy> = {
       'No live figure is typed into a guide: where a number changes, such as the staking rate, the unstaking wait or the price, the guide links the page of this site that shows it now, with its source and age.',
     ],
     facts: [],
+  },
+  bridges: {
+    paras: [
+      'NAM leaves Namada over bridge channels, one for each chain Namada is connected to. This page lists every channel the chain has opened, the chain it leads to and the NAM that chain holds through it.',
+      'Namada keeps one bridge account for every channel, so the account alone does not say where the NAM went. The other chains do: each one reports the NAM it received over its channel, and the page sets their sum against the account.',
+    ],
+    facts: ['bridgeAccount', 'bridgeHeld'],
+    sections: [
+      {
+        h2: 'Why does the bridge account hold more than the chains do?',
+        paras: [
+          'NAM stays in the account when a transfer was refused or timed out on the other chain and was never refunded, and when it was sent to a chain this site cannot read. The page states both: the NAM in transfers known to be stuck, and the channels that have no figure.',
+          'What is left is NAM in the account beyond what the chains read hold and the stuck transfers. It may be on a chain that is not read. It is shown as it is, never explained away, and while it is more than a small amount the cross-check that compares the two sides says it needs a look.',
+        ],
+      },
+      {
+        h2: 'Which chains cannot be read?',
+        paras: [
+          'A chain is read by asking one of its public nodes for the total of NAM it has issued for its channel. A chain whose nodes do not answer that question, as Penumbra\'s do not, is listed with its channel and no figure, never with a zero.',
+        ],
+      },
+      {
+        h2: 'How current is each figure?',
+        paras: [
+          'The channel list is read from a Namada node several times a day, and each chain is asked again several times an hour. Every figure carries the time of its own reading. A chain that did not answer keeps its last figure, marked old, until it answers again, and a figure more than half an hour old is left out of the sum.',
+        ],
+      },
+    ],
   },
   // The platform pages (docs/design/platform-plan.md, release A). The API page's list of routes is not typed here:
   // it is drawn from shared/api-catalog.ts by the view and by the server-rendered page.

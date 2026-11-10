@@ -674,6 +674,8 @@ class Borsh {
   }
   /** A borsh String (u32 length + UTF-8). */
   string() { return new TextDecoder().decode(this.take(this.u32())); }
+  /** A borsh Vec<u8> (u32 length + the bytes): a view into the answer, bounds-checked like every read. */
+  bytes() { return this.take(this.u32()); }
   /**
    * Address, in its raw 21-byte form: tag 0 Established and 1 Implicit (+ 20 bytes; the raw discriminant is 1 for
    * established, 0 for implicit), tag 2 Internal (a variant byte, then 20 bytes for the three hashed variants).
@@ -1084,4 +1086,210 @@ export async function maspTotalRewards(opts: ReadOpts = {}) {
 export async function maspEpochMultiplier(opts: ReadOpts = {}) {
   const r = await abci(`/shell/value/#${parametersAddress()}/masp_epoch_multiplier`, opts, notACount);
   return { multiplier: decodeU64LE(r.value), height: r.height, provider: r.provider };
+}
+
+// ---------------------------------------------------------------- the bridge's channels (platform plan, release B)
+//
+// Namada's bridge is one account (NAMADA.internal.ibc) that holds every coin sent out over any channel. Which
+// channels exist, and which chain each one leads to, is in the chain's own state under that account:
+//   channelEnds/ports/transfer/channels/<channel>   a ChannelEnd: its state, the other side's port and channel, its connection
+//                                                   (anyone may start a channel's handshake; only one that finished names its other side)
+//   connections/<connection>                        a ConnectionEnd: the light client the connection rests on
+//   clients/<client>/clientState                    an Any around that client's state, whose first field is the other chain's id
+// each stored as the protobuf message itself. The first two are read as prefix listings (about 1 KB each on
+// 2026-11-10, eight channels), the client states one key each (about 180 bytes): three reads plus one per chain.
+// Checked against the node on 2026-11-10 at block 8,517,986 (test/fixtures/ibc_channels.json).
+
+/** The most fields one message may have before it is refused (a channel has five, a client state about a dozen). */
+const PB_FIELDS_MAX = 64;
+
+/** The fields of one protobuf message, each read within the message's bytes: a field that runs past the end throws. */
+function pbFields(buf: Uint8Array, what: string): { f: number; w: number; n: bigint; b: Uint8Array }[] {
+  const out: { f: number; w: number; n: bigint; b: Uint8Array }[] = [];
+  let i = 0;
+  const varint = (): bigint => {
+    let shift = 0n, v = 0n;
+    for (;;) {
+      if (i >= buf.length || shift > 63n) throw new Error(`${what}: a number runs past the end of the message`);
+      const c = buf[i++];
+      v |= BigInt(c & 0x7f) << shift;
+      if (!(c & 0x80)) return v;
+      shift += 7n;
+    }
+  };
+  const NONE = new Uint8Array(0);
+  while (i < buf.length) {
+    // the messages read here have a handful of fields: a value made of very many is refused, not held in memory
+    if (out.length >= PB_FIELDS_MAX) throw new Error(`${what}: more fields than a message of its kind has`);
+    const key = varint();
+    const f = Number(key >> 3n), w = Number(key & 7n);
+    if (w === 0) out.push({ f, w, n: varint(), b: NONE });
+    else if (w === 2) {
+      const len = Number(varint());
+      if (len > buf.length - i) throw new Error(`${what}: a field runs past the end of the message`);
+      out.push({ f, w, n: 0n, b: buf.subarray(i, i + len) });
+      i += len;
+    } else if (w === 1 || w === 5) {
+      const len = w === 1 ? 8 : 4;
+      if (len > buf.length - i) throw new Error(`${what}: a field runs past the end of the message`);
+      out.push({ f, w, n: 0n, b: buf.subarray(i, i + len) });
+      i += len;
+    } else throw new Error(`${what}: unknown wire type ${w}`);
+  }
+  return out;
+}
+const pbText = (fs: { f: number; w: number; b: Uint8Array }[], f: number): string | null => {
+  const x = fs.find((y) => y.f === f && y.w === 2);
+  return x ? new TextDecoder().decode(x.b) : null;
+};
+
+/** The ids the chain gives its channels, connections and clients: a word, a dash and a number (a client's has two parts), of bounded length. */
+const IBC_ID = /^[a-z0-9]{1,32}(-[a-z0-9]{1,32}){0,3}-\d{1,10}$/;
+/** A port's name on the other chain: what its voucher name is made from, so nothing but plain characters a port may have (a contract's port is `wasm.` and its address, 68 in all). */
+const IBC_PORT = /^[A-Za-z0-9._+-]{1,128}$/;
+/** The most transfer channels one listing may hold: an answer with more is refused, not walked. */
+export const IBC_CHANNELS_MAX = 256;
+/** The most bytes one listing under the bridge account may decode to: about fifty times the largest read (1 KB on 2026-11-10). A longer one is refused before it is walked. */
+export const IBC_LISTING_MAX_BYTES = 64 * 1024;
+/** The most client states one channel read asks for, and how many at once: the channels past these keep no chain. */
+export const IBC_CLIENT_READS_MAX = 64;
+const IBC_CLIENT_READS_AT_ONCE = 8;
+/** The stored Any's type of the one kind of light client whose state this site reads the chain id from. */
+const TENDERMINT_CLIENT = '/ibc.lightclients.tendermint.v1.ClientState';
+
+/**
+ * A prefix listing under the bridge account: every key as its string segments after the account, with the stored
+ * bytes. borsh Vec<PrefixValue { key: Key { segments: Vec<DbKeySeg> }, value: Vec<u8> }>, as parseBalanceListing reads
+ * it; the first segment must be the bridge account. Throws on a cut or malformed answer.
+ */
+function ibcPrefixEntries(value: string | null, what: string): { path: string[]; value: Uint8Array }[] {
+  const bytes = base64Bytes(value ?? '');
+  if (bytes.length > IBC_LISTING_MAX_BYTES) throw new Error(`${what}: ${bytes.length} bytes, more than this site reads`);
+  const b = new Borsh(bytes);
+  const out: { path: string[]; value: Uint8Array }[] = [];
+  const n = b.u32();
+  for (let i = 0; i < n; i++) {
+    const segs = b.u32();
+    if (segs < 2 || segs > 16) throw new Error(`${what}: key ${i} has ${segs} segments`);
+    if (b.u8() !== 0 || b.address().address !== NAMADA.internal.ibc) throw new Error(`${what}: key ${i} is not under the bridge account`);
+    const path: string[] = [];
+    for (let k = 1; k < segs; k++) {
+      if (b.u8() !== 1) throw new Error(`${what}: key ${i} has a segment that is not text`);
+      path.push(b.string());
+    }
+    out.push({ path, value: b.bytes() });
+  }
+  if (!b.done) throw new Error(`${what}: ${bytes.length - b.offset} unread bytes`);
+  return out;
+}
+
+/** One transfer channel as the chain's state names it. */
+export interface IbcChannelEnd {
+  /** Namada's id of the channel: channel-1. */
+  channel: string;
+  /** The channel is open on Namada's side (ChannelEnd.state 3). A channel in any other state carries no transfer. */
+  open: boolean;
+  /** The other chain's port and its id of the same channel: together with the coin's address they name the coin's voucher there. */
+  counterpartyPort: string;
+  counterpartyChannel: string;
+  /** The connection the channel rests on (its one hop); null when the channel names none or more than one. */
+  connection: string | null;
+}
+
+/**
+ * Decode /shell/prefix/#<bridge>/channelEnds/ports/transfer/channels: every transfer channel that names its other
+ * side, in the chain's own order, and how many were passed over because their other side is named in a form this
+ * site does not read (`passed`: one odd channel must not cost the whole list). A channel whose handshake never
+ * finished names no channel on the other chain: NAM cannot cross it and no voucher of it exists, so it is left out
+ * and not counted (an open channel that names none is a malformed answer). Throws on a cut or malformed answer, a
+ * key that is not a channel's, a channel listed twice, or more channels than IBC_CHANNELS_MAX.
+ */
+export function parseIbcChannelList(value: string | null): { ends: IbcChannelEnd[]; passed: number } {
+  const entries = ibcPrefixEntries(value, 'channel listing');
+  if (entries.length > IBC_CHANNELS_MAX) throw new Error(`channel listing: ${entries.length} channels, more than this site reads`);
+  const out: IbcChannelEnd[] = [];
+  const seen = new Set<string>();
+  let passed = 0;
+  for (const [i, e] of entries.entries()) {
+    const p = e.path;
+    if (p.length !== 5 || p[0] !== 'channelEnds' || p[1] !== 'ports' || p[2] !== 'transfer' || p[3] !== 'channels' || !IBC_ID.test(p[4])) throw new Error(`channel listing: key ${i} is not a transfer channel's`);
+    if (seen.has(p[4])) throw new Error(`channel listing: ${p[4]} is listed twice`);
+    seen.add(p[4]);
+    const fs = pbFields(e.value, `channel ${p[4]}`);
+    const open = (fs.find((x) => x.f === 1 && x.w === 0)?.n ?? 0n) === 3n;
+    const cp = fs.find((x) => x.f === 3 && x.w === 2);
+    const cfs = cp ? pbFields(cp.b, `channel ${p[4]} counterparty`) : [];
+    const port = pbText(cfs, 1), chan = pbText(cfs, 2);
+    if (!chan) {
+      if (open) throw new Error(`channel listing: ${p[4]} is open and names no channel on the other side`);
+      continue;
+    }
+    if (!port || !IBC_PORT.test(port) || !IBC_ID.test(chan)) { passed++; continue; }
+    const hops = fs.filter((x) => x.f === 4 && x.w === 2).map((x) => new TextDecoder().decode(x.b));
+    out.push({ channel: p[4], open, counterpartyPort: port, counterpartyChannel: chan, connection: hops.length === 1 && IBC_ID.test(hops[0]) ? hops[0] : null });
+  }
+  return { ends: out, passed };
+}
+/** The channels of parseIbcChannelList alone. */
+export const parseIbcChannels = (value: string | null): IbcChannelEnd[] => parseIbcChannelList(value).ends;
+
+/** Decode /shell/prefix/#<bridge>/connections: each connection's light client. Keys that are not a connection (the chain's counter) are passed over; a connection listed twice is a malformed answer. */
+export function parseIbcConnections(value: string | null): Map<string, string> {
+  const out = new Map<string, string>();
+  for (const e of ibcPrefixEntries(value, 'connection listing')) {
+    const p = e.path;
+    if (p.length !== 2 || p[0] !== 'connections' || !/^connection-\d{1,10}$/.test(p[1])) continue;
+    const client = pbText(pbFields(e.value, p[1]), 1);
+    if (!client || !IBC_ID.test(client)) throw new Error(`connection listing: ${p[1]} names no client`);
+    if (out.has(p[1])) throw new Error(`connection listing: ${p[1]} is listed twice`);
+    out.set(p[1], client);
+  }
+  return out;
+}
+
+/**
+ * The id of the chain a light client follows: the first field of the client state inside the stored Any. Only the
+ * one kind of client whose state has that field is read (TENDERMINT_CLIENT); any other kind, or a name that is not
+ * a chain id's, throws.
+ */
+export function parseIbcClientChain(value: string | null): string {
+  const any = pbFields(base64Bytes(value ?? ''), 'client state');
+  if (pbText(any, 1) !== TENDERMINT_CLIENT) throw new Error('client state: not a kind of client this site reads');
+  const inner = any.find((x) => x.f === 2 && x.w === 2);
+  const chainId = inner ? pbText(pbFields(inner.b, 'client state'), 1) : null;
+  if (!chainId || !/^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$/.test(chainId)) throw new Error('client state: it names no chain');
+  return chainId;
+}
+
+/** A channel with the chain it leads to: `chainId` null when its connection or its client's state could not be read. */
+export interface IbcChannel extends IbcChannelEnd { client: string | null; chainId: string | null }
+
+const ibcKey = (rest: string) => `#${NAMADA.internal.ibc}/${rest}`;
+
+/**
+ * Every transfer channel of the chain with the chain each one leads to, read from one node at its newest block: the
+ * channel listing, the connection listing, then one client state per channel's client (at most
+ * IBC_CLIENT_READS_MAX of them, a few at a time). A channel whose client state cannot be read, or was not asked for,
+ * keeps a null chain id (it is listed, and nothing is guessed for it); a failed listing throws. `passed`: the
+ * channels left out because their other side is named in a form this site does not read.
+ */
+export async function ibcChannels(opts: ReadOpts = {}): Promise<{ channels: IbcChannel[]; height: number; provider: string; passed: number }> {
+  const ch = await abci(`/shell/prefix/${ibcKey('channelEnds/ports/transfer/channels')}`, opts);
+  const { ends, passed } = parseIbcChannelList(ch.value);
+  const co = await abci(`/shell/prefix/${ibcKey('connections')}`, opts);
+  const clientOf = parseIbcConnections(co.value);
+  const clients = [...new Set(ends.map((e) => (e.connection ? clientOf.get(e.connection) ?? null : null)).filter((c): c is string => !!c))].slice(0, IBC_CLIENT_READS_MAX);
+  // the client states a few together (a few hundred bytes each): the two listings above have shown the breaker which
+  // node answers, so these go straight to it; one that fails leaves its channels listed without a chain
+  const chainOf = new Map<string, string>();
+  for (let i = 0; i < clients.length && !opts.signal?.aborted; i += IBC_CLIENT_READS_AT_ONCE) {
+    await Promise.all(clients.slice(i, i + IBC_CLIENT_READS_AT_ONCE).map(async (c) => {
+      try { chainOf.set(c, parseIbcClientChain((await abci(`/shell/value/${ibcKey(`clients/${c}/clientState`)}`, opts)).value)); } catch { /* listed without its chain */ }
+    }));
+  }
+  const channels = ends.map((e): IbcChannel => {
+    const client = e.connection ? clientOf.get(e.connection) ?? null : null;
+    return { ...e, client, chainId: client ? chainOf.get(client) ?? null : null };
+  });
+  return { channels, height: ch.height, provider: ch.provider, passed };
 }

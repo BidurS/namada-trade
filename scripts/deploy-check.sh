@@ -354,6 +354,10 @@ for p in /developers /status /methodology /privacy /terms; do check "$p answers"
 check "/api is a 301 to the API page" "301 $H/developers" "$(curl -s -o /dev/null -w '%{http_code} %{redirect_url}' "$H/api")"
 check "openapi.json names the routes"  1 "$(curl -s "$H/openapi.json" | python3 -c "import sys,json; d=json.load(sys.stdin); print(1 if d['openapi'].startswith('3.') and all(p in d['paths'] for p in ('/api/overview', '/api/flows', '/api/depth', '/api/address/{address}')) else 0)")"
 check "the API page lists the routes without JavaScript" 1 "$(curl -s "$H/developers" | grep -c 'GET /api/overview' || true)"
+# every bridge channel (release B, 2026-11-10): the page answers, and its data answers with a list (empty until the first
+# tick after the deploy has read the chain's channels) and a stamp whose status is one of the three
+check "/bridges answers"               200 "$(curl -s -o /dev/null -w '%{http_code}' "$H/bridges")"
+check "the bridges answer carries a list and a stamp" 1 "$(curl -s "$H/api/bridges" | python3 -c "import sys,json; d=json.load(sys.stdin); print(1 if isinstance(d['channels'], list) and d['prov']['status'] in ('live','stale','missing') and 'beyondNam' in d and 'prov' in d['held'] and 'prov' in d['stuck'] else 0)")"
 # (the answer is kept at the edge for some seconds, so a copy from before the deploy may be read first: asked again, four times at most)
 integrity_tick() { curl -s "$H/api/integrity" | python3 -c "import sys,json; d=json.load(sys.stdin); print(1 if 'lastTickAt' in d and (d['lastTickAt'] is None or isinstance(d['lastTickAt'], int)) else 0)" 2>/dev/null || echo 0; }
 got=0; for i in 1 2 3 4; do got=$(integrity_tick); [ "$got" = 1 ] && break; sleep 8; done

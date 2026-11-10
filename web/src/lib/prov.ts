@@ -186,7 +186,7 @@ export const ageRange = (stamps: Stamp[], now: number): string => {
  * operator text and appear only under "How it is computed").
  */
 export const CHECK_TITLES: Record<string, string> = {
-  ibc_conservation: 'NAM locked at the Namada bridge (for every chain) matches NAM on Osmosis',
+  ibc_conservation: 'NAM locked at the Namada bridge matches NAM on the chains it bridges to',
   bonded_coverage: 'Staked NAM is traced to the addresses that staked it',
   rpc_consensus: 'Two Namada nodes agree on the latest block',
   supply_integrity: 'NAM in staking, the bridge, the shielded pool and public funding never exceeds all NAM',
@@ -322,10 +322,21 @@ export function checkDetail(c: Check): string | null {
       if (x == null) return null;
       const stuck = detailNum(d.stuckNam) ?? 0;
       const amt = fmtNamRule(Math.abs(x));
-      const gap = d.over === 'escrow' ? `The Namada bridge holds ${amt} NAM more than Osmosis counts`
-        : d.over === 'osmosis' ? `Osmosis counts ${amt} NAM more than the Namada bridge holds`
+      // Since 2026-11-10 the check also counts the NAM on every other chain a channel leads to that could be read
+      // (worker/src/bridges.ts): `otherChainsRead` names them and `otherChainsUnread` the ones with no current figure.
+      // A result from before then, or from a tick with no channel list yet, has neither (absent or null), and reads
+      // as it did: only Osmosis was read.
+      const names = (v: unknown): string[] | null => (Array.isArray(v) ? v.filter((n): n is string => typeof n === 'string') : null);
+      const read = names(d.otherChainsRead), unread = names(d.otherChainsUnread) ?? [];
+      const list = (xs: string[]) => (xs.length <= 1 ? xs.join('') : `${xs.slice(0, -1).join(', ')} and ${xs[xs.length - 1]}`);
+      const also = read?.length ? ` and the ${fmtCount(read.length)} other ${read.length === 1 ? 'chain' : 'chains'} read` : '';
+      const gap = d.over === 'escrow' ? `The Namada bridge holds ${amt} NAM more than Osmosis${also ? `${also} hold` : ' counts'}`
+        : d.over === 'osmosis' ? `Osmosis${also} ${also ? 'count' : 'counts'} ${amt} NAM more than the Namada bridge holds`
         : Math.abs(x) < 1 ? 'Equal' : `${amt} NAM apart`;
-      const why = d.over === 'escrow' ? '; the bridge holds NAM for every chain and only Osmosis is read, so the difference may be NAM sent to another chain' : '';
+      const why = d.over !== 'escrow' ? ''
+        : read == null ? '; the bridge holds NAM for every chain and only Osmosis is read, so the difference may be NAM sent to another chain'
+          : unread.length ? `; ${list(unread)} ${unread.length === 1 ? 'is' : 'are'} not read, so the difference may be NAM sent there`
+            : '; every other chain the bridge has a channel to was read';
       if (!(stuck > 0)) return `${gap}${why}`;
       const packets = Array.isArray(d.stuckPackets) ? (d.stuckPackets as { sentAt?: unknown; note?: unknown }[]) : [];
       const dates = packets.map((p) => p.sentAt).filter((v): v is string => typeof v === 'string').map((v) => Date.parse(v)).filter(Number.isFinite).sort();

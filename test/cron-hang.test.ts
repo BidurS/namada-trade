@@ -125,7 +125,8 @@ describe('a tick with both listings due', () => {
     // the third tick finds both listings current: nothing is read again
     const calls = network(() => false);
     await virtualTick({ DB: db, KEPLR_KEY: 'k' }, PLAIN + 120000);
-    expect(calls.filter((u) => decodeURIComponent(u).includes('/shell/prefix/') || decodeURIComponent(u).includes('bonds_and_unbonds/to'))).toHaveLength(0);
+    // (the balance listing is the prefix read of the balance keys; the bridge's channel reads are prefix reads too, and are not listings)
+    expect(calls.filter((u) => /\/shell\/prefix\/.*\/balance/.test(decodeURIComponent(u)) || decodeURIComponent(u).includes('bonds_and_unbonds/to'))).toHaveLength(0);
     expect(locked(db)).toBe(0);
   });
 });

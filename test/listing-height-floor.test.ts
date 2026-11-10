@@ -446,7 +446,8 @@ function seeded(listingHeight: number, rowHeight: number, provider = 'Papadritta
   return db;
 }
 const healthOf = (db: TestD1) => JSON.parse(db.raw.prepare("SELECT value FROM kv WHERE key='source.health'").get().value);
-const listingReads = (calls: string[]) => calls.filter((u) => decodeURIComponent(u).includes('/shell/prefix/'));
+// the balance listing: the prefix read of the balance keys (the bridge's channel reads are prefix reads too, and are not it)
+const listingReads = (calls: string[]) => calls.filter((u) => /\/shell\/prefix\/.*\/balance/.test(decodeURIComponent(u)));
 const maxHeight = (db: TestD1) => db.raw.prepare("SELECT MAX(updated_height) h FROM holders WHERE chain='namada'").get().h;
 
 describe('the cron tick', () => {

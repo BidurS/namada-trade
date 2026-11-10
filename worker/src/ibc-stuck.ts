@@ -35,6 +35,9 @@ export interface StuckPacket {
 
 export interface StuckList { at: number; packets: StuckPacket[]; /** dropped since the last tick, with why */ dropped: { innerTx: string; nam: number; status: string; at: number }[] }
 
+/** kv key of the stuck list (the tick writes it; the bridges answer reads it). */
+export const STUCK_PACKETS_KV = 'ibc.stuck_packets';
+
 export const INDEXER_IBC_STATUS = (inner: string) => `https://indexer.namada.net/api/v1/ibc/${inner}/status`;
 
 /**

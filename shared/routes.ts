@@ -12,7 +12,7 @@ export type GuideRouteId = `guide-${GuideSlug}`;
 export type RouteId =
   | 'home' | 'trade' | 'depth' | 'supply' | 'shielded' | 'activity' | 'holders' | 'alerts' | 'settings'
   | 'staking' | 'osmosis' | 'learn' | 'faq' | 'guides' | GuideRouteId
-  | 'developers' | 'status' | 'methodology' | 'privacy' | 'terms';
+  | 'developers' | 'status' | 'methodology' | 'privacy' | 'terms' | 'bridges';
 
 /** The six tabs, in this order everywhere (system.md section 3). */
 export type TabId = 'home' | 'trade' | 'supply' | 'shielded' | 'activity' | 'alerts';
@@ -122,6 +122,14 @@ export const ROUTES: RouteDef[] = [
     description: 'How much money the NAM pools on Osmosis hold, how much NAM is there, what traded in the last day, and why a small order moves the price.',
   },
   {
+    // Every bridge channel and what each chain holds (docs/design/platform-plan.md, release B): an explainer page
+    // with live figures, linked from the footer, the Home page's bridge notice and the served pages' navigation.
+    path: '/bridges', id: 'bridges', label: 'Bridges', index: true,
+    h1: 'Which chains hold NAM, and how much?',
+    title: 'NAM on other chains: every bridge channel',
+    description: 'Every bridge channel Namada has opened, the chain each leads to and the NAM that chain holds through it, set against the NAM in Namada\'s bridge account.',
+  },
+  {
     path: '/learn/how-nam-trading-works', id: 'learn', label: 'How NAM trading works', index: true,
     h1: 'How does NAM get from a Namada wallet to a sale?',
     title: 'How NAM trading works: from wallet to sale',
@@ -205,6 +213,7 @@ export const ROUTE_ALIASES: Record<string, string> = {
   intel: '/supply', pressure: '/supply',
   learn: '/learn/how-nam-trading-works',
   guide: GUIDES_PATH,
+  bridge: '/bridges', channels: '/bridges', ibc: '/bridges',
   // the words people type for the platform pages
   api: '/developers', docs: '/developers', 'api-docs': '/developers', developer: '/developers',
   health: '/status', uptime: '/status',

@@ -2,7 +2,7 @@ import type {
   Overview, AddressReport, SearchResult, PoolInfo, PriceQuote, QuoteCurveResponse, IntelResponse,
   Pressure, BlindSpot, OrderflowResponse, AlertRuleInfo, Provenance, UserSettings, SessionInfo,
   FlowsResponse, HoldersResponse, AlertsRecentResponse, Flow, Holder, HoldersBy, SearchResponse, NotServedBody,
-  SeriesResponse, SeriesStep, PriceChangesResponse, VolumeResponse, PairsResponse, TradesResponse, ValuesResponse, GenesisCohortsResponse, IntegrityResponse,
+  SeriesResponse, SeriesStep, PriceChangesResponse, VolumeResponse, PairsResponse, TradesResponse, ValuesResponse, GenesisCohortsResponse, IntegrityResponse, BridgesResponse,
 } from '../../shared/types';
 
 export type {
@@ -408,6 +408,8 @@ export const fetchQuote = (amount: number, side: 'buy' | 'sell') => get<{ quote:
 export const fetchQuoteCurve = () => get<QuoteCurveResponse>('/api/quote/curve');
 export const fetchAddressReport = (address: string) => get<AddressReport>(`/api/address/${encodeURIComponent(address)}`).then(withAddressReport);
 export const fetchIntegrity = () => get<IntegrityResponse>('/api/integrity');
+/** GET /api/bridges: every bridge channel with the NAM its chain holds (current only: the route takes no time). */
+export const fetchBridges = () => get<BridgesResponse>('/api/bridges');
 export const fetchIntel = () => get<IntelResponse>('/api/intel');
 
 /** Address, transaction and label search. Rejects when the server does not answer: a failure is not "no match". */

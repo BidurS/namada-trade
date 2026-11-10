@@ -365,6 +365,71 @@ export interface IntegrityResponse {
   lastTickAt?: number | null;
 }
 
+// ---------------------------------------------------------------- the bridge's channels (worker/src/bridges.ts)
+
+/** One bridge channel of Namada and the NAM the chain on its other side holds through it. */
+export interface BridgeChannelRow {
+  /** Namada's id of the channel: channel-1. */
+  channel: string;
+  /** The other chain's port and its id of the same channel. */
+  counterpartyPort: string;
+  counterpartyChannel: string;
+  /** The id of the chain the channel leads to, from the channel's light client; null when Namada's state could not say. */
+  chainId: string | null;
+  /** That chain's name as the pages write it; null for a chain the site has no name for. */
+  chain: string | null;
+  /** The channel is open on Namada's side. */
+  open: boolean;
+  /** The name that chain gives NAM that arrived over this channel. */
+  denom: string;
+  /**
+   * NAM the chain holds through the channel: the total of that voucher as one of the chain's public nodes reports it,
+   * with the time of that reading. Null with the reason when the chain is not read or has never answered; a figure
+   * whose last read failed keeps its own time and is marked stale.
+   */
+  held: Sourced<number>;
+}
+
+/**
+ * kv bridge.channels: the channel list (`channelsAt`: when it was last read with every channel's chain, from the
+ * Namada node `provider` at block `height`; `triedAt`: when it was last attempted, whatever came of it) and each
+ * chain's holding as last read (`at`).
+ */
+export interface BridgesRecord {
+  at: number;
+  channelsAt: number;
+  triedAt?: number;
+  height: number;
+  provider: string;
+  rows: BridgeChannelRow[];
+}
+
+/** GET /api/bridges. Current only: neither the channels nor the holdings are recorded over time. */
+export interface BridgesResponse {
+  asOf: number;
+  /** NAM in Namada's bridge account: one account for every channel. */
+  account: Sourced<number>;
+  /** Every transfer channel that names its other side, in the chain's own order. Empty until the channel list has been read once. */
+  channels: BridgeChannelRow[];
+  /** The NAM the chains with a current figure hold between them, dated by the oldest of those readings; null with the reason when no chain has one. */
+  held: Sourced<number>;
+  /** The names of the channels' chains that have no current figure. */
+  unread: string[];
+  /**
+   * NAM in transfers that were refused or timed out on the other chain and never refunded, dated by the oldest
+   * reading of a transfer's status; null with the reason when that list was not read.
+   */
+  stuck: Sourced<number>;
+  /**
+   * The account less `held` and less `stuck`: NAM in the account beyond what the chains read hold and the transfers
+   * known to be stuck. Null unless the account is current, the stuck list was read and every chain that can be read
+   * has a current figure: it is never made with a part missing.
+   */
+  beyondNam: number | null;
+  /** The channel list's stamp: the Namada node and block it was read from, and when. */
+  prov: Provenance;
+}
+
 // ---------------------------------------------------------------- overview
 
 export interface PoolInfo {

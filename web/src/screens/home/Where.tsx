@@ -6,6 +6,7 @@ import { Derived, Notice, Num, SkeletonBlock, SupplyBar, SourceLine, derive } fr
 import type { Stamp } from '../../lib/prov';
 import { NBSP, fmtNamRule, fmtPctRule, fmtUsdWhole } from '../../lib/format';
 import { NoData } from './bits';
+import { Link } from '../../app/index';
 
 export interface WhereProps {
   o: Overview | null;
@@ -82,6 +83,9 @@ export function Where({ o, supplyP, osmoP, osmoShareP, bridgeCheck, failed, why 
                 <Num v={s.osmosis} prov={osmoP} fmt={fmtNamRule} showAge={false} />. The gap is{' '}
                 <Derived inputs={[{ value: s.ibcEscrow, prov: supplyP }, { value: s.osmosis, prov: osmoP }]} label="gap / NAM on Osmosis" name="Gap as a share of NAM on Osmosis" compute={(a, b) => (Math.abs(a - b) / b) * 100} fmt={gapPct} showAge={false} /> of what
                 is on Osmosis, and one of the cross-checks that needs a look.
+              </p>
+              <p>
+                <Link to="/bridges" className="link">Every bridge channel, and what each chain holds</Link>
               </p>
             </Notice>
           ) : null}

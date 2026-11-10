@@ -20,14 +20,15 @@ import { namFloors, publicHour } from './public-posts';
 import { sendDiscordForumAlert, sendDiscordGovAlert, sendsAlerts, alertBudget, flushAlerts, sweepNoticeChannels, RUN_ALERT_POSTS, RUN_ALERT_WINDOW_MS, type GovContext } from './sources/discord';
 import { NAM, NAMADA, OSMOSIS } from './config';
 import { fetchJson, toNam, isRealAddress, FETCH_TEXT_MAX_BYTES, publicNote, redact, registerSecrets } from './util';
-import type { IntelResponse, SourceHealth } from '../../shared/types';
+import type { BridgesRecord, IntelResponse, SourceHealth } from '../../shared/types';
+import { BRIDGES_KV, BRIDGES_PHASE_MS, bridgeSums, currentHeld, osmosisRow, rowName, runBridges } from './bridges';
 import type { Stmt } from './db';
 import { sweepAuth } from './auth';
 import { userRowCount, placeCount, USER_ROWS_MAX, DELIVERABLE_MAX, type SettingsRefused } from './settings';
 import { NOT_LEGACY_TWIN } from './flows-query';
 import { unbondAddresses, fetchUnbonds, buildUnbondTermStructure, cachedChainParams, UNLOCKS_MIN_NAM, UNBOND_WITHDRAW_STALE_MS, type UnbondWithdrawCache } from './analytics';
 import { chainParams, indexState, NAMADA_CURSOR_MAX_LAG, NAMADA_CURSOR_STALE_MS, OSMOSIS_LIVE_STALE_MS, OSMOSIS_SWEEP_STALE_MS, timedOutSends, ibcRowOf, safeParseJson } from './analytics';
-import { INDEXER_IBC_STATUS, innerTxOfRow, reconcileStuckPackets, stuckTotalNam, type StuckCandidate, type StuckList } from './ibc-stuck';
+import { INDEXER_IBC_STATUS, STUCK_PACKETS_KV, innerTxOfRow, reconcileStuckPackets, stuckTotalNam, type StuckCandidate, type StuckList } from './ibc-stuck';
 import type { AlertsPending, LiveBondStatus, LiveUnbondStatus, LiveScanStatus } from './live-hub';
 import type { AlertsSkipped } from './sources/discord';
 import {
@@ -47,7 +48,7 @@ import { refreshFlowCounts } from './flow-counts';
 
 const INDEXER = 'https://indexer.namada.net/api/v1';
 /** kv key of the IBC packets stuck in the escrow (ibc-stuck.ts). */
-export const STUCK_PACKETS_KV = 'ibc.stuck_packets';
+export { STUCK_PACKETS_KV };
 /** A Namada → Osmosis send on record on Namada only for this long is looked up as a stuck packet. */
 export const STUCK_CANDIDATE_AGE_MS = 24 * 3600000;
 
@@ -433,8 +434,8 @@ export const IBC_TOLERANCE_NAM = 100;
 /** Osmosis counting this many NAM more than the escrow holds is a fault, not a look. */
 export const IBC_FAIL_NAM = 10_000;
 /** What the bridge check compares and what it cannot, in its detail (the escrow is one for every channel). */
-export const IBC_COMPARED = 'The Namada IBC escrow (one account for every channel), less the NAM in packets stuck in it, against the NAM voucher supply on Osmosis.';
-export const IBC_NOT_COMPARED = 'NAM held for any other channel: it is in the escrow, and no other chain is read. It shows as the escrow over Osmosis, and an Osmosis shortfall of the same size would cancel it out.';
+export const IBC_COMPARED = 'The Namada IBC escrow (one account for every channel), less the NAM in packets stuck in it, against the NAM voucher supply on Osmosis and on every other chain a channel leads to whose supply could be read (worker/src/bridges.ts).';
+export const IBC_NOT_COMPARED = 'NAM held on a chain whose supply is not read (detail.otherChainsUnread names them): it is in the escrow and shows as the escrow over the chains read; a shortfall of the same size on a chain that is read would cancel it out.';
 
 /**
  * The bridge conservation check: Namada's IBC escrow, less the NAM in packets stuck in it (ibc-stuck.ts), against
@@ -448,14 +449,28 @@ export const IBC_NOT_COMPARED = 'NAM held for any other channel: it is in the es
  *   not pass, and never a fault, as any holder can send NAM to another chain.
  * An Osmosis shortfall as large as the NAM held for other chains cancels out and reads as equal; the detail says so.
  */
-export function ibcConservation(escrowNam: number, osmosisNam: number, stuckNam: number): {
+export function ibcConservation(escrowNam: number, osmosisNam: number, stuckNam: number, otherChainsNam = 0): {
   status: 'ok' | 'warn' | 'fail'; over: 'escrow' | 'osmosis' | null; rawGapNam: number; driftNam: number;
 } {
+  // NAM on the other chains read is NAM the escrow holds for them, as the NAM on Osmosis is: it counts on that side.
+  // rawGapNam stays the escrow against Osmosis alone, so the figure read before the other chains were read still means
+  // what it meant; driftNam is what nothing read accounts for.
   const rawGapNam = escrowNam - osmosisNam;
-  const driftNam = rawGapNam - stuckNam;
+  const driftNam = rawGapNam - stuckNam - otherChainsNam;
   const over = driftNam >= IBC_TOLERANCE_NAM ? 'escrow' : driftNam <= -IBC_TOLERANCE_NAM ? 'osmosis' : null;
   const status = over == null ? 'ok' : over === 'escrow' ? 'warn' : -driftNam < IBC_FAIL_NAM ? 'warn' : 'fail';
   return { status, over, rawGapNam, driftNam };
+}
+
+/**
+ * The bridge check as the tick judges it, with the NAM on the other chains read counted on the chains' side. Those
+ * figures are up to half an hour old and each is one public node's word, while the escrow and Osmosis are the tick's
+ * own readings of this minute: a fault ('fail') stands only when those two alone show it. With the other chains
+ * counted in, the most the check says is that it needs a look.
+ */
+export function bridgeCheck(escrowNam: number, osmosisNam: number, stuckNam: number, otherChainsNam: number | null): ReturnType<typeof ibcConservation> {
+  const judged = ibcConservation(escrowNam, osmosisNam, stuckNam, otherChainsNam ?? 0);
+  return judged.status === 'fail' && ibcConservation(escrowNam, osmosisNam, stuckNam).status !== 'fail' ? { ...judged, status: 'warn' } : judged;
 }
 
 // ---------------------------------------------------------------- the mint rule (supply_mint_rule)
@@ -3023,10 +3038,24 @@ export async function runCron(env: Env) {
       }
     }
 
+    // Every bridge channel and the NAM each chain holds through it (bridges.ts): the channel list from the chain's own
+    // state a few times a day, each chain's holding every ten minutes, all chains at once and each bounded by its own
+    // timeout. Never on a late tick, and a failure here is the pass's own health row, not the tick's.
+    let bridges: BridgesRecord | null = await kvGetJson<BridgesRecord>(env.DB, BRIDGES_KV).catch(() => null);
+    if (!late()) {
+      // its own end, well inside the tick's: a node that hangs costs this pass, never the checks after it
+      const phase = phaseSignal(signal, Math.min(deadlineAt, Date.now() + BRIDGES_PHASE_MS));
+      try {
+        bridges = await runBridges(env, health, now, { read: { ...nread, signal: phase.signal }, signal: phase.signal, deps: { osmosis: osmoSupply != null ? { nam: osmoSupply, at: now } : null } })
+          .catch((e) => { console.error('bridges', e); return bridges; });
+      } finally { phase.done(); }
+    }
+
     // IBC conservation: the escrow, less the packets stuck in it (ibc-stuck.ts: each one's status re-read from the
-    // indexer every tick, so a relayed acknowledgement or timeout drops it on its own), against the Osmosis supply.
-    // Namada keeps one escrow for every channel and no other chain is read (other chains held no NAM when the owner
-    // looked on 2026-10-19, but any holder can change that): ibcConservation says which side of the gap is a finding.
+    // indexer every tick, so a relayed acknowledgement or timeout drops it on its own), against the Osmosis supply
+    // and the supply on every other chain a channel leads to that was read in the last half hour (bridgeSums). Namada
+    // keeps one escrow for every channel; a chain that is not read (detail.otherChainsUnread) still shows as the escrow
+    // over the rest, and ibcConservation says which side of the gap is a finding.
     if (ibcEscrowNam != null && osmoSupply != null) {
       const prevStuck = await kvGetJson<StuckList>(env.DB, STUCK_PACKETS_KV).catch(() => null);
       const lookup = (inner: string) => fetchJson<any>(INDEXER_IBC_STATUS(inner), { timeoutMs: 6000, retries: 0, signal })
@@ -3034,14 +3063,21 @@ export async function runCron(env: Env) {
       const stuck = await reconcileStuckPackets(prevStuck, stuckCandidates, lookup, now);
       await kvSet(env.DB, STUCK_PACKETS_KV, stuck).catch(() => {});
       const stuckNam = stuckTotalNam(stuck);
-      const bridge = ibcConservation(ibcEscrowNam, osmoSupply, stuckNam);
+      const others = bridgeSums(bridges, now);
+      const listed = !!bridges?.rows.length;
+      const bridge = bridgeCheck(ibcEscrowNam, osmoSupply, stuckNam, others.otherNam);
       checkStmts.push(stmt.check('ibc_conservation', bridge.status,
-        'IBC conservation: Namada escrow (one for every channel) vs Osmosis voucher supply + packets stuck in the escrow; no other chain is read',
+        'IBC conservation: Namada escrow (one for every channel) vs the voucher supply on Osmosis and on the other chains read + packets stuck in the escrow',
         { namadaIbcEscrow: ibcEscrowNam, osmosisSupply: osmoSupply, rawGapNam: bridge.rawGapNam, stuckNam, driftNam: bridge.driftNam, over: bridge.over,
-          compared: IBC_COMPARED, notCompared: IBC_NOT_COMPARED, otherChainsNam: null,
+          // NAM on the chains read besides Osmosis (null: none of them has a current figure), which chains those are,
+          // and the chains a channel leads to that have no current figure
+          // (both lists are null until a channel list has been read: then only Osmosis is read, as before 2026-11-10)
+          compared: IBC_COMPARED, notCompared: IBC_NOT_COMPARED, otherChainsNam: others.otherNam,
+          otherChainsRead: listed ? others.otherRead : null,
+          otherChainsUnread: listed ? (bridges?.rows ?? []).filter((r) => !osmosisRow(r) && currentHeld(r, now) == null).map((r) => rowName(r, bridges?.rows ?? [])) : null,
           stuckPackets: stuck.packets.map((p) => ({ innerTx: p.innerTx, nam: p.nam, sentAt: p.sentAt, height: p.height, channel: p.channel, sequence: p.sequence, counterparty: p.counterparty, note: p.note, status: p.status, verifiedAt: p.verifiedAt, stale: !!p.stale, timeout: p.timeout, evidence: p.evidence })),
           stuckDropped: stuck.dropped.slice(-3),
-          sources: ['Namada RPC abci_query', 'Keplr Osmosis bank/supply', 'indexer.namada.net /ibc/{tx}/status'] }, now));
+          sources: ['Namada RPC abci_query', 'Keplr Osmosis bank/supply', 'indexer.namada.net /ibc/{tx}/status', 'the other chains\' bank/supply'] }, now));
     }
 
     // SQS mid vs the last hour's executed swap price. With no trusted trade in the window the check still runs and

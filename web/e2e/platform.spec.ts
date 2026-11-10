@@ -1,13 +1,16 @@
 // The platform pages (docs/design/platform-plan.md, release A): /developers, /status, /methodology, /privacy and
-// /terms. What the cross-route gates cannot say for them on their own: that every sentence of the page's copy
+// /terms, and the bridges page (release B). What the cross-route gates cannot say for them on their own: that every sentence of the page's copy
 // (shared/copy.ts BODY, the words the server-rendered page states) is visible text in the app, that each page
 // passes the layout rules of the content pages, and that the API page's reference is the catalog. The layout checks
 // run in every project of the G6 matrix; the rest run once (375).
 import { BODY } from '../../shared/copy';
-import { PLATFORM_ROUTES } from '../../shared/routes';
+import { PLATFORM_ROUTES, routeByPath } from '../../shared/routes';
 import { API_CATALOG, API_GROUPS } from '../../shared/api-catalog';
 import { API_LIMITS } from '../../shared/api-limits';
 import { expect, gotoRoute, layoutAudit, onlyIn, test } from './helpers';
+
+/** The pages this spec covers: the five platform pages and the bridges page (release B), which is built the same way. */
+const PAGES = [...PLATFORM_ROUTES, routeByPath('/bridges')!];
 
 /** Every plain-language sentence of a page, in order. */
 const sentencesOf = (id: string): string[] => {
@@ -21,7 +24,7 @@ async function settled(page: import('@playwright/test').Page) {
 }
 
 test.describe('layout, every viewport', () => {
-  for (const r of PLATFORM_ROUTES) {
+  for (const r of PAGES) {
     test(`${r.path}: no overflow, no <table>, 44 px targets, text at least 11 px`, async ({ page }) => {
       await gotoRoute(page, r.path);
       await settled(page);
@@ -47,7 +50,7 @@ test.describe('layout, every viewport', () => {
 test.describe('the words and the reference', () => {
   test('one h1 equal to RouteDef.h1, and every BODY sentence is visible text', async ({ page }, info) => {
     test.skip(onlyIn(info.project.name), 'runs once');
-    for (const r of PLATFORM_ROUTES) {
+    for (const r of PAGES) {
       await gotoRoute(page, r.path);
       await settled(page);
       await expect(page.locator('h1')).toHaveCount(1);
