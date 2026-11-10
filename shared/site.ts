@@ -14,6 +14,11 @@ export const SITE = {
   repo: 'https://github.com/BidurS/namada-trade',
   /** The site's X account (owner, 2026-10-29), linked from the footer; it posts the site's own alerts (worker/src/sources/x.ts). */
   x: 'https://x.com/namadatrade',
+  /**
+   * The tool server for AI agents at /mcp (worker/src/agents.ts) is answered, and /llms.txt, /llms-full.txt and
+   * robots.txt name it. On since 2026-11-10 (owner decision); when false, /mcp is a 404 and nothing names it.
+   */
+  mcpLive: true as boolean,
   /** "Buy me a coffee": the maker's shielded payment address (owner, 2026-10-20). A shielded address does not
    *  reveal who owns it or what it holds; senders stay private when they pay from a shielded account. */
   donateShielded: 'znam13nhljeczcggkq4jqfn64mzdsp8d56wgt6t33ja5chzdfqjxnhghwrm2a6hs7tph5uffsj2rv379',
@@ -51,6 +56,12 @@ export const SITE = {
     /** Google Search Console: the meta tag's content, and the HTML file's name. */
     google: 'y8MMHleNrKmUJyxHkUw0Dan_z39wLvq4SD_G2FmiEJo',
     googleFile: 'google759de8fb39112be6.html',
+    /**
+     * IndexNow (indexnow.org: Bing, Yandex, Seznam, Naver and the engines that read Bing's index): the key that
+     * proves a list of changed addresses comes from this site. Public by design: it is served at /<key>.txt
+     * (worker/src/hosts.ts), and scripts/indexnow.mjs sends the sitemap's addresses with it after a release.
+     */
+    indexNow: '06b9f624cb91bbf0d717de8cd27cb6fa',
     /** Bing Webmaster Tools: msvalidate.01, and the <user> of /BingSiteAuth.xml. */
     bing: '241A8F4305CDCFD2D9EAEA30B9EF8E3F',
   },

@@ -5,6 +5,8 @@ import { registerSecrets, type Env } from './util';
 import { alertsPausedIn, configureAlerts, sendsAlerts } from './sources/discord';
 import { seoHtml, robotsTxt, sitemapXml, llmsTxt, securityTxt, classifyPath } from './seo';
 import { openApiJson } from './openapi';
+import { llmsFullTxt, markdownResponse, markdownRoute, mcp, wantsMarkdown } from './agents';
+import { routeByPath, SITE } from '../../shared/routes';
 import { redirectLocation } from '../../shared/routes';
 import { cachedApi as cachedApiWith, inlineScriptHashes, pagePolicies, ENFORCE_SCRIPT_POLICY, wsLimited } from './http';
 import { canonicalRedirect, redirectStatus, isCanonicalHost, ownershipFile } from './hosts';
@@ -79,6 +81,15 @@ export default {
     if (url.pathname === '/robots.txt') return withSiteHeaders(robotsTxt(), url);
     if (url.pathname === '/sitemap.xml') return withSiteHeaders(await sitemapXml(env), url);
     if (url.pathname === '/llms.txt') return withSiteHeaders(llmsTxt(), url);
+    // The site for a program (worker/src/agents.ts): every page in one file, a tool server, and each page as Markdown
+    // at its address with .md or, asked for by its Accept header, at its own address.
+    if (url.pathname === '/llms-full.txt') return withSiteHeaders(await llmsFullTxt(env), url);
+    if (url.pathname === '/mcp' && SITE.mcpLive) return withSiteHeaders(await mcp(request, env, async (r) => apiHeaders(await cachedApi(r, env, ctx))), url);
+    if (request.method === 'GET' || request.method === 'HEAD') {
+      const own = markdownRoute(url.pathname);
+      const asked = own ?? (wantsMarkdown(request.headers.get('accept')) ? routeByPath(url.pathname) : undefined);
+      if (asked && asked.index) return withSiteHeaders(await markdownResponse(env, asked, !!own), url);
+    }
     if (url.pathname === '/.well-known/security.txt') return withSiteHeaders(securityTxt(), url);
     // the public API as an OpenAPI document, from the list the API page is drawn from (worker/src/openapi.ts)
     if (url.pathname === '/openapi.json') return withSiteHeaders(openApiJson(), url);

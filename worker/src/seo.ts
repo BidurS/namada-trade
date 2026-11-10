@@ -355,7 +355,11 @@ function breadcrumbs(route: RouteDef): RouteDef[] {
 export function jsonLd(route: RouteDef, _f: Facts | null): string | null {
   const data: unknown[] = [];
   const org = { '@type': 'Organization', name: SITE.name, url: `${SITE.origin}/` };
-  if (route.id === 'home') data.push({ '@context': 'https://schema.org', '@type': 'WebSite', name: SITE.name, alternateName: ['Namada Trade', 'namada.trade'], url: `${SITE.origin}/`, description: SITE.description, inLanguage: 'en' });
+  if (route.id === 'home') {
+    data.push({ '@context': 'https://schema.org', '@type': 'WebSite', name: SITE.name, alternateName: ['Namada Trade', 'namada.trade'], url: `${SITE.origin}/`, description: SITE.description, inLanguage: 'en' });
+    // who publishes the site, with the two places the footer links as its own: its X account and its code
+    data.push({ '@context': 'https://schema.org', ...org, alternateName: ['Namada Trade', 'namada.trade'], logo: `${SITE.origin}/icon-512.png`, sameAs: [SITE.x, SITE.repo] });
+  }
   else {
     data.push({
       '@context': 'https://schema.org', '@type': 'BreadcrumbList',
@@ -419,6 +423,7 @@ export async function seoHtml(env: Env, req: Request, res: Response): Promise<Re
 <meta name="description" content="${esc(description)}">
 <meta name="robots" content="${indexable ? 'index,follow,max-image-preview:large' : !found ? 'noindex,nofollow' : 'noindex,follow'}">
 ${found ? `<link rel="canonical" href="${canonical}">` : ''}
+${indexable ? `<link rel="alternate" type="text/markdown" href="${SITE.origin}${route.path === '/' ? '/index.md' : `${route.path}.md`}" title="This page as Markdown">` : ''}
 <meta name="google-site-verification" content="${esc(v.google)}">
 <meta name="msvalidate.01" content="${esc(v.bing)}">
 <meta property="og:type" content="${article ? 'article' : 'website'}">
@@ -447,6 +452,8 @@ ${indexable ? jsonLd(route, f) ?? '' : ''}`;
     .transform(res);
   const h = new Headers(out.headers);
   h.set('cache-control', 'public, max-age=0, must-revalidate');
+  // the same address answers Markdown to a request that asks for it (worker/src/agents.ts)
+  h.append('vary', 'Accept');
   // the static shell's validators describe the shell, not this page with its figures of this minute
   h.delete('etag');
   h.delete('last-modified');
@@ -462,6 +469,8 @@ export function robotsTxt(): Response {
   // costs the server a walk to that page (the first page and the list itself stay crawlable).
   const body = `# Every agent is welcome under these rules: search engines, language models and scripts alike.
 # The pages are readable without JavaScript, /llms.txt describes the site, and /api/overview is the figures as JSON.
+# Every page of the sitemap is also Markdown (add .md to its address; the home page is /index.md) and /llms-full.txt is all of them
+# in one file.${SITE.mcpLive ? '\n# /mcp is a Model Context Protocol server.' : ''}
 # A security problem with the site is reported as /.well-known/security.txt says.
 User-agent: *
 Allow: /
@@ -529,6 +538,9 @@ export async function sitemapXml(env: Env | null): Promise<Response> {
   return new Response(`<?xml version="1.0" encoding="UTF-8"?>\n<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">\n${urls.join('\n')}\n</urlset>\n`, { headers: { 'content-type': 'application/xml; charset=utf-8', 'cache-control': 'public, max-age=600' } });
 }
 
+/** How a program reads the site, as /llms.txt and /llms-full.txt say it. */
+export const AGENT_NOTES = `Every page listed here is also served as Markdown: add \`.md\` to its address (the home page is ${SITE.origin}/index.md), or ask for its own address with \`Accept: text/markdown\`. ${SITE.origin}/llms-full.txt is every page's Markdown in one file.${SITE.mcpLive ? ` ${SITE.origin}/mcp is a Model Context Protocol server (Streamable HTTP, no sign-in) whose tools list the pages, read one, and call a documented route of the API.` : ''}`;
+
 /**
  * /llms.txt (llmstxt.org): what the site is, in a few lines, and every indexable page with what it answers, so a
  * language model reading the site starts from the right page. No figure is typed: the pages state them.
@@ -547,6 +559,8 @@ export function llmsTxt(): Response {
 > ${SITE.description} ${SITE.disclaimer}
 
 Every figure on the pages below states its source and the time it was read; the sources are Namada nodes, indexer.namada.net and the Osmosis router. The guides explain Namada in plain words and cite Namada's own documentation for every claim. The site is read-only: it never trades or holds funds. Every page is readable without JavaScript: the figures, their sources and times are in the HTML as served.
+
+${AGENT_NOTES}
 ${statusSection}
 ## Pages
 
@@ -563,7 +577,8 @@ ${GUIDE_ROUTES.map(line).join('\n')}
 - [Depth (JSON)](${SITE.origin}/api/depth): every bid and ask for NAM on Osmosis as of the newest stored minute, with every read behind it
 - [Cross-checks (JSON)](${SITE.origin}/api/integrity): every check this site runs on its own figures, with its status and what was compared
 - [The documented routes (OpenAPI)](${SITE.origin}/openapi.json): each documented route of the API with its parameters and the fields of its answer, as the API page lists them
-
+- [Every page in one file](${SITE.origin}/llms-full.txt): the guides and the pages as Markdown, each figure with the time it was read
+${SITE.mcpLive ? `- [Tool server](${SITE.origin}/mcp): the Model Context Protocol endpoint (POST, Streamable HTTP): list_pages, read_page, get_data\n` : ''}
 ## Optional
 
 - [Source code](${SITE.repo}): the site's code, MIT licence

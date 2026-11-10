@@ -48,6 +48,9 @@ export function ownershipFile(path: string): Response | null {
   if (path === `/${v.googleFile}`) {
     return new Response(`google-site-verification: ${v.googleFile}`, { headers: { 'content-type': 'text/html; charset=utf-8', 'cache-control': 'public, max-age=3600' } });
   }
+  if (path === `/${v.indexNow}.txt`) {
+    return new Response(v.indexNow, { headers: { 'content-type': 'text/plain; charset=utf-8', 'cache-control': 'public, max-age=3600' } });
+  }
   if (path === '/BingSiteAuth.xml') {
     return new Response(`<?xml version="1.0"?>\n<users>\n\t<user>${v.bing}</user>\n</users>\n`, { headers: { 'content-type': 'application/xml; charset=utf-8', 'cache-control': 'public, max-age=3600' } });
   }
