@@ -5,7 +5,7 @@
 // in the raw HTML is also the visible text. Nothing here invents numbers: every figure is read from the
 // same metrics the API serves, carries the time it was recorded, and is left out when missing.
 import type { Env } from './util';
-import { ROUTES, TABS, EXPLAINER_ROUTES, GUIDE_ROUTES, classifyPath, routeByPath, fullTitle, type RouteDef } from '../../shared/routes';
+import { ROUTES, TABS, EXPLAINER_ROUTES, GUIDE_ROUTES, PLATFORM_ROUTES, classifyPath, routeByPath, fullTitle, type RouteDef } from '../../shared/routes';
 import { SITE, BODY, NOT_FOUND, type FactKey, type PageCopy } from '../../shared/copy';
 import { GUIDES } from '../../shared/guides';
 import { citations, GUIDE_INDEPENDENCE, type GPara } from '../../shared/guide-types';
@@ -17,6 +17,10 @@ import { NAM_DEPTH } from './depth/config';
 import { DEPTH_OFFSETS_PCT, DEPTH_PLAIN_SOURCE, OFFSET_10_INDEX, bidQuotable, sellQuotable, type DepthResponse } from '../../shared/depth';
 import { fmtNamRule, fmtPctRule, fmtUsdRule } from '../../shared/format';
 import { HALT, HALT_FACT_SOURCE, networkStatus } from '../../shared/halt';
+import { API_CATALOG, API_GROUPS } from '../../shared/api-catalog';
+import { API_LIMITS } from '../../shared/api-limits';
+import { CHECK_STALE_MS, checkStaleMs } from './digest/freshness';
+import { readHealth } from './ops';
 
 export type { FactKey };
 export { BODY };
@@ -29,16 +33,47 @@ const D = 86400000;
 interface Fact { text: string; at: number; source: string }
 type Facts = Partial<Record<FactKey, Fact>>;
 
+/** A stored check's own interval (its detail's everyMs), or undefined: a detail that is not JSON has none. */
+function everyMsOf(detail: string | null): unknown {
+  try { return detail ? (JSON.parse(detail) as { everyMs?: unknown })?.everyMs : undefined; } catch { return undefined; }
+}
+
+/**
+ * The status page's two figures. The cross-checks that pass, of all of them, judged as /api/integrity judges them
+ * (api.ts checkOf: a check that has not run for its interval is not counted as passing), dated by the newest check;
+ * and the last reading of every source that completed. Each is left out when its read failed or holds nothing: no
+ * rows is not "0 of 0", and no completed reading is not a time.
+ */
+export function statusFacts(checkRows: { status: string; detail: string | null; checked_at: number }[] | null | undefined, lastTickAt: number | null | undefined, now: number): Facts {
+  const f: Facts = {};
+  if (checkRows?.length) {
+    const passing = checkRows.filter((r) => r.status === 'ok' && now - Number(r.checked_at) <= Math.max(CHECK_STALE_MS, checkStaleMs(everyMsOf(r.detail)))).length;
+    f.checks = { text: `Cross-checks that pass: ${num(passing)} of ${num(checkRows.length)}`, at: Math.max(...checkRows.map((r) => Number(r.checked_at))), source: 'NamadaTrade cross-checks' };
+  }
+  if (lastTickAt != null && Number.isFinite(lastTickAt)) f.tick = { text: 'The last reading of every source completed', at: lastTickAt, source: 'NamadaTrade' };
+  return f;
+}
+
+/**
+ * Does a route's served page state live figures? Its copy says so (shared/copy.ts BODY: the facts under its lead or
+ * under a section). A guide states none and never waits on the database; a words-first page that carries the day
+ * its text was checked (`updated`) and also lists figures, as the methodology page does, is served with them.
+ */
+export function statesFigures(route: RouteDef): boolean {
+  const body = BODY[route.id];
+  return !!body && (body.facts.length > 0 || (body.sections ?? []).some((x) => (x.facts ?? []).length > 0));
+}
+
 /** The figures the server-rendered pages state, each with its source and time (cached 2 minutes at the edge). */
 export async function facts(env: Env): Promise<Facts> {
   const cache = caches.default;
-  const key = new Request(`${SITE.origin}/__seo/facts-v7`);
+  const key = new Request(`${SITE.origin}/__seo/facts-v8`);
   const hit = await cache.match(key).catch(() => null);
   if (hit) return hit.json();
   const db = env.DB;
   const now = Date.now();
   const listed = await listingTimes(db);
-  const [price, total, bonded, shielded, osmosis, liquidity, pools, priced, holderFig, vol, cov, params, depthLatest] = await Promise.all([
+  const [price, total, bonded, shielded, osmosis, liquidity, pools, priced, holderFig, vol, cov, params, depthLatest, checkRows, health] = await Promise.all([
     // Staked: the chain's own total stake, not the staking account's balance (which also holds NAM on its way out).
     metricAt(db, 'price.usd', now), metricAt(db, 'supply.total', now), metricAt(db, 'supply.total_stake', now), metricAt(db, 'supply.masp_shielded', now),
     // The pools' money: each pool's coins at their own prices (pool-sizes.ts), and how many pools that total counts.
@@ -52,6 +87,9 @@ export async function facts(env: Env): Promise<Facts> {
     cachedChainParams(db).catch(() => null),
     // The newest depth minute (kv depth.latest, written in the same batch as its depth_minute rows): the two quotable figures.
     db.prepare('SELECT value FROM kv WHERE key = ?1').bind(KV_KEYS.latest).first<{ value: string }>().then((r) => (r?.value ? (JSON.parse(r.value) as DepthResponse) : null)).catch(() => null),
+    // The status page's two figures: every cross-check's stored result (one small table), and the last completed tick.
+    db.prepare('SELECT status, detail, checked_at FROM checks').all<{ status: string; detail: string | null; checked_at: number }>().then((r) => r.results ?? []).catch(() => null),
+    readHealth(db, now).then((r) => r.body).catch(() => null),
   ]);
   const pct = (n: number) => (total ? `${((n / total.value) * 100).toFixed(1)}% of all NAM` : '');
   // While the network is halted a Namada figure's stamp says so beside its time: the reading is days old for a reason.
@@ -96,6 +134,7 @@ export async function facts(env: Env): Promise<Facts> {
     if (sell?.complete && Number.isFinite(sell.usd)) f.depthSell = { text: sellQuotable(fmtNamRule(cfg.quotableSize), cfg.base.symbol, fmtUsdRule(sell.usd)), at: depthLatest.at, source: DEPTH_PLAIN_SOURCE };
     if (Number.isFinite(depthLatest.within.bidUsd10)) f.depthBid = { text: bidQuotable(fmtUsdRule(depthLatest.within.bidUsd10), fmtPctRule(DEPTH_OFFSETS_PCT[OFFSET_10_INDEX], 0)), at: depthLatest.at, source: DEPTH_PLAIN_SOURCE };
   }
+  Object.assign(f, statusFacts(checkRows, health?.lastTickAt, now));
   if (params?.apr) f.apr = { text: `Staking rate reported by the network indexer: ${(params.apr * 100).toFixed(1)}% a year, before validator commission; it changes with the share staked and is not a promise`, at: params.fetchedAt, source: 'indexer.namada.net' };
   await cache.put(key, new Response(JSON.stringify(f), { headers: { 'content-type': 'application/json', 'cache-control': 'public, max-age=120' } })).catch(() => {});
   return f;
@@ -157,7 +196,8 @@ function factList(keys: FactKey[], f: Facts | null, shown: Set<FactKey>): string
 const paras = (ps: string[]) => ps.map((p) => `<p style="${S.p}">${esc(p)}</p>`).join('\n');
 
 function navHtml(): string {
-  const links = [...TABS.map((t) => routeByPath(t.path)!), ...EXPLAINER_ROUTES.filter((r) => !TABS.some((t) => t.path === r.path))];
+  // the tabs, the explainer pages, then the platform pages: every page is one link away for a reader without JavaScript
+  const links = [...TABS.map((t) => routeByPath(t.path)!), ...EXPLAINER_ROUTES.filter((r) => !TABS.some((t) => t.path === r.path)), ...PLATFORM_ROUTES];
   return `<nav aria-label="Pages" style="${S.nav}">${links.map((x) => `<a href="${x.path}" style="${S.a}">${esc(x.label)}</a>`).join('')}</nav>`;
 }
 
@@ -165,9 +205,8 @@ function navHtml(): string {
 export function pageHtml(route: RouteDef, f: Facts | null): string {
   const body: PageCopy | undefined = BODY[route.id];
   const shown = new Set<FactKey>();
-  const sections = route.id === 'guides'
-    ? guideListHtml()
-    : (body?.sections ?? []).map((s) => `<section><h2 style="${S.h2}">${esc(s.h2)}</h2>\n${paras(s.paras)}\n${factList(s.facts ?? [], f, shown)}</section>`).join('\n');
+  const own = (body?.sections ?? []).map((s) => `<section><h2 style="${S.h2}">${esc(s.h2)}</h2>\n${paras(s.paras)}\n${factList(s.facts ?? [], f, shown)}</section>`).join('\n');
+  const sections = route.id === 'guides' ? guideListHtml() : route.id === 'developers' ? `${own}\n${apiListHtml()}` : own;
   return `<div id="ssr" style="${S.root}"><div style="${S.wrap}">
 ${haltHtml()}<h1 style="${S.h1}">${esc(route.h1)}</h1>
 ${paras(body?.paras ?? [route.description])}
@@ -176,6 +215,29 @@ ${sections}
 ${navHtml()}
 <p class="ssr-2" style="${S.small}">${esc(SITE.disclaimer)}</p>
 </div></div>`;
+}
+
+/**
+ * The API page's reference for a reader without JavaScript: the limits the page's words point to, then every
+ * documented route under its group with what it answers, the parameters it reads and the names of the fields of its
+ * answer, then the link to the document a program reads; all from the lists the page and /openapi.json are drawn
+ * from (shared/api-catalog.ts, shared/api-limits.ts). What each field holds is on the page once it mounts and in
+ * /openapi.json.
+ */
+export function apiListHtml(): string {
+  const code = `font-family:${MONO};font-size:14px`;
+  // a name the catalog writes between backticks is set as code (the page does the same once it mounts)
+  const words = (t: string) => esc(t).split('`').map((x, i) => (i % 2 ? `<code style="${code}">${x}</code>` : x)).join('');
+  const small = (label: string, names: string[]) => (names.length ? ` <small class="ssr-2" style="${S.stamp}">(${label}: ${esc(names.join(', '))})</small>` : '');
+  const limits = `<section><h2 style="${S.h2}">The limits, for each address</h2>\n<ul style="${S.ul}">${API_LIMITS.map((l) => `<li style="${S.li}">${num(l.limit)} in ${num(l.seconds)} seconds: ${esc(l.what)}.</li>`).join('')}</ul></section>`;
+  const groups = API_GROUPS.map((g) => {
+    const items = API_CATALOG.filter((e) => e.group === g.id).map((e) => {
+      const names = [...(e.pathParam ? [e.pathParam.name] : []), ...e.params.map((p) => p.name)];
+      return `<li style="${S.li}"><code style="${code}">GET ${esc(e.path)}</code> ${words(e.what)}${small('parameters', names)}${small('fields', Object.keys(e.fields))}</li>`;
+    });
+    return items.length ? `<section><h2 style="${S.h2}">${esc(g.title)}</h2>\n<p style="${S.p}">${esc(g.lead)}</p>\n<ul style="${S.ul}">${items.join('')}</ul></section>` : '';
+  }).join('\n');
+  return `${limits}\n${groups}\n<p style="${S.p}"><a href="/openapi.json" style="${S.a}">The OpenAPI document</a></p>`;
 }
 
 /** The guides' list: each guide's question as an H2 link with its description. */
@@ -297,8 +359,8 @@ export async function seoHtml(env: Env, req: Request, res: Response): Promise<Re
   const found = routeByPath(url.pathname);
   const route = found ?? ROUTES[0];
   let f: Facts | null = null;
-  // a guide and the guides' list state no figure, so they never wait on the database
-  if (found && !found.updated) {
+  // a page whose copy lists no figure (a guide, the guides' list, the words-only platform pages) never waits on the database
+  if (found && statesFigures(found)) {
     try { f = await facts(env); } catch {}
   }
 
@@ -457,6 +519,7 @@ ${GUIDE_ROUTES.map(line).join('\n')}
 - [Overview (JSON)](${SITE.origin}/api/overview): the figures behind the home page, each with its source and time, the site's cross-checks and source health, and the network status while Namada is halted
 - [Depth (JSON)](${SITE.origin}/api/depth): every bid and ask for NAM on Osmosis as of the newest stored minute, with every read behind it
 - [Cross-checks (JSON)](${SITE.origin}/api/integrity): every check this site runs on its own figures, with its status and what was compared
+- [The documented routes (OpenAPI)](${SITE.origin}/openapi.json): each documented route of the API with its parameters and the fields of its answer, as the API page lists them
 
 ## Optional
 

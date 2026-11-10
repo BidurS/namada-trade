@@ -347,6 +347,17 @@ check "holders page 2 answers"         200 "$(curl -s -o /dev/null -w '%{http_co
 check "/api/ask is off (503)"          503 "$(curl -s -o /dev/null -w '%{http_code}' -X POST -H 'content-type: application/json' --data '{}' "$H/api/ask")"
 check "/api/ask state is unavailable"  1 "$(curl -s "$H/api/ask" | python3 -c "import sys,json; print(1 if json.load(sys.stdin)['state']=='unavailable' else 0)")"
 check "pressure carries decided"       1 "$(curl -s "$H/api/pressure" | python3 -c "import sys,json; print(1 if 'decided' in json.load(sys.stdin) else 0)")"
+# the platform pages of 2026-11-10 (docs/design/platform-plan.md, release A): each page answers, the words people type for
+# the API page are a redirect to it, the OpenAPI document names the routes, and the cross-checks answer carries the time
+# of the last completed reading (a number or null, never absent)
+for p in /developers /status /methodology /privacy /terms; do check "$p answers" 200 "$(curl -s -o /dev/null -w '%{http_code}' "$H$p")"; done
+check "/api is a 301 to the API page" "301 $H/developers" "$(curl -s -o /dev/null -w '%{http_code} %{redirect_url}' "$H/api")"
+check "openapi.json names the routes"  1 "$(curl -s "$H/openapi.json" | python3 -c "import sys,json; d=json.load(sys.stdin); print(1 if d['openapi'].startswith('3.') and all(p in d['paths'] for p in ('/api/overview', '/api/flows', '/api/depth', '/api/address/{address}')) else 0)")"
+check "the API page lists the routes without JavaScript" 1 "$(curl -s "$H/developers" | grep -c 'GET /api/overview' || true)"
+# (the answer is kept at the edge for some seconds, so a copy from before the deploy may be read first: asked again, four times at most)
+integrity_tick() { curl -s "$H/api/integrity" | python3 -c "import sys,json; d=json.load(sys.stdin); print(1 if 'lastTickAt' in d and (d['lastTickAt'] is None or isinstance(d['lastTickAt'], int)) else 0)" 2>/dev/null || echo 0; }
+got=0; for i in 1 2 3 4; do got=$(integrity_tick); [ "$got" = 1 ] && break; sleep 8; done
+check "integrity carries the last reading" 1 "$got"
 echo "== checks and health"
 curl -s "$H/api/integrity" | python3 -c "
 import sys,json; d=json.load(sys.stdin)

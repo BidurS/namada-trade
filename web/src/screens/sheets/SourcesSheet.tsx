@@ -7,27 +7,12 @@
 // check titles, raw details, the data-source health list, the raw JSON link) lives only under
 // "How it is computed". Under Rewind the checks were not recorded: the sheet says so.
 import React from 'react';
-import type { Overview } from '../../../../shared/types';
 import { useClock, useOverview, useReplay } from '../../app/index';
-import { Notice, Sheet, Skeleton, checkUi, uiStatus, type Stamp } from '../../ui/index';
+import { Notice, Sheet, Skeleton, checkUi, uiStatus } from '../../ui/index';
 import { checkDetail, checkTitle, scopeRowText } from '../../lib/prov';
+import { figureStamps } from '../../lib/figure-stamps';
 import { Icon } from '../../ui/Icon';
 import { fmtAge, fmtAgo, fmtCount, fmtUtcLong } from '../../lib/format';
-
-/** The headline figures and their stamps (plain labels; the sheet prints each stamp in plain words). */
-function figureStamps(o: Overview): { label: string; p: Stamp }[] {
-  return [
-    { label: 'NAM price, quoted', p: o.price.usd.prov },
-    { label: 'Last trade price', p: o.price.swap1h.prov },
-    { label: 'Staked, shielded and public funding', p: o.supply.prov },
-    { label: 'NAM on Osmosis', p: o.supply.osmosisProv },
-    { label: 'Pool depth on Osmosis', p: o.dex.prov },
-    { label: 'Moves on Osmosis', p: o.dex.coverage },
-    { label: 'Moves on Namada', p: o.namada.coverage },
-    { label: 'Latest Osmosis block', p: o.heads.osmosis.prov },
-    { label: 'Latest Namada block', p: o.heads.namada.prov },
-  ];
-}
 
 /** A raw detail value for "How it is computed" (operator text). */
 function rawValue(v: unknown): string {

@@ -346,6 +346,25 @@ export interface Check {
   checkedAt: number;
 }
 
+/** The answer of GET /api/health: names and times only, no address, no secret; a `note` only when its own record could not be read. */
+export interface HealthAnswer {
+  ok: boolean; lastTickAt: number | null; lastTickAgeMs: number | null; failing: string[]; incidents: string[];
+  /** Only when the record of the last reading could not be read: a sentence that says so (the answer is then not ok). */
+  note?: string;
+}
+
+/**
+ * GET /api/integrity: every cross-check with its status and what was compared, every source with whether it answered
+ * at the last reading, when this answer was made, and when the site's last reading of every source completed (null
+ * when no completed reading is on record; absent when that record could not be read, and on servers before 2026-11-10).
+ */
+export interface IntegrityResponse {
+  checks: Check[];
+  sources: SourceHealth[];
+  at: number;
+  lastTickAt?: number | null;
+}
+
 // ---------------------------------------------------------------- overview
 
 export interface PoolInfo {

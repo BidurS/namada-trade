@@ -1,8 +1,9 @@
 // The footer (system.md 9.1 item 8, seo-requirements Must 9): black, the dial and wordmark,
 // how current the data is, the data sources, the disclaimer sentence on every route, and the
-// links: How we know (Sources sheet), Settings, API, then the explainer pages under the names they
-// carry everywhere else (shared/routes.ts labels: Questions, Guides, Staking, Holders, NAM on Osmosis, Depth, How NAM
-// trading works; EXPLAINER_ROUTES plus the depth page, seo-requirements "New pages": link from the footer).
+// links: How we know (Sources sheet), Settings, API (the reference page, /developers), then the explainer pages under
+// the names they carry everywhere else (shared/routes.ts labels: Questions, Guides, Staking, Holders, NAM on Osmosis,
+// Depth, How NAM trading works; EXPLAINER_ROUTES plus the depth page, seo-requirements "New pages": link from the
+// footer), then the platform pages (Status, Methodology, Privacy, Terms; docs/design/platform-plan.md release A).
 // Then "Source code": the public repository (owner decision 4, SITE.repo), and "X", the site's account (SITE.x),
 // each opening in a new tab. Under the disclaimer, one line against people who borrow the site's name: what it never
 // does (SITE.neverAsks) and a link to the questions page's answer that names its own links (/faq#q-official).
@@ -18,7 +19,7 @@ import { useClock, useOverview } from './overview';
 import { useOverlays } from './overlays';
 import { useReplay } from './replay';
 
-const LINK_IDS: RouteId[] = ['settings', 'faq', 'guides', 'staking', 'holders', 'osmosis', 'depth', 'learn'];
+const LINK_IDS: RouteId[] = ['settings', 'developers', 'faq', 'guides', 'staking', 'holders', 'osmosis', 'depth', 'learn', 'status', 'methodology', 'privacy', 'terms'];
 const LINKS: { to: string; label: string }[] = LINK_IDS.flatMap((id) => {
   const r = ROUTES.find((x) => x.id === id);
   return r ? [{ to: r.path, label: r.label }] : [];
@@ -66,13 +67,7 @@ export function Footer() {
           <li>
             <button type="button" onClick={openSources}>How we know</button>
           </li>
-          {LINKS.slice(0, 1).map((l) => (
-            <li key={l.to}><Link to={l.to}>{l.label}</Link></li>
-          ))}
-          <li>
-            <a href="/api/overview" data-native="" rel="nofollow" title="The figures behind the home page, as JSON">API</a>
-          </li>
-          {LINKS.slice(1).map((l) => (
+          {LINKS.map((l) => (
             <li key={l.to}><Link to={l.to}>{l.label}</Link></li>
           ))}
           <li>

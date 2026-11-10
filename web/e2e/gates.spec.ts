@@ -582,8 +582,9 @@ test.describe('G10 data honesty', () => {
       const a = await layoutAudit(page, 'body');
       expect.soft(a.overflowX, path).toBe(false);
       await expect(page.locator('.hbtn--rewind')).toBeHidden();
-      const links = await page.evaluate(() => [...document.querySelectorAll('nav.tabbar a[href], header a[href], footer a[href], main a[href^="/"]')].map((a) => a.getAttribute('href') ?? '').filter((h) => h.startsWith('/') && !h.startsWith('/api/') && !h.startsWith('//')));
-      // a link may rewind to another moment (the Home example); it never drops the rewound state
+      const links = await page.evaluate(() => [...document.querySelectorAll('nav.tabbar a[href], header a[href], footer a[href], main a[href^="/"]')].map((a) => a.getAttribute('href') ?? '').filter((h) => h.startsWith('/') && !h.startsWith('/api/') && h !== '/openapi.json' && !h.startsWith('//')));
+      // a link may rewind to another moment (the Home example); it never drops the rewound state (the API's answers and
+      // the OpenAPI document are data, not pages: the API page links them as they are)
       for (const h of links) expect.soft(new URL(h, 'http://x').searchParams.get('at'), `${path}: link ${h}`).toMatch(/^\d{13}$/);
       page.removeAllListeners('request');
     }

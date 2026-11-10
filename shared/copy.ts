@@ -25,7 +25,9 @@ export type FactKey =
   | 'unbonding'  // the unstaking wait, from the chain's own settings
   | 'apr'        // the staking rate the network indexer reports
   | 'depthSell'  // what selling the depth page's quoted size fetches across every Osmosis pool, from the newest depth minute
-  | 'depthBid';  // USD of bids within the quoted distance of the price across every pool, from the same minute
+  | 'depthBid'   // USD of bids within the quoted distance of the price across every pool, from the same minute
+  | 'checks'     // how many of the site's cross-checks pass, of all of them, as of the newest check
+  | 'tick';      // when the site's last reading of every source completed
 
 /**
  * What the two derived values on the Trade page count (no figures). The series API sends the same sentences with
@@ -317,6 +319,199 @@ export const BODY: Record<string, PageCopy> = {
       'No live figure is typed into a guide: where a number changes, such as the staking rate, the unstaking wait or the price, the guide links the page of this site that shows it now, with its source and age.',
     ],
     facts: [],
+  },
+  // The platform pages (docs/design/platform-plan.md, release A). The API page's list of routes is not typed here:
+  // it is drawn from shared/api-catalog.ts by the view and by the server-rendered page.
+  developers: {
+    paras: [
+      'The figures the pages show are also served as data, to anyone, with no key and no account. This page lists the documented routes: what each answers, the parameters it reads and the fields of its answer.',
+      'The answers are the ones the pages themselves read, so a figure here and the same figure on a page are one reading. Most figures come with a stamp that says where the figure was read, when, and whether that reading is current, old or missing.',
+    ],
+    facts: [],
+    sections: [
+      {
+        h2: 'How do I read a stamp?',
+        paras: [
+          'A stamp is a small object beside a figure, most often named prov or with a name ending in Prov. Its source says where the figure was read, its at is the time of that reading in unix milliseconds, and its status is live, stale, missing or conflict.',
+          'A figure whose source did not answer is left empty, with the reason in the stamp\'s note. The depth routes carry a list of stamps instead, one for each read behind the minute, with what was read, when and at which block.',
+        ],
+      },
+      {
+        h2: 'How often can I ask?',
+        paras: [
+          'An answer is kept for a short time, from a few seconds to a few minutes depending on the route, so asking again within that time returns the same reading.',
+          'The requests that cost more to answer are limited by the address they come from, a newer long-form address by its network, and each kind of request on its own. The kinds and their limits are listed below, and a request over a limit is refused with the number of seconds to wait.',
+        ],
+      },
+      {
+        h2: 'Can I ask for a past moment?',
+        paras: [
+          'A route that lists the parameter at answers as of that moment, a time in unix milliseconds, as the Rewind control on the pages does. A figure that was not recorded over time is either left empty with a note, or given as a current reading whose stamp carries its own, later time.',
+        ],
+      },
+      {
+        h2: 'Is there a description a program can read?',
+        paras: [
+          'The same list is served as an OpenAPI document, made from the list this page is drawn from. The code behind every route is public under the MIT licence, with the type of every answer.',
+        ],
+      },
+      {
+        h2: 'What is a key for?',
+        paras: [
+          'Reading the routes on this page needs no key. A key made on the Settings page stands for one signed-in wallet: it does what that wallet\'s own session can do, such as changing its alert choices and writing its public tags, and it changes nothing about the routes listed here.',
+        ],
+      },
+    ],
+  },
+  status: {
+    paras: [
+      'This page says whether the figures on this site are current: which of its cross-checks pass, whether each source it reads answered at the last reading, and when that reading completed.',
+      'A cross-check compares two sources for the same thing. It passes, needs a look, has nothing to compare when there was no trade to check against, or has no recent result when one of its sources stopped answering.',
+    ],
+    facts: ['checks', 'tick'],
+    sections: [
+      {
+        h2: 'What do the states of a figure mean?',
+        paras: [
+          'Fresh: read within its usual refresh time. Old: older than that, so it is shown dimmed with its age. No data: the source did not answer, and nothing is put in its place. Sources disagree: two sources give different values, and both are shown.',
+        ],
+      },
+      {
+        h2: 'Where is this as data?',
+        paras: [
+          'The cross-checks and the sources are served as data, and so is whether the last reading completed: that answer carries an error status while something is failing, so an outside monitor can watch it.',
+        ],
+      },
+    ],
+  },
+  methodology: {
+    paras: [
+      'Every figure on this site is read from a public source and shown with that source and the time of the reading. This page says, figure by figure, what is counted, where it is read and what is left out.',
+      'The site is built to two rules. A reading that failed is to be shown as missing, or as an estimate that says it is one, and never as if it had been read. And a series starts on the day its record begins: nothing is drawn before it.',
+    ],
+    facts: [],
+    sections: [
+      {
+        h2: 'What is the NAM price?',
+        paras: [
+          'The price is the NAM price in USDC from the Osmosis router, read every minute: the router\'s own price for NAM when it lists one, and otherwise the reference pool\'s own price, read from a small quote through that pool alone. Beside it the site shows the last trade price: the middle price of one hour\'s trades, from the swaps recorded on Osmosis.',
+          'The two differ when no trade has happened for a while, which is why both are shown.',
+        ],
+        facts: ['price'],
+      },
+      {
+        h2: 'What counts as a holder?',
+        paras: [
+          'A holder is an address holding spendable or staked NAM. The protocol\'s own accounts, such as the staking account, the bridge account and the shielded pool, are left out, and NAM inside the shielded pool cannot be attributed to anyone.',
+          'Balances and stakes come from the chain\'s own lists of every balance and every stake, each read whole from a Namada node.',
+        ],
+      },
+      {
+        h2: 'How are all NAM, staked NAM and shielded NAM read?',
+        paras: [
+          'All NAM in existence, NAM staked with validators and NAM in the shielded pool are read from Namada nodes. Staked NAM is the chain\'s own total stake, not the balance of the staking account, which also holds NAM on its way out of staking and unclaimed rewards.',
+        ],
+        facts: ['supply', 'staked', 'shielded'],
+      },
+      {
+        h2: 'How is NAM on Osmosis counted?',
+        paras: [
+          'NAM on Osmosis, in wallets and in pools, is the amount Osmosis itself reports for NAM. The bridge account on Namada holds NAM for every chain it bridges to, so the two figures are compared in a cross-check rather than assumed equal.',
+        ],
+        facts: ['osmosis'],
+      },
+      {
+        h2: 'What is the money in the pools?',
+        paras: [
+          'The money in the pools is what each pool holds, its NAM at the NAM price and its other coin at that coin\'s own price. A pool that holds a coin with no price is left out of the total, and the figure says how many pools it counts.',
+        ],
+        facts: ['depth'],
+      },
+      {
+        h2: 'What is counted as traded?',
+        paras: [
+          'Traded NAM is every buy and sell of NAM recorded on Osmosis in the window, with bot round trips left out: trades that buy and sell at once for a small profit and leave no one holding more or less NAM.',
+        ],
+        facts: ['volume'],
+      },
+      {
+        h2: 'How do I know a figure is right?',
+        paras: [
+          'Each figure names its source and the age of its reading. The site also compares its sources with each other in cross-checks, and their results are public on the status page. When two sources disagree, both values are shown.',
+        ],
+      },
+    ],
+  },
+  privacy: {
+    paras: [
+      'Reading this site needs no account. For a reader who has not signed in, what the site remembers, such as the appearance chosen, what was opened or searched lately and the time of the last visit, is kept in that reader\'s own browser.',
+      SITE.privacy,
+    ],
+    facts: [],
+    sections: [
+      {
+        h2: 'What does the host keep about a request?',
+        paras: [
+          'Cloudflare, which hosts the site, keeps a log of each request for up to seven days: what was asked for, which can include a word searched or an address looked up, when, and the request data sent with it, such as the address it came from and the browser\'s details. The operator can read that log to find faults.',
+          'Requests that cost more to answer are limited by the address they come from, and that count lasts about a minute. A page\'s live connection is counted by the address it comes from for as long as it stays open, and forgotten when it closes. The number of live connections open at once is recorded each hour, as a number and nothing else.',
+        ],
+      },
+      {
+        h2: 'What is stored when I sign in?',
+        paras: [
+          'Signing in is a signed message, never a transaction, and it moves nothing. Your address, which is public on the chain anyway, becomes the key for your settings and sessions.',
+          'Your alert choices, watchlist and quiet hours, your Telegram chat and your Discord channel link are encrypted before they are stored. Sessions and keys are random tokens with when they were made and last used. No IP address and no browser details are stored with them.',
+          'Your tags on addresses are public: every user sees them, signed with your address. They are the only thing you write that others see.',
+        ],
+      },
+      {
+        h2: 'Who can read what is stored?',
+        paras: [
+          'The database and its backups hold your choices only in encrypted form, so the site\'s operator cannot read your watchlist or your Discord link by looking at the data. The honest limit: whoever deploys this site could change its code to record them while they are decrypted to send an alert. That is true of every hosted service, and this one says so.',
+        ],
+      },
+      {
+        h2: 'How do I take or delete what is stored?',
+        paras: [
+          'The Settings page saves your settings and your list of sessions as a file. The Discord channel link is in it only with its middle left out, and of the Telegram chat only whether one is linked and a group\'s name.',
+          'Its delete button removes your settings, your Discord link, every session and every key, on every device. Tags you wrote on addresses are public and stay.',
+        ],
+      },
+    ],
+  },
+  terms: {
+    paras: [
+      'NamadaTrade reports public data from Namada and Osmosis as it finds it. It gives no advice, holds no funds and makes no trade.',
+      SITE.disclaimer,
+    ],
+    facts: [],
+    sections: [
+      {
+        h2: 'Can I rely on a figure?',
+        paras: [
+          'Every figure is a reading of a public source at a stated time, and a source can be late, wrong or silent. The site shows the age of each reading and says when one is missing. It makes no promise that a figure is complete, correct or current, and what anyone does with one is their own decision.',
+        ],
+      },
+      {
+        h2: 'Does the site trade or hold anything?',
+        paras: [
+          SITE.quoteNotOrder,
+          'Signing in is a signed message that moves nothing. ' + SITE.neverAsks,
+        ],
+      },
+      {
+        h2: 'May I use the figures and the code?',
+        paras: [
+          'The figures are public facts, free to read and to cite; naming this site and the time of the reading lets the next reader check them. The code is public under the MIT licence, which says it comes without warranty.',
+        ],
+      },
+      {
+        h2: 'Can the site change?',
+        paras: [
+          'Any page or route may change, be limited or stop. The request limits for each address are listed on the API page.',
+        ],
+      },
+    ],
   },
 };
 

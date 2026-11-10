@@ -9,7 +9,7 @@ import {
   ROUTES, SITE, TABS, ROUTE_ALIASES, classifyPath, routeById, routeByPath, fullTitle, redirectLocation, legacyHashTarget,
 } from '../shared/routes';
 import { BODY, SITE as COPY_SITE, NOT_FOUND } from '../shared/copy';
-import { sitemapXml, robotsTxt, pageHtml, notFoundHtml, jsonLd, llmsTxt } from '../worker/src/seo';
+import { sitemapXml, robotsTxt, pageHtml, notFoundHtml, jsonLd, llmsTxt, apiListHtml } from '../worker/src/seo';
 
 const SUFFIX = ' · NamadaTrade'.length;
 
@@ -231,7 +231,9 @@ describe('sitemap, robots and the server-rendered page', () => {
       // every style attribute is whole (a double quote inside one would cut it short)
       for (const m of html.matchAll(/style="([^"]*)"/g)) expect(m[1], r.path).toMatch(/;?[a-z0-9%)'-]$/i);
       expect(html).not.toMatch(/font-family:"/);
-      expect(html).not.toMatch(/<ul/); // no facts given → no list, never a placeholder figure
+      // no facts given → no list, never a placeholder figure (the API page's list of routes is words, not figures:
+      // taken out, nothing else on that page is a list either)
+      expect(r.id === 'developers' ? html.replace(apiListHtml(), '') : html).not.toMatch(/<ul/);
       for (const t of TABS) expect(html).toContain(`href="${t.path}"`);
     }
     const nf = notFoundHtml();

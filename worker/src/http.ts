@@ -44,7 +44,8 @@ export const CACHE_PARAMS: Record<string, string[]> = {
   '/api/depth/heat': ['days', 'at'],
   '/api/depth/owners': [],
   '/api/depth/changes': ['pool', 'before', 'limit'],
-  // The cross-checks and the donation addresses: one kv read each, no parameter, no session
+  // The cross-checks (the checks table, the stored source health and the last completed tick: three small reads) and
+  // the donation addresses (one kv read): no parameter, no session
   '/api/integrity': [],
   '/api/donation': [],
   // The uptime probe's answer (worker/src/ops.ts): two kv rows by key, no parameter, no session
@@ -246,7 +247,7 @@ export const edgeCacheOf = (url: URL) => {
 };
 
 /**
- * Every API answer: not for search indexes (the footer links /api/overview; robots.txt keeps the read paths
+ * Every API answer: not for search indexes (the API page links each route as it is; robots.txt keeps the read paths
  * crawlable so pages render), never sniffed into another type, and for cacheable ones the browser lifetime set
  * here, whatever the stored copy says. Everything else (sign-in answers that carry a token, a user's settings,
  * live quotes) is for this request only: no browser or shared cache keeps it.

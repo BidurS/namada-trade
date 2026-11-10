@@ -11,7 +11,8 @@ export type GuideRouteId = `guide-${GuideSlug}`;
 
 export type RouteId =
   | 'home' | 'trade' | 'depth' | 'supply' | 'shielded' | 'activity' | 'holders' | 'alerts' | 'settings'
-  | 'staking' | 'osmosis' | 'learn' | 'faq' | 'guides' | GuideRouteId;
+  | 'staking' | 'osmosis' | 'learn' | 'faq' | 'guides' | GuideRouteId
+  | 'developers' | 'status' | 'methodology' | 'privacy' | 'terms';
 
 /** The six tabs, in this order everywhere (system.md section 3). */
 export type TabId = 'home' | 'trade' | 'supply' | 'shielded' | 'activity' | 'alerts';
@@ -46,6 +47,9 @@ export interface RouteDef {
    */
   updated?: string;
 }
+
+/** The day the text of the platform pages (API, methodology, privacy, terms) was last checked against the code. */
+export const PLATFORM_TEXT_CHECKED = '2026-11-10';
 
 export const ROUTES: RouteDef[] = [
   {
@@ -140,6 +144,40 @@ export const ROUTES: RouteDef[] = [
     path: guidePath(g.slug), id: `guide-${g.slug}`, label: g.label, index: true, guide: g.slug, updated: g.updated,
     h1: g.h1, title: g.title, description: g.description,
   })),
+  // The platform pages (docs/design/platform-plan.md, release A): what a reader who builds on the site, or who has to
+  // decide whether to rely on it, looks for. Four are words first and carry the day their text was checked against
+  // the code (the methodology page also states live figures under its words, each with its own time); the status
+  // page is its live figures and carries none.
+  {
+    path: '/developers', id: 'developers', label: 'API', index: true, updated: PLATFORM_TEXT_CHECKED,
+    h1: 'How do I read these figures from my own code?',
+    title: 'NamadaTrade API: the documented routes',
+    description: 'The documented routes of the NamadaTrade API: what each answers, its parameters and fields, the limits, and how a figure carries its source and time.',
+  },
+  {
+    path: '/status', id: 'status', label: 'Status', index: true,
+    h1: 'Are the figures on this site current?',
+    title: 'NamadaTrade status: checks and sources',
+    description: 'Which of this site\'s cross-checks pass and which need a look, whether each source it reads answered, and when its last reading completed.',
+  },
+  {
+    path: '/methodology', id: 'methodology', label: 'Methodology', index: true, updated: PLATFORM_TEXT_CHECKED,
+    h1: 'How is each figure on this site made?',
+    title: 'How NamadaTrade makes each figure',
+    description: 'What each headline figure means, where it is read, how often, and what is left out: price, holders, staked, shielded, pool depth and volume.',
+  },
+  {
+    path: '/privacy', id: 'privacy', label: 'Privacy', index: true, updated: PLATFORM_TEXT_CHECKED,
+    h1: 'What does this site know about its readers?',
+    title: 'Privacy: what NamadaTrade stores',
+    description: 'What is kept when you read this site and when you sign in, who can read it, and what the Settings page saves as a file and deletes for an address.',
+  },
+  {
+    path: '/terms', id: 'terms', label: 'Terms', index: true, updated: PLATFORM_TEXT_CHECKED,
+    h1: 'What is this site, and what is it not?',
+    title: 'Terms: what NamadaTrade is and is not',
+    description: 'NamadaTrade reports public data as it finds it, without advice and without a promise. What its figures are and are not, and the licence its code is under.',
+  },
 ];
 
 /** The six tabs in order, with their routes. */
@@ -149,6 +187,10 @@ export const TABS: { id: TabId; label: string; path: string; key: string }[] = R
 
 /** The SEO pages: footer and Home explainer links, not tabs. */
 export const EXPLAINER_ROUTES: RouteDef[] = ROUTES.filter((r) => ['staking', 'osmosis', 'learn', 'faq', 'holders', 'guides'].includes(r.id));
+
+/** The platform pages, in the order the footer links them: the API reference, status, methodology, privacy, terms. */
+export const PLATFORM_ROUTES: RouteDef[] = (['developers', 'status', 'methodology', 'privacy', 'terms'] as const)
+  .map((id) => ROUTES.find((r) => r.id === id)).filter((r): r is RouteDef => !!r);
 
 /** The guides, in the order of shared/guide-meta.ts. */
 export const GUIDE_ROUTES: RouteDef[] = ROUTES.filter((r) => !!r.guide);
@@ -163,6 +205,12 @@ export const ROUTE_ALIASES: Record<string, string> = {
   intel: '/supply', pressure: '/supply',
   learn: '/learn/how-nam-trading-works',
   guide: GUIDES_PATH,
+  // the words people type for the platform pages
+  api: '/developers', docs: '/developers', 'api-docs': '/developers', developer: '/developers',
+  health: '/status', uptime: '/status',
+  method: '/methodology', methods: '/methodology', about: '/methodology',
+  'privacy-policy': '/privacy',
+  tos: '/terms', 'terms-of-use': '/terms', 'terms-of-service': '/terms', disclaimer: '/terms',
 };
 
 /** View ids of the old UI, so code that still passes them resolves to the renamed route. */

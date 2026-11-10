@@ -5,7 +5,7 @@ import { bodyLimit } from 'hono/body-limit';
 import type { Env } from './util';
 import type {
   Overview, Holder, AddressReport, SearchResult, Check, IntelResponse, DonationConfig, SourceHealth, Provenance, Sourced,
-  AlertsRecentResponse, HoldersResponse, FlowsResponse, HolderCountsKv, SearchGroup, SearchMatch, SearchResponse, Chain, Flow, MaspMakeup,
+  AlertsRecentResponse, HoldersResponse, FlowsResponse, HolderCountsKv, SearchGroup, SearchMatch, SearchResponse, Chain, Flow, MaspMakeup, IntegrityResponse,
 } from '../../shared/types';
 import { quoteNamTrade, priceSourceName } from './sources/sqs';
 import { PRICE_HOW_KEY, priceHowAt, storedPriceNote, storedPriceSource, type PriceHowLog } from './price-how';
@@ -385,9 +385,21 @@ export function holderFiguresProv(top10At: number | null | undefined, countAt: n
 }
 
 // ---------------------------------------------------------------- decision endpoints
+/** The window of GET /api/pressure in days: the smallest, the largest, and the one used when `days` is left out. */
+export const PRESSURE_DAYS_MIN = 1, PRESSURE_DAYS_MAX = 365, PRESSURE_DAYS_DEFAULT = 7;
+/**
+ * `?days=` as the route reads it: a whole number outside the range is the nearest end of it (0 is the smallest), and
+ * a value that is not a number reads as left out. parseInt gives NaN for such a value, which Math.min and Math.max
+ * pass through, and a window of NaN days used to reach every query of the answer.
+ */
+export function pressureDays(raw: string | undefined): number {
+  const n = parseInt(raw || String(PRESSURE_DAYS_DEFAULT), 10);
+  return Math.min(PRESSURE_DAYS_MAX, Math.max(PRESSURE_DAYS_MIN, Number.isFinite(n) ? n : PRESSURE_DAYS_DEFAULT));
+}
+
 app.get('/api/pressure', async (c) => {
   const { asOf, replay } = asOfParam(c);
-  const days = Math.min(365, Math.max(1, parseInt(c.req.query('days') || '7', 10)));
+  const days = pressureDays(c.req.query('days'));
   return c.json(await pressure(c.env.DB, asOf, replay, days));
 });
 
@@ -2024,7 +2036,12 @@ app.get('/api/integrity', async (c) => {
   const rows = await c.env.DB.prepare('SELECT * FROM checks ORDER BY checked_at DESC').all<any>().catch(() => ({ results: [] }));
   const checks: Check[] = (rows.results || []).map((r: any) => checkOf(r, Date.now()));
   const health = (await kvGetJson<Record<string, SourceHealth>>(c.env.DB, 'source.health')) ?? {};
-  return c.json({ checks, sources: publicSources(health), at: Date.now() });
+  // when the last reading of every source completed (the status page's second figure): the time /api/health judges,
+  // served here with a plain 200 so a page can read it while something is failing. Null: no completed reading is on
+  // record. Left out: the record could not be read, which is not the same thing and is not said as if it were.
+  const lastTickAt = await readHealth(c.env.DB).then((r) => r.body.lastTickAt, () => undefined);
+  const answer: IntegrityResponse = { checks, sources: publicSources(health), at: Date.now(), ...(lastTickAt !== undefined ? { lastTickAt } : {}) };
+  return c.json(answer);
 });
 
 // The probe of an uptime service outside Cloudflare (scale plan, Stage 1 item 4): whether the cron completed a tick

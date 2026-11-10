@@ -1,8 +1,8 @@
 import type {
-  Overview, AddressReport, SearchResult, PoolInfo, PriceQuote, QuoteCurveResponse, Check, IntelResponse,
-  Pressure, BlindSpot, OrderflowResponse, AlertRuleInfo, Provenance, SourceHealth, UserSettings, SessionInfo,
+  Overview, AddressReport, SearchResult, PoolInfo, PriceQuote, QuoteCurveResponse, IntelResponse,
+  Pressure, BlindSpot, OrderflowResponse, AlertRuleInfo, Provenance, UserSettings, SessionInfo,
   FlowsResponse, HoldersResponse, AlertsRecentResponse, Flow, Holder, HoldersBy, SearchResponse, NotServedBody,
-  SeriesResponse, SeriesStep, PriceChangesResponse, VolumeResponse, PairsResponse, TradesResponse, ValuesResponse, GenesisCohortsResponse,
+  SeriesResponse, SeriesStep, PriceChangesResponse, VolumeResponse, PairsResponse, TradesResponse, ValuesResponse, GenesisCohortsResponse, IntegrityResponse,
 } from '../../shared/types';
 
 export type {
@@ -407,7 +407,7 @@ export const fetchPools = () => get<{ pools: PoolInfo[]; prov: Provenance }>('/a
 export const fetchQuote = (amount: number, side: 'buy' | 'sell') => get<{ quote: PriceQuote | null; error?: string }>(`/api/quote?amount=${amount}&side=${side}`);
 export const fetchQuoteCurve = () => get<QuoteCurveResponse>('/api/quote/curve');
 export const fetchAddressReport = (address: string) => get<AddressReport>(`/api/address/${encodeURIComponent(address)}`).then(withAddressReport);
-export const fetchIntegrity = () => get<{ checks: Check[]; sources: SourceHealth[]; at: number }>('/api/integrity');
+export const fetchIntegrity = () => get<IntegrityResponse>('/api/integrity');
 export const fetchIntel = () => get<IntelResponse>('/api/intel');
 
 /** Address, transaction and label search. Rejects when the server does not answer: a failure is not "no match". */

@@ -7,3 +7,6 @@ export { Faq } from './Faq';
 export { NotFound } from './NotFound';
 export { Guides } from './Guides';
 export { Guide } from './Guide';
+export { Developers } from './Developers';
+export { Status } from './Status';
+export { Methodology, Privacy, Terms } from './Plain';

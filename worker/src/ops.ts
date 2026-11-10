@@ -31,7 +31,7 @@
 // A message that reached no channel is tried again on the next tick. Each line is the site's own words: the name,
 // since when, and the health row's note (util.ts publicNote: never an upstream's answer or a URL) or the check's
 // status and title; never a post, a label or anything else someone outside wrote. Nothing about any visitor is read.
-import type { SourceHealth } from '../../shared/types';
+import type { HealthAnswer, SourceHealth } from '../../shared/types';
 import { fmtAge, fmtUtcLong } from '../../shared/format';
 import { DEPTH_CHECK_TITLES } from '../../shared/depth-checks';
 import { kvSet } from './db';
@@ -465,8 +465,7 @@ export async function watchCronStall(env: OpsEnv, now = Date.now()): Promise<'fr
 
 // ---------------------------------------------------------------- GET /api/health
 
-/** The answer of GET /api/health: nothing but names and times, no note, no address, no secret. */
-export interface HealthAnswer { ok: boolean; lastTickAt: number | null; lastTickAgeMs: number | null; failing: string[]; incidents: string[] }
+export type { HealthAnswer } from '../../shared/types';
 
 /**
  * /api/health from the stored state and the hub's stall: `failing`, every name bad at the last tick (open or not yet);

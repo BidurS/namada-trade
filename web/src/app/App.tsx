@@ -9,7 +9,7 @@
      screens/activity/index.tsx  /activity and /holders (one component; props.view says which tab)
      screens/depth/index.tsx     /depth
      screens/alerts/index.tsx    /alerts      screens/settings/index.tsx  /settings
-     screens/seo/index.tsx       named exports Staking, Osmosis, Learn, Faq, NotFound
+     screens/seo/index.tsx       named exports Staking, Osmosis, Learn, Faq, NotFound, Developers, Status, Methodology, Privacy, Terms
      screens/sheets/index.tsx    named exports SourcesSheet, AddressSheet, SignInSheet, AccountSheet
    Every screen and the sheets are lazy-loaded (React.lazy); keep heavy imports inside them.
 
@@ -86,6 +86,11 @@ const LOADERS: Partial<Record<ViewId, Loader>> = {
   faq: () => seo().then((m) => ({ default: m.Faq })),
   notfound: () => seo().then((m) => ({ default: m.NotFound })),
   guides: () => seo().then((m) => ({ default: m.Guides })),
+  developers: () => seo().then((m) => ({ default: m.Developers })),
+  status: () => seo().then((m) => ({ default: m.Status })),
+  methodology: () => seo().then((m) => ({ default: m.Methodology })),
+  privacy: () => seo().then((m) => ({ default: m.Privacy })),
+  terms: () => seo().then((m) => ({ default: m.Terms })),
 };
 LOADERS.holders = LOADERS.activity;
 // every guide is drawn by the one guide screen (one loader, so moving between guides keeps it mounted)

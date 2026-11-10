@@ -20,6 +20,8 @@ The UI is built to `docs/design/system.md` (the design system) and `docs/design/
 | **Alerts** `/alerts` | D7 | What crossed an alert size, the rules, where alerts go. |
 | **Sources sheet** (header check pill) | D6 | Every source, its age, and the cross-checks. |
 | `/staking`, `/osmosis`, `/learn/how-nam-trading-works`, `/faq` | | Plain-language pages for search (`shared/copy.ts` is the one source for their text and the server-rendered page). |
+| `/developers`, `/openapi.json` | | The public read API: every route with its parameters and the fields of its answer, from one list (`shared/api-catalog.ts`) that the page, the OpenAPI document and the server-rendered page are all drawn from. Most field lists are typed against the answers' own types (a field added without its line fails the typecheck) and a test holds the parameters equal to the ones the Worker reads; the sentences themselves are held by review, not by a test. |
+| `/status`, `/methodology`, `/privacy`, `/terms` | | Whether the figures are current (the cross-checks and the last completed reading, on a page with an address), how each figure is made, what the site stores, and what the site is and is not. Plan: `docs/design/platform-plan.md`. |
 
 Every number carries provenance (`source`, `at`, `status: live | stale | missing | conflict`, shown as fresh, old, no data, sources disagree). There are no hard-coded fallbacks: when a source fails you see "—" and the reason.
 
@@ -129,7 +131,8 @@ worker/src/analytics.ts  decision queries (pressure, blind spot, alerts), all pa
 worker/src/cron.ts       1-min refresh, source health, checks
 worker/src/live-hub.ts   Durable Object: Osmosis WS + Namada block polling → D1 + WebSocket fan-out
 worker/src/parse/        event parsers (tested with fixtures in test/)
-shared/types.ts          API contract; shared/alerts.ts alert rules
+shared/types.ts          API contract; shared/alerts.ts alert rules; shared/api-catalog.ts the documented API
+worker/src/openapi.ts    /openapi.json, made from shared/api-catalog.ts
 web/src/app/             shell: router, header, tab bar, footer, Rewind, palette, overview poll and stream
 web/src/ui/              kit: provenance (Num, ProvChip, ProvDot, SourceLine, Sheet), controls, lists, charts (custom SVG)
 web/src/screens/         one folder per screen, plus the sheets and the plain-language pages
