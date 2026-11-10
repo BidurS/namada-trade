@@ -71,6 +71,10 @@ const notSent = (cov: Stamp, what: string, rewound: boolean): Stamp => ({
   note: rewound ? `The server did not send ${what} for that time.` : `This server does not send ${what} yet.`,
 });
 
+/** Why the week's share has no figure when nothing moved: said as that, never as a figure that was not sent. */
+const NO_FLOW_NOW = 'No NAM moved in or out of the shielded set in the last 7 days, so there is no share to state.';
+const NO_FLOW_THEN = 'No NAM moved in or out of the shielded set in those 7 days, so there is no share to state.';
+
 export default function ShieldedScreen({ route }: ScreenProps) {
   const { overview: o } = useOverview();
   const { at, rewound } = useReplay();
@@ -337,9 +341,14 @@ function Inside({ data, overview: o, now, rewound, activity }: { data: BlindSpot
   // flow index; its own stamp, since the strip's SourceLine does not list it. "—" with the reason when not sent.
   const pairs = data.passthroughs7d;
   const stayed = data.stickySharePct7d;
+  // The server sends null when no NAM moved in or out in the week: there is nothing to take a share of, which is a
+  // reading with a reason of its own, not a figure the server failed to send (that is `undefined`, an older server).
+  const noFlow = data.shields7d === 0 && data.unshields7d === 0;
   const stayedStamp: Stamp = stayed != null
     ? { ...cov, derivedFrom: 'NAM moved in or out in 7 days, less the moves out paired with a move in of the same amount within 24 hours' }
-    : notSent(cov, 'this figure', rewound);
+    : stayed === null && noFlow
+      ? { ...cov, status: 'missing', note: rewound ? NO_FLOW_THEN : NO_FLOW_NOW }
+      : notSent(cov, 'this figure', rewound);
   // The pool as a ledger (the daily job's kv row, served as `makeup`): current, so not said on a rewound page. The
   // ledger sentence needs the chain's rewards total and the pool's balance; the bridge sentence needs the legs in only.
   const ledger = rewound ? null : ledgerOf(data.makeup ?? null, now);

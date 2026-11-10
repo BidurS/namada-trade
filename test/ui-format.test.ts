@@ -21,6 +21,18 @@ describe('dollars (system.md 5.3)', () => {
     expect(fmtUsdRule(0.0000001)).not.toBe('$0');
     expect(fmtUsdRule(0.0000001)).not.toMatch(/^\$0(\.0+)?$/);
   });
+  it('below a millionth: plain decimals with the first two digits that are not zero, never an exponent', () => {
+    expect(fmtUsdRule(0.00000011)).toBe('$0.00000011');
+    expect(fmtUsdRule(0.0000001)).toBe('$0.0000001');
+    expect(fmtUsdRule(1.14e-7)).toBe('$0.00000011');
+    expect(fmtUsdRule(4.26e-9)).toBe('$0.0000000043');
+    expect(fmtUsdRule(-3e-8)).toBe(`${MINUS}$0.00000003`);
+    for (const v of [4.9e-7, 1e-7, 1.1e-7, 9.99e-10, 3e-12, 1e-19, 1e-25, Number.MIN_VALUE]) {
+      const t = fmtUsdRule(v);
+      expect(t, String(v)).toMatch(/^\$0\.0*[1-9]\d?$/);
+      expect(t, String(v)).not.toMatch(/e/i);
+    }
+  });
   it('$1 to $999.99: two decimals', () => {
     expect(fmtUsdRule(5.127)).toBe('$5.13');
     expect(fmtUsdRule(24.5)).toBe('$24.50');

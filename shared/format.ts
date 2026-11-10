@@ -33,6 +33,17 @@ export const signOf = (n: number): string => (n > 0 ? '+' : n < 0 ? MINUS : '');
  * Dollars by size: under $1 six decimals ($0.001025), $1 to $999.99 two decimals ($24.50),
  * $1,000 and over none ($1,819). Never prints "$0" for a value that is not zero.
  */
+/**
+ * A positive amount under a millionth as plain decimals, its first two digits that are not zero kept: 0.00000011,
+ * 0.0000001. Never an exponent ("1.1e-7" is not a figure a reader can read) and never all zeros: an amount too
+ * small for twenty decimals is printed as the smallest that fits.
+ */
+const plainSmall = (a: number): string => {
+  const places = Math.min(20, 1 - Math.floor(Math.log10(a)));
+  const t = a.toFixed(places).replace(/0+$/, '');
+  return /[1-9]/.test(t) ? t : `0.${'0'.repeat(19)}1`;
+};
+
 export const fmtUsdRule = (n: number | null | undefined): string => {
   if (!ok(n)) return '—';
   const a = Math.abs(n);
@@ -40,7 +51,7 @@ export const fmtUsdRule = (n: number | null | undefined): string => {
   if (a === 0) return '$0.00';
   if (a >= 1000 || round(a, 2) >= 1000) return `${s}$${nf(round(a, 0), 0)}`;
   if (a >= 1 || round(a, 6) >= 1) return `${s}$${nf(round(a, 2), 2)}`;
-  if (round(a, 6) === 0) return `${s}$${a.toPrecision(2)}`; // below a millionth: still not "$0"
+  if (round(a, 6) === 0) return `${s}$${plainSmall(a)}`; // below a millionth: still not "$0", and never an exponent
   return `${s}$${nf(round(a, 6), 6)}`;
 };
 
