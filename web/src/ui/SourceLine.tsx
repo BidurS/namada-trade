@@ -62,6 +62,15 @@ export function scopeSummary(items: ScopeItem[], now: number): { status: ReturnT
   const mixed = new Set(states).size > 1;
   if (!mixed) {
     const ui = uiStatus(worst);
+    // A figure that is the current record of an event (the last trade) has no reading age: its time is when the
+    // event was, and the line says that ("last trade 9.5 h ago"), where "9.5 h · fresh" read as a fresh reading
+    // that was hours old. The other figures' ages and their one state word stand beside it as before.
+    const events = ui === 'fresh' ? aged.filter((s) => s.event === 'trade') : [];
+    if (events.length) {
+      const rest = aged.filter((s) => s.event !== 'trade');
+      const last = `${SEP}last trade ${ageRange(events, now)} ago`;
+      return { status: ui, text: `${SEP}${sourcesText(items)}${rest.length ? `${SEP}${ageRange(rest, now)}${SEP}${STATUS_WORD[ui]}` : ''}${last}` };
+    }
     return { status: ui, text: `${SEP}${sourcesText(items)}${age}${SEP}${STATUS_WORD[ui]}` };
   }
   const counts = COUNT_ORDER.map((u) => [u, states.filter((x) => x === u).length] as const).filter(([, n]) => n > 0);
