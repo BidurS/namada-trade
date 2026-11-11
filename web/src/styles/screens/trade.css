@@ -20,6 +20,10 @@
   .ticket .sub { margin-top: var(--s-4); }
   .ticket .seg--side { margin-top: var(--s-5); }
   .ticket .tk-field { margin-top: var(--s-5); }
+  /* the way out to Osmosis (owner decision 46): a text link, never a button; its line of words under it */
+  .tk-out { display: grid; gap: 2px; margin-top: var(--s-4); }
+  .tk-out__a { display: inline-flex; align-items: center; gap: 6px; min-height: 44px; justify-self: start; font-size: var(--t-15); font-weight: var(--w-medium); }
+  .tk-out__n { font-size: var(--t-12); line-height: 18px; color: var(--c-ink); opacity: .8; max-width: 46ch; }
   .ticket .field__state { flex-wrap: wrap; }
   .ticket .field__in:read-only { cursor: default; }
   .ticket .field__box:has(.field__in:read-only) { cursor: default; }

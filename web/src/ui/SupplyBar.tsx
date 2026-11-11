@@ -3,10 +3,11 @@
 // the staked colour), Public funding (hatched), Shielded, Everything else spendable (label inside),
 // On Osmosis (--c-mark, with a flag above: "1.7% on Osmosis"). 44 px high (56 from 640), 2 px gaps, at least 4 px a segment,
 // a real 0-100 % scale beneath, and a legend row per segment (swatch, name, share, NAM figure
-// and a plain note). Shares are rounded so the legend sums to exactly 100 %. Segments grow once
-// on first paint; the numbers are final from the first frame.
+// and a plain note). Each share is rounded on its own (owner decision 45), so it reads the same as on
+// every other page; when the parts then read a tenth over or under a hundred, one line under the legend
+// says so. Segments grow once on first paint; the numbers are final from the first frame.
 import React from 'react';
-import { roundToTotal } from '../lib/format';
+import { fmtPctRule } from '../lib/format';
 
 export type SupplyKey = 'staked' | 'unstaking' | 'pgf' | 'shielded' | 'rest' | 'osmosis';
 
@@ -44,12 +45,18 @@ export function SupplyBar({ segments, legend = true, digits = 1, className = '' 
     return <p className={`cap ${className}`}>The supply split has no data right now.</p>;
   }
   const raw = known.map((s) => ((s.nam as number) / total) * 100);
-  const shares = roundToTotal(raw, digits, 100);
+  // Each printed share is rounded on its own (owner decision 45, 2026-11-10), so a share reads the same here as on
+  // every other page; the bar's widths are the unrounded shares. Rounded one by one the parts can read a tenth over or
+  // under a hundred together: then the legend says so in one line, and nothing is nudged to hide it.
+  const shares = raw;
+  // the sum of the shares exactly as printed, so the line below can never disagree with the figures above it
+  const f = 10 ** digits;
+  const printedSum = Math.round(raw.reduce((a, v) => a + Number(fmtPctRule(v, digits).replace(/[%,]/g, '')), 0) * f) / f;
   const share = (k: SupplyKey) => {
     const i = known.findIndex((s) => s.key === k);
     return i < 0 ? null : shares[i];
   };
-  const pct = (v: number | null) => (v == null ? '—' : `${v.toFixed(digits)}%`);
+  const pct = (v: number | null) => (v == null ? '—' : fmtPctRule(v, digits));
   const osm = share('osmosis');
   const aria = `Supply bar: ${known.map((s, i) => `${s.name} ${pct(shares[i])}`).join(', ')}`;
 
@@ -84,6 +91,9 @@ export function SupplyBar({ segments, legend = true, digits = 1, className = '' 
             );
           })}
         </ul>
+      ) : null}
+      {legend && printedSum !== 100 ? (
+        <p className="cap supply__sum">Each share is rounded on its own, so together they read <span data-num="">{printedSum.toFixed(digits)}%</span>.</p>
       ) : null}
     </div>
   );

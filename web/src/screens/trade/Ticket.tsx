@@ -7,7 +7,8 @@
 // - rewind: live quotes are paused; the last trade price at that time is shown instead.
 import type { Overview } from '../../../../shared/types';
 import { BODY } from '../../../../shared/copy';
-import { Field, Notice, Num, ProvChip, ProvDot, Segmented, SelectChip, SkeletonBlock, Tag, Term, derive } from '../../ui/index';
+import { Field, Icon, Notice, Num, ProvChip, ProvDot, Segmented, SelectChip, SkeletonBlock, Tag, Term, derive } from '../../ui/index';
+import { OSMOSIS_PAIR_LINK, OSMOSIS_PAIR_NOTE, OSMOSIS_PAIR_URL } from '../../../../shared/osmosis-app';
 import type { Stamp } from '../../ui/index';
 import { NBSP, fmtCoin, fmtNamRule, fmtPctSigned, fmtUsdRule, fmtUsdWhole, fmtCount } from '../../lib/format';
 import type { Depth, Reading, Side, TicketMode } from './model';
@@ -108,6 +109,15 @@ export function Ticket({ h1, h1Buy, side, onSide, text, amount, onType, onPick, 
         {note ? <p className="field__note tk-note">{note}</p> : null}
 
         <GetBlock side={side} mode={mode} reading={reading} overview={overview} />
+        {/* the one way out to where the trade can be made (owner decision 46): a text link named for the pair, a new
+            tab, no referrer and no handle back; no amount, address or side goes with it, and it is not a button */}
+        <p className="tk-out">
+          <a className="link tk-out__a" href={OSMOSIS_PAIR_URL} target="_blank" rel="noopener noreferrer" aria-label={`${OSMOSIS_PAIR_LINK}, opens in a new tab`}>
+            <span>{OSMOSIS_PAIR_LINK}</span>
+            <Icon name="external" className="ico ico--inline" />
+          </a>
+          <span className="tk-out__n">{OSMOSIS_PAIR_NOTE}</span>
+        </p>
       </div>
       {depth && depth.usd != null ? (
         <Notice tone="warning" className="notice--thin" title={<><Term id="thin-market">Thin market</Term>.</>}>
