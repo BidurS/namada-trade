@@ -17,7 +17,8 @@ import type { ValidatorHistoryResponse, ValidatorRow, ValidatorsResponse } from 
 import { BODY } from '../../../../shared/copy';
 import { isWholeAddress } from '../../../../shared/search-grammar';
 import {
-  STATE_NOT_RECORDED, VALIDATORS_SHOWN, VALIDATORS_SOURCE, VALIDATOR_DAYS_MAX, VALIDATOR_NAMES_SOURCE, spreadLabel, validatorNameShown, validatorStateWords,
+  STATE_NOT_RECORDED, VALIDATORS_MAX, VALIDATORS_SHOWN, VALIDATORS_SOURCE, VALIDATOR_DAYS_MAX, VALIDATOR_NAMES_SOURCE, activeSetCounts, inActiveSet, outsideActiveSet, spreadLabel,
+  validatorNameShown, validatorSetOf, validatorStateWords, type ValidatorSet,
 } from '../../../../shared/validators';
 import { HeroNumber, Num, ProvChip, ProvScope, SearchField, Segmented, Skeleton, SourceLine, Sparkline, useShowAll, type ScopeItem, type SegOption, type Stamp } from '../../ui';
 import { ApiError, fetchValidatorHistory, fetchValidators } from '../../api';
@@ -94,6 +95,16 @@ export function Validators({ route }: ScreenProps) {
     const s = q.toString();
     return s ? `${path}?${s}` : path;
   };
+  // ?set=active|not: which validators are listed, kept in the address so "the active set" can be linked. Any other
+  // word, or none, lists them all.
+  const set = validatorSetOf(params.get('set'));
+  const hrefSet = (next: ValidatorSet) => {
+    const q = new URLSearchParams(params);
+    if (next === 'all') q.delete('set');
+    else q.set('set', next);
+    const s = q.toString();
+    return s ? `${path}?${s}` : path;
+  };
   // a validator opened by a click is brought into view and given focus; one opened by the link the page was loaded with is not
   const oneRef = useRef<HTMLElement>(null);
   const mounted = useRef(false);
@@ -116,6 +127,11 @@ export function Validators({ route }: ScreenProps) {
     : d?.prev
       ? fromOne(listP, `each stake less the same validator's stake in the listing of ${fmtDayMonthYear(dayMs(d.prev))}`)
       : missing(VALIDATORS_SOURCE, 'No earlier day is on record to compare with.', NODE);
+
+  // The active set: counted from the states of the day's rows, so only when the indexer's list was read for that day
+  // and every row of the day is in the answer (a count over a part of the rows would be a smaller number, not the count).
+  const sets = d && namesP && namesP.status !== 'missing' && d.validators.length < VALIDATORS_MAX ? activeSetCounts(d.validators.map((x) => x.state)) : null;
+  const setP: Stamp | null = namesP && namesP.status !== 'missing' ? fromOne(namesP, 'the validators of the day whose state is the active one') : namesP;
 
   return (
     <article className="seo seo--validators">
@@ -140,6 +156,11 @@ export function Validators({ route }: ScreenProps) {
           items={[
             { n: <Fig loading={loading} v={d?.third} prov={spreadP} fmt={fmtCount} showAge={false} />, label: spreadLabel(d?.third, 'a third'), scope: spreadP ? { label: 'Validators that hold more than a third', p: spreadP } : undefined },
             { n: <Fig loading={loading} v={d?.twoThirds} prov={spreadP} fmt={fmtCount} showAge={false} />, label: spreadLabel(d?.twoThirds, 'two thirds'), scope: spreadP ? { label: 'Validators that hold more than two thirds', p: spreadP } : undefined },
+            {
+              n: <Fig loading={loading} v={sets ? sets.active : null} prov={setP} fmt={fmtCount} showAge={false} />,
+              label: sets?.active === 1 ? 'validator is in the active set, the validators that produce blocks' : 'validators are in the active set, the validators that produce blocks',
+              scope: setP ? { label: 'Validators in the active set', p: setP } : undefined,
+            },
           ]}
         />
       </Hero>
@@ -154,7 +175,7 @@ export function Validators({ route }: ScreenProps) {
             {d && !d.validators.length ? <Say>{d.prov.note ?? none}</Say> : null}
             {sel ? <One key={sel} address={sel} d={d} waiting={loading} listP={listP} namesP={namesP} rewound={rewound} closeHref={hrefWith(null)} sectionRef={oneRef} /> : null}
             {loading ? <Skeleton rows={8} heights={[86]} label="validators" /> : null}
-            {d && d.validators.length && listP && namesP && changeP ? <ValidatorList d={d} listP={listP} namesP={namesP} changeP={changeP} sel={sel} hrefOf={hrefWith} now={now} /> : null}
+            {d && d.validators.length && listP && namesP && changeP ? <ValidatorList d={d} listP={listP} namesP={namesP} changeP={changeP} sel={sel} hrefOf={hrefWith} now={now} set={sets ? set : 'all'} sets={sets} onSet={(next) => navigate(hrefSet(next), { replace: true, scroll: false })} /> : null}
           </div>
         </section>
 
@@ -170,14 +191,22 @@ export function Validators({ route }: ScreenProps) {
  * The day's validators as a list: the tools (a text filter over name and address, three orders), the rows, the
  * "Show all" button and one SourceLine for every figure in it. Exported for the markup test (test/validators-ui.test.ts).
  */
-export function ValidatorList({ d, listP, namesP, changeP, sel, hrefOf, now }: { d: ValidatorsResponse; listP: Stamp; namesP: Stamp; changeP: Stamp; sel: string | null; hrefOf: (address: string) => string; now: number }) {
+export function ValidatorList({ d, listP, namesP, changeP, sel, hrefOf, now, set: asked = 'all', sets = null, onSet }: {
+  d: ValidatorsResponse; listP: Stamp; namesP: Stamp; changeP: Stamp; sel: string | null; hrefOf: (address: string) => string; now: number;
+  /** which validators are listed, and the counts of each choice (null when the states were not read: the choice is then not offered) */
+  set?: ValidatorSet; sets?: ReturnType<typeof activeSetCounts> | null; onSet?: (next: ValidatorSet) => void;
+}) {
   const [text, setText] = useState('');
   const [sort, setSort] = useState<SortKey>('stake');
+  // a choice of set stands only on states that were read: without them every validator is listed
+  const set: ValidatorSet = sets ? asked : 'all';
   // the rank is the place by stake in the day's listing, whatever the list is filtered or ordered by
   const all = useMemo<Ranked[]>(() => d.validators.map((v, i) => ({ v, rank: i + 1, shown: validatorNameShown(v.name) })), [d.validators]);
   const rows = useMemo(() => {
     const needle = text.trim().toLowerCase();
-    const hit = needle ? all.filter((r) => (r.shown ?? '').toLowerCase().includes(needle) || r.v.validator.includes(needle)) : all;
+    // the set first, then the text: both narrow the list, neither changes a validator's rank
+    const of = set === 'active' ? all.filter((r) => inActiveSet(r.v.state)) : set === 'not' ? all.filter((r) => outsideActiveSet(r.v.state)) : all;
+    const hit = needle ? of.filter((r) => (r.shown ?? '').toLowerCase().includes(needle) || r.v.validator.includes(needle)) : of;
     if (sort === 'stake') return hit;
     const key = (r: Ranked) => (sort === 'commission' ? r.v.commission : r.v.delegators);
     // largest first; a validator without the figure goes last; equal figures keep the order by stake
@@ -186,7 +215,7 @@ export function ValidatorList({ d, listP, namesP, changeP, sel, hrefOf, now }: {
       if (x == null || y == null) return x == null && y == null ? a.rank - b.rank : x == null ? 1 : -1;
       return y - x || a.rank - b.rank;
     });
-  }, [all, text, sort]);
+  }, [all, text, sort, set]);
   const [shown, more] = useShowAll(rows, VALIDATORS_SHOWN);
   // the bar is each stake against the day's largest, so the list reads as a shape; the percent beside it is the share
   const top = d.validators[0]?.stake ?? 0;
@@ -200,20 +229,42 @@ export function ValidatorList({ d, listP, namesP, changeP, sel, hrefOf, now }: {
     ...(changeP.status !== 'missing' && d.prev ? [{ label: `Change since ${fmtDayMonthYear(dayMs(d.prev))}`, p: changeP }] : []),
   ];
 
+  // the three choices with their counts: every validator, the active set, and those known to be outside it
+  const setOptions: SegOption<ValidatorSet>[] = sets ? [
+    { value: 'all', label: <>All <span data-num="">{fmtCount(all.length)}</span></> },
+    { value: 'active', label: <>Active set <span data-num="">{fmtCount(sets.active)}</span></> },
+    { value: 'not', label: <>Not in it <span data-num="">{fmtCount(sets.not)}</span></> },
+  ] : [];
+
   return (
     <ProvScope className="val-scope" old={old} oldSentence={old ? `This listing is ${ageRange([listP], now)} old, so it is shown dimmed.` : undefined}>
       {d.day ? <p className="cap">{`The first complete listing of ${fmtDayMonthYear(dayMs(d.day))}, UTC.`}</p> : null}
       {namesP.status === 'missing' && namesP.note ? <Say>{namesP.note}</Say> : null}
       {changeP.status === 'missing' && changeP.note ? <Say>{changeP.note}</Say> : null}
-      <div className="val-tools">
+      <div className={`val-tools${sets && onSet ? ' val-tools--three' : ''}`}>
         <SearchField label="Find a validator" placeholder="Name or address" value={text} onChange={setText} />
+        {sets && onSet ? (
+          <div className="val-tools__set">
+            <span className="fset__l" aria-hidden="true">Show</span>
+            <Segmented label="Which validators to show" value={set} options={setOptions} onChange={onSet} />
+          </div>
+        ) : null}
         <div className="val-tools__sort">
           <span className="fset__l" aria-hidden="true">Largest first by</span>
           <Segmented label="Largest first by" value={sort} options={SORTS} onChange={setSort} />
         </div>
       </div>
+      {/* what "not in it" is made of, in the states' own words, and how many have no state on record (they are in neither list) */}
+      {sets && set === 'not' && sets.outside.length ? (
+        <p className="cap">Outside the active set: {sets.outside.map((o, i) => <span key={o.words}>{i ? ', ' : ''}<span data-num="">{fmtCount(o.n)}</span> {o.words}</span>)}.</p>
+      ) : null}
+      {sets && set !== 'all' && sets.unrecorded > 0 ? (
+        <p className="cap"><span data-num="">{fmtCount(sets.unrecorded)}</span> {sets.unrecorded === 1 ? 'validator has' : 'validators have'} no state on record and {sets.unrecorded === 1 ? 'is' : 'are'} in neither list.</p>
+      ) : null}
       {text && !rows.length ? <Say>No validator of this day matches that text.</Say> : null}
+      {!text && set !== 'all' && !rows.length ? <Say>{set === 'active' ? 'No validator of this day is in the active set.' : 'No validator of this day is known to be outside the active set.'}</Say> : null}
       {text && rows.length ? <p className="cap">{`${fmtCount(rows.length)} of ${fmtCount(all.length)} validators match.`}</p> : null}
+      {!text && set !== 'all' && rows.length ? <p className="cap">{`${fmtCount(rows.length)} of ${fmtCount(all.length)} validators are listed, each with its place by stake among them all.`}</p> : null}
       {rows.length ? (
         <div className="val-list" role="table" aria-label="Validators and their stake" aria-rowcount={rows.length + 1}>
           <div className="val-head" role="row" aria-rowindex={1}>
@@ -222,7 +273,7 @@ export function ValidatorList({ d, listP, namesP, changeP, sel, hrefOf, now }: {
             ))}
           </div>
           {shown.map(({ v, rank, shown: name }, i) => (
-            <div key={v.validator} className={`val${v.validator === sel ? ' is-sel' : ''}`} role="row" aria-rowindex={i + 2}>
+            <div key={v.validator} className={`val${v.validator === sel ? ' is-sel' : ''}${inActiveSet(v.state) ? ' val--set' : ''}`} role="row" aria-rowindex={i + 2}>
               <span className="val__rk" role="cell">{fmtCount(rank)}</span>
               <span className="val__id" role="cell">
                 <Link to={hrefOf(v.validator)} className="val__name" aria-current={v.validator === sel ? 'true' : undefined}>

@@ -46,6 +46,39 @@ export function validatorStateWords(state: string | null | undefined): string {
   return Object.prototype.hasOwnProperty.call(VALIDATOR_STATE_WORDS, key) ? VALIDATOR_STATE_WORDS[key] : STATE_NOT_RECORDED;
 }
 
+/** The key of a state word in VALIDATOR_STATE_WORDS: lower case, letters only. */
+const stateKey = (state: string | null | undefined): string | null => (typeof state === 'string' ? state.toLowerCase().replace(/[^a-z]/g, '') : null);
+/**
+ * Is the validator in the active set, the validators that produce blocks (the indexer's `consensus`)? Only a state
+ * that was read can say so: a validator with no state on record is in neither list.
+ */
+export const inActiveSet = (state: string | null | undefined): boolean => stateKey(state) === 'consensus';
+/** Is it known to be outside the active set: a state this table holds that is not the active one? */
+export const outsideActiveSet = (state: string | null | undefined): boolean => {
+  const k = stateKey(state);
+  return k != null && k !== 'consensus' && Object.prototype.hasOwnProperty.call(VALIDATOR_STATE_WORDS, k);
+};
+
+/** The page's choice of which validators to list (the `set` word in the address, so a list can be linked). */
+export type ValidatorSet = 'all' | 'active' | 'not';
+/** That choice from the address: anything but the two words is every validator. */
+export const validatorSetOf = (raw: string | null | undefined): ValidatorSet => (raw === 'active' || raw === 'not' ? raw : 'all');
+
+/**
+ * How many of the day's validators are in the active set, how many are known to be outside it, how many have no
+ * state on record, and the outside ones by their state in plain words, most first ("146 jailed", "76 not active").
+ */
+export function activeSetCounts(states: readonly (string | null | undefined)[]): { active: number; not: number; unrecorded: number; outside: { words: string; n: number }[] } {
+  const by = new Map<string, number>();
+  let active = 0, not = 0;
+  for (const s of states) {
+    if (inActiveSet(s)) active++;
+    else if (outsideActiveSet(s)) { not++; const w = validatorStateWords(s); by.set(w, (by.get(w) ?? 0) + 1); }
+  }
+  const outside = [...by.entries()].map(([words, n]) => ({ words: words.toLowerCase(), n })).sort((a, b) => b.n - a.n || a.words.localeCompare(b.words));
+  return { active, not, unrecorded: states.length - active - not, outside };
+}
+
 /** Characters that draw nothing or turn the text around: control characters, zero-width marks and direction marks. */
 const UNSEEN = /[\u0000-\u001f\u007f-\u009f\u00ad\u200b-\u200f\u2028-\u202f\u2060-\u206f\ufeff]/g;
 /**

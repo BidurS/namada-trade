@@ -10,7 +10,7 @@ import { createElement, type ComponentType } from 'react';
 import { renderToStaticMarkup } from 'react-dom/server';
 import { BODY } from '../shared/copy';
 import { routeByPath } from '../shared/routes';
-import { VALIDATORS_SHOWN, VALIDATORS_SOURCE, VALIDATOR_NAMES_SOURCE } from '../shared/validators';
+import { VALIDATORS_SHOWN, VALIDATORS_SOURCE, VALIDATOR_NAMES_SOURCE, activeSetCounts, inActiveSet, outsideActiveSet, validatorSetOf } from '../shared/validators';
 import type { Provenance, ValidatorRow, ValidatorsResponse } from '../shared/types';
 
 let ValidatorList: ComponentType<any>;
@@ -135,6 +135,76 @@ describe('the list of validators', () => {
     for (const o of ['Stake', 'Commission', 'Addresses']) expect(html).toMatch(new RegExp(`<input type="radio"[^>]*value="${o.toLowerCase()}"`));
     // few enough rows need no button
     expect(text(draw(answer()))).not.toContain('Show all');
+  });
+});
+
+describe('the active set, easy to find (owner, 2026-11-10)', () => {
+  // the fixture's four rows: Alpha consensus; the hostile name jailed; one belowCapacity; one of a state the table does not hold
+  const states = rows.map((r) => r.state);
+  const sets = activeSetCounts(states);
+
+  it('counts the active set, those known to be outside it by their state, and those with no state on record apart', () => {
+    expect(activeSetCounts(['consensus', 'Consensus', 'jailed', 'inactive', 'inactive', 'belowThreshold', 'below_capacity', null, 'tombstoned', undefined])).toEqual({
+      active: 2, not: 5, unrecorded: 3,
+      outside: [{ words: 'not active', n: 2 }, { words: 'below the active set', n: 1 }, { words: 'jailed', n: 1 }, { words: 'under the minimum stake', n: 1 }],
+    });
+    expect(activeSetCounts([])).toEqual({ active: 0, not: 0, unrecorded: 0, outside: [] });
+    // a state that was not read, or is a word the table does not hold, is in neither list
+    for (const s of [null, undefined, '', 'unknown', 'tombstoned']) {
+      expect(inActiveSet(s), String(s)).toBe(false);
+      expect(outsideActiveSet(s), String(s)).toBe(false);
+    }
+    expect(inActiveSet('consensus')).toBe(true);
+    expect(outsideActiveSet('consensus')).toBe(false);
+    expect(outsideActiveSet('jailed')).toBe(true);
+  });
+
+  it('the choice in the address is one of two words, and anything else is every validator', () => {
+    expect(validatorSetOf('active')).toBe('active');
+    expect(validatorSetOf('not')).toBe('not');
+    for (const w of [null, undefined, '', 'all', 'ACTIVE', 'jailed', 'constructor']) expect(validatorSetOf(w), String(w)).toBe('all');
+  });
+
+  it('offers the three choices with their counts, and marks every row of the active set in any list', () => {
+    const html = draw(answer(), { sets, onSet: () => {} });
+    const t = text(html);
+    for (const o of ['all', 'active', 'not']) expect(html).toMatch(new RegExp(`<input type="radio"[^>]*value="${o}"`));
+    expect(t).toMatch(/All\s+4/);
+    expect(t).toMatch(/Active set\s+1/);
+    expect(t).toMatch(/Not in it\s+2/);
+    expect(html.split('val--set').length - 1).toBe(1);
+    // every validator is listed and no count line is added while nothing narrows the list
+    expect(html.split('role="row"').length - 1).toBe(rows.length + 1);
+    expect(t).not.toContain('are listed');
+  });
+
+  it('lists the active set alone, each validator keeping its place by stake among them all', () => {
+    const html = draw(answer(), { set: 'active', sets, onSet: () => {} });
+    const t = text(html);
+    expect(html.split('role="row"').length - 1).toBe(2);
+    expect(t).toContain('Alpha');
+    expect(t).toContain('1 of 4 validators are listed, each with its place by stake among them all.');
+    expect(t).toContain('1 validator has no state on record and is in neither list.');
+    const chosen = /<input[^>]*value="active"[^>]*>/.exec(html)![0];
+    expect(chosen).toContain('checked');
+  });
+
+  it('lists those known to be outside it, says what they are made of, and keeps their ranks', () => {
+    const html = draw(answer(), { set: 'not', sets, onSet: () => {} });
+    const t = text(html);
+    expect(html.split('role="row"').length - 1).toBe(3);
+    expect(t).not.toContain('Alpha');
+    expect(t).toMatch(/Outside the active set:\s*1\s+below the active set\s*,\s*1\s+jailed\s*\./);
+    expect(t).toContain('2 of 4 validators are listed');
+    // the jailed validator is second by stake in the whole listing, and still reads 2
+    expect(html).toMatch(/class="val__rk"[^>]*>2</);
+    expect(html.split('val--set').length - 1).toBe(0);
+  });
+
+  it('offers no choice when the states were not read, and lists every validator', () => {
+    const html = draw(answer(), { set: 'active', sets: null });
+    expect(html).not.toMatch(/value="active"/);
+    expect(html.split('role="row"').length - 1).toBe(rows.length + 1);
   });
 });
 

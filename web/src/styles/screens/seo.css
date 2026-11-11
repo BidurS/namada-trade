@@ -282,9 +282,21 @@
 
   .val-scope { gap: var(--s-4); }
   .val-tools { display: grid; gap: var(--s-4); min-width: 0; }
-  .val-tools__sort { display: grid; min-width: 0; }
+  .val-tools__sort, .val-tools__set { display: grid; min-width: 0; }
+  /* a choice's count stands a little apart from its word, in the word's own ink (a dimmer count failed contrast on the chosen one) */
+  .val-tools__set [data-num] { margin-left: 6px; color: inherit; }
+  /* a validator in the active set: its state reads in full ink with a mark before it, so the set shows in any order */
+  .val--set .val__st { color: var(--c-ink); font-weight: var(--w-medium); }
+  .val--set .val__st::before { content: ''; display: inline-block; width: 6px; height: 6px; margin-right: 6px; border-radius: 50%; background: currentColor; vertical-align: 1px; }
   @media (min-width: 640px) {
     .val-tools { grid-template-columns: minmax(0, 24rem) max-content; justify-content: space-between; align-items: end; column-gap: var(--s-6); }
+    /* with the set choice: the search on its own line, the two choices under it; one line from 1100 px */
+    .val-tools--three { grid-template-columns: max-content max-content; justify-content: start; }
+    .val-tools--three > :first-child { grid-column: 1 / -1; max-width: 24rem; }
+  }
+  @media (min-width: 1100px) {
+    .val-tools--three { grid-template-columns: minmax(0, 20rem) max-content max-content; justify-content: space-between; }
+    .val-tools--three > :first-child { grid-column: auto; max-width: none; }
   }
 
   .val-list { container: val / inline-size; display: grid; min-width: 0; border-top: 2px solid var(--c-ink); }
