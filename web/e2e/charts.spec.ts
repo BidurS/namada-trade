@@ -254,7 +254,9 @@ test.describe('charts, at 375 px', () => {
     await expect(chart.locator('.chartsec__title .cap')).toHaveText(/^USDC paid per NAM in real trades: each point is the middle price of one hour’s trades, [\d,]+ points?\.$/);
     // the sparse sentence (the start dates are their own line under it, .c-starts); under 1024 px both sit behind the
     // chart's closed line (the phone cut), opened here
-    await chart.locator('details.pfold > summary').click();
+    // two closed lines sit under the chart on a phone: the key (owner decision 49) and these notes
+    await expect(chart.locator('details.pfold > summary')).toHaveText(['What the lines and marks are', 'How the chart is drawn, and since when']);
+    await chart.locator('details.pfold > summary', { hasText: 'How the chart is drawn' }).click();
     const caps = chart.locator(':scope > .pfold > .pfold__body > .cap:not(.c-starts)');
     await expect(caps).toBeVisible();
     await expect(caps).toContainText(/of the [\d,]+ hours since \d+ \w+ had/);

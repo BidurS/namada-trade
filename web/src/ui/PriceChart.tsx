@@ -118,6 +118,8 @@ export interface PriceChartProps {
    * them behind a disclosure on a phone. Default: the notes as they are.
    */
   notes?: (notes: React.ReactNode) => React.ReactNode;
+  /** Wraps the key under the plot (what each line and mark is) the same way. Default: the key as it is. */
+  keyWrap?: (key: React.ReactNode) => React.ReactNode;
   className?: string;
 }
 
@@ -167,7 +169,7 @@ const clean = <T extends { t: number }>(list: T[] | undefined, ok: (p: T) => boo
 
 export function PriceChart({
   series, bars, barsStepMs, barsMissing, band, flatHours, poolStepMs, poolMissing, starts, executedStart,
-  events = [], marks = [], marksKey, range, onRange, end, cursorAt, prov, title, headingId, level = 2, variant = 'price', unit, bucketMs, notes, className = '',
+  events = [], marks = [], marksKey, range, onRange, end, cursorAt, prov, title, headingId, level = 2, variant = 'price', unit, bucketMs, notes, keyWrap, className = '',
 }: PriceChartProps) {
   const now = useUiNow();
   const [boxRef, { w, h }] = useSize<HTMLDivElement>();
@@ -297,6 +299,23 @@ export function PriceChart({
   const cur = sel ? [X(sel.t), Y(sel.v)] : null;
   const atX = cursorAt != null && cursorAt >= tStart && cursorAt <= tEnd ? X(cursorAt) : null;
   const shownBar = shown && !readPool ? barAt(shown.t) : null;
+
+  // the key under the plot: what each line and mark is
+  const keyEl = (
+      <ul className="key">
+      <li><i className="key__ln key__dot" />{isPrice ? `Price paid in trades: a dot per ${hourly ? 'hour' : spanWords(stepMs)} with trades, joined only where the next one traded too` : 'Shielded NAM'}</li>
+      {isPrice && Q.length ? <li><i className="key__ln key__ln--dash" />Price the pools quote, recorded since <span data-num="">{fmtDayMonth(quoted[0]?.t)}</span></li> : null}
+      {isPrice && BD.length > 1 ? <li><i className="key__sw key__sw--band" />Shaded: the lowest and highest quote in each hour</li> : null}
+      {isPrice && P.length ? <li><i className="key__ln key__ln--pool" />Pool price, not trades (Osmosis app data)</li> : null}
+      {isPrice && flats.length ? <li><i className="key__ln key__ln--flat" />Short marks under the plot: <span data-num="">{fmtCount(flats.length)}</span> {spansWords(pStep)} in which no trade moved the pool</li> : null}
+      {isPrice && poolMissing ? <li className="key__miss"><span data-num="" data-status="none">—</span> Pool price: {poolMissing}</li> : null}
+      {showBars ? <li><i className="key__sw key__sw--bar" />Bars under the chart: NAM traded in each hour; an empty slot is an hour without a trade</li> : null}
+      {isPrice && !showBars && barsMissing ? <li className="key__miss"><span data-num="" data-status="none">—</span> NAM traded per hour: {barsMissing}</li> : null}
+      {/* each marker is a move between two hours that had trades (generated/events.ts), not always one hour apart */}
+      {evIn.length ? <li><i className="key__ln key__ln--evt" />Dashed lines: the {evIn.length === 1 ? 'biggest move' : `${evIn.length} biggest moves`} from one hour with trades to the next</li> : null}
+      {mkIn.length && marksKey ? <li><i className="key__ln key__ln--inc" />{marksKey}</li> : null}
+    </ul>
+  );
 
   // the notes under the stats: how the series is drawn, then since when each series is recorded
   const noteEls = isPrice && (E.length || starts?.length) ? (
@@ -452,19 +471,7 @@ export function PriceChart({
         ) : null}
       </div>
 
-      <ul className="key">
-        <li><i className="key__ln key__dot" />{isPrice ? `Price paid in trades: a dot per ${hourly ? 'hour' : spanWords(stepMs)} with trades, joined only where the next one traded too` : 'Shielded NAM'}</li>
-        {isPrice && Q.length ? <li><i className="key__ln key__ln--dash" />Price the pools quote, recorded since <span data-num="">{fmtDayMonth(quoted[0]?.t)}</span></li> : null}
-        {isPrice && BD.length > 1 ? <li><i className="key__sw key__sw--band" />Shaded: the lowest and highest quote in each hour</li> : null}
-        {isPrice && P.length ? <li><i className="key__ln key__ln--pool" />Pool price, not trades (Osmosis app data)</li> : null}
-        {isPrice && flats.length ? <li><i className="key__ln key__ln--flat" />Short marks under the plot: <span data-num="">{fmtCount(flats.length)}</span> {spansWords(pStep)} in which no trade moved the pool</li> : null}
-        {isPrice && poolMissing ? <li className="key__miss"><span data-num="" data-status="none">—</span> Pool price: {poolMissing}</li> : null}
-        {showBars ? <li><i className="key__sw key__sw--bar" />Bars under the chart: NAM traded in each hour; an empty slot is an hour without a trade</li> : null}
-        {isPrice && !showBars && barsMissing ? <li className="key__miss"><span data-num="" data-status="none">—</span> NAM traded per hour: {barsMissing}</li> : null}
-        {/* each marker is a move between two hours that had trades (generated/events.ts), not always one hour apart */}
-        {evIn.length ? <li><i className="key__ln key__ln--evt" />Dashed lines: the {evIn.length === 1 ? 'biggest move' : `${evIn.length} biggest moves`} from one hour with trades to the next</li> : null}
-        {mkIn.length && marksKey ? <li><i className="key__ln key__ln--inc" />{marksKey}</li> : null}
-      </ul>
+      {keyWrap ? keyWrap(keyEl) : keyEl}
 
       <dl className="cstats">
         <div><dt>Low</dt><dd data-num="">{low ? <>{fmtV(low.v)}<small>{fmtDayMonth(low.t)}</small></> : '—'}</dd></div>

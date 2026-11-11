@@ -6,13 +6,16 @@
 // to every holder.
 import type { Holder, HoldersResponse, Overview } from '../../../../shared/types';
 import { LIQUID_STALE_MS } from '../../../../shared/holder-status';
-import { DataList, HolderRow, Num, ProvDot, Skeleton, Tag, derive } from '../../ui/index';
+import { DataList, HolderRow, Num, ProvDot, Skeleton, Tag, derive, useMinWidth } from '../../ui/index';
 import type { Stamp } from '../../lib/prov';
 import { REWIND_WORDS, useNow, useOverlays } from '../../app/index';
 import { fmtAddr, fmtAge, fmtAgo, fmtCount, fmtNamRule, fmtPctRule } from '../../lib/format';
 import { holderName, holderTag, isUserTag } from '../../lib/holder';
 import type { Res } from './data';
-import { MoreLink, NoData, OldLine } from './bits';
+import { FOLD_UNDER_PX, MoreLink, NoData, OldLine } from './bits';
+
+/** The rows of the list on a phone (owner decision 49, 2026-11-10: "Yes, shorten both"): the five biggest, with the link to every holder under them. */
+const PHONE_ROWS = 5;
 
 export interface HoldersProps {
   o: Overview | null;
@@ -72,6 +75,7 @@ export function Holders({ o, at, holders, supplyP, countP, failed }: HoldersProp
   const foldIn = balancesOld && spendOld && reads.length > 0;
   const sentence7 = foldIn ? null : sevenDaySentence(rows, wall);
   const top = rows.length ? Math.max(...rows.map((h) => h.total)) : 0;
+  const wide = useMinWidth(FOLD_UNDER_PX);
 
   return (
     <section className="sec" aria-labelledby="home-who" data-prov-scope="">
@@ -104,7 +108,7 @@ export function Holders({ o, at, holders, supplyP, countP, failed }: HoldersProp
           </div>
           <DataList
             kind="holders"
-            label="Ten biggest NAM holders"
+            label={wide ? 'Ten biggest NAM holders' : 'Five biggest NAM holders'}
             old={listOld}
             scope={[
               { label: 'Spendable balances', p: balancesP },
@@ -115,7 +119,8 @@ export function Holders({ o, at, holders, supplyP, countP, failed }: HoldersProp
             ]}
             scopeLabel="Where the holder figures come from"
           >
-            {rows.map((h, i) => (
+            {/* a phone lists the five biggest; the figures above the list are of all ten, and the link below leads to every holder */}
+            {(wide ? rows : rows.slice(0, PHONE_ROWS)).map((h, i) => (
               <Row key={h.address} h={h} st={status[i]} listOld={listOld} top={top} onOpen={() => openAddress(h.address)} />
             ))}
           </DataList>

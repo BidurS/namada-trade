@@ -56,6 +56,8 @@ const EVENTS = markerEvents(PRICE_MOVES, (p) => fmtPctSigned(p, 1));
 const FLOW_WHAT = 'What was bought and sold';
 /** The price chart's notes on how it is drawn and since when its series are recorded: one closed line under 1024 px. */
 const CHART_NOTES = 'How the chart is drawn, and since when';
+/** The fold over the chart's key on a phone (owner decision 49, 2026-11-10: "Yes, shorten both"). */
+const CHART_KEY = 'What the lines and marks are';
 /** The stamp of the record of what was bought and sold when the server does not serve it. */
 const FLOW_UNSERVED: Stamp = {
   source: 'D1 flow index',
@@ -277,6 +279,7 @@ export default function TradeScreen({ route }: ScreenProps) {
                   prov={chartProv}
                   bucketMs={history.data.executedBucketMs}
                   notes={(n) => <PhoneFold label={CHART_NOTES} className="tk-fold">{n}</PhoneFold>}
+                  keyWrap={(k) => <PhoneFold label={CHART_KEY} className="tk-fold">{k}</PhoneFold>}
                 />
                 {priceCapped ? <CapNote what="trades" /> : null}
               </ProvScope>

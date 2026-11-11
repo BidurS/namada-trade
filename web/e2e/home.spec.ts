@@ -271,12 +271,15 @@ test.describe('Home, once', () => {
     else await expect(notice).toHaveCount(0);
   });
 
-  test('holders: ten rows, each with a name line and an address line, no chip per row', async ({ page }) => {
+  test('holders: ten rows (the five biggest under 1024 px), each with a name line and an address line, no chip per row', async ({ page }) => {
     await gotoRoute(page, '/');
     await loaded(page);
     const rows = page.locator('.home .dl--holders .hrow');
-    await expect(rows).toHaveCount(10);
-    for (let i = 0; i < 10; i++) {
+    // a phone lists the five biggest and links to every holder under them (owner decision 49, 2026-11-10); the desktop lists ten
+    const n = (page.viewportSize()?.width ?? 0) >= 1024 ? 10 : 5;
+    await expect(rows).toHaveCount(n);
+    await expect(page.locator('.home .dl--holders')).toHaveAttribute('aria-label', n === 10 ? /Ten biggest NAM holders/ : /Five biggest NAM holders/);
+    for (let i = 0; i < n; i++) {
       await expect(rows.nth(i).locator('.hrow__name')).toBeVisible();
       await expect(rows.nth(i).locator('.hrow__addr')).toBeVisible();
     }
