@@ -14,7 +14,7 @@
 import { mkdirSync, existsSync, readFileSync, writeFileSync, appendFileSync, readdirSync, rmSync } from 'node:fs';
 import { join } from 'node:path';
 import { parseNamadaBlock } from '../worker/src/parse/namada';
-import { blockResults, namBalance, namadaStatus, transferHeights } from '../worker/src/sources/namada';
+import { blockResults, indexedRpcs, namBalance, namadaStatus, transferHeights } from '../worker/src/sources/namada';
 import { inlineSql, stmt } from '../worker/src/db';
 import { INTERNAL_LABELS, NAMADA } from '../worker/src/config';
 import { fetchJson, toNam, FETCH_TEXT_MAX_BYTES } from '../worker/src/util';
@@ -65,8 +65,9 @@ async function indexFloor(rpc: { provider: string; url: string }): Promise<numbe
 async function scan() {
   const st = await namadaStatus();
   const progress = readJson<ScanProgress>('progress.json', { nextFrom: 1, head: 0, blocks: 0, flows: 0 });
-  // transferHeights may ask any node of config.ts NAMADA.rpcs, so every node's index must reach the blocks still to scan.
-  const floors = await Promise.all(NAMADA.rpcs.map(async (r) => {
+  // transferHeights may ask any node of config.ts NAMADA.rpcs that has an event index (indexedRpcs), so the index of
+  // each of those must reach the blocks still to scan; a node without one is never asked, so it has no floor here.
+  const floors = await Promise.all(indexedRpcs(NAMADA.rpcs).map(async (r) => {
     try { return { provider: r.provider, floor: await indexFloor(r) }; }
     catch (e) { throw new Error(`scan: where ${r.provider}'s event index starts could not be read (${String(e).slice(0, 200)}); the scan needs every node's. Nothing was scanned.`); }
   }));

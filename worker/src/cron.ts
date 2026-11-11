@@ -2532,7 +2532,8 @@ export async function runCron(env: Env) {
     // Which Namada nodes answer this tick (a short status read each). A node that does not is left out of every
     // read below, so a node that accepts requests and never answers costs one status read, not one per address.
     const rpcStatuses = await namadaStatusAll({ timeoutMs: 6000, retries: 0 });
-    const rpcs = answeringRpcs(rpcStatuses as { provider: string; error?: string; catchingUp?: boolean; network?: string }[]);
+    // and, when any node is at a block made in the last minutes, only the nodes that are (answeringRpcs `now`)
+    const rpcs = answeringRpcs(rpcStatuses as { provider: string; error?: string; catchingUp?: boolean; network?: string; time?: number }[], now);
     const validRpcs = rpcStatuses.filter((r: any) => !r.error) as any[];
     const headHeight = validRpcs.length ? Math.max(...validRpcs.map((r: any) => Number(r.height) || 0)) : null;
     // Quick reads (one attempt per node, 8 s): a node that answers its status and hangs on queries falls over to

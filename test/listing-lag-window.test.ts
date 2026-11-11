@@ -96,9 +96,26 @@ describe('an honest node lagging 97 blocks', () => {
     const health = JSON.parse(db.raw.prepare("SELECT value FROM kv WHERE key='source.health'").get().value)['Namada RPC (balance listing)'];
     console.log('asked', asked, 'record', JSON.stringify({ height: rec.height, provider: rec.provider, unpinned: rec.unpinned, error: rec.error }), '| note', health?.note);
     console.log('row A after the tick', JSON.stringify(rowOf(db, A)), '| listing balance', users[A], '| new holder', JSON.stringify(rowOf(db, NEW)));
-    expect(rec.height).toBe(R);
-    // The rows came from block R+101, newer than the listing (R): they should stay as the live scan wrote them.
+    // The node 97 blocks behind has a newest block over five minutes old: while another node is at the head it is not
+    // asked (answeringRpcs), so the listing is the head node's, at its height, and no longer the older state.
+    expect(asked.length).toBeGreaterThan(0);
+    expect(asked.every((who) => who === 'papa')).toBe(true);
+    expect(rec).toMatchObject({ height: papa, provider: 'Papadritta' });
+    // The rows came from a block above the listing's: they stay as the live scan wrote them.
     expect({ A: rowOf(db, A), NEW: rowOf(db, NEW) }).toEqual({ A: { balance: '5', updated_height: papa + 4 }, NEW: { balance: '7000000', updated_height: papa + 4 } });
+  });
+
+  it('a node 40 blocks behind is still within five minutes of the head, is asked first, and the newer rows written during its listing are kept', async () => {
+    const db = testD1();
+    seed(db);
+    const asked: string[] = [];
+    const p40 = R + 40;
+    network(db, { five: R, papa: p40, indexer: p40, liveRow: { height: p40 + 4, balance: '5' }, asked });
+    await tick(db, PLAIN);
+    const rec = JSON.parse(db.raw.prepare("SELECT value FROM kv WHERE key='balance.listing'").get().value);
+    expect(asked[0]).toBe('five');
+    expect(rec.height).toBe(R);
+    expect({ A: rowOf(db, A), NEW: rowOf(db, NEW) }).toEqual({ A: { balance: '5', updated_height: p40 + 4 }, NEW: { balance: '7000000', updated_height: p40 + 4 } });
   });
 
   it('contrast: the same tick with the node 90 behind leaves the newer row alone', async () => {

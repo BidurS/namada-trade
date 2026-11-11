@@ -6,8 +6,15 @@ import { INTERNAL_ADDRESSES } from '../parse/namada-tx';
 // The base64 decoder lives in util.ts (the depth module reads the chain node's answers with it too); callers of this file keep their import.
 export { base64Bytes };
 
-export type Rpc = { provider: string; url: string };
+/**
+ * A node of the list. `indexed: false`: the node keeps blocks and answers queries but has no event index, so a search
+ * of its index answers an empty page that would read as "no blocks": it is a witness of the head and a source of
+ * blocks and state, and is never asked for a search (indexedRpcs).
+ */
+export type Rpc = { provider: string; url: string; indexed?: boolean };
 const RPCS: readonly Rpc[] = NAMADA.rpcs;
+/** The nodes of a list that have an event index: every node not marked `indexed: false`. */
+export const indexedRpcs = (list: readonly Rpc[]): readonly Rpc[] => list.filter((r) => r.indexed !== false);
 
 export async function namadaStatus(rpc: Rpc = RPCS[0], opts: { timeoutMs?: number; retries?: number; signal?: AbortSignal } = {}) {
   const r = await fetchJson(`${rpc.url}/status`, { timeoutMs: opts.timeoutMs ?? 10000, retries: opts.retries ?? 1, signal: opts.signal });
@@ -41,10 +48,20 @@ export const namesOtherChain = (s: { network?: string }): boolean => !!s.network
  * one). When none did, the nodes whose status does not name another chain (a status that timed out says nothing
  * against the node's answers); a node that names another chain is never asked, so when every node does the list
  * is empty and the reads that take it (abci) have no node to ask.
+ *
+ * With `now`: when at least one of those nodes has a newest block from the last HEAD_MAX_AGE_MS, only the nodes that
+ * do are asked. A node can sit at an old block and say it is not catching up; its answers are that block's state,
+ * and a figure read from it would be stored under this tick's time while another node is at the chain's head. When
+ * no node's newest block is that new (no block is being made, or every clock is off), the list is as without `now`:
+ * the nodes' answers are then the newest there are.
  */
-export function answeringRpcs(statuses: { provider: string; error?: string; catchingUp?: boolean; network?: string }[]): readonly Rpc[] {
+export function answeringRpcs(statuses: { provider: string; error?: string; catchingUp?: boolean; network?: string; time?: number }[], now?: number): readonly Rpc[] {
   const statusOf = (r: Rpc) => statuses.find((s) => s.provider === r.provider);
   const ok = RPCS.filter((r) => { const s = statusOf(r); return !!s && !s.error && !s.catchingUp && !namesOtherChain(s); });
+  if (now != null) {
+    const fresh = ok.filter((r) => { const t = Number(statusOf(r)!.time); return t > now - HEAD_MAX_AGE_MS && t < now + 60_000; });
+    if (fresh.length) return fresh;
+  }
   return ok.length ? ok : RPCS.filter((r) => { const s = statusOf(r); return !s || !namesOtherChain(s); });
 }
 
@@ -307,10 +324,10 @@ export async function blockTxs(height: number, opts: ReadOpts = {}): Promise<str
   return value.result.block.data.txs as string[];
 }
 
-/** Heights (with block time) that emitted token/transfer events within [lo, hi] */
-export async function transferHeights(lo: number, hi: number, page = 1, perPage = 100) {
+/** Heights (with block time) that emitted token/transfer events within [lo, hi]: a search of a node's event index, so only a node that has one is asked. */
+export async function transferHeights(lo: number, hi: number, page = 1, perPage = 100, rpcs: readonly Rpc[] = RPCS) {
   const q = encodeURIComponent(`"token/transfer.height>=${lo} AND token/transfer.height<=${hi}"`);
-  const { value } = await withFailover(RPCS, (b) =>
+  const { value } = await withFailover(indexedRpcs(rpcs), (b) =>
     fetchJson(`${b}/block_search?query=${q}&page=${page}&per_page=${perPage}&order_by="asc"`, { timeoutMs: 120000, retries: 2, maxBytes: BLOCK_READ_MAX_BYTES }),
   );
   const res = value.result;
