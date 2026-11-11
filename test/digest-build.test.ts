@@ -511,6 +511,20 @@ describe('Discord\'s limits on the largest subscriber and on the weekly', () => 
     expect(field(first.payload.embeds[0], 'Validators')).toMatch(/^The snapshots start 22 Oct, so that day is the base, not 7 days back\./);
     for (const p of b.operatorPosts) { expectWithinDiscord(p); expectFilesMatch(p); }
   });
+
+  it('days with no snapshot before today (an arbitrary stretch of them): the field names the last snapshot before the missing day as the base, daily and weekly', async () => {
+    const db = seeded();
+    // the day before today has no snapshot; the last one before it is 14 Oct, and an older one exists
+    db.exec("UPDATE validator_daily SET day = '2026-10-14', as_of = as_of - 8 * 86400000 WHERE day = '2026-10-22'");
+    db.exec(`INSERT INTO validator_daily (day, validator, stake, delegators, commission, state, name, as_of, height, names_at)
+      SELECT '2026-10-01', validator, stake - 7, delegators, commission, state, name, as_of - 13 * 86400000, height - 100000, names_at FROM validator_daily WHERE day = '2026-10-14'`);
+    const daily = await readAndBuildDigest(db, T, 'daily');
+    expect(field(daily.operatorPosts[0].payload.embeds[0], 'Validators')).toMatch(/^No snapshot 1 day back; the base is the last one before it, 14 Oct\./);
+    const weekly = await readAndBuildDigest(db, T, 'weekly');
+    expect(field(weekly.operatorPosts[0].payload.embeds[0], 'Validators')).toMatch(/^No snapshot 7 days back; the base is the last one before it, 14 Oct\./);
+    // never the sentence of the table's first days
+    for (const b of [daily, weekly]) expect(field(b.operatorPosts[0].payload.embeds[0], 'Validators')).not.toContain('The snapshots start');
+  });
 });
 
 describe('the price\'s source as the site names a stored price (kv price.how)', () => {

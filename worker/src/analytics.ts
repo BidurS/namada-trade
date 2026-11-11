@@ -345,9 +345,10 @@ export const EPOCH_MAX_MINIMUMS = 2;
  * minimum. Returns how it was measured, in plain words.
  *
  * An epoch ends at the first block made after the chain's minimum has passed, so an epoch longer than
- * EPOCH_MAX_MINIMUMS minimums held a stretch in which Namada made no blocks. It says nothing about how long an epoch
- * is while blocks are made, and it would stretch every date counted in epochs for thirty days, so it is left out of
- * the mean and the note says how many were.
+ * EPOCH_MAX_MINIMUMS of today's minimums either held a stretch in which Namada made no blocks or dates from a
+ * longer minimum. Either way it says nothing about how long an epoch is from now on, and it would stretch every date
+ * counted in epochs for thirty days, so it is left out of the mean. The note says how many were and by which
+ * measure, not why: the readings cannot tell the two apart.
  */
 export async function measureEpochSec(db: D1Database, now: number, minEpochSec: number, genesisMs: number | null): Promise<{ sec: number; note: string }> {
   const r = await db
@@ -365,7 +366,7 @@ export async function measureEpochSec(db: D1Database, now: number, minEpochSec: 
   const leftOut = seen.length - lengths.length;
   if (lengths.length >= 3) {
     const v = Math.max(minEpochSec, lengths.reduce((a, x) => a + x, 0) / lengths.length);
-    const out = leftOut ? `; ${leftOut} ${leftOut === 1 ? 'epoch' : 'epochs'} left out, in which Namada made no blocks for a time` : '';
+    const out = leftOut ? `; ${leftOut} ${leftOut === 1 ? 'epoch' : 'epochs'} left out, longer than ${EPOCH_MAX_MINIMUMS} of the chain's minimums` : '';
     return { sec: v, note: `about ${(v / 3600).toFixed(2)} h an epoch, measured over the last ${lengths.length} epochs${out}` };
   }
   const last = await metricAt(db, 'epoch', now);

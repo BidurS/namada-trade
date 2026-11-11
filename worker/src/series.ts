@@ -16,7 +16,7 @@ import { PRICE_TRADE_MIN_NAM } from '../../shared/price-trades';
 import { INTERNAL_ADDRS, osmosisStamp, osmosisTrustedStart } from './holders';
 import { fetchPairChart, fetchPairSummary, OSMOSIS_DATA_SOURCE, type PairChartPoint, type PairSummary } from './sources/osmosis-data';
 import { safeParseJson, timedOutSends, ibcRowOf, metricAt, MASP_MAKEUP_KV } from './analytics';
-import { maspTotalRewards, maspCoinBalance, type BondListing } from './sources/namada';
+import { maspTotalRewards, maspCoinBalance, type BondListing, type Rpc } from './sources/namada';
 import { SCANNED_KV, MASP_SEEN_FIRST_SQL, scannedOf, dayScanned, readMaspActivityDay, maspActivityStmts } from './masp-activity';
 import { MASP_COINS_KV, maspCoinsOf, coinDayFigures, coinDayStmts } from './masp-coins';
 import { toNam } from './util';
@@ -671,6 +671,12 @@ export interface DailyCtx {
   listingTick?: boolean;
   /** true once the tick is past its deadline (cron.ts late): no part is started then */
   late?: () => boolean;
+  /**
+   * The nodes this tick asks (cron.ts answeringRpcs): the day's own chain reads ask them and no other, so a node the
+   * tick left out (one sitting at an old block while another is at the head) is not read from here either. Left
+   * out (a test, a script): every node of the list, in its order.
+   */
+  rpcs?: readonly Rpc[];
   /** for tests */
   validators?: (signal?: AbortSignal) => Promise<unknown>;
   /** for tests: the chain read of the shielded pool's running total of rewards (sources/namada.ts maspTotalRewards) */
@@ -816,7 +822,7 @@ export async function daily(env: Env, now: number, ctx: DailyCtx): Promise<Daily
   await part('shielded coins', 'coins', async () => {
     if (!coinsStored) return null;
     if (job.coinsTried === hourNow) { res.waiting.push('shielded coins: a coin\'s pool balance could not be read this hour; asked again next hour'); return null; }
-    const read = ctx.coinBalance ?? ((token: string, s?: AbortSignal) => maspCoinBalance(token, { signal: s, timeoutMs: COIN_READ_TIMEOUT_MS, retries: 0 }));
+    const read = ctx.coinBalance ?? ((token: string, s?: AbortSignal) => maspCoinBalance(token, { signal: s, timeoutMs: COIN_READ_TIMEOUT_MS, retries: 0, rpcs: ctx.rpcs }));
     const reads: Record<string, { base: string; height: number; provider: string } | null> = {};
     const keys = Object.keys(coins);
     const from = keys.indexOf(job.coinsFrom ?? '');
@@ -846,7 +852,8 @@ export async function daily(env: Env, now: number, ctx: DailyCtx): Promise<Daily
   // job without it).
   await part('shielded makeup', 'makeup', async () => {
     if (job.makeupTried === hourNow) { res.waiting.push('shielded makeup: the chain’s total of shielded rewards was not read this hour; asked again next hour'); return null; }
-    const m = await readMaspMakeup(env.DB, now, ctx.signal, ctx.maspRewards, (kv[MASP_MAKEUP_KV] as MaspMakeup | null) ?? null);
+    const rewards = ctx.maspRewards ?? ((s?: AbortSignal) => maspTotalRewards({ signal: s, timeoutMs: MAKEUP_REWARDS_TIMEOUT_MS, retries: 0, rpcs: ctx.rpcs }));
+    const m = await readMaspMakeup(env.DB, now, ctx.signal, rewards, (kv[MASP_MAKEUP_KV] as MaspMakeup | null) ?? null);
     const row = kvStmt(MASP_MAKEUP_KV, m, now);
     if (m.rewards?.at === now) return [row];
     const next: DailyJob = { ...job, makeupTried: hourNow };

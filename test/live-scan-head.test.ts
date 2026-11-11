@@ -69,6 +69,8 @@ const hubOf = (db: TestD1) => Object.assign(Object.create(LiveHub.prototype), {
 }) as any;
 const cursor = (db: TestD1) => (db.raw.prepare("SELECT value FROM kv WHERE key = 'namada.cursor'").get() as any)?.value;
 const notes = (db: TestD1): string[] => JSON.parse((db.raw.prepare("SELECT value FROM kv WHERE key = 'namada.scan'").get() as any)?.value ?? '{"failures":[]}').failures.map((f: any) => f.note);
+/** The kind each note was stored with: the cron's row lets a scanned block answer only a note the scan waited under ('head'). */
+const kinds = (db: TestD1): (string | undefined)[] => JSON.parse((db.raw.prepare("SELECT value FROM kv WHERE key = 'namada.scan'").get() as any)?.value ?? '{"failures":[]}').failures.map((f: any) => f.kind);
 const setCursor = (db: TestD1, v: string) => db.raw.prepare("INSERT OR REPLACE INTO kv (key, value, updated_at) VALUES ('namada.cursor', ?, 0)").run(v);
 const blockReads = (calls: string[], who?: string) => calls.filter((c) => !c.endsWith('/status') && (!who || c.startsWith(who)));
 
@@ -92,6 +94,7 @@ describe('the live scan follows only nodes at this chain\'s head', () => {
     expect(cursor(db)).toBe('8300010');
     expect(blockReads(calls).some((c) => c.includes('/block_results?height=8299961'))).toBe(true);
     expect(notes(db)).toEqual(['the scan\'s cursor 40000000 was 31699990 blocks above the head 8300010: the scan restarts at block 8299961, and blocks it missed before then are not scanned']);
+    expect(kinds(db)).toEqual(['block']); // a cursor the scan had to move: it stands for its day
   });
 
   it('a cursor a few blocks above a node\'s head waits for it, as before (no reset within 100 blocks)', async () => {
@@ -133,6 +136,7 @@ describe('the live scan follows only nodes at this chain\'s head', () => {
     expect(cursor(db)).toBe('8300010');
     expect(blockReads(calls, 'five')).toEqual([]);
     expect(notes(db)).toEqual(['the Namada nodes disagree on the head (5ElementsNodes 40000000, Papadritta 8300010): the scan follows Papadritta, the lowest not far below its cursor, and neither moves back nor jumps']);
+    expect(kinds(db)).toEqual(['disagree']); // the scan reads on while they disagree: a scanned block does not answer this note
     spec.papa.height = 8_300_020;
     await hub.scanNamada();
     expect(cursor(db)).toBe('8300020');
@@ -149,6 +153,7 @@ describe('the live scan follows only nodes at this chain\'s head', () => {
     expect(blockReads(calls)).toEqual([]);
     expect(cursor(db)).toBe('8300000');
     expect(notes(db)).toEqual([`no Namada node is at the chain's head (5ElementsNodes: catching up; Papadritta: names another network than ${NAMADA.chainId}; StakeAndRelax: no answer)`]);
+    expect(kinds(db)).toEqual(['head']); // the scan waits: the first block scanned after it answers the note
   });
 
   it('both nodes down: the scan throws as before (the alarm logs it) and records no note', async () => {

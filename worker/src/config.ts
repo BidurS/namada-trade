@@ -95,8 +95,9 @@ export const NAMADA = {
    * to genesis), but their event index starts much later: block_search answers from block 7,679,994 on 5ElementsNodes
    * and 7,914,171 on Papadritta, tx_search from 7,682,174 and 7,914,248 (read 2026-11-02), and Stake&Relax indexes
    * masp and token events from block 4,546,325; nothing below. Polkachu (namada-rpc.polkachu.com) keeps every block
-   * too but has event indexing off, so it is not listed: an empty block_search page from it would read as "no
-   * blocks" (scripts/backfill-namada.ts transferHeights asks any node of this list). Stake&Relax was added on
+   * too but has event indexing off: an empty block_search page from it would read as "no blocks". A node like that
+   * can be listed only with `indexed: false` (sources/namada.ts Rpc), which keeps it out of every search of the
+   * index (scripts/backfill-namada.ts transferHeights asks the indexed nodes of this list). Stake&Relax was added on
    * 2026-11-07, when the first two answered HTTP 502 for hours and every Namada read of the site failed with them.
    */
   rpcs: [

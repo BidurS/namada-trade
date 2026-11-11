@@ -18,7 +18,7 @@ import { describe, it, expect, vi, afterEach } from 'vitest';
 import { readFileSync } from 'node:fs';
 import { runCron, MINT_RULE_KV, type BondListingRecord } from '../worker/src/cron';
 import { NAMADA } from '../worker/src/config';
-import { answeringRpcs, HEAD_MAX_AGE_MS, indexedRpcs, transferHeights } from '../worker/src/sources/namada';
+import { answeringRpcs, HEAD_MAX_AGE_MS, indexedRpcs, NO_NODE_AT_HEAD, transferHeights } from '../worker/src/sources/namada';
 import { toNam } from '../worker/src/util';
 import { testD1, type TestD1 } from './d1-sqlite';
 
@@ -40,8 +40,8 @@ const MIN = 60_000, DAY = 86_400_000;
 /** What one node answers: its newest block, that block's time, and the state it answers queries from. */
 interface NodeAnswers { height: number; blockTime: number; epoch: number; stakeBase: bigint }
 const AT_HEAD = (blockTime: number): NodeAnswers => ({ height: HEAD, blockTime, epoch: 2715, stakeBase: 75_338_381_473_000n });
-/** Days behind: an older block, an older epoch, another total stake. */
-const BEHIND = (blockTime: number): NodeAnswers => ({ height: HEAD - 40_000, blockTime, epoch: 2680, stakeBase: 70_000_000_000_000n });
+/** Behind: an older block and an older epoch, with a total stake that is simply another number (an arbitrary one), so a figure read from it is told apart. */
+const BEHIND = (blockTime: number): NodeAnswers => ({ height: HEAD - 40_000, blockTime, epoch: 2680, stakeBase: 12_345_678_000_000n });
 
 /** A node not named here answers HTTP 502 to every request, as on 2026-11-07; the indexer agrees with the head. */
 function network(up: Record<string, NodeAnswers>) {
@@ -145,8 +145,8 @@ describe('the nodes a tick reads the chain from', () => {
 
   it('the first node in line sitting at an old block while another is at the head: nothing is read from the one behind', async () => {
     const db = testD1();
-    // the first node answers its status, says it is not catching up, and its newest block is nine days old
-    const calls = network({ [FIRST.host]: BEHIND(PLAIN - 9 * DAY), [LAST.host]: AT_HEAD(PLAIN - 20_000) });
+    // the first node answers its status, says it is not catching up, and its newest block is days old (an arbitrary number of them)
+    const calls = network({ [FIRST.host]: BEHIND(PLAIN - 3 * DAY), [LAST.host]: AT_HEAD(PLAIN - 20_000) });
     await virtualTick({ DB: db, KEPLR_KEY: 'k' }, PLAIN);
 
     // its status answered, so its row is ok and says where it stands; it was asked nothing else
@@ -163,11 +163,28 @@ describe('the nodes a tick reads the chain from', () => {
     expect(kv<BondListingRecord>(db, 'bond.listing')).toMatchObject({ completeAt: PLAIN, provider: LAST.provider, height: HEAD });
   });
 
+  it('the day\'s own chain reads, made in the first minutes of an hour, ask the same nodes: nothing is read from the one behind there either', async () => {
+    const db = testD1();
+    // 23:13:05 UTC: inside the hourly window in which the daily job reads the shielded pool's running total of rewards
+    const IN_WINDOW = Date.parse('2026-11-07T23:13:05Z');
+    const calls = network({ [FIRST.host]: BEHIND(IN_WINDOW - 3 * DAY), [LAST.host]: AT_HEAD(IN_WINDOW - 20_000) });
+    await virtualTick({ DB: db, KEPLR_KEY: 'k' }, IN_WINDOW);
+    // the read was made this tick, of the node at the head
+    const rewards = calls.filter((u) => decodeURIComponent(u).includes('max_total_rewards'));
+    expect(rewards.length).toBeGreaterThan(0);
+    expect(rewards.every((u) => new URL(u).host === LAST.host)).toBe(true);
+    // and the node behind was asked its status and nothing else, the whole tick
+    const behind = calls.filter((u) => new URL(u).host === FIRST.host);
+    expect(behind.length).toBeGreaterThan(0);
+    expect(behind.filter((u) => !u.endsWith('/status'))).toEqual([]);
+  });
+
   it('no node at a block from the last minutes: the nodes are asked in their listed order, as before', async () => {
     const db = testD1();
-    // both answering nodes stand at the same block, made hours ago: there is no newer answer to prefer
+    // both answering nodes stand at the same block, made hours ago: there is no newer answer to prefer. The last
+    // node's total stake is another number here, so the figure stored says which node the read was made of.
     const old = PLAIN - 6 * 60 * MIN;
-    const calls = network({ [FIRST.host]: { ...AT_HEAD(old), stakeBase: 75_338_381_473_000n }, [LAST.host]: AT_HEAD(old) });
+    const calls = network({ [FIRST.host]: AT_HEAD(old), [LAST.host]: { ...AT_HEAD(old), stakeBase: 12_345_678_000_000n } });
     await virtualTick({ DB: db, KEPLR_KEY: 'k' }, PLAIN);
 
     const h = healthOf(db);
@@ -181,6 +198,33 @@ describe('the nodes a tick reads the chain from', () => {
     // and a listing is not applied on a head no answer vouches for as current: its row says why
     expect(h['Namada RPC (bond listing)']).toMatchObject({ ok: false });
     expect(h['Namada RPC (bond listing)'].note).toMatch(/^Not read this tick: no two answers agree on the head/);
+  });
+});
+
+describe('the live scan\'s row in a tick: the newest scanned block is read beside the scan\'s notes', () => {
+  const NAME = 'Namada RPC (live block scan)';
+  const note = { height: HEAD - 5, at: PLAIN - 10 * MIN, note: `${NO_NODE_AT_HEAD} (a node: no answer)`, kind: 'head' };
+  const seed = (db: TestD1, scannedAt: number | null) => {
+    db.raw.prepare("INSERT INTO kv (key, value, updated_at) VALUES ('namada.scan', ?, 0)").run(JSON.stringify({ failures: [note] }));
+    if (scannedAt != null) db.raw.prepare("INSERT INTO kv (key, value, updated_at) VALUES ('namada.scanned', ?, 0)").run(JSON.stringify({ height: HEAD, ts: scannedAt, at: scannedAt }));
+  };
+
+  it('a block scanned after the note: the row is ok and names the block', async () => {
+    const db = testD1();
+    seed(db, PLAIN - 2 * MIN);
+    network({ [LAST.host]: AT_HEAD(PLAIN) });
+    await virtualTick({ DB: db, KEPLR_KEY: 'k' }, PLAIN);
+    expect(healthOf(db)[NAME]).toMatchObject({ ok: true, note: `block ${HEAD} scanned after the last note about the chain's head (22:31 UTC)` });
+  });
+
+  it('no block scanned since: the row is the note', async () => {
+    for (const scannedAt of [null, PLAIN - 30 * MIN]) {
+      const db = testD1();
+      seed(db, scannedAt);
+      network({ [LAST.host]: AT_HEAD(PLAIN) });
+      await virtualTick({ DB: db, KEPLR_KEY: 'k' }, PLAIN);
+      expect(healthOf(db)[NAME], String(scannedAt)).toMatchObject({ ok: false, note: note.note });
+    }
   });
 });
 
@@ -203,7 +247,7 @@ describe('answeringRpcs: which nodes are asked, from their status answers', () =
   });
 
   it('none at such a block: every node that answers, as without a time', () => {
-    const stale = NODES.map((n) => st(n.provider, { time: NOW - 9 * DAY }));
+    const stale = NODES.map((n) => st(n.provider, { time: NOW - 3 * DAY }));
     expect(names(answeringRpcs(stale, NOW))).toEqual(ALL);
     expect(names(answeringRpcs(stale))).toEqual(ALL);
     // a block time that is no time, or one from the future, is not a block from the last minutes
@@ -222,8 +266,8 @@ describe('a node without an event index (Rpc.indexed false)', () => {
 
   it('indexedRpcs keeps every node not marked, in order', () => {
     expect(indexedRpcs([WITHOUT, WITH, { ...WITH, provider: 'marked true', indexed: true }]).map((r) => r.provider)).toEqual(['with an index', 'marked true']);
-    // no node of today's list is left out by it unless it is marked
-    expect(indexedRpcs(NAMADA.rpcs)).toEqual(NAMADA.rpcs.filter((r) => (r as { indexed?: boolean }).indexed !== false));
+    // the list always keeps a node to search: the history scan cannot run on a list with none
+    expect(indexedRpcs(NAMADA.rpcs).length).toBeGreaterThan(0);
   });
 
   it('is never asked for a search of the index, wherever it stands in the list; with no indexed node the search fails, it does not answer an empty page', async () => {

@@ -1,7 +1,8 @@
-// The measured epoch length leaves out an epoch in which Namada made no blocks for a time. An epoch ends at the first
-// block made after the chain's minimum has passed, so one much longer than the minimum is not how long an epoch is
-// while blocks are made; counted into the thirty-day mean it would stretch the unstaking wait and every date counted
-// in epochs for thirty days. The note says how many were left out. The long epoch here is an arbitrary one.
+// The measured epoch length leaves out an epoch much longer than the chain's minimum. An epoch ends at the first
+// block made after the minimum has passed, so one longer than twice the minimum is not how long an epoch is while
+// blocks are made at today's minimum; counted into the thirty-day mean it would stretch the unstaking wait and every
+// date counted in epochs for thirty days. The note says how many were left out and by which measure. The long epoch
+// here is an arbitrary one.
 import { describe, it, expect } from 'vitest';
 import { EPOCH_MAX_MINIMUMS, measureEpochSec } from '../worker/src/analytics';
 import { testD1, insert } from './d1-sqlite';
@@ -26,7 +27,7 @@ describe('the measured epoch length', () => {
     insert(db, 'metrics', readings([6, 6, 6, 6, 60, 6, 6, 3]));
     const m = await measureEpochSec(db as any, NOW, MIN_SEC, null);
     expect(m.sec).toBeCloseTo(6 * 3600, -1);
-    expect(m.note).toBe('about 6.00 h an epoch, measured over the last 5 epochs; 1 epoch left out, in which Namada made no blocks for a time');
+    expect(m.note).toBe('about 6.00 h an epoch, measured over the last 5 epochs; 1 epoch left out, longer than 2 of the chain\'s minimums');
   });
 
   it('with the long epoch counted the mean would have been hours longer: that is what is kept out', async () => {
@@ -43,14 +44,14 @@ describe('the measured epoch length', () => {
     insert(db, 'metrics', readings([6, 6.5, 11.9, 6.5, 12.1, 6.5, 3]));
     const m = await measureEpochSec(db as any, NOW, MIN_SEC, null);
     expect(m.sec).toBeCloseTo(((6.5 * 3 + 11.9) / 4) * 3600, -1);
-    expect(m.note).toMatch(/measured over the last 4 epochs; 1 epoch left out, in which Namada made no blocks for a time$/);
+    expect(m.note).toMatch(/measured over the last 4 epochs; 1 epoch left out, longer than 2 of the chain's minimums$/);
   });
 
   it('two left out are counted as two; with fewer than three epochs kept, the length is not measured from them', async () => {
     const db = testD1();
     insert(db, 'metrics', readings([6, 30, 6, 6, 6, 40, 3]));
     const two = await measureEpochSec(db as any, NOW, MIN_SEC, null);
-    expect(two.note).toBe('about 6.00 h an epoch, measured over the last 3 epochs; 2 epochs left out, in which Namada made no blocks for a time');
+    expect(two.note).toBe('about 6.00 h an epoch, measured over the last 3 epochs; 2 epochs left out, longer than 2 of the chain\'s minimums');
 
     const few = testD1();
     insert(few, 'metrics', readings([6, 6, 60, 6, 3]));

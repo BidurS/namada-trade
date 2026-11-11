@@ -1,15 +1,16 @@
 // The live scan's health row (cron.ts liveScanRow) from the scan's notes (kv namada.scan) and the newest block it read
-// (kv namada.scanned). A note about the head says the scan is waiting for one: a block scanned after it supersedes
-// it, so the row is ok from that block on and not a day later. A note about a block the scan could not read stands
-// for its day whatever was scanned since.
+// (kv namada.scanned). A note under which the scan waits for a head (no node at it) is answered by the first block
+// scanned after it, so the row is ok from that block on and not a day later. A note about nodes that disagreed
+// while the scan read on, or about a block the scan could not read, stands for its day whatever was scanned since.
+// The kind each note is stored with is pinned where the scan writes them (test/live-scan-head.test.ts).
 import { describe, it, expect } from 'vitest';
-import { readFileSync } from 'node:fs';
 import { liveScanRow, SCAN_NOTE_STANDS_MS } from '../worker/src/cron';
+import { NO_NODE_AT_HEAD } from '../worker/src/sources/namada';
 
 const NOW = Date.UTC(2026, 5, 20, 12, 0);
 const MIN = 60_000;
 const NAME = 'Namada RPC (live block scan)';
-const head = (at: number, height = 101) => ({ height, at, note: 'no Namada node is at the chain\'s head (a node: no answer)', kind: 'head' as const });
+const head = (at: number, height = 101) => ({ height, at, note: `${NO_NODE_AT_HEAD} (a node: no answer)`, kind: 'head' as const });
 const block = (at: number, height = 90) => ({ height, at, note: `block ${height} not scanned: Error: a shape this reader does not know`, kind: 'block' as const });
 const scanned = (at: number, height = 105) => ({ height, at });
 
@@ -44,16 +45,18 @@ describe('the live scan\'s health row', () => {
     expect(liveScanRow(notes, scanned(NOW - 2 * MIN), later - 1)).toMatchObject({ ok: false });
   });
 
-  it('a note stored before notes had a kind stands as a block does', () => {
-    const old = { height: 101, at: NOW - 4 * MIN, note: 'a note with no kind' };
-    expect(liveScanRow({ failures: [old] }, scanned(NOW - 2 * MIN), NOW)).toMatchObject({ ok: false, failedAt: old.at, note: 'a note with no kind' });
+  it('nodes that disagreed on the head while the scan read on: a block scanned after the note does not answer it', () => {
+    const d = { height: 101, at: NOW - 4 * MIN, note: 'the Namada nodes disagree on the head (a node 200, a node 101): the scan follows the lowest', kind: 'disagree' as const };
+    expect(liveScanRow({ failures: [d] }, scanned(NOW - MIN), NOW)).toEqual({ name: NAME, ok: false, at: d.at, failedAt: d.at, note: d.note });
+    // and it is the row when a later note about a head the scan waited under has been answered
+    expect(liveScanRow({ failures: [d, head(NOW - 3 * MIN)] }, scanned(NOW - MIN), NOW)).toMatchObject({ ok: false, failedAt: d.at });
   });
 
-  it('the scan stores which kind each note is: a head it cannot follow as a head, everything else as a block', () => {
-    const src = readFileSync(new URL('../worker/src/live-hub.ts', import.meta.url), 'utf8');
-    expect(src).toContain("private async noteScanFailure(height: number, note: string, kind: 'head' | 'block' = 'block') {");
-    expect(src).toContain("await this.noteScanFailure(height, note, 'head');");
-    // one call marks a head; the others take the default
-    expect(src.split("'head');").length - 1).toBe(1);
+  it('a note stored before notes had a kind: the no-node note is one the scan waited under, any other stands', () => {
+    const waited = { height: 101, at: NOW - 4 * MIN, note: `${NO_NODE_AT_HEAD} (a node: no answer; a node: newest block not from the last 5 minutes)` };
+    expect(liveScanRow({ failures: [waited] }, scanned(NOW - 2 * MIN, 107), NOW)).toMatchObject({ ok: true, note: 'block 107 scanned after the last note about the chain\'s head (11:56 UTC)' });
+    expect(liveScanRow({ failures: [waited] }, scanned(NOW - 30 * MIN), NOW)).toMatchObject({ ok: false, failedAt: waited.at });
+    const other = { height: 101, at: NOW - 4 * MIN, note: 'a note with no kind' };
+    expect(liveScanRow({ failures: [other] }, scanned(NOW - 2 * MIN), NOW)).toMatchObject({ ok: false, failedAt: other.at, note: 'a note with no kind' });
   });
 });

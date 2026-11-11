@@ -110,9 +110,13 @@ export function listingHeads(statuses: readonly { provider?: string; error?: str
   const agreed = nodes.filter((h, i) => all.some((o, j) => j !== i && Math.abs(h - o) <= HEAD_AGREE_BLOCKS));
   const byNodes = nodes.some((h, i) => nodes.some((o, j) => j !== i && Math.abs(h - o) <= HEAD_AGREE_BLOCKS));
   if (agreed.length) return { head: Math.min(...agreed), top: Math.max(...agreed), note: null, byNodes };
-  return { head: null, top: null, note: `no two answers agree on the head (${said.join('; ')})`, byNodes: false };
+  return { head: null, top: null, note: `${NO_AGREED_HEAD} (${said.join('; ')})`, byNodes: false };
 }
 
+/** How listingHeads' note begins when no two answers agree on a head: no listing is read that tick (cron.ts recordListingFailure). */
+export const NO_AGREED_HEAD = 'no two answers agree on the head';
+/** How chainHead's note begins when no node is at the head: the scan waits then (cron.ts liveScanRow reads a note stored before notes had a kind by it). */
+export const NO_NODE_AT_HEAD = "no Namada node is at the chain's head";
 /** Two nodes at the chain's head are at most this many blocks apart (about twelve minutes of blocks); further apart, one of them is not at it. */
 export const HEAD_AGREE_BLOCKS = 100;
 /** A node whose newest block is older than this is not at the head, whatever catching_up says (Namada makes a block about every 7 s). */
@@ -200,7 +204,7 @@ export function chainHead(statuses: NodeStatus[], now: number, cursor = 0, vote:
     if (no) why.push(`${r.provider}: ${no}`);
     else at.push({ rpc: r, height: h });
   }
-  if (!at.length) return { height: null, rpcs: [], note: `no Namada node is at the chain's head (${why.join('; ')})`, agreed: false, byNodes: false, disputed: false };
+  if (!at.length) return { height: null, rpcs: [], note: `${NO_NODE_AT_HEAD} (${why.join('; ')})`, agreed: false, byNodes: false, disputed: false };
   const names = (rpcs: Rpc[]) => rpcs.map((r) => r.provider).join(' and ');
   const split = at.length > 1 ? `the Namada nodes disagree on the head (${at.map((a) => `${a.rpc.provider} ${a.height}`).join(', ')})` : null;
   // The nodes within HEAD_AGREE_BLOCKS of another counted node agree on the head: the lowest of them, a height every

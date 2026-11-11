@@ -471,8 +471,11 @@ describe('every "not read" rule (spec section 5): no value, the last reading\'s 
 
 describe('the validator base day when the day a period back has no snapshot', () => {
   const fresh = () => { const db = testD1(); seedSurvey(db); return db; };
-  /** Nine days with no listing before today's: the last snapshot before them is 14 Oct, and an older one exists too. */
-  function nineDayHole() {
+  /**
+   * Days with no listing before today's (an arbitrary stretch, longer than a week so that the weekly's base day falls
+   * in it too): the last snapshot before them is 14 Oct, and an older one exists too.
+   */
+  function daysWithNoListing() {
     const db = fresh();
     db.exec("UPDATE validator_daily SET day = '2026-10-14' WHERE day = '2026-10-22'");
     db.exec(`INSERT INTO validator_daily (day, validator, stake, delegators, commission, state, name, as_of, height, names_at)
@@ -481,7 +484,7 @@ describe('the validator base day when the day a period back has no snapshot', ()
   }
 
   it('daily: the base is the last snapshot before the missing day, not the oldest on record, and the figure says which it is', async () => {
-    const db = nineDayHole();
+    const db = daysWithNoListing();
     const log: Prepared[] = [];
     const w = v((await readDigestFigures(db, T, 'daily', log)).validators);
     expect(w).toMatchObject({ day: '2026-10-23', baseDay: '2026-10-14', baseIsEarlier: true, baseIsOldest: false, noListingToday: false });
@@ -491,7 +494,7 @@ describe('the validator base day when the day a period back has no snapshot', ()
   });
 
   it('weekly: the same day is the base when the day seven days back falls in the hole', async () => {
-    const w = v((await readDigestFigures(nineDayHole(), T, 'weekly')).validators);
+    const w = v((await readDigestFigures(daysWithNoListing(), T, 'weekly')).validators);
     expect(w).toMatchObject({ day: '2026-10-23', baseDay: '2026-10-14', baseIsEarlier: true, baseIsOldest: false });
   });
 

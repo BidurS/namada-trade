@@ -7,7 +7,7 @@ import * as depth from './depth/index';
 import { KV_KEYS as DEPTH_KV } from './depth/sql';
 import { PRICE_HOW_KEY, priceHealth, priceHowAt, priceHowStmt, storedPriceSource, type PriceHowLog } from './price-how';
 import { QUOTE_KEYS } from '../../shared/settle';
-import { namProtocolBalance, namTotalSupply, namTotalStake, namadaEpochRead, mintKeysAt, namadaStatusAll, delegationsAt, answeringRpcs, listingHeads, QUICK, RpcBreaker, allNamBalances, allBonds, ListingTooLargeError, LISTING_MAX_VALUE_BYTES, namProtocolBalanceAt, posLastInflationAt, maspTotalRewards, maspEpochMultiplier, type BalanceListing, type BondListing, type MintKeys, type ReadOpts, type Rpc } from './sources/namada';
+import { NO_AGREED_HEAD, NO_NODE_AT_HEAD, namProtocolBalance, namTotalSupply, namTotalStake, namadaEpochRead, mintKeysAt, namadaStatusAll, delegationsAt, answeringRpcs, listingHeads, QUICK, RpcBreaker, allNamBalances, allBonds, ListingTooLargeError, LISTING_MAX_VALUE_BYTES, namProtocolBalanceAt, posLastInflationAt, maspTotalRewards, maspEpochMultiplier, type BalanceListing, type BondListing, type MintKeys, type ReadOpts, type Rpc } from './sources/namada';
 import { MASP_INDEXER_HEALTH, MASP_INDEXER_MAX_HEIGHTS, maspIndexerHeight, maspIndexerTxs, type MaspIndexerTx } from './sources/masp-indexer';
 import { MASP_SEEN_RANGE_SQL, seenKey } from './masp-seen';
 import { MASP_ADDRESS, SQL as DIGEST_SQL } from './digest/sql';
@@ -1712,6 +1712,8 @@ export interface BalanceListingRecord {
   failedAt?: number | null;
   error?: string;
   failures?: number;
+  /** `failedAt` is a tick that read nothing because no head was agreed on: the next try waits the shortest wait, and `failures` is as the reads left it */
+  noHead?: boolean;
   /** the node whose answer the gate last refused; asked last next time */
   refusedProvider?: string | null;
   /** a key count under the shrink floor another node answered, waiting for a second answer to confirm it (shrinkRefusal) */
@@ -1745,6 +1747,8 @@ export interface BondListingRecord {
   failedAt?: number | null;
   error?: string;
   failures?: number;
+  /** as BalanceListingRecord.noHead */
+  noHead?: boolean;
   refusedProvider?: string | null;
   /** a sources count under the shrink floor another node answered, waiting for a second answer to confirm it (shrinkRefusal) */
   smaller?: SmallerCount | null;
@@ -1774,11 +1778,12 @@ export function listingRetryMs(failures: number): number {
 /**
  * A listing is due when there is none, when its last pass has rows left to write, or when its interval has passed;
  * not within the retry wait of a failed or refused read (listingRetryMs: 5 minutes, then 15, then 60, so a slow
- * day does not cost the nodes a cut-off download every five minutes). A tick that read nothing because no head was
- * agreed on records no failure in a row (recordListingFailure), so it waits the 5 minutes each time.
+ * day does not cost the nodes a cut-off download every five minutes). After a tick that read nothing because no head
+ * was agreed on (`noHead`, recordListingFailure) the wait is the 5 minutes each time: nothing was read, so nothing is
+ * spared by waiting longer; the count of failed reads in a row is kept, so the reads' own back-off goes on.
  */
-export function listingDue(rec: { at: number; remaining: number; failedAt?: number | null; failures?: number } | null | undefined, everyMs: number, now: number): boolean {
-  if (rec?.failedAt != null && now - rec.failedAt < listingRetryMs(rec.failures ?? 1)) return false;
+export function listingDue(rec: { at: number; remaining: number; failedAt?: number | null; failures?: number; noHead?: boolean } | null | undefined, everyMs: number, now: number): boolean {
+  if (rec?.failedAt != null && now - rec.failedAt < (rec.noHead ? LISTING_RETRY_MS : listingRetryMs(rec.failures ?? 1))) return false;
   return !rec || rec.remaining > 0 || now - rec.at >= everyMs;
 }
 
@@ -2100,7 +2105,7 @@ export async function runBalanceListing(env: Env, health: SourceHealth[], now: n
     health.push({ name, ok: false, at: now, note: why.note });
     await writeListingSum(env.DB, listingSumCheck(null, null, ctx, now, why.note), now);
     // The record remembers the failure (the next try waits LISTING_RETRY_MS); a pass already complete stays complete.
-    const failed: BalanceListingRecord = { ...(prev ?? { at: 0, completeAt: null, height: 0, provider: '', keys: 0, holders: 0, totalNam: 0, bytes: 0, written: 0, zeroed: 0, remaining: 0, ticks: 0, durationMs: 0, spansAt: null, extendedAt: null }), failedAt: now, error: why.error, failures: (prev?.failures ?? 0) + 1 };
+    const failed: BalanceListingRecord = { ...(prev ?? { at: 0, completeAt: null, height: 0, provider: '', keys: 0, holders: 0, totalNam: 0, bytes: 0, written: 0, zeroed: 0, remaining: 0, ticks: 0, durationMs: 0, spansAt: null, extendedAt: null }), failedAt: now, error: why.error, failures: (prev?.failures ?? 0) + 1, noHead: false };
     await kvSet(env.DB, 'balance.listing', failed).catch(() => {});
     return failed;
   }
@@ -2112,7 +2117,7 @@ export async function runBalanceListing(env: Env, health: SourceHealth[], now: n
     const error = `Not applied: ${gate.reason}`;
     health.push({ name, ok: false, at: now, note: `The balance listing from ${listing.provider} was not applied: ${gate.reason}`.slice(0, 160) });
     // The node whose answer was refused is asked last next time (listingRpcs): a node 1,000 blocks behind with catching_up false would otherwise be asked first until it caught up.
-    const refused: BalanceListingRecord = { ...(prev ?? { at: 0, completeAt: null, height: 0, provider: '', keys: 0, holders: 0, totalNam: 0, bytes: 0, written: 0, zeroed: 0, remaining: 0, ticks: 0, durationMs: 0, spansAt: null, extendedAt: null }), failedAt: now, error, failures: (prev?.failures ?? 0) + 1, refusedProvider: listing.provider };
+    const refused: BalanceListingRecord = { ...(prev ?? { at: 0, completeAt: null, height: 0, provider: '', keys: 0, holders: 0, totalNam: 0, bytes: 0, written: 0, zeroed: 0, remaining: 0, ticks: 0, durationMs: 0, spansAt: null, extendedAt: null }), failedAt: now, error, failures: (prev?.failures ?? 0) + 1, noHead: false, refusedProvider: listing.provider };
     // A smaller key count from another node than the last listing's waits for a second answer to confirm it (shrinkRefusal).
     if (gate.smaller) refused.smaller = { ...gate.smaller, at: now };
     await kvSet(env.DB, 'balance.listing', refused).catch(() => {});
@@ -2222,7 +2227,7 @@ export async function runBondListing(env: Env, health: SourceHealth[], now: numb
     const why = listingReadFailure('bond', e);
     health.push({ name, ok: false, at: now, note: why.note });
     await writeCheckRow(env.DB, bondSourcesCheck(null, now, why.note), now, 'bond_sources');
-    const failed: BondListingRecord = { ...(prev ?? { at: 0, completeAt: null, height: 0, epoch, provider: '', sources: 0, stakers: 0, totalNam: 0, bytes: 0, written: 0, zeroed: 0, remaining: 0, ticks: 0, durationMs: 0 }), failedAt: now, error: why.error, failures: (prev?.failures ?? 0) + 1 };
+    const failed: BondListingRecord = { ...(prev ?? { at: 0, completeAt: null, height: 0, epoch, provider: '', sources: 0, stakers: 0, totalNam: 0, bytes: 0, written: 0, zeroed: 0, remaining: 0, ticks: 0, durationMs: 0 }), failedAt: now, error: why.error, failures: (prev?.failures ?? 0) + 1, noHead: false };
     await kvSet(env.DB, 'bond.listing', failed).catch(() => {});
     return failed;
   }
@@ -2232,7 +2237,7 @@ export async function runBondListing(env: Env, health: SourceHealth[], now: numb
   if (!gate.ok) {
     const error = `Not applied: ${gate.reason}`;
     health.push({ name, ok: false, at: now, note: `The bond listing from ${listing.provider} was not applied: ${gate.reason}`.slice(0, 160) });
-    const refused: BondListingRecord = { ...(prev ?? { at: 0, completeAt: null, height: 0, epoch, provider: '', sources: 0, stakers: 0, totalNam: 0, bytes: 0, written: 0, zeroed: 0, remaining: 0, ticks: 0, durationMs: 0 }), failedAt: now, error, failures: (prev?.failures ?? 0) + 1, refusedProvider: listing.provider };
+    const refused: BondListingRecord = { ...(prev ?? { at: 0, completeAt: null, height: 0, epoch, provider: '', sources: 0, stakers: 0, totalNam: 0, bytes: 0, written: 0, zeroed: 0, remaining: 0, ticks: 0, durationMs: 0 }), failedAt: now, error, failures: (prev?.failures ?? 0) + 1, noHead: false, refusedProvider: listing.provider };
     if (gate.smaller) refused.smaller = { ...gate.smaller, at: now };
     await kvSet(env.DB, 'bond.listing', refused).catch(() => {});
     return refused;
@@ -2610,7 +2615,7 @@ export async function runCron(env: Env) {
     // With no head the answers agree on, the listing due is not read: one node's word would be all its height is
     // checked against. It is recorded so its row says why (5a, 5d) and the next try waits the shortest wait, however
     // many ticks in a row had no head: nothing was read, so nothing is spared by waiting longer, and the first tick
-    // with a head again is at most that wait away (recordListingFailure `read`).
+    // with a head again is at most that wait away (recordListingFailure `read`, listingDue `noHead`).
     const which = listingHead.head == null ? null : due;
     const noHead = due && listingHead.head == null ? `Not read this tick: ${listingHead.note}` : null;
     if (due && noHead) await recordListingFailure(env.DB, due === 'bond' ? 'bond.listing' : 'balance.listing', now, `Not applied: ${listingHead.note}`.slice(0, 160), false);
@@ -2747,7 +2752,7 @@ export async function runCron(env: Env) {
     const seriesCtx = { health, signal, late, listingTick: which !== null };
     await Promise.all([
       series.hourly(env, now, { ...seriesCtx, pools: sized.then((s) => s.pools), poolsAt: poolRes.at }).catch((e) => { console.error('series hourly', e); health.push({ name: 'Series (hourly)', ok: false, at: now, note: String(e).slice(0, 160) }); }),
-      series.daily(env, now, seriesCtx).catch((e) => { console.error('series daily', e); health.push({ name: 'Series (daily snapshot)', ok: false, at: now, note: String(e).slice(0, 160) }); }),
+      series.daily(env, now, { ...seriesCtx, rpcs }).catch((e) => { console.error('series daily', e); health.push({ name: 'Series (daily snapshot)', ok: false, at: now, note: String(e).slice(0, 160) }); }),
       depth.hourly(env, now, { ...seriesCtx, writeAfter: depthRun }).catch((e) => { console.error('depth hourly', e); health.push({ name: depth.DEPTH_HEALTH.owners, ok: false, at: now, note: String(e).slice(0, 160) }); }),
     ]);
 
@@ -3275,7 +3280,8 @@ export async function runCron(env: Env) {
     // hangs on queries, and the Sources sheet should say why the other node answered instead.
     for (const { provider, h } of nodeHealth) {
       const n = breaker.failures(provider);
-      if (h.ok && n > 0) { h.ok = false; h.note = `${h.note}; ${n} ${n === 1 ? 'read' : 'reads'} got no answer this tick, so another node was asked`; }
+      // "another node was asked" only when the tick had another to ask (answeringRpcs can leave one)
+      if (h.ok && n > 0) { h.ok = false; h.note = `${h.note}; ${n} ${n === 1 ? 'read' : 'reads'} got no answer this tick${rpcs.length > 1 ? ', so another node was asked' : ''}`; }
     }
   } catch (err) {
     console.error('cron error:', err);
@@ -3315,16 +3321,19 @@ export async function runCron(env: Env) {
 export const SCAN_NOTE_STANDS_MS = 24 * 3600000;
 /**
  * The live scan's health row from its notes (kv namada.scan) and the newest block it read (kv namada.scanned); null
- * with no note. A note about the head (no node at it, nodes that disagree on it) says the scan is waiting: once a
- * block has been scanned after it, it no longer stands, so the row is ok from that block on and not a day later. A
- * note about a block the scan could not read, or a cursor it had to move, stands for SCAN_NOTE_STANDS_MS whatever was
- * scanned since: that block was not read. The row is the newest note standing.
+ * with no note. A note under which the scan waits (kind 'head': no node at the head, a cursor above a head two nodes
+ * did not give) no longer stands once a block has been scanned after it, so the row is ok from that block on and not
+ * a day later. Every other note stands for SCAN_NOTE_STANDS_MS whatever was scanned since: nodes that disagreed on
+ * the head while the scan read on, a block the scan could not read, a cursor it had to move. A note stored before
+ * notes had a kind is one the scan waited under when it begins as the no-node note does (NO_NODE_AT_HEAD); any other
+ * stands. The row is the newest note standing.
  */
 export function liveScanRow(scan: LiveScanStatus | null | undefined, scanned: { height: number; at: number } | null, now: number): SourceHealth | null {
   const notes = scan?.failures ?? [];
   if (!notes.length) return null;
   const name = 'Namada RPC (live block scan)';
-  const standing = notes.filter((f) => !(f.kind === 'head' && scanned != null && scanned.at > f.at));
+  const waited = (f: (typeof notes)[number]) => f.kind === 'head' || (f.kind == null && typeof f.note === 'string' && f.note.startsWith(NO_NODE_AT_HEAD));
+  const standing = notes.filter((f) => !(waited(f) && scanned != null && scanned.at > f.at));
   const last = standing[standing.length - 1];
   if (!last) {
     const head = notes[notes.length - 1];
@@ -3341,14 +3350,18 @@ export function liveScanRow(scan: LiveScanStatus | null | undefined, scanned: { 
  * the tick's own first read of it may have failed too, and a record built from nothing would replace a complete one
  * (its completeAt, height, counts and spans) with a blank.
  *
- * `read`: a read was started (the default). A tick with no head starts none (`read` false): it is not one more
- * failure in a row, so the count starts over and the next try is one LISTING_RETRY_MS later (listingRetryMs), not the
- * hour that three failed reads in a row wait. A count already raised by such ticks is put back by the next one.
+ * `read`: a read was started (the default): one more failed read in a row. A tick with no head starts none (`read`
+ * false): the record is marked `noHead`, so the next try is one LISTING_RETRY_MS later (listingDue) and not the hour
+ * that three failed reads in a row wait, and the count of failed reads is left as it is: a failed read before and
+ * after such a tick still backs off. A record from before the mark existed whose last error is a no-head tick's had
+ * its count raised by those ticks, one each; that count is put back to none, once.
  */
 export async function recordListingFailure(db: D1Database, key: 'bond.listing' | 'balance.listing', now: number, error: string, read = true): Promise<void> {
   let cur: (Partial<BondListingRecord> & Partial<BalanceListingRecord>) | null;
   try { cur = await kvGetJson<Partial<BondListingRecord> & Partial<BalanceListingRecord>>(db, key); } catch { return; }
-  await kvSet(db, key, { at: 0, completeAt: null, remaining: 0, ...cur, failedAt: now, error, failures: read ? (cur?.failures ?? 0) + 1 : 0 }).catch(() => {});
+  const raisedByNoHead = cur?.noHead === undefined && typeof cur?.error === 'string' && cur.error.startsWith(`Not applied: ${NO_AGREED_HEAD}`);
+  const failures = read ? (cur?.failures ?? 0) + 1 : raisedByNoHead ? 0 : cur?.failures ?? 0;
+  await kvSet(db, key, { at: 0, completeAt: null, remaining: 0, ...cur, failedAt: now, error, failures, noHead: !read }).catch(() => {});
 }
 
 /**
