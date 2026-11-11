@@ -56,6 +56,8 @@ export interface StoredPools {
   price: SitePrice | null;
   /** pools the router listed whose address is not a pool account's (sources/sqs.ts fetchNamPools refused) */
   refused?: number;
+  /** each other coin's price as last read, by denomination: what a minute with no reading of a coin may carry (CoinReading) */
+  coins?: CoinReadings;
 }
 
 const fin = (x: number | null | undefined): x is number => x != null && Number.isFinite(x);
@@ -68,20 +70,62 @@ export const NO_NAM_PRICE = 'the site has no NAM price this minute';
 export const noCoinPrice = (coin: string) => `no US dollar price is read for ${coin}`;
 export const noCoinDecimals = (coin: string) => `the number of decimals of ${coin} is not known`;
 
-/** A coin's US dollar price as the code already has it, and how it was found. */
-interface CoinPrice { usd: number | null; how: string }
+/** A coin's US dollar price as the code already has it, and how it was found. `carriedAt`: the price is an earlier minute's reading, made then. */
+interface CoinPrice { usd: number | null; how: string; carriedAt?: number }
+
+/**
+ * A coin's price as it was last read, with when and how. A minute that has no reading of a coin's price (the depth
+ * minute was not written, or its price list did not name the coin) may use this one while it is no older than
+ * MINUTE_STALE_MS, the rule the site's own NAM price already follows (owner decision 47, 2026-11-10: a dated
+ * reading said with its time, not a fallback). Past that age the coin has no price and its pool is not priced. Before
+ * this a pool dropped out of the total for the one minute its coin had no price, and the total dipped and came back.
+ */
+export interface CoinReading { usd: number; at: number; how: string }
+export type CoinReadings = Record<string, CoinReading>;
+/** The words added to a carried price's own: when it was read, and that this minute read none. */
+export const carriedWords = (at: number) => `read at ${fmtClock(at)} and carried, since no price was read for it this minute`;
 
 /**
  * A counter coin's price where the code already has one: Noble USDC and allUSDC count as one dollar (the depth module's
  * own rule, worker/src/depth/config.ts quoteCoins); a coin the cron quotes each minute (OSMOSIS.quotedCoins) takes this
  * tick's quote; a coin the depth minute priced in another pool takes that price. Anything else has none.
  */
-function coinPrice(denom: string, coinUsd: Record<string, number>, coinAt: number | null, depth: DepthResponse | null): CoinPrice {
+function coinPrice(denom: string, coinUsd: Record<string, number>, coinAt: number | null, depth: DepthResponse | null, carried?: CoinReadings | null, at?: number): CoinPrice {
   if (NAM_DEPTH.quoteCoins[denom]?.usdFixed) return { usd: 1, how: USDC_AS_ONE };
   const quoted = Object.entries(OSMOSIS.quotedCoins).find(([, d]) => d === denom)?.[0];
   if (quoted && fin(coinUsd[quoted]) && coinUsd[quoted] > 0) return { usd: coinUsd[quoted], how: `${quoted} at the Osmosis quote, ${usdWords(coinUsd[quoted])}${coinAt != null ? ` at ${fmtClock(coinAt)}` : ''}` };
   const seen = depth?.pools.find((p) => p.counterDenom === denom && fin(p.counterUsd) && p.counterUsd > 0);
-  return seen ? { usd: seen.counterUsd, how: seen.counterUsdHow } : { usd: null, how: '' };
+  if (seen) return { usd: seen.counterUsd, how: seen.counterUsdHow };
+  // no reading this minute: the last one, while it is under MINUTE_STALE_MS old, said with the time it was made
+  const last = carried && Object.prototype.hasOwnProperty.call(carried, denom) ? carried[denom] : null;
+  if (last && at != null && fin(last.usd) && last.usd > 0 && fin(last.at) && at - last.at >= 0 && at - last.at <= MINUTE_STALE_MS) {
+    return { usd: last.usd, how: `${last.how}, ${carriedWords(last.at)}`, carriedAt: last.at };
+  }
+  return { usd: null, how: '' };
+}
+
+/**
+ * The other coins' prices this minute read, by denomination, with the last readings a minute may still carry: this
+ * minute's own (the coins the cron quotes, and each coin the depth minute priced) over `prev`, whose entries are kept
+ * only while under MINUTE_STALE_MS old at `at`. A coin counted as one dollar has no entry: it is never read. This is
+ * what the tick stores beside the list (StoredPools.coins) and hands to the next tick's sizePools as `carried`.
+ */
+export function coinReadings(input: Pick<SizeInput, 'depth' | 'coinUsd' | 'coinAt' | 'poolsAt'>, prev?: CoinReadings | null): CoinReadings {
+  const out: CoinReadings = {};
+  for (const [denom, r] of Object.entries(prev ?? {})) {
+    if (r && fin(r.usd) && r.usd > 0 && fin(r.at) && typeof r.how === 'string' && input.poolsAt - r.at >= 0 && input.poolsAt - r.at <= MINUTE_STALE_MS) out[denom] = { usd: r.usd, at: r.at, how: r.how };
+  }
+  if (input.coinAt != null) {
+    for (const [name, denom] of Object.entries(OSMOSIS.quotedCoins)) {
+      const usd = input.coinUsd?.[name];
+      if (fin(usd) && usd > 0) out[denom] = { usd, at: input.coinAt, how: `${name} at the Osmosis quote, ${usdWords(usd)}` };
+    }
+  }
+  for (const p of input.depth?.pools ?? []) {
+    if (NAM_DEPTH.quoteCoins[p.counterDenom]?.usdFixed) continue;
+    if (fin(p.counterUsd) && p.counterUsd > 0) out[p.counterDenom] = { usd: p.counterUsd, at: input.depth!.at, how: p.counterUsdHow };
+  }
+  return out;
 }
 
 /** The coins' metadata the depth module reads from the quote service and keeps (kv depth.params tokens): decimals by denomination. */
@@ -133,6 +177,8 @@ export interface SizeInput {
   coinAt?: number | null;
   /** the coins' decimals the depth module read (kv depth.params tokens), for a coin the router's list gave in base units only */
   tokens?: CoinMeta | null;
+  /** the other coins' prices as last read (the stored list's `coins`): used for a coin this minute has no reading of, while under MINUTE_STALE_MS old */
+  carried?: CoinReadings | null;
 }
 
 /**
@@ -170,7 +216,7 @@ function fromDepth(depth: DepthResponse | null, p: PoolInfo): PoolInfo | null {
 /** Any other pool: the router's reserves, its NAM at the site's price and its other coin at that coin's price, or not priced. */
 function fromList(input: SizeInput, p: PoolInfo): PoolInfo {
   const { price } = input;
-  const c = coinPrice(p.counterDenom, input.coinUsd ?? {}, input.coinAt ?? null, input.depth);
+  const c = coinPrice(p.counterDenom, input.coinUsd ?? {}, input.coinAt ?? null, input.depth, input.carried, input.poolsAt);
   const counter = p.counterReserve;
   const why: string[] = [];
   // a side with nothing in it is worth nothing at any price
@@ -384,6 +430,8 @@ export interface StorePoolsInput {
   depth: DepthResponse | null;
   price: SitePrice | null;
   refused?: number;
+  /** the other coins' prices as last read (coinReadings), kept for the next minute */
+  coins?: CoinReadings;
 }
 
 /**
@@ -396,6 +444,7 @@ export async function storePools(db: D1Database, x: StorePoolsInput): Promise<vo
     at: x.poolsAt, pools: x.pools, price: x.price,
     depth: x.depth ? { minute: x.depth.at, at: x.depth.ref.at, height: x.depth.ref.height, refPool: x.depth.ref.pool, refUsd: x.depth.ref.usd } : null,
     ...(x.refused ? { refused: x.refused } : {}),
+    ...(x.coins && Object.keys(x.coins).length ? { coins: x.coins } : {}),
   };
   // A stretch an earlier version stored since the last minute (a rollback) is recorded before this minute's totals.
   const run = await routerRunStmt(db, x.now).catch((e) => { console.error('router runs not read', e); return null; });

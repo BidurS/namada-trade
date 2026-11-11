@@ -2,7 +2,7 @@ import type { Env } from './util';
 import { runBatch, stmt, kvGet, kvSet, kvGetJson } from './db';
 import { fetchOsmosisHolderList, fetchOsmosisSupplyBase, fetchOsmosisBalanceBase, OSMOSIS_HOLDER_PAGES, OSMOSIS_NEXT_KEY_MAX, KEPLR_REST_SRC, type HolderListRead, type KeplrOpts, type OsmosisBalanceRead } from './sources/osmosis';
 import { buildCurve, curveComplete, fetchNamPools, fetchNamPrice, priceSourceName, CURVE_TIERS } from './sources/sqs';
-import { CURVE_HEALTH_NAME, MINUTE_STALE_MS, sizePools, storeCurve, storePools, type CoinMeta, type SitePrice } from './pool-sizes';
+import { CURVE_HEALTH_NAME, MINUTE_STALE_MS, coinReadings, readPoolsRow, sizePools, storeCurve, storePools, type CoinMeta, type CoinReadings, type SitePrice } from './pool-sizes';
 import * as depth from './depth/index';
 import { KV_KEYS as DEPTH_KV } from './depth/sql';
 import { PRICE_HOW_KEY, priceHealth, priceHowAt, priceHowStmt, storedPriceSource, type PriceHowLog } from './price-how';
@@ -2647,10 +2647,14 @@ export async function runCron(env: Env) {
     const coinMeta: Promise<CoinMeta | null> = poolRes.pools.some((p) => p.counterBase)
       ? depthRun.then(() => kvGetJson<{ tokens?: CoinMeta }>(env.DB, DEPTH_KV.params)).then((r) => r?.tokens ?? null, () => null)
       : Promise.resolve(null);
-    const sized = Promise.all([depthRun, sitePrice, coinMeta]).then(([d, p, tokens]) => ({
-      pools: sizePools({ pools: poolRes.pools, poolsAt: poolRes.at, depth: d?.written ? d.latest : null, price: p, coinUsd: price.coinUsd, coinAt: price.at, tokens }),
-      depth: d?.written ? d.latest : null, price: p,
-    }));
+    // A coin this minute has no price reading of takes its last one while that is under MINUTE_STALE_MS old (owner
+    // decision 47): the readings are kept beside the stored list, read here and written back with this minute's own.
+    const carriedCoins: Promise<CoinReadings | null> = poolRes.pools.length ? readPoolsRow(env.DB).then((r) => r.row?.coins ?? null, () => null) : Promise.resolve(null);
+    const sized = Promise.all([depthRun, sitePrice, coinMeta, carriedCoins]).then(([d, p, tokens, carried]) => {
+      const minute = d?.written ? d.latest : null;
+      const input = { pools: poolRes.pools, poolsAt: poolRes.at, depth: minute, price: p, coinUsd: price.coinUsd, coinAt: price.at, tokens, carried };
+      return { pools: sizePools(input), depth: minute, price: p, coins: coinReadings(input, carried) };
+    });
     // 1d. The size table (sources/sqs.ts buildCurve), once a minute against this tick's price, so a visitor's
     //     /api/quote/curve reads the stored table and never asks the router. Its own phase (CURVE_PHASE_MS), started
     //     only with a price and while the tick is not late; stored at the end of the tick (6c), never waited on before.
@@ -3103,7 +3107,7 @@ export async function runCron(env: Env) {
     // 4b. The sized pool list and its totals (pool-sizes.ts storePools), what visitors read of the pools: right after
     //     the depth minute. A list that did not answer leaves the stored one, which its readers mark old.
     const s = await sized;
-    await storePools(env.DB, { now, pools: s.pools, poolsAt: poolRes.at, depth: s.depth, price: s.price, refused: poolRes.refused })
+    await storePools(env.DB, { now, pools: s.pools, poolsAt: poolRes.at, depth: s.depth, price: s.price, refused: poolRes.refused, coins: s.coins })
       .catch((e) => { console.error('stored pool list', e); poolsRow.ok = false; poolsRow.note = [poolsRow.note, `The sized pool list was not stored: ${String(e).slice(0, 80)}`].filter(Boolean).join(' ').slice(0, 160); });
     await mergeHealth(env, health);
 

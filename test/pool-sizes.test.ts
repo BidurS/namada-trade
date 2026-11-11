@@ -14,7 +14,7 @@ import { OSMOSIS } from '../worker/src/config';
 import {
   POOLS_KEY, CURVE_KEY, POOLS_STALE_MS, MINUTE_STALE_MS, SIZE_SOURCE, PRICED_KEY, CURVE_HEALTH_NAME,
   sizePools, poolsTotal, storedPoolsStmts, storedPoolsProv, storedTotalProv, storedCurve, storeCurve, storePools, curveWithPools, counterDecimals, notPricedWords, NO_NAM_PRICE, noCoinPrice, noCoinDecimals,
-  NOT_READ, NOT_KNOWN_KEY, notKnownThenWords, type StoredPools,
+  NOT_READ, NOT_KNOWN_KEY, notKnownThenWords, carriedWords, coinReadings, readPoolsRow, type StoredPools,
 } from '../worker/src/pool-sizes';
 import { fetchNamPools } from '../worker/src/sources/sqs';
 import { readFileSync } from 'node:fs';
@@ -189,6 +189,83 @@ describe('a pool\'s size from its reserves', () => {
     // a coin the list names itself keeps the list's name
     const usdc = listed('3005', USDC, 'USDC', 100, 1, 10);
     expect(sizePools({ pools: [usdc], poolsAt: T, depth: null, price, tokens: { [USDC]: { symbol: 'XUSD', decimals: 6 } } })[0].counterSymbol).toBe('USDC');
+  });
+
+  describe('a coin with no price reading this minute (owner decision 47, 2026-11-10)', () => {
+    const atone = 'ibc/BC26A7A805ECD6822719472BCB7842A48EF09DF206182F8F259B2593EB5D23FB';
+    const pool = listed('3405', atone, 'ATONE', 60_000, 700, 60);
+    const price = { usd: 0.001, at: T - 20_000, source: 'Osmosis SQS' };
+    const HOW = 'ATONE at the quote service\'s price list, 0.07 USD';
+    const size = (carried: Record<string, unknown> | null | undefined) => sizePools({ pools: [pool], poolsAt: T, depth: null, price, carried: carried as any })[0];
+
+    it('takes its last reading while that is no more than three minutes old, and says when it was read', () => {
+      expect(MINUTE_STALE_MS).toBe(3 * MIN);
+      const a = size({ [atone]: { usd: 0.07, at: T - MIN, how: HOW } });
+      expect(a.liquidityUsd).toBeCloseTo(60_000 * 0.001 + 700 * 0.07, 9);
+      expect(a.counterUsd).toBeCloseTo(49, 9);
+      expect(a.sizeProv).toMatchObject({ source: SIZE_SOURCE.list, at: T, status: 'live' });
+      expect(a.sizeProv!.note).toContain(`${HOW}, ${carriedWords(T - MIN)}`);
+      expect(carriedWords(T - MIN)).toMatch(/^read at \d\d:\d\d UTC and carried, since no price was read for it this minute$/);
+      // the edge: exactly three minutes is carried, a millisecond more is not
+      expect(size({ [atone]: { usd: 0.07, at: T - MINUTE_STALE_MS, how: HOW } }).liquidityUsd).not.toBeNull();
+      const late = size({ [atone]: { usd: 0.07, at: T - MINUTE_STALE_MS - 1, how: HOW } });
+      expect(late.liquidityUsd).toBeNull();
+      expect(late.sizeProv!.note).toBe(notPricedWords(noCoinPrice('ATONE')));
+    });
+
+    it('carries nothing that is not a reading: no entry, a time ahead of this one, a price that is not a positive number, a word every object answers to', () => {
+      for (const carried of [null, undefined, {}, { [atone]: { usd: 0.07, at: T + 1, how: HOW } }, { [atone]: { usd: 0, at: T - MIN, how: HOW } }, { [atone]: { usd: -1, at: T - MIN, how: HOW } },
+        { [atone]: { usd: Number.NaN, at: T - MIN, how: HOW } }, { [atone]: { usd: 0.07, at: Number.NaN, how: HOW } }, { other: { usd: 0.07, at: T - MIN, how: HOW } }]) {
+        expect(size(carried).liquidityUsd, JSON.stringify(carried)).toBeNull();
+      }
+      const odd = listed('3999', 'constructor', 'XYZ', 100, 5, 1);
+      expect(sizePools({ pools: [odd], poolsAt: T, depth: null, price, carried: {} })[0].liquidityUsd).toBeNull();
+    });
+
+    it('this minute\'s own reading always stands before a carried one', () => {
+      const minute = depthMinute(0.001, [{ id: '3012', counterDenom: atone, counterSymbol: 'ATONE', counterUsd: 0.09, counterUsdHow: 'ATONE at the quote service\'s price list, 0.09 USD', nam: 1, counter: 1, counterValueUsd: 0.09 }]);
+      const a = sizePools({ pools: [pool], poolsAt: T, depth: minute, price, carried: { [atone]: { usd: 0.07, at: T - MIN, how: HOW } } })[0];
+      expect(a.counterUsd).toBeCloseTo(700 * 0.09, 9);
+      expect(a.sizeProv!.note).not.toContain('carried');
+    });
+
+    it('what a tick keeps for the next: its own readings, the last ones still under three minutes old, and never a coin counted as one dollar', () => {
+      const minute = depthMinute(0.001, [
+        { id: '3005', counterDenom: USDC, counterSymbol: 'USDC', counterUsd: 1, nam: 1, counter: 1, counterValueUsd: 1 },
+        { id: '3012', counterDenom: atone, counterSymbol: 'ATONE', counterUsd: 0.09, counterUsdHow: 'ATONE now', nam: 1, counter: 1, counterValueUsd: 0.09 },
+      ]);
+      const prev = { [atone]: { usd: 0.07, at: T - MIN, how: HOW }, 'ibc/OLD': { usd: 2, at: T - MINUTE_STALE_MS - 1, how: 'old' }, 'ibc/KEPT': { usd: 3, at: T - 2 * MIN, how: 'kept' }, 'ibc/BAD': { usd: 0, at: T - MIN, how: 'bad' } };
+      const now = coinReadings({ depth: minute, coinUsd: { OSMO: 0.05 }, coinAt: T - 5_000, poolsAt: T }, prev);
+      expect(now[atone]).toEqual({ usd: 0.09, at: minute.at, how: 'ATONE now' });
+      expect(now['ibc/KEPT']).toEqual({ usd: 3, at: T - 2 * MIN, how: 'kept' });
+      expect(now.uosmo).toEqual({ usd: 0.05, at: T - 5_000, how: 'OSMO at the Osmosis quote, $0.05' });
+      expect(Object.keys(now).sort()).toEqual([atone, 'ibc/KEPT', 'uosmo'].sort());
+      expect(now[USDC]).toBeUndefined();
+      // a minute with no reading at all keeps the last ones as they were, with their own times: a carried price is never re-dated
+      const quiet = coinReadings({ depth: null, coinUsd: {}, coinAt: null, poolsAt: T + MIN }, now);
+      expect(quiet[atone]).toEqual(now[atone]);
+      expect(quiet['ibc/KEPT']).toEqual(now['ibc/KEPT']);
+      // and three minutes on it is gone
+      expect(coinReadings({ depth: null, coinUsd: {}, coinAt: null, poolsAt: minute.at + MINUTE_STALE_MS + 1 }, now)[atone]).toBeUndefined();
+    });
+
+    it('the tick hands the stored readings to the sizing and writes this minute\'s back', () => {
+      const cron = readFileSync(new URL('../worker/src/cron.ts', import.meta.url), 'utf8');
+      expect(cron).toContain('readPoolsRow(env.DB).then((r) => r.row?.coins ?? null, () => null)');
+      expect(cron).toContain('const input = { pools: poolRes.pools, poolsAt: poolRes.at, depth: minute, price: p, coinUsd: price.coinUsd, coinAt: price.at, tokens, carried };');
+      expect(cron).toContain('return { pools: sizePools(input), depth: minute, price: p, coins: coinReadings(input, carried) };');
+      expect(cron).toContain('refused: poolRes.refused, coins: s.coins })');
+    });
+
+    it('the stored list carries them to the next minute', async () => {
+      const db = testD1();
+      const coins = { [atone]: { usd: 0.07, at: T - MIN, how: HOW } };
+      await storePools(db as any, { now: T, pools: [size(coins)], poolsAt: T, depth: null, price, coins });
+      expect((await readPoolsRow(db as any)).row?.coins).toEqual(coins);
+      // a list stored with no reading has no such field
+      await storePools(db as any, { now: T + MIN, pools: [size(null)], poolsAt: T + MIN, depth: null, price, coins: {} });
+      expect((await readPoolsRow(db as any)).row).not.toHaveProperty('coins');
+    });
   });
 
   it('the other coin\'s decimals are the code\'s own: Noble USDC 6, allETH 18, a coin it does not name none', () => {
