@@ -7,8 +7,14 @@ import { DEFAULT_THRESHOLDS } from '../shared/alerts';
 import { ALERTS_READ_MAX, LAST_ALERT_SCAN, lastAlertBefore } from '../worker/src/analytics';
 import { app, ALERTS_SINCE_MAX_MS } from '../worker/src/api';
 import { cacheKeyUrl, isReplay } from '../worker/src/http';
-import { fetchAlertsRecent } from '../web/src/api';
+import { fetchAlertsRecent, forgetSharedAlerts } from '../web/src/api';
 import type { AlertsRecentResponse } from '../shared/types';
+
+/**
+ * One tab's request. Within one page two askers of one address share one request (test/alerts-once.test.ts); a tab is
+ * a page of its own and shares nothing with another, so each one here starts with no answer kept.
+ */
+const tab = (...a: Parameters<typeof fetchAlertsRecent>) => { forgetSharedAlerts(); return fetchAlertsRecent(...a); };
 
 const NOW = Date.UTC(2026, 9, 17, 12);
 const D = 86_400_000;
@@ -116,17 +122,17 @@ describe('GET /api/alerts/recent: one shared window per span, the reader’s own
     vi.useFakeTimers({ now: NOW, toFake: ['Date'] });
     try {
       // three last visits in the last 24 hours: one URL, three answers
-      const a = await fetchAlertsRecent(null, NOW - 3 * H);
-      const b = await fetchAlertsRecent(null, NOW - 11 * H);
-      const c = await fetchAlertsRecent(null, NOW - 20 * H);
+      const a = await tab(null, NOW - 3 * H);
+      const b = await tab(null, NOW - 11 * H);
+      const c = await tab(null, NOW - 20 * H);
       expect(a.hits.map((h) => h.flowId)).toEqual(['h1']);
       expect(b.hits.map((h) => h.flowId)).toEqual(['h1', 'h2']);
       expect(c.since).toBe(NOW - 20 * H);
       // a last visit 3 days ago: the 7-day window, from then on; 10 days ago: the 31-day window, the bond 9 days ago too
-      expect((await fetchAlertsRecent(null, NOW - 3 * D)).hits.map((h) => h.flowId)).toEqual(['h1', 'h2']);
-      expect((await fetchAlertsRecent(null, NOW - 10 * D)).hits.map((h) => h.flowId)).toEqual(['h1', 'h2', 'h9']);
+      expect((await tab(null, NOW - 3 * D)).hits.map((h) => h.flowId)).toEqual(['h1', 'h2']);
+      expect((await tab(null, NOW - 10 * D)).hits.map((h) => h.flowId)).toEqual(['h1', 'h2', 'h9']);
       // 40 days ago: the window starts 31 days back, and the answer says so
-      expect((await fetchAlertsRecent(null, NOW - 40 * D)).since).toBe(NOW - 31 * D);
+      expect((await tab(null, NOW - 40 * D)).since).toBe(NOW - 31 * D);
       expect(urls.some((u) => /since=/.test(u))).toBe(false);
       expect(urls).toEqual(['/api/alerts/recent', '/api/alerts/recent', '/api/alerts/recent', '/api/alerts/recent?days=7', '/api/alerts/recent?days=31', '/api/alerts/recent?days=31']);
     } finally {
@@ -145,12 +151,12 @@ describe('GET /api/alerts/recent: one shared window per span, the reader’s own
     try {
       // the page computes its window, then the request leaves a little later
       const end = Date.now() - 5;
-      await fetchAlertsRecent(null, end - D, end);
-      await fetchAlertsRecent(null, end - 7 * D, end);
+      await tab(null, end - D, end);
+      await tab(null, end - 7 * D, end);
       // a last visit has no end of its own: the span runs to now, so a visit just over a day ago gets the 7-day window
-      await fetchAlertsRecent(null, end - D);
+      await tab(null, end - D);
       // rewound, the span is measured from the rewind time
-      await fetchAlertsRecent(NOW, NOW - D, Date.now());
+      await tab(NOW, NOW - D, Date.now());
       expect(urls).toEqual(['/api/alerts/recent', '/api/alerts/recent?days=7', '/api/alerts/recent?days=7', `/api/alerts/recent?at=${NOW}`]);
     } finally {
       vi.unstubAllGlobals();
@@ -166,7 +172,7 @@ describe('GET /api/alerts/recent: one shared window per span, the reader’s own
     });
     try {
       // the page's window ends 5 ms before the server reads it: the hit 2 ms after the page's start is before the window's
-      const r = await fetchAlertsRecent(null, NOW - D, NOW);
+      const r = await tab(null, NOW - D, NOW);
       expect(r.since).toBe(NOW + 5 - D);
       expect(r.hits.map((h) => h.flowId)).toEqual(['in']);
     } finally {

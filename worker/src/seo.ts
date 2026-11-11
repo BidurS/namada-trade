@@ -411,6 +411,15 @@ const TRACKING = /^(utm_[a-z_]+|gclid|fbclid|msclkid|mc_cid|mc_eid|ref)$/i;
 export const isListView = (q: URLSearchParams): boolean => [...q.keys()].some((k) => !TRACKING.test(k));
 
 /** Rewrite the SPA shell for a path. Unknown paths get status 404 and noindex; views of a list get noindex. */
+/**
+ * The app's first read, started with the page. Every page of the app asks for /api/overview as it starts; named here,
+ * the browser asks for it while the scripts are still arriving, so the figures are there when the app draws its first
+ * frame instead of a second or so of empty blocks (review of 2026-11-10, first paint). It is the same request the app
+ * makes (same address, same mode), so it is made once; nothing is added for a rewound page, whose read carries its
+ * time. A hint only: a browser that ignores it behaves as before.
+ */
+export const OVERVIEW_PRELOAD = '<link rel="preload" as="fetch" href="/api/overview" crossorigin="anonymous">';
+
 export async function seoHtml(env: Env, req: Request, res: Response): Promise<Response> {
   const url = new URL(req.url);
   const found = routeByPath(url.pathname);
@@ -452,6 +461,7 @@ ${article && route.updated ? `<meta property="article:modified_time" content="${
 <meta name="twitter:description" content="${esc(description)}">
 <meta name="twitter:image" content="${SITE.origin}/og.png">
 ${inner ? SSR_LIGHT_CSS : ''}
+${found && !url.searchParams.has('at') ? OVERVIEW_PRELOAD : ''}
 ${indexable ? jsonLd(route, f) ?? '' : ''}`;
 
   const out = new HTMLRewriter()

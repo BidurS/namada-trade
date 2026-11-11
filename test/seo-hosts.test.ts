@@ -196,6 +196,19 @@ describe('a path that is not a page is a 404 with noindex, never a copy of the a
     }
   });
 
+  it('a page starts the app\'s first read with itself, once, and never for a rewound page or a path that is not a page', async () => {
+    const link = '<link rel="preload" as="fetch" href="/api/overview" crossorigin="anonymous">';
+    for (const p of ['/', '/trade', '/supply', '/validators', '/settings']) {
+      const html = await (await get(`https://namada.trade${p}`)).text();
+      expect(html.split(link).length - 1, p).toBe(1);
+      // in the head, where the browser reads it before the scripts
+      expect(html.indexOf(link), p).toBeLessThan(html.indexOf('</head>'));
+    }
+    // a rewound page reads the overview at its own time: the plain address would be a read nobody uses
+    expect(await (await get('https://namada.trade/trade?at=1788116700000')).text()).not.toContain('rel="preload" as="fetch"');
+    expect(await (await get('https://namada.trade/no-such-page')).text()).not.toContain('rel="preload" as="fetch"');
+  });
+
   it('a missing file of the build is never kept by a browser or a cache; any other missing path is, for five minutes', async () => {
     // around a deploy a new page can name a script the answering server does not hold yet: that 404 must not be
     // remembered, or the page stays without its app until the memory of it runs out

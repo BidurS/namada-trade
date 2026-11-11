@@ -81,11 +81,33 @@ export const fetchAlertRules = () => get<{ rules: AlertRuleInfo[] }>('/api/alert
  */
 export async function fetchAlertsRecent(asOf: number | null, since?: number, end?: number): Promise<AlertsRecentResponse> {
   const days = since != null ? alertWindowDays((asOf ?? end ?? Date.now()) - since) : 1;
-  const r = await get<AlertsRecentResponse>(`/api/alerts/recent${at(asOf, new URLSearchParams(days > 1 ? { days: String(days) } : {}))}`);
+  const r = await alertsOnce(`/api/alerts/recent${at(asOf, new URLSearchParams(days > 1 ? { days: String(days) } : {}))}`);
   if (since == null) return r;
   const from = Math.max(since, r.since);
   return { ...r, since: from, hits: r.hits.filter((h) => h.ts >= from) };
 }
+
+/** Two askers of one address within this long share one request. */
+export const ALERTS_SHARE_MS = 2000;
+const alertsShared = new Map<string, { at: number; p: Promise<AlertsRecentResponse> }>();
+/**
+ * One request for one address. As a page loads, the shell (the count of new alerts) and Home (what changed) both ask
+ * for the newest alerts at the same address within the same moment: the second asker takes the first one's answer
+ * instead of sending the request again. An answer is shared for ALERTS_SHARE_MS only, so a refresh a minute later
+ * always asks; a request that failed is not kept, so the next asker tries again. The answer is shared, never changed:
+ * a caller that narrows it makes its own copy (fetchAlertsRecent does).
+ */
+function alertsOnce(url: string): Promise<AlertsRecentResponse> {
+  const now = Date.now();
+  const had = alertsShared.get(url);
+  if (had && now - had.at < ALERTS_SHARE_MS) return had.p;
+  const p = get<AlertsRecentResponse>(url);
+  alertsShared.set(url, { at: now, p });
+  p.catch(() => { if (alertsShared.get(url)?.p === p) alertsShared.delete(url); });
+  return p;
+}
+/** Forgets every shared answer. A page load starts with none; a test that stands for several pages calls this between them. */
+export const forgetSharedAlerts = (): void => alertsShared.clear();
 
 /**
  * An alerts answer with how far `last` is known. `last: null` alone means none is on record (the server
