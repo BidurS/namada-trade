@@ -139,7 +139,8 @@ export const plainSource = (p: Pick<Stamp, 'source' | 'plain'> | null | undefine
 
 /**
  * The stamp text (system.md 8, ProvChip/ProvDot): "{source} · {age}"; old: "{source} · old {age}";
- * none: "{source} · no data"; disagree: "{source} · disagree {age}". The dot never stands alone.
+ * none: "{source} · no data"; disagree: "{source} · disagree {age}"; the current record of an event:
+ * "{source} · last trade {age} ago". The dot never stands alone.
  */
 export const stampText = (p: Stamp, now: number, label?: string): string => {
   const src = label ?? plainSource(p);
@@ -149,6 +150,8 @@ export const stampText = (p: Stamp, now: number, label?: string): string => {
   if (p.at == null) return `${src} · ${ui === 'fresh' ? 'time unknown' : STATUS_WORD[ui]}`;
   if (ui === 'old') return `${src} · old ${age}`;
   if (ui === 'disagree') return `${src} · disagree ${age}`;
+  // the record of an event that is current: its age is how long ago the event was, said as that (owner decision 48)
+  if (p.event === 'trade') return `${src} · last trade ${age} ago`;
   return `${src} · ${age}`;
 };
 

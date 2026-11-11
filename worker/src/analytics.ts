@@ -92,6 +92,29 @@ export function provAt(source: string, at: number | null, now: number, maxAgeMs:
   return { source, at, status: age <= maxAgeMs ? 'live' : 'stale', ...(age > maxAgeMs ? { note: `${Math.round(age / 60000)} min old` } : {}), ...extra };
 }
 
+/** The source of the last trade price: the hourly median of the trades the executed price counts. */
+export const LAST_TRADE_SOURCE = 'executed NAM/USDC swaps (hourly median)';
+/** What the last trade price's stamp says while the record of trades is current, and when it is behind. */
+export const LAST_TRADE_CURRENT = 'The time is that of the last hour with a trade the price counts; no such trade has been recorded since.';
+export const LAST_TRADE_BEHIND = 'The record of trades on Osmosis is behind, so a newer trade may not be counted yet.';
+/** A last trade price older than this is old by its age alone where the state of the record is not known (a rewound page). */
+export const LAST_TRADE_STALE_MS = 6 * 3600_000;
+
+/**
+ * The stamp of the last trade price. It is the record of an event, not a reading that ages (owner decision 48,
+ * 2026-11-10): while the record of Osmosis trades is current (`record` is live) a price whose last trade was hours
+ * ago is current too, and its stamp says when that trade was; it is old only when the record itself is behind, since
+ * a newer trade may then not be counted yet. `record` null (a rewound page, where the record's state then is not
+ * known): old by its age alone, as before.
+ */
+export function lastTradeProv(at: number | null, asOf: number, record: Provenance | null): Provenance {
+  const byAge = provAt(LAST_TRADE_SOURCE, at, asOf, LAST_TRADE_STALE_MS);
+  if (at == null || !record) return byAge;
+  return record.status === 'live'
+    ? { source: LAST_TRADE_SOURCE, at, status: 'live', event: 'trade', note: LAST_TRADE_CURRENT }
+    : { source: LAST_TRADE_SOURCE, at, status: 'stale', event: 'trade', note: LAST_TRADE_BEHIND };
+}
+
 /** Latest metric at or before `asOf`. */
 export async function metricAt(db: D1Database, key: string, asOf: number): Promise<{ ts: number; value: number } | null> {
   return db.prepare('SELECT ts, value FROM metrics WHERE key = ? AND ts <= ? ORDER BY ts DESC LIMIT 1').bind(key, asOf).first<{ ts: number; value: number }>().catch(() => null);

@@ -314,6 +314,12 @@ export interface Provenance {
   status: SourceStatus;
   /** Why it is stale/missing/conflicting, in plain words */
   note?: string;
+  /**
+   * Set when the figure is the record of an event, not a reading taken again and again: its time is when the event
+   * happened. 'trade': the last trade the executed price counts. A page says "last trade 6.7 h ago" for such a
+   * figure, and keeps "old" for a reading that failed or is overdue (owner decision 48, 2026-11-10).
+   */
+  event?: 'trade';
 }
 
 export interface Sourced<T> {

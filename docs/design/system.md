@@ -139,7 +139,7 @@ What is borrowed from namada.net: Namada Yellow `#FFFF00`, black sections, Space
 
 Also: `/settings` (account menu), and the SEO pages from `seo-requirements.md` (`/staking`, `/osmosis`, `/learn/how-nam-trading-works`, `/faq`) which are footer and Home links, not tabs. `/pressure` and `/tape` redirect (`ROUTE_ALIASES`); `?at=` survives every redirect. Holders lights the Activity tab.
 
-**Phone (below 1024 px).** Header: one 52 px row, black in both themes: mark (44 px target) · price with 24 h change (never wraps; the change hides below 360 px) · status pill (check icon, `5/7`) · search icon · account icon. Bottom tab bar: six equal cells, at least 62 px wide at 375, 56 px high plus `env(safe-area-inset-bottom)`, 20 px icon plus 11 px label, 2 px yellow rule on the active cell, icon stroke 1.9 when active. Alerts carries a count dot for hits since `lastSeen`. No hamburger, no More.
+**Phone (below 1024 px).** Header: one 52 px row, black in both themes: mark (44 px target) · price with 24 h change (never wraps; the change hides below 360 px) · status pill (`5 of 7` in words, the passes against the checks that could be compared; the check icon joins it from 400 px, and under 400 px an amber rule round the pill says a check needs a look: owner decision 48) · search icon · account icon. Bottom tab bar: six equal cells, at least 62 px wide at 375, 56 px high plus `env(safe-area-inset-bottom)`, 20 px icon plus 11 px label, 2 px yellow rule on the active cell, icon stroke 1.9 when active. Alerts carries a count dot for hits since `lastSeen`. No hamburger, no More.
 
 **Desktop (1024 px up).** Header 64 px, one row: mark and wordmark (wordmark hidden 1024 to 1199) · six text tabs (15 px 500; active = ink and a 2 px yellow underline, no box) · price pill · Rewind button (label hidden 1024 to 1199) · status pill `5 of 7 checks` · search · account. No second row. The tab bar is hidden.
 
@@ -262,7 +262,8 @@ One large moment per screen: Home the price, Trade "You get", inner pages the H1
 
 - Unit in `--t-12` after the value, mono, `--c-ink-2` (`24.50 USDC`, `10,000 NAM`).
 - Sign on every delta, with the true minus `U+2212`: `+0.87%`, `−1.49%`.
-- Price keeps six decimals (`$0.001025`), never prints `$0`. Dollars: under $1 six decimals, $1 to $999.99 two decimals, $1,000 and over none (`$1,819`).
+- Price keeps six decimals (`$0.001025`), never prints `$0`. Dollars: under $1 six decimals, $1 to $999.99 two decimals, $1,000 and over none (`$1,819`). An amount under a millionth of a dollar prints as plain decimals with its first two digits that are not zero (`$0.00000011`), never with an exponent.
+- A share is rounded on its own wherever it is printed (owner decision 45), so one share reads the same on every page; a bar's widths are the unrounded shares, and a legend whose parts then read a tenth over or under a hundred says what they read.
 - Price move and share of supply: two decimals everywhere (`1.49%`, `4.80%`). Hero shares: one decimal (`4.4%`).
 - NAM: integers from 1,000 up (`17,124 NAM`), two decimals under 10.
 - Home price: the leading `$0.00` is `--c-ink-2` weight 400, the significant digits ink weight 500.
@@ -352,13 +353,13 @@ Both are buttons that open the provenance `Sheet`. **Rule: ProvChip only on hero
 | | ProvChip | ProvDot |
 |---|---|---|
 | Look | pill, 24 px high, 1 px `--c-chip-line` border, `--c-chip-bg`, mono 12 px 500 | no pill: dot, source word, age, mono 12 px 500 `--c-ink-2`; 1 px dotted underline under the text |
-| Text | `{dot} {source} · {age}`; old: `{source} · old {age}`; none: `{source} · no data`; disagree: `{source} · disagree {age}` | same |
+| Text | `{dot} {source} · {age}`; old: `{source} · old {age}`; none: `{source} · no data`; disagree: `{source} · disagree {age}`; the current record of an event: `{source} · last trade {age} ago` ("old" is kept for a reading that failed or is overdue: owner decision 48) | same |
 | Hit area | 44 px via `::after { inset: -11px -5px }` (1 px border: padding box 22 + 22 = 44) | 44 px via `::after { inset: -10px -6px }` |
 | Rule | The dot always sits beside a word. A bare `10 s` is banned (stranger judge could not read it). | |
 
 ### SourceLine (`.srcb`) and the scope sheet
 
-The panel footer. One button for every figure in the panel: `● Source · {source | N sources} · {age or range} · {state word}`; only the word "Source" is underlined. Opens a scope sheet listing each figure (label, source, UTC time, age, status). Rules: a panel whose figures are not fresh also says so **in words above the data** (one sentence: "Balances were last checked 2.3 days ago, so they are shown dimmed."). A row that differs from its scope (holder rank 1, the Osmosis supply figure) carries its own ProvDot or disagree underline.
+The panel footer. One button for every figure in the panel: `● Source · {source | N sources} · {age or range} · {state word}`; when the panel's figures are not all in one state, a count of each takes the place of the age and the one word: `● Source · 8 sources · 7 fresh · 1 not read`, the dot being the worst state among the figures that were read (owner decision 48; the worst-state rule stays for a single derived figure). Only the word "Source" is underlined. Opens a scope sheet listing each figure (label, source, UTC time, age, status). Rules: a panel whose figures are not fresh also says so **in words above the data** (one sentence: "Balances were last checked 2.3 days ago, so they are shown dimmed."). A row that differs from its scope (holder rank 1, the Osmosis supply figure) carries its own ProvDot or disagree underline.
 
 ### Sheet (provenance, sources, filters, address, sign-in)
 

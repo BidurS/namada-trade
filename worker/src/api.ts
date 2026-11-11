@@ -38,7 +38,7 @@ import { label_plain, category_plain, labelAuthorShort, tagByline } from './labe
 import { counterpartiesOf, priceAtOf, priceBasisWords, priceHowOf } from '../../shared/flow-rules';
 import { settleUsd } from '../../shared/settle';
 import {
-  FLOW_SELECT, flowSelect, rowToFlow, safeParseJson, provAt, metricAt, coverageOf, pressure, blindSpot, alertsWindow, lastAlertBefore, metricSeries, withSettles, metricSeriesRolled, type HistoryPoint, osmosisNetIbc, orderflowSeries,
+  FLOW_SELECT, flowSelect, rowToFlow, safeParseJson, provAt, lastTradeProv, metricAt, coverageOf, pressure, blindSpot, alertsWindow, lastAlertBefore, metricSeries, withSettles, metricSeriesRolled, type HistoryPoint, osmosisNetIbc, orderflowSeries,
   MASP_MAKEUP_KV,
 } from './analytics';
 import { NAM_AMOUNT, NOT_LEGACY_TWIN as NOT_TWIN } from './flows-query';
@@ -235,7 +235,7 @@ app.get('/api/overview', async (c) => {
   }
   else priceUsd = { value: null, prov: { source: 'Osmosis SQS', at: null, status: 'missing', note: 'no price recorded' } };
 
-  const swap1h: Sourced<number> = { value: mv('price.swap_1h'), prov: provAt('executed NAM/USDC swaps (hourly median)', mt('price.swap_1h'), asOf, 6 * H) };
+  const swap1h: Sourced<number> = { value: mv('price.swap_1h'), prov: lastTradeProv(mt('price.swap_1h'), asOf, replay ? null : cov.osmosis) };
   // Before 2026-10-15 only executed-swap prices exist: in replay, use them as the price rather than show nothing.
   if (replay && priceUsd.value == null && swap1h.value != null) priceUsd = { value: swap1h.value, prov: { ...swap1h.prov, note: 'The quoted price was not recorded at that time, so this is the price real trades paid.' } };
   const change24h = refPriceRow?.value && priceUsd.value ? ((priceUsd.value - refPriceRow.value) / refPriceRow.value) * 100 : null;
