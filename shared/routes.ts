@@ -11,7 +11,7 @@ export type GuideRouteId = `guide-${GuideSlug}`;
 
 export type RouteId =
   | 'home' | 'trade' | 'depth' | 'supply' | 'shielded' | 'activity' | 'holders' | 'alerts' | 'settings'
-  | 'staking' | 'osmosis' | 'learn' | 'faq' | 'guides' | GuideRouteId
+  | 'staking' | 'osmosis' | 'learn' | 'faq' | 'glossary' | 'guides' | GuideRouteId
   | 'developers' | 'status' | 'methodology' | 'privacy' | 'terms' | 'bridges' | 'validators' | 'governance';
 
 /** The six tabs, in this order everywhere (system.md section 3). */
@@ -50,6 +50,9 @@ export interface RouteDef {
 
 /** The day the text of the platform pages (API, methodology, privacy, terms) was last checked against the code. */
 export const PLATFORM_TEXT_CHECKED = '2026-11-10';
+
+/** The day the glossary page's text (its own words and the entries of shared/glossary.ts) was last checked. The page states no live figure. */
+export const GLOSSARY_TEXT_CHECKED = '2026-11-10';
 
 export const ROUTES: RouteDef[] = [
   {
@@ -158,6 +161,16 @@ export const ROUTES: RouteDef[] = [
     h1: 'NAM questions, answered with sources',
     title: 'NAM questions: price, holders, sources',
     description: 'Why this NAM price differs from other sites, why shielded holders cannot be seen, how old each number is, and where the data comes from.',
+  },
+  {
+    // The glossary on a page of its own (public review of 2026-11-10): every entry of shared/glossary.ts, the plain
+    // word first and the expert term under it, each with its id as the fragment (/glossary#staked). Linked from the
+    // footer after Questions, from a glossary card's "More in the glossary", from the search box's Glossary list and
+    // from the served pages' navigation. The list is not typed in shared/copy.ts: the page draws it from the entries.
+    path: '/glossary', id: 'glossary', label: 'Glossary', index: true, updated: GLOSSARY_TEXT_CHECKED,
+    h1: 'What do the words on this site mean?',
+    title: 'Namada glossary: plain words for expert terms',
+    description: 'Each word NamadaTrade uses for staking, bridging, trading and its own figures, with what it means in plain words and the term other sites use for it.',
   },
   {
     path: GUIDES_PATH, id: 'guides', label: 'Guides', index: true,

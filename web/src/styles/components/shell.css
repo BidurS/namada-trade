@@ -303,6 +303,10 @@
   .pal__gi dt { display: flex; flex-wrap: wrap; align-items: baseline; gap: 2px var(--s-2); }
   .pal__gi dd { margin: 0; }
   .pal__x2 { font: var(--w-medium) var(--t-12) / 16px var(--font-code); color: var(--ink-2); }
+  /* under the list: the page that holds every word (a 44 px row, the width of the box) */
+  .pal__more { display: flex; align-items: center; gap: var(--s-2); min-height: 44px; padding: 0 var(--s-4); color: var(--ink); font-size: var(--t-13); line-height: 18px; font-weight: var(--w-medium); text-decoration: underline; text-decoration-thickness: 1px; text-underline-offset: 3px; }
+  .pal__more:hover { background: var(--surface-2); }
+  .pal__more .ico { color: var(--ink-2); }
   @media (min-width: 1024px) {
     .pal { inset: 0; top: 10vh; bottom: auto; width: min(640px, calc(100vw - 48px)); height: auto; max-height: 76vh; margin: 0 auto; border: 1px solid var(--line-strong); border-top: 2px solid var(--accent); }
   }

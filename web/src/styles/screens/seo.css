@@ -348,3 +348,26 @@
   .val-one__a { font: var(--w-regular) var(--t-12) / 18px var(--font-code); color: var(--c-ink-2); overflow-wrap: anywhere; }
   .seo-fig dd .val-one__state { font-size: var(--t-18); line-height: var(--lh-18); letter-spacing: 0; }
 }
+
+/* ==========================================================================
+   The glossary (/glossary): every entry of shared/glossary.ts as one
+   definition list. An entry is three lines: the plain word, the term other
+   sites use (mono, the dimmer ink, as the tap-open card sets it), then the
+   sentence. From 1024 px the word stands on the left and the two lines on
+   the right, as a question and its answer do on the pages above. The word
+   carries the entry's id: /glossary#staked lands on it, clear of the header,
+   and the entry is marked. No control of its own: text only.
+   ========================================================================== */
+@layer components {
+  .seo-gloss { display: grid; min-width: 0; margin: 0; border-top: 2px solid var(--c-ink); }
+  .seo-gloss__i { display: grid; gap: var(--s-1); min-width: 0; padding: var(--s-4) 0; border-bottom: 1px solid var(--c-line); }
+  .seo-gloss__i.is-at { background: var(--c-hover); }
+  .seo-gloss__w { min-width: 0; font-size: var(--t-18); line-height: var(--lh-18); font-weight: var(--w-semi); overflow-wrap: anywhere; scroll-margin-top: calc(var(--header-h) + var(--s-4)); }
+  .seo-gloss__x { min-width: 0; margin: 0; font: var(--w-medium) var(--t-12) / 16px var(--font-code); color: var(--c-ink-2); overflow-wrap: anywhere; }
+  .seo-gloss__t { min-width: 0; margin: 0; font-size: var(--t-15); line-height: var(--lh-15); color: var(--c-ink-2); max-width: 64ch; }
+  @media (min-width: 1024px) {
+    .seo-gloss__i { grid-template-columns: repeat(12, minmax(0, 1fr)); column-gap: var(--s-5); padding: var(--s-5) 0; }
+    .seo-gloss__w { grid-column: 1 / span 4; grid-row: 1 / span 2; }
+    .seo-gloss__x, .seo-gloss__t { grid-column: 6 / span 7; }
+  }
+}

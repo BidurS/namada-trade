@@ -318,6 +318,15 @@ export const BODY: Record<string, PageCopy> = {
       },
     ],
   },
+  // The glossary page (/glossary). Its list is not typed here: the page and the server-rendered page draw every entry
+  // from shared/glossary.ts, and put GLOSSARY_ALSO before each entry's second line.
+  glossary: {
+    paras: [
+      'Each word this site uses for staking, bridging, trading and its own figures is listed here with what it means, in plain words.',
+      'The second line of each entry, after “In other words”, is the exact term for the same thing, most often the one that other sites and the chain\'s own documents use.',
+    ],
+    facts: [],
+  },
   guides: {
     paras: [
       'Plain guides to the questions people ask about Namada and NAM, each written from Namada\'s own documentation, specifications and posts, with a numbered source after every paragraph.',
@@ -752,6 +761,13 @@ export const ADDRESS_WORDS = {
     `${fromPoolNam} of ${receivedNam} NAM received came out of the shielded pool (${moves})${over ? `, counted over ${over}` : ''}.`,
   whyLabel: 'Why this label',
 } as const;
+
+/**
+ * The glossary page (/glossary): the words that stand before an entry's second line, its exact or expert term
+ * (shared/glossary.ts `expert`). The page's second paragraph (BODY.glossary) names these words, so the page, the
+ * server-rendered page and the page's Markdown read them from here.
+ */
+export const GLOSSARY_ALSO = 'In other words:';
 
 /** The not-found view and the server's 404 page (system.md 9.9). */
 export const NOT_FOUND = {

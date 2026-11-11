@@ -13,7 +13,7 @@ export interface UiConfig {
   rewindHref?: (at: number) => string;
   /** Client-side navigation for kit links (rewind, glossary). Default: the browser follows the href. */
   navigate?: (href: string) => void;
-  /** Where "More in the glossary" points. Unset: the link is not shown. */
+  /** Where "More in the glossary" points; a card that shows one entry adds that entry's id as the fragment. Unset: the link is not shown. */
   glossaryHref?: string;
   /** Open the Address sheet for an address (the shell's overlays). Unset: address names are plain text. */
   openAddress?: (address: string) => void;

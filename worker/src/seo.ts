@@ -6,7 +6,8 @@
 // same metrics the API serves, carries the time it was recorded, and is left out when missing.
 import type { Env } from './util';
 import { ROUTES, TABS, EXPLAINER_ROUTES, GUIDE_ROUTES, PLATFORM_ROUTES, classifyPath, routeByPath, fullTitle, type RouteDef } from '../../shared/routes';
-import { SITE, BODY, NOT_FOUND, type FactKey, type PageCopy } from '../../shared/copy';
+import { SITE, BODY, NOT_FOUND, GLOSSARY_ALSO, type FactKey, type PageCopy } from '../../shared/copy';
+import { GLOSSARY, type GlossaryEntry } from '../../shared/glossary';
 import { GUIDES } from '../../shared/guides';
 import { citations, GUIDE_INDEPENDENCE, type GPara } from '../../shared/guide-types';
 import { metricAt, cachedChainParams, coverageOf, unbondingWait } from './analytics';
@@ -248,8 +249,8 @@ function factList(keys: FactKey[], f: Facts | null, shown: Set<FactKey>): string
 const paras = (ps: string[]) => ps.map((p) => `<p style="${S.p}">${esc(p)}</p>`).join('\n');
 
 function navHtml(): string {
-  // the tabs, the explainer pages, the validators, the votes and the bridges, then the platform pages: every page is one link away for a reader without JavaScript
-  const more = ['/validators', '/governance', '/bridges'].map((p) => routeByPath(p)).filter((r): r is RouteDef => !!r);
+  // the tabs, the explainer pages, the validators, the votes, the bridges and the glossary, then the platform pages: every page is one link away for a reader without JavaScript
+  const more = ['/validators', '/governance', '/bridges', '/glossary'].map((p) => routeByPath(p)).filter((r): r is RouteDef => !!r);
   const links = [...TABS.map((t) => routeByPath(t.path)!), ...EXPLAINER_ROUTES.filter((r) => !TABS.some((t) => t.path === r.path)), ...more, ...PLATFORM_ROUTES];
   return `<nav aria-label="Pages" style="${S.nav}">${links.map((x) => `<a href="${x.path}" style="${S.a}">${esc(x.label)}</a>`).join('')}</nav>`;
 }
@@ -259,7 +260,7 @@ export function pageHtml(route: RouteDef, f: Facts | null): string {
   const body: PageCopy | undefined = BODY[route.id];
   const shown = new Set<FactKey>();
   const own = (body?.sections ?? []).map((s) => `<section><h2 style="${S.h2}">${esc(s.h2)}</h2>\n${paras(s.paras)}\n${factList(s.facts ?? [], f, shown)}</section>`).join('\n');
-  const sections = route.id === 'guides' ? guideListHtml() : route.id === 'developers' ? `${own}\n${apiListHtml()}` : own;
+  const sections = route.id === 'guides' ? guideListHtml() : route.id === 'developers' ? `${own}\n${apiListHtml()}` : route.id === 'glossary' ? `${own}\n${glossaryListHtml()}` : own;
   return `<div id="ssr" style="${S.root}"><div style="${S.wrap}">
 ${haltHtml()}<h1 style="${S.h1}">${esc(route.h1)}</h1>
 ${paras(body?.paras ?? [route.description])}
@@ -291,6 +292,22 @@ export function apiListHtml(): string {
     return items.length ? `<section><h2 style="${S.h2}">${esc(g.title)}</h2>\n<p style="${S.p}">${esc(g.lead)}</p>\n<ul style="${S.ul}">${items.join('')}</ul></section>` : '';
   }).join('\n');
   return `${limits}\n${groups}\n<p style="${S.p}"><a href="/openapi.json" style="${S.a}">The OpenAPI document</a></p>`;
+}
+
+/**
+ * The glossary's list for a reader without JavaScript: every entry of shared/glossary.ts in the file's order, as one
+ * definition list. An entry is the plain word (its id the entry's own, so /glossary#staked lands on it), then the term
+ * other sites and the chain's own documents use, after GLOSSARY_ALSO, then the sentence: the three lines the page
+ * shows once it mounts. Every part is text, escaped (`entries` is the glossary; a test passes its own to see that).
+ */
+export function glossaryListHtml(entries: readonly GlossaryEntry[] = GLOSSARY): string {
+  // no colour of their own: the word and the sentence take the page's ink in either theme, the second line the dimmer ink (.ssr-2)
+  const dt = 'font-size:18px;line-height:1.3;font-weight:600;margin:24px 0 2px';
+  const dd = 'font-size:16px;line-height:1.55;margin:0 0 4px';
+  const items = entries.map((g) => `<dt id="${esc(g.id)}" style="${dt}">${esc(g.plain)}</dt>
+<dd class="ssr-2" style="${S.stamp};margin:0 0 4px">${esc(GLOSSARY_ALSO)} ${esc(g.expert)}</dd>
+<dd style="${dd}">${esc(g.text)}</dd>`);
+  return `<dl style="margin:8px 0 0">\n${items.join('\n')}\n</dl>`;
 }
 
 /** The guides' list: each guide's question as an H2 link with its description. */

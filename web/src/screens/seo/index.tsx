@@ -4,6 +4,7 @@ export { Staking } from './Staking';
 export { Osmosis } from './Osmosis';
 export { Learn } from './Learn';
 export { Faq } from './Faq';
+export { Glossary } from './Glossary';
 export { NotFound } from './NotFound';
 export { Guides } from './Guides';
 export { Guide } from './Guide';

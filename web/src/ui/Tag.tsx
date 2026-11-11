@@ -46,7 +46,7 @@ export function Tag({ kind, chain, cat, look = 'cat', ring, term, plain, classNa
         <button ref={btnRef} type="button" className={cls} aria-haspopup="dialog" aria-expanded="false" aria-label={`${k.word}. What this means.`}>
           {inner}
         </button>
-        <GlossPop popRef={popRef} popId={popId} c={{ plain: k.word, expert: k.expert, text: g?.text }} />
+        <GlossPop popRef={popRef} popId={popId} c={{ id: g?.id, plain: k.word, expert: k.expert, text: g?.text }} />
       </>
     );
   }
@@ -64,7 +64,7 @@ export function Tag({ kind, chain, cat, look = 'cat', ring, term, plain, classNa
       <button ref={btnRef} type="button" className={cls} aria-haspopup="dialog" aria-expanded="false">
         {inner}
       </button>
-      <GlossPop popRef={popRef} popId={popId} c={{ plain: g.plain, expert: g.expert, text: g.text }} />
+      <GlossPop popRef={popRef} popId={popId} c={{ id: g.id, plain: g.plain, expert: g.expert, text: g.text }} />
     </>
   );
 }

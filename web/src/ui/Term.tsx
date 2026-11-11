@@ -15,10 +15,18 @@ import { Ico } from './ico';
 import { linkClick, useUiConfig } from './now';
 
 export interface GlossPopContent {
+  /** The glossary entry the card shows, when it shows one: "More in the glossary" lands on that entry of the page. */
+  id?: string;
   plain: string;
   expert?: string;
   text?: string;
 }
+
+/**
+ * Where a card's "More in the glossary" points: the shell's glossary address (UiConfig.glossaryHref, which carries a
+ * rewound page's ?at=), at the card's own entry when the card shows one (the glossary page gives each entry its id).
+ */
+export const glossaryLink = (href: string, id?: string): string => (id ? `${href.split('#')[0]}#${encodeURIComponent(id)}` : href);
 
 export const supportsPopover = () => typeof HTMLElement !== 'undefined' && 'showPopover' in HTMLElement.prototype;
 
@@ -120,6 +128,7 @@ export function useGlossPop() {
 export function GlossPop({ popRef, popId, c }: { popRef: React.RefObject<HTMLDivElement>; popId: string; c: GlossPopContent }) {
   const cfg = useUiConfig();
   const hide = () => hideGlossPop(popRef.current);
+  const more = cfg.glossaryHref ? glossaryLink(cfg.glossaryHref, c.id) : null;
   if (typeof document === 'undefined') return null;
   // portalled to <body>: a term sits inside running text (<p>), where a card cannot nest
   return createPortal(
@@ -127,8 +136,8 @@ export function GlossPop({ popRef, popId, c }: { popRef: React.RefObject<HTMLDiv
       <p className="pop__plain">{c.plain}</p>
       {c.expert ? <p className="pop__expert">{c.expert}</p> : null}
       {c.text ? <p className="pop__text">{c.text}</p> : null}
-      {cfg.glossaryHref ? (
-        <a className="link" href={cfg.glossaryHref} onClick={linkClick(cfg, cfg.glossaryHref, hide)}>
+      {more ? (
+        <a className="link" href={more} onClick={linkClick(cfg, more, hide)}>
           More in the glossary
         </a>
       ) : null}
@@ -157,7 +166,7 @@ export function Term({ id, children, className = '' }: TermProps) {
       <button ref={btnRef} type="button" className={`term ${className}`} aria-haspopup="dialog" aria-expanded="false">
         {children ?? g.plain}
       </button>
-      <GlossPop popRef={popRef} popId={popId} c={{ plain: g.plain, expert: g.expert, text: g.text }} />
+      <GlossPop popRef={popRef} popId={popId} c={{ id: g.id, plain: g.plain, expert: g.expert, text: g.text }} />
     </>
   );
 }

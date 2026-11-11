@@ -9,7 +9,7 @@
      screens/activity/index.tsx  /activity and /holders (one component; props.view says which tab)
      screens/depth/index.tsx     /depth
      screens/alerts/index.tsx    /alerts      screens/settings/index.tsx  /settings
-     screens/seo/index.tsx       named exports Staking, Osmosis, Learn, Faq, NotFound, Developers, Status, Methodology, Privacy, Terms
+     screens/seo/index.tsx       named exports Staking, Osmosis, Learn, Faq, Glossary, NotFound, Developers, Status, Methodology, Privacy, Terms
      screens/sheets/index.tsx    named exports SourcesSheet, AddressSheet, SignInSheet, AccountSheet
    Every screen and the sheets are lazy-loaded (React.lazy); keep heavy imports inside them.
 
@@ -53,7 +53,7 @@ import { OverlaysProvider, useOverlays } from './overlays';
 import { OverviewProvider } from './overview';
 import { ReplayProvider, useReplay } from './replay';
 import { RewindBanner } from './RewindBanner';
-import { consumeUserNav, navigate, titleFor, useRoute, type RouteDef, type ViewId } from './router';
+import { consumeUserNav, hrefFor, navigate, titleFor, useRoute, type RouteDef, type ViewId } from './router';
 import { SessionProvider } from './session';
 import { TabBar } from './TabBar';
 import { UpdateBanner } from './UpdateBanner';
@@ -84,6 +84,7 @@ const LOADERS: Partial<Record<ViewId, Loader>> = {
   osmosis: () => seo().then((m) => ({ default: m.Osmosis })),
   learn: () => seo().then((m) => ({ default: m.Learn })),
   faq: () => seo().then((m) => ({ default: m.Faq })),
+  glossary: () => seo().then((m) => ({ default: m.Glossary })),
   notfound: () => seo().then((m) => ({ default: m.NotFound })),
   guides: () => seo().then((m) => ({ default: m.Guides })),
   bridges: () => seo().then((m) => ({ default: m.Bridges })),
@@ -221,10 +222,13 @@ function Shell() {
   );
 }
 
-/** The kit's clock, rewind links and navigation follow the shell. */
+/**
+ * The kit's clock, rewind links and navigation follow the shell. A glossary card's "More in the glossary" goes to the
+ * glossary page (the card adds its own entry as the fragment), with a rewound page's ?at= in the address itself.
+ */
 function KitBridge({ children }: { children: React.ReactNode }) {
   const { at } = useReplay();
-  const value = useMemo(() => ({ now: at, navigate: (href: string) => navigate(href) }), [at]);
+  const value = useMemo(() => ({ now: at, navigate: (href: string) => navigate(href), glossaryHref: hrefFor('/glossary') }), [at]);
   return <UiProvider value={value}>{children}</UiProvider>;
 }
 

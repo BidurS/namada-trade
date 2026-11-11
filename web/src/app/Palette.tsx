@@ -6,11 +6,13 @@
 //
 // One box finds everything:
 //   - local groups, computed on every keystroke before any request answers: Lists (the search grammar's filters as a
-//     link to the moves or holders list, shared/search-grammar.ts), Views, Actions, the typed whole address, and
-//     before typing Recent (this browser only, app/recent.ts) and a short list of views and actions;
+//     link to the moves or holders list, shared/search-grammar.ts), Views (the pages, and while typing the plain
+//     words a reader uses for something a page calls otherwise, shared/search-words.ts), Actions, the typed whole
+//     address, and before typing Recent (this browser only, app/recent.ts) and a short list of views and actions;
 //   - server groups from /api/search (Addresses, Records, Blocks, Names, Pools), 150 ms after typing pauses, each
 //     request cancelled when the text changes (lib/useQuery.ts); a late answer for older text is never shown;
-//   - the glossary as a plain list under the results (its rows are not actions, so they are not options);
+//   - the glossary as a plain list under the results (its rows are not actions, so they are not options), and under
+//     it a link to the page that holds the whole list (/glossary);
 //   - the Rewind row at the foot, where it was.
 // Inside a group: exact match, then the start of the value, then its end, then a word start, then inside it; then
 // how often and how lately it was opened here; ties keep the server's order. Nothing fuzzy on addresses or hashes.
@@ -29,10 +31,12 @@ import { explorerTx, fmtAddr, fmtCount, fmtPctSigned, fmtUtcLong } from '../lib/
 import { kindInfo } from '../lib/kinds';
 import { useQuery } from '../lib/useQuery';
 import { Icon, type GridIconName } from '../ui/Icon';
+import { Link } from './Link';
 import { useOverlays } from './overlays';
+import { NO_MATCH, textTier, wordRows } from './palette-match';
 import { clearRecent, noteRecent, readRecent, recentScore, topRecent, type RecentEntry } from './recent';
 import { useReplay, REWIND_WORDS } from './replay';
-import { navigate } from './router';
+import { isModifiedClick, navigate } from './router';
 import { useSession } from './session';
 import { TAB_ICON } from './TabBar';
 import { THEME_LABELS, useTheme, type ThemePref } from './theme';
@@ -93,28 +97,10 @@ export function splitScope(input: string, chip: Scope | null): { scope: Scope | 
   return { scope: null, text: input.trim(), typedPrefix: null };
 }
 
-/** Match tiers: 0 exact, 1 start of the value, 2 its end, 3 a word start, 4 inside, NO_MATCH none. */
-export const NO_MATCH = 9;
+// The match tiers (0 exact, 1 start of the value, 2 its end, 3 a word start, 4 inside, NO_MATCH none) and the plain
+// words a reader types (shared/search-words.ts) are in palette-match.ts, which a test reads without the shell.
+export { NO_MATCH, WORDS_MIN_CHARS, textTier, wordRows, type WordRow } from './palette-match';
 const TIER_OF_MATCH: Record<string, number> = { exact: 0, start: 1, end: 2, word: 3, contains: 4 };
-const escapeRe = (s: string) => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-
-/** The best tier of `term` against any of `values` (case ignored). */
-export function textTier(term: string, ...values: (string | null | undefined)[]): number {
-  const t = term.trim().toLowerCase();
-  if (!t) return NO_MATCH;
-  const wordStart = new RegExp(`(^|[^\\p{L}\\p{N}])${escapeRe(t)}`, 'u');
-  let best = NO_MATCH;
-  for (const v of values) {
-    if (!v) continue;
-    const s = v.toLowerCase();
-    if (s === t) return 0;
-    if (s.startsWith(t)) best = Math.min(best, 1);
-    else if (s.endsWith(t) && /^[0-9a-z]+$/.test(t)) best = Math.min(best, 2);
-    else if (wordStart.test(s)) best = Math.min(best, 3);
-    else if (s.includes(t)) best = Math.min(best, 4);
-  }
-  return best;
-}
 
 /** The group a server result belongs to. A server before nav step 5 sends no `group`: it is read from `type`, and two
  *  of its echoes are dropped, since they name nothing that exists: an address result for any tnam1… text, and a pool
@@ -273,7 +259,14 @@ async function loadPresets(): Promise<RewindPreset[]> {
   }
 }
 
-const ROUTE_ICON: Partial<Record<RouteId, GridIconName>> = { holders: 'activity', settings: 'account', staking: 'supply', osmosis: 'trade', learn: 'info', faq: 'info' };
+const ROUTE_ICON: Partial<Record<RouteId, GridIconName>> = { holders: 'activity', settings: 'account', staking: 'supply', osmosis: 'trade', learn: 'info', faq: 'info', glossary: 'info' };
+/** The icon of the page a path names: a tab's own, else the page's (the arrow when it has none). */
+const iconOfPath = (path: string): GridIconName => {
+  const tab = TABS.find((t) => t.path === path);
+  if (tab) return TAB_ICON[tab.id];
+  const r = ROUTES.find((x) => x.path === path);
+  return (r && ROUTE_ICON[r.id]) ?? 'arrow';
+};
 const toUtcInput = (ms: number) => new Date(ms).toISOString().slice(0, 16);
 const chainWord = (chain: string | undefined, value: string) => ((chain ?? (value.startsWith('osmo1') ? 'osmosis' : 'namada')) === 'osmosis' ? 'Osmosis address' : 'Namada address');
 const upperFirst = (s: string) => (s ? s.charAt(0).toUpperCase() + s.slice(1) : s);
@@ -452,11 +445,15 @@ export default function Palette({ focus, onClose }: { focus: 'search' | 'rewind'
       );
     }
 
-    // Views: the six tabs first, then the other pages (those only when typed for)
+    // Views: the six tabs first, then the other pages (those only when typed for), then the plain words a reader
+    // types for something a page calls otherwise ("market cap", "slippage"): the site's own name for it and its page
     if (show('views')) {
+      /** the pages listed for this text: a plain-word row that would repeat one of them is left out */
+      const listed: { path: string; label: string }[] = [];
       const view = (path: string, label: string, sub: string | undefined, icon: GridIconName, hint: string | undefined, i: number) => {
         const tier = local(label, sub);
         if (term && tier === NO_MATCH) return;
+        listed.push({ path, label });
         // before typing the tabs keep their order (and their keys); while typing, pages opened here before rank higher
         out.push({ id: `v:${path}`, group: 'views', label, sub, icon, hint, tier, score: term ? recentScore(recent, 'view', path, now) : 0, order: i, run: () => { noteRecent('view', path, { label }); go(path); } });
       };
@@ -467,6 +464,10 @@ export default function Palette({ focus, onClose }: { focus: 'search' | 'rewind'
         if (!term && r.id !== 'holders') return;
         view(r.path, r.label, r.h1, ROUTE_ICON[r.id] ?? 'arrow', undefined, TABS.length + i);
       });
+      // chosen and kept in Recent as a page is: the row's path, under the site's own name for the thing
+      wordRows(term, listed, rewound).forEach(({ word: w, tier }, i) =>
+        out.push({ id: `w:${w.id}`, group: 'views', label: w.label, sub: w.where, icon: iconOfPath(w.path), tier, score: recentScore(recent, 'view', w.path, now), order: TABS.length + ROUTES.length + i, run: () => { noteRecent('view', w.path, { label: w.label }); go(w.path); } }),
+      );
     }
 
     // Actions
@@ -752,6 +753,11 @@ export default function Palette({ focus, onClose }: { focus: 'search' | 'rewind'
                 </div>
               ))}
             </dl>
+            {/* the whole list has a page of its own; the rows above stay words, not options */}
+            <Link to="/glossary" className="pal__more" onClick={(e) => { if (!isModifiedClick(e)) close(); }}>
+              Every word on one page
+              <Icon name="arrow" className="ico ico--inline" />
+            </Link>
           </section>
         ) : null}
 

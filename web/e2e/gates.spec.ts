@@ -38,8 +38,12 @@ const BANNED: { word: string; re: RegExp }[] = [
   { word: 'D1 to D7', re: /\bD[1-7]\b/ },
   { word: 'Loading…', re: /\bLoading(…|\.\.\.)/i },
 ];
-/** Allowlisted places: the "How it is computed" disclosures and Settings "For developers". */
-const ALLOW = 'details.how, #developers, .pop, script, style, noscript, template';
+/**
+ * Allowlisted places: the "How it is computed" disclosures, Settings "For developers", the glossary cards, and the
+ * glossary page's own list (dl.seo-gloss, on /glossary only: each entry's second line is the expert term on purpose,
+ * as on the card; the page's heading and paragraphs are still checked).
+ */
+const ALLOW = 'details.how, #developers, .pop, dl.seo-gloss, script, style, noscript, template';
 
 /** Wait until the skeletons in main are replaced (soft: a slow source must not hide the other checks). */
 async function settled(page: Page, ms = 30_000) {

@@ -3,7 +3,7 @@
 // links: How we know (Sources sheet), Settings, API (the reference page, /developers), then the explainer pages under
 // the names they carry everywhere else (shared/routes.ts labels: Questions, Guides, Staking, Holders, NAM on Osmosis,
 // Depth, How NAM trading works; EXPLAINER_ROUTES plus the depth page, seo-requirements "New pages": link from the
-// footer), with Validators and Votes after Staking (release C), then Bridges (release B) and the platform pages (Status,
+// footer), with Glossary after Questions, Validators and Votes after Staking (release C), then Bridges (release B) and the platform pages (Status,
 // Methodology, Privacy, Terms; docs/design/platform-plan.md release A).
 // Then "Source code": the public repository (owner decision 4, SITE.repo), and "X", the site's account (SITE.x),
 // each opening in a new tab. Under the disclaimer, one line against people who borrow the site's name: what it never
@@ -20,7 +20,7 @@ import { useClock, useOverview } from './overview';
 import { useOverlays } from './overlays';
 import { useReplay } from './replay';
 
-const LINK_IDS: RouteId[] = ['settings', 'developers', 'faq', 'guides', 'staking', 'validators', 'governance', 'holders', 'osmosis', 'depth', 'learn', 'bridges', 'status', 'methodology', 'privacy', 'terms'];
+const LINK_IDS: RouteId[] = ['settings', 'developers', 'faq', 'glossary', 'guides', 'staking', 'validators', 'governance', 'holders', 'osmosis', 'depth', 'learn', 'bridges', 'status', 'methodology', 'privacy', 'terms'];
 const LINKS: { to: string; label: string }[] = LINK_IDS.flatMap((id) => {
   const r = ROUTES.find((x) => x.id === id);
   return r ? [{ to: r.path, label: r.label }] : [];

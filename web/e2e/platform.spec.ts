@@ -9,8 +9,8 @@ import { API_CATALOG, API_GROUPS } from '../../shared/api-catalog';
 import { API_LIMITS } from '../../shared/api-limits';
 import { expect, gotoRoute, layoutAudit, onlyIn, test } from './helpers';
 
-/** The pages this spec covers: the five platform pages, and the bridges page (release B) and the validators page (release C), which are built the same way. */
-const PAGES = [...PLATFORM_ROUTES, routeByPath('/bridges')!, routeByPath('/validators')!, routeByPath('/governance')!];
+/** The pages this spec covers: the five platform pages, and the bridges page (release B), the validators and votes pages (release C) and the glossary page, which are built the same way. */
+const PAGES = [...PLATFORM_ROUTES, routeByPath('/bridges')!, routeByPath('/validators')!, routeByPath('/governance')!, routeByPath('/glossary')!];
 
 /** Every plain-language sentence of a page, in order. */
 const sentencesOf = (id: string): string[] => {

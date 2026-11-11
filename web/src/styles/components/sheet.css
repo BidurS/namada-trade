@@ -68,6 +68,8 @@
   .pop__text { font-size: var(--t-13); line-height: 20px; }
   .pop__x { position: absolute; top: var(--s-3); right: var(--s-2); }
   .pop .link { min-height: 44px; }
+  /* a card opened from inside a sheet stands outside it (ui/Term.tsx puts it under <body>), and a modal sheet lets nothing outside it be followed: no "More in the glossary" there */
+  html:has(.sheet[open], .pal[open]) .pop .link { display: none; }
   @media (min-width: 640px) {
     .pop { inset: auto; top: var(--pop-y, 50%); left: var(--pop-x, 50%); width: max-content; max-width: 320px; padding: var(--s-4); border: 1px solid var(--c-line-strong); border-top: 2px solid var(--accent); }
     .pop::backdrop { background: transparent; }

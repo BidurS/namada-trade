@@ -13,7 +13,8 @@
 // from seo.ts facts(), and is left out when it was not read.
 import type { Env } from './util';
 import { ROUTES, GUIDE_ROUTES, routeByPath, type RouteDef } from '../../shared/routes';
-import { SITE, BODY, type FactKey } from '../../shared/copy';
+import { SITE, BODY, GLOSSARY_ALSO, type FactKey } from '../../shared/copy';
+import { GLOSSARY } from '../../shared/glossary';
 import { GUIDES } from '../../shared/guides';
 import { citations, GUIDE_INDEPENDENCE, type GPara } from '../../shared/guide-types';
 import { networkStatus } from '../../shared/halt';
@@ -104,7 +105,9 @@ export function pageMarkdown(route: RouteDef, f: Facts | null): string {
   const own = (body?.sections ?? []).map((s) => `## ${s.h2}\n\n${paras(s.paras)}${factsMd(s.facts ?? [], f, shown)}`).join('');
   const extra = route.id === 'guides'
     ? GUIDE_ROUTES.map((g) => `## [${g.h1}](${urlOf(g)})\n\n${g.description}\n\n`).join('')
-    : route.id === 'developers' ? apiMd() : '';
+    : route.id === 'developers' ? apiMd()
+    // the glossary's list as the page serves it (seo.ts glossaryListHtml): the plain word, the term other sites use, the sentence
+    : route.id === 'glossary' ? GLOSSARY.map((g) => `## ${g.plain}\n\n${GLOSSARY_ALSO} ${g.expert}\n\n${g.text}\n\n`).join('') : '';
   return `# ${route.h1}
 
 ${urlOf(route)}
