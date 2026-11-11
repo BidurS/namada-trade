@@ -6,6 +6,9 @@ export const EXPLORERS = {
 /** Osmosis ICS-20 transfer module account (worker/src/config.ts OSMOSIS.transferModule). */
 export const OSMOSIS_TRANSFER_MODULE = 'osmo1yl6hdjhmkf37639730gffanpzndzdpmhxy9ep3';
 
+/** The Namada chain this site reads (its nodes name it as node_info.network); worker/src/config.ts NAMADA.chainId is the same (test/block-production.test.ts holds them equal). */
+export const NAMADA_CHAIN_ID = 'namada.5f5de2dd1b88cba30586420';
+
 export const NAMADA = {
   internal: {
     pos: 'tnam1qgqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqc8j2fp',

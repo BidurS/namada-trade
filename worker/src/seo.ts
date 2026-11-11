@@ -26,6 +26,7 @@ import { kvGetJson } from './db';
 import type { BridgesRecord, ValidatorsResponse } from '../../shared/types';
 import { validatorsAnswer } from './validators';
 import { spreadSentence } from '../../shared/validators';
+import { blockProduction, blocksSentence, blocksWho } from '../../shared/block-production';
 
 export type { FactKey };
 export { BODY };
@@ -49,8 +50,12 @@ function everyMsOf(detail: string | null): unknown {
  * and the last reading of every source that completed. Each is left out when its read failed or holds nothing: no
  * rows is not "0 of 0", and no completed reading is not a time.
  */
-export function statusFacts(checkRows: { status: string; detail: string | null; checked_at: number }[] | null | undefined, lastTickAt: number | null | undefined, now: number): Facts {
+export function statusFacts(checkRows: { key?: string; status: string; detail: string | null; checked_at: number }[] | null | undefined, lastTickAt: number | null | undefined, now: number): Facts {
   const f: Facts = {};
+  // whether Namada is making blocks, from the nodes' and the indexer's newest blocks at the last reading (shared/block-production.ts)
+  const b = blockProduction((checkRows ?? []).map((r) => ({ key: r.key ?? '', detail: r.detail, checkedAt: Number(r.checked_at) })), now);
+  const said = blocksSentence(b);
+  if (said && b.readAt != null) f.blocks = { text: [said, blocksWho(b)].filter(Boolean).join(' '), at: b.readAt, source: b.indexerHeight != null ? 'Namada nodes and the network indexer' : 'Namada nodes' };
   if (checkRows?.length) {
     const passing = checkRows.filter((r) => r.status === 'ok' && now - Number(r.checked_at) <= Math.max(CHECK_STALE_MS, checkStaleMs(everyMsOf(r.detail)))).length;
     f.checks = { text: `Cross-checks that pass: ${num(passing)} of ${num(checkRows.length)}`, at: Math.max(...checkRows.map((r) => Number(r.checked_at))), source: 'NamadaTrade cross-checks' };
@@ -102,7 +107,7 @@ export function statesFigures(route: RouteDef): boolean {
 /** The figures the server-rendered pages state, each with its source and time (cached 2 minutes at the edge). */
 export async function facts(env: Env): Promise<Facts> {
   const cache = caches.default;
-  const key = new Request(`${SITE.origin}/__seo/facts-v8`);
+  const key = new Request(`${SITE.origin}/__seo/facts-v9`);
   const hit = await cache.match(key).catch(() => null);
   if (hit) return hit.json();
   const db = env.DB;
@@ -123,7 +128,7 @@ export async function facts(env: Env): Promise<Facts> {
     // The newest depth minute (kv depth.latest, written in the same batch as its depth_minute rows): the two quotable figures.
     db.prepare('SELECT value FROM kv WHERE key = ?1').bind(KV_KEYS.latest).first<{ value: string }>().then((r) => (r?.value ? (JSON.parse(r.value) as DepthResponse) : null)).catch(() => null),
     // The status page's two figures: every cross-check's stored result (one small table), and the last completed tick.
-    db.prepare('SELECT status, detail, checked_at FROM checks').all<{ status: string; detail: string | null; checked_at: number }>().then((r) => r.results ?? []).catch(() => null),
+    db.prepare('SELECT key, status, detail, checked_at FROM checks').all<{ key: string; status: string; detail: string | null; checked_at: number }>().then((r) => r.results ?? []).catch(() => null),
     readHealth(db, now).then((r) => r.body).catch(() => null),
     // The bridges page's two figures: the bridge account's own balance, and the record of what each chain holds.
     metricAt(db, 'supply.ibc_escrow', now),

@@ -58,7 +58,7 @@ export function SourcesSheet({ onClose }: { onClose: () => void }) {
         {checks.length ? (
           <section aria-labelledby="sh-src-chk">
             <h3 id="sh-src-chk" className="sh-h3">Cross-checks</h3>
-            <p className="sh-cap">Each one compares two sources for the same thing. It passes, needs a look, has nothing to compare when there was no trade to check against, or has no recent result when one of its sources stopped answering.</p>
+            <p className="sh-cap">Each one compares two sources for the same thing. It passes, needs a look, has nothing to compare when there was nothing new to check (no trade, or no new block), or has no recent result when one of its sources stopped answering.</p>
             <ul className="sh-chks">
               {[...look, ...quiet, ...idle, ...pass].map((c) => {
                 const ui = checkUi(c.status);

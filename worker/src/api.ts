@@ -60,6 +60,8 @@ import { bridgesAnswer } from './bridges';
 import { validatorsAnswer, validatorHistoryAnswer } from './validators';
 import { route } from './api-route';
 import { answerAsk, askState } from './ask';
+import { blockProduction, blocksSentence, BLOCKS_STOPPED_AFTER_MS } from '../../shared/block-production';
+import { NAMADA_CHAIN_ID } from '../../shared/config';
 
 /** A check that has not run for this long is served as 'stale': its last result is kept, but it no longer counts as
  *  passing (on 2026-10-19 the supply check kept a green "Passes" for 3.5 h after its source went quiet). */
@@ -280,8 +282,16 @@ app.get('/api/overview', async (c) => {
     : { source: POOLS_SOURCE, at: null, status: 'missing', note: replay ? 'Pool depth was not recorded before 16 Oct 2026.' : storedPools.failed ? NOT_READ : NOT_STORED };
 
   const rpcCheck = checks.find((k) => k.key === 'rpc_consensus');
-  const rpcHeight = Math.max(0, ...(((rpcCheck?.detail as any)?.statuses ?? []) as any[]).map((s) => Number(s.height) || 0));
+  // the nodes' heights as the block judgement takes them: on this chain (a node naming none counts, as the cron counts
+  // it), and not with a block time ahead of the reading (shared/block-production.ts)
+  const rpcHeight = Math.max(0, ...(((rpcCheck?.detail as any)?.statuses ?? []) as any[])
+    .filter((s) => s && !s.error && !(typeof s.network === 'string' && s.network !== '' && s.network !== NAMADA_CHAIN_ID) && !(Number(s.time) > (rpcCheck?.checkedAt ?? 0) + 60_000))
+    .map((s) => Number(s.height) || 0));
   const namHead = Math.max(rpcHeight, Number(heights?.nam_cursor || 0), Number(heights?.nam_h || 0)) || null;
+  // whether Namada is making blocks (shared/block-production.ts): while it is not, the newest block is dated by its own
+  // time, not by the reading that found it again, so "Latest Namada block" reads as old with the reason
+  const blocks = rpcCheck ? blockProduction(checks, now) : null;
+  const blockOld = !!blocks && blocks.state !== 'making' && blocks.blockAt != null && blocks.readAt != null && blocks.readAt - blocks.blockAt > BLOCKS_STOPPED_AFTER_MS && namHead === blocks.height;
   const osmoHead = Math.max(Number(heights?.osmo_h || 0), replay ? 0 : cov.state.osmosisSweep?.height ?? 0, replay ? 0 : cov.state.osmosisLive?.height ?? 0) || null;
 
   const totalSupply = mv('supply.total');
@@ -328,7 +338,15 @@ app.get('/api/overview', async (c) => {
     },
     heads: {
       osmosis: { value: osmoHead, prov: cov.osmosis },
-      namada: { value: namHead, prov: rpcCheck ? provAt('Namada RPC status', rpcCheck.checkedAt, now, 5 * 60000) : cov.namada },
+      namada: {
+        value: namHead,
+        prov: !rpcCheck ? cov.namada
+          : blockOld && blocks?.blockAt != null
+            ? { source: 'Namada RPC status', at: blocks.blockAt, ...(blocks.height != null ? { height: blocks.height } : {}), status: 'stale', note: blocksSentence(blocks) ?? undefined }
+            : blocks?.state === 'unknown'
+              ? { ...provAt('Namada RPC status', rpcCheck.checkedAt, now, 5 * 60000), status: 'stale', note: blocks.why ?? undefined }
+              : provAt('Namada RPC status', rpcCheck.checkedAt, now, 5 * 60000),
+      },
       epoch: mv('epoch'),
     },
     dex: {

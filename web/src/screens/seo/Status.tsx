@@ -6,6 +6,8 @@
 // BODY.status); where the same is served as data. The operator's
 // words (the sources as the server names them) are only under "How it is computed", as on the sheet.
 // Under Rewind the checks were not recorded: the page says so and counts nothing.
+// First of all, whether Namada is making blocks (shared/block-production.ts): measured from the nodes' and the indexer's
+// newest blocks at the last reading, so it says when blocks stop and when they start again with nothing set by hand.
 import type { ScreenProps } from '../../app/index';
 import { REWIND_WORDS, useClock, useOverview, useReplay } from '../../app/index';
 import { BODY } from '../../../../shared/copy';
@@ -14,6 +16,7 @@ import { Icon } from '../../ui/Icon';
 import { checkDetail, checkTitle, scopeRowText } from '../../lib/prov';
 import { fetchIntegrity } from '../../api';
 import { fmtAge, fmtAgo, fmtCount } from '../../lib/format';
+import { blockProduction, blocksSentence, blocksWho } from '../../../../shared/block-production';
 import { figureStamps } from '../../lib/figure-stamps';
 import { Band, Dateline, Facts, Fig, GoLink, Hero, QSection, Related, Say, missing, noAnswer, useLoad, useOv } from './parts';
 
@@ -31,7 +34,7 @@ export function Status({ route }: ScreenProps) {
   // answer is kept with the moment this page received it: how old the reading is now is the server's own gap between
   // its clock and the reading, plus the time this page has held the answer, so a reader's clock set wrong changes nothing.
   const integrity = useLoad(rewound ? 'integrity:rewound' : 'integrity', () => fetchIntegrity().then((d) => ({ d, got: Date.now() })), { enabled: !rewound, everyMs: 60_000 });
-  const [qStates, qData] = copy.sections!;
+  const [qBlocks, qStates, qData] = copy.sections!;
 
   const checks = o?.checks ?? [];
   const look = checks.filter((c) => c.status === 'warn' || c.status === 'fail');
@@ -68,6 +71,28 @@ export function Status({ route }: ScreenProps) {
               ? { source: 'this site', plain: 'This site', at: tickAt, status: 'stale', note: 'This page could not ask again, so this is the reading it last heard of.' }
               : { source: 'this site', plain: 'This site', at: tickAt, status: tickAge <= TICK_FRESH_MS ? 'live' : 'stale', note: tickAge <= TICK_FRESH_MS ? undefined : 'No reading of every source has completed in its usual time.' };
 
+  // Whether Namada is making blocks, at the last reading of its nodes (a current figure: not shown while rewound)
+  // judged at the server's clock (its last answer's time, plus how long this page has held it), as the tick figure is,
+  // so a reader's clock set wrong does not make a current reading look old
+  const srvNow = ans ? ans.d.at + Math.max(0, now - ans.got) : now;
+  const blocks = o && !rewound ? blockProduction(o.checks, srvNow) : null;
+  // the reading's age is judged only once the server's time is known (until then nothing is said about it)
+  const readOld = !!ans && !!blocks?.oldReading;
+  const blocksSaid = blocks ? blocksSentence(blocks) : null;
+  const blocksP: Stamp | null = rewound
+    ? missing('Namada nodes', 'Whether Namada is making blocks is a current figure; it is not shown while rewound.', 'Namada nodes')
+    : !blocks
+      ? null
+      : blocks.readAt == null || blocks.state === 'unknown' || blocks.blockAt == null
+        ? missing('Namada nodes', blocks.why ?? 'The Namada nodes have not been asked yet.', 'Namada nodes')
+        : {
+          source: 'Namada nodes', plain: blocks.indexerHeight != null ? 'Namada nodes and the network indexer' : 'Namada nodes', at: blocks.readAt,
+          status: readOld || stale ? 'stale' : 'live',
+          note: readOld ? 'The Namada nodes have not been asked in their usual time, so this is the last reading on record.' : undefined,
+        };
+  // the checks that wait for a new block: they ran and had nothing new to compare (cron.ts notJudged 'no-new-…')
+  const waiting = checks.filter((c) => c.status === 'idle' && String((c.detail as { notJudged?: unknown })?.notJudged ?? '').startsWith('no-new-'));
+
   return (
     <article className="seo seo--status">
       <Hero eyebrow={<Dateline label="Status" />} h1={route?.h1 ?? ''} sub={copy.paras[0]}>
@@ -75,6 +100,14 @@ export function Status({ route }: ScreenProps) {
           className="seo-facts"
           sourceLabel="Figures on this page"
           items={[
+            {
+              // stopped: how long without a block; making: the newest block's height; cannot tell: no figure, with the reason
+              n: loading ? <Fig loading v={null} /> : blocks?.state === 'stopped' && blocksP?.status !== 'missing' && blocks.blockAt != null && blocks.readAt != null
+                ? <Num v={blocks.readAt - blocks.blockAt} prov={blocksP} fmt={(ms) => fmtAge(ms)} showAge={false} />
+                : <Num v={blocks?.state === 'making' && blocksP?.status !== 'missing' ? blocks.height : null} prov={blocksP} fmt={(h) => fmtCount(h)} showAge={false} />,
+              label: blocks?.state === 'stopped' ? 'without a new Namada block, at the last reading' : 'Namada\'s newest block, at the last reading',
+              scope: blocksP ? { label: 'The last reading of the Namada nodes', p: blocksP } : undefined,
+            },
             {
               n: loading ? <Fig loading v={null} /> : checkP && checkP.status !== 'missing' ? <><Num v={pass.length} prov={checkP} showAge={false} /> <span className="u">of</span> <Num v={checks.length} prov={checkP} showAge={false} /></> : <Num v={null} prov={checkP} showAge={false} />,
               label: 'cross-checks pass',
@@ -90,6 +123,27 @@ export function Status({ route }: ScreenProps) {
       </Hero>
 
       <Band label="Cross-checks and sources">
+        <section className="seo-sec st-blocks" aria-labelledby="st-blocks" data-state={blocks?.state ?? 'none'}>
+          <h2 id="st-blocks" className="h2 seo-sec__h">{qBlocks.h2}</h2>
+          <div className="seo-sec__b">
+            {rewound ? <Say>Whether Namada is making blocks is a current figure; it is not shown while rewound.</Say> : null}
+            {!rewound && !o ? <Fig loading v={null} /> : null}
+            {blocks && blocksSaid ? <Say status={blocks.state === 'making' && blocksP?.status === 'live' ? 'fresh' : 'old'}>{blocksSaid}</Say> : null}
+            {blocks && blocks.readAt == null ? <Say>The Namada nodes have not been asked yet.</Say> : null}
+            {blocks && blocks.readAt != null ? (
+              <p className="seo-p">
+                {blocksWho(blocks) ? `${blocksWho(blocks)} ` : ''}Asked {fmtAgo(blocks.readAt, srvNow)}{readOld ? ', longer ago than usual' : ''}.
+              </p>
+            ) : null}
+            {blocks?.state === 'stopped' && waiting.length ? (
+              <p className="seo-p">
+                {fmtCount(waiting.length)} of the cross-checks below {waiting.length === 1 ? 'has' : 'have'} nothing new to judge until Namada makes a block again.
+              </p>
+            ) : null}
+            {qBlocks.paras.map((p, i) => <p key={i} className="seo-p">{p}</p>)}
+          </div>
+        </section>
+
         <section className="seo-sec" aria-labelledby="st-checks">
           <h2 id="st-checks" className="h2 seo-sec__h">Cross-checks</h2>
           <div className="seo-sec__b">

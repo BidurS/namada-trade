@@ -184,7 +184,7 @@ export const ROUTES: RouteDef[] = [
     path: '/status', id: 'status', label: 'Status', index: true,
     h1: 'Are the figures on this site current?',
     title: 'NamadaTrade status: checks and sources',
-    description: 'Which of this site\'s cross-checks pass and which need a look, whether each source it reads answered, and when its last reading completed.',
+    description: 'Whether Namada is making blocks, which of this site\'s cross-checks pass, whether each source it reads answered, and when its last reading completed.',
   },
   {
     path: '/methodology', id: 'methodology', label: 'Methodology', index: true, updated: PLATFORM_TEXT_CHECKED,

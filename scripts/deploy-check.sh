@@ -379,6 +379,20 @@ else
 fi
 indexnow_key=$(grep -oE "indexNow: '[0-9a-f]{32}'" shared/site.ts | grep -oE '[0-9a-f]{32}' || true)
 check "the IndexNow key file is the key" "$indexnow_key" "$(curl -s "$H/$indexnow_key.txt")"
+# whether Namada is making blocks (2026-11-10, shared/block-production.ts): the served status page has its section, and
+# the overview's newest Namada block carries a stamp whose status is one of the three
+check "/status says whether Namada is making blocks" 1 "$(curl -s "$H/status" | grep -c 'Is Namada making blocks?' || true)"
+# while no node gave a block from the last five minutes at the reading, the newest Namada block's stamp must read as old
+# with its reason; otherwise any of the three statuses (the expectation comes from the reading, not the hand-set notice).
+# The overview is kept at the edge for some seconds, so a copy from before the deploy may be read first: asked again.
+head_stamp() { curl -s "$H/api/overview" | python3 -c "
+import sys,json
+d=json.load(sys.stdin); p=d['heads']['namada']['prov']
+r=next((c for c in d['checks'] if c['key']=='rpc_consensus'),None)
+fresh=r is not None and any(not s.get('error') and isinstance(s.get('time'),(int,float)) and r['checkedAt']-s['time']<=300000 for s in r['detail'].get('statuses',[]))
+print(1 if (p['status'] in ('live','stale','missing') if fresh else (p['status']=='stale' and bool(p.get('note')))) else 0)" 2>/dev/null || echo 0; }
+got=0; for i in 1 2 3 4; do got=$(head_stamp); [ "$got" = 1 ] && break; sleep 8; done
+check "the newest Namada block's stamp fits the reading" 1 "$got"
 # (the answer is kept at the edge for some seconds, so a copy from before the deploy may be read first: asked again, four times at most)
 integrity_tick() { curl -s "$H/api/integrity" | python3 -c "import sys,json; d=json.load(sys.stdin); print(1 if 'lastTickAt' in d and (d['lastTickAt'] is None or isinstance(d['lastTickAt'], int)) else 0)" 2>/dev/null || echo 0; }
 got=0; for i in 1 2 3 4; do got=$(integrity_tick); [ "$got" = 1 ] && break; sleep 8; done

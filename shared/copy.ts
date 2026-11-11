@@ -26,6 +26,7 @@ export type FactKey =
   | 'apr'        // the staking rate the network indexer reports
   | 'depthSell'  // what selling the depth page's quoted size fetches across every Osmosis pool, from the newest depth minute
   | 'depthBid'   // USD of bids within the quoted distance of the price across every pool, from the same minute
+  | 'blocks'     // whether Namada is making blocks: its newest block and when it was made, at the site's last reading of the nodes
   | 'checks'     // how many of the site's cross-checks pass, of all of them, as of the newest check
   | 'tick'       // when the site's last reading of every source completed
   | 'bridgeAccount'  // NAM in Namada's bridge account, one account for every channel
@@ -427,11 +428,18 @@ export const BODY: Record<string, PageCopy> = {
   },
   status: {
     paras: [
-      'This page says whether the figures on this site are current: which of its cross-checks pass, whether each source it reads answered at the last reading, and when that reading completed.',
-      'A cross-check compares two sources for the same thing. It passes, needs a look, has nothing to compare when there was no trade to check against, or has no recent result when one of its sources stopped answering.',
+      'This page says whether the figures on this site are current: whether Namada is making blocks, which of its cross-checks pass, whether each source it reads answered at the last reading, and when that reading completed.',
+      'A cross-check compares two sources for the same thing. It passes, needs a look, has nothing to compare when there was nothing new to check (no trade, or no new block), or has no recent result when one of its sources stopped answering.',
     ],
     facts: ['checks', 'tick'],
     sections: [
+      {
+        h2: 'Is Namada making blocks?',
+        paras: [
+          'Namada normally makes a new block every few seconds. Every minute this site asks Namada nodes for their newest block, and the network indexer for its own. A block from the last five minutes, from any node, shows that blocks were being made. When the newest block is older than that and a second node or the indexer is at the same block, Namada is not making blocks: the figures read from Namada stay as of that block, and the checks that compare new blocks have nothing to judge until blocks are made again. When that old block has nothing to confirm it, or the nodes give different old blocks, the page says it cannot tell. This is measured, so it changes on its own when blocks start again.',
+        ],
+        facts: ['blocks'],
+      },
       {
         h2: 'What do the states of a figure mean?',
         paras: [

@@ -248,7 +248,7 @@ export function FigList({ rows, label, loading, noSource, children, className = 
 }
 
 /** A plain sentence in the evidence band with a status dot (Rewind and live-only wording). */
-export function Say({ children, status = 'none' }: { children: React.ReactNode; status?: 'none' | 'old' }) {
+export function Say({ children, status = 'none' }: { children: React.ReactNode; status?: 'none' | 'old' | 'fresh' }) {
   return (
     <p className="seo-say">
       <i className="dot" data-status={status} aria-hidden="true" />

@@ -85,7 +85,7 @@ test.describe('the words and the reference', () => {
     await expect(rows.first()).toBeVisible();
     const n = await rows.count();
     expect(n).toBeGreaterThan(0);
-    // the band's first figure states the same total ("10 of 20 cross-checks pass")
+    // the band states the same total ("10 of 20 cross-checks pass"), after the figure for Namada's blocks
     const band = (await page.locator('.seo-hero').innerText()).replace(/\s+/g, ' ');
     expect(band).toMatch(new RegExp(`\\bof ${n} cross-checks pass`));
     // operator text is only under "How it is computed"
