@@ -240,7 +240,7 @@ export default function ShieldedScreen({ route }: ScreenProps) {
             prov={sp}
             provLabel="Shielded NAM readings"
             marks={marks}
-            marksKey={TIMELINE_WORDS.chartKey}
+            marksKey={TIMELINE_SHOWN ? TIMELINE_WORDS.chartKey : undefined}
           />
         ) : data ? (
           <EmptyState title="No shielded-set readings recorded yet.">The chart appears once there are two readings.</EmptyState>

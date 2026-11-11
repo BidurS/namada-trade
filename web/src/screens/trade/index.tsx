@@ -269,7 +269,7 @@ export default function TradeScreen({ route }: ScreenProps) {
                   executedStart={history.data.executedStart}
                   events={EVENTS}
                   marks={marks}
-                  marksKey={TIMELINE_WORDS.chartKey}
+                  marksKey={TIMELINE_SHOWN ? TIMELINE_WORDS.chartKey : undefined}
                   range={range}
                   onRange={setRange}
                   end={at ?? clock}

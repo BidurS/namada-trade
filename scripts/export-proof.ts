@@ -8,7 +8,8 @@
  * scripts/events.ts) and writes web/src/generated/proof.ts and web/src/generated/events.ts. Every figure in
  * the output is parsed from those two files, and the ones that appear in both are checked against each
  * other: the script stops instead of writing a figure the sources do not agree on. events.ts also carries
- * INCIDENTS, the reviewed rows of scripts/incidents.ts, each checked for a source and a well-formed date.
+ * INCIDENTS, the reviewed rows of scripts/incidents.ts, while the timeline is shown (none while it is hidden:
+ * shippedIncidents), each checked for a source and a well-formed date.
  * web/src/generated/supply.ts is the dated split of NAM minted since genesis, read from docs/data (the
  * per-epoch table and the period totals, re-derived from public figures on 2026-11-02), each period's total
  * checked against the table's rows. No network: everything here is read from files in the repository.

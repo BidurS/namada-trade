@@ -1,7 +1,7 @@
 /**
  * The public incidents timeline: what happened on Namada, one reviewed row per event, each with a source a reader can
  * open. scripts/export-proof.ts (npm run gen, which the build runs) writes this array into web/src/generated/events.ts
- * as INCIDENTS; the Shielded page lists it under "What happened on Namada", and the Trade price chart and the Shielded
+ * as INCIDENTS while the timeline is shown (shared/timeline-flag.ts; an empty array while it is hidden); the Shielded page lists it under "What happened on Namada", and the Trade price chart and the Shielded
  * trend chart carry the rows that have a `mark` as dated markers (web/src/screens/trade/model.ts incidentMarks).
  *
  * Rules for a row (test/incidents.test.ts keeps them):

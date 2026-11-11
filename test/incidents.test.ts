@@ -1,4 +1,5 @@
-// The public incidents timeline (scripts/incidents.ts, written into web/src/generated/events.ts as INCIDENTS): every row
+// The public incidents timeline (scripts/incidents.ts, written into web/src/generated/events.ts as INCIDENTS while the
+// timeline is shown, and as an empty array while it is hidden): every row
 // has a day, plain words and a source a reader can open; the halts' hours are what the public node's block headers
 // give (test/fixtures/namada_blockchain_*.json, namada-rpc.stakeandrelax.net on 2026-11-07, which namada-rpc.polkachu.com
 // agreed with to the millisecond); the halt of 2 November is the HALT row; and the chart markers never stand before
@@ -179,6 +180,8 @@ describe('the owner\'s call of 2026-11-08 (owner-decisions row 39)', () => {
     for (const f of ['../web/src/screens/trade/index.tsx', '../web/src/screens/shielded/index.tsx']) {
       const src = readFileSync(new URL(f, import.meta.url), 'utf8');
       expect(src, f).toMatch(/TIMELINE_SHOWN (&& wide )?\? incidentMarks\(/);
+      // the charts' key line names the section: it is passed only while the timeline is shown, so it does not ship either
+      expect(src, f).toContain('marksKey={TIMELINE_SHOWN ? TIMELINE_WORDS.chartKey : undefined}');
     }
   });
 });
