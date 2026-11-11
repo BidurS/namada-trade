@@ -41,6 +41,8 @@ export function Status({ route }: ScreenProps) {
   const quiet = checks.filter((c) => c.status === 'stale');
   const idle = checks.filter((c) => c.status === 'idle');
   const pass = checks.filter((c) => c.status === 'ok');
+  // a check that ran with nothing to compare is neither a pass nor a fault: the passes are counted against the rest (owner decision 48)
+  const idleCount = checks.filter((c) => c.status === 'idle').length;
   const checkAt = checks.length ? Math.max(...checks.map((c) => c.checkedAt)) : null;
   const checkP: Stamp | null = !o
     ? null
@@ -109,8 +111,8 @@ export function Status({ route }: ScreenProps) {
               scope: blocksP ? { label: 'The last reading of the Namada nodes', p: blocksP } : undefined,
             },
             {
-              n: loading ? <Fig loading v={null} /> : checkP && checkP.status !== 'missing' ? <><Num v={pass.length} prov={checkP} showAge={false} /> <span className="u">of</span> <Num v={checks.length} prov={checkP} showAge={false} /></> : <Num v={null} prov={checkP} showAge={false} />,
-              label: 'cross-checks pass',
+              n: loading ? <Fig loading v={null} /> : checkP && checkP.status !== 'missing' ? <><Num v={pass.length} prov={checkP} showAge={false} /> <span className="u">of</span> <Num v={checks.length - idleCount} prov={checkP} showAge={false} /></> : <Num v={null} prov={checkP} showAge={false} />,
+              label: idleCount ? `cross-checks that could be compared pass; ${idleCount} more had nothing to compare` : 'cross-checks that could be compared pass',
               scope: checkP ? { label: 'Cross-checks that pass', p: checkP } : undefined,
             },
             {

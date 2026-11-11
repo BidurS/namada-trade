@@ -27,7 +27,7 @@ export type FactKey =
   | 'depthSell'  // what selling the depth page's quoted size fetches across every Osmosis pool, from the newest depth minute
   | 'depthBid'   // USD of bids within the quoted distance of the price across every pool, from the same minute
   | 'blocks'     // whether Namada is making blocks: its newest block and when it was made, at the site's last reading of the nodes
-  | 'checks'     // how many of the site's cross-checks pass, of all of them, as of the newest check
+  | 'checks'     // how many of the site's cross-checks pass, of those that could be compared, as of the newest check
   | 'tick'       // when the site's last reading of every source completed
   | 'bridgeAccount'  // NAM in Namada's bridge account, one account for every channel
   | 'bridgeHeld'     // NAM the chains read hold between them, and how many chains that is

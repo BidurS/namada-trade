@@ -280,8 +280,8 @@ describe('the server-rendered pages', () => {
     const none = pageHtml(route, null);
     expect(none).not.toContain('Cross-checks that pass');
     const at = Date.UTC(2026, 10, 10, 5, 30);
-    const some = pageHtml(route, { checks: { text: 'Cross-checks that pass: 10 of 20', at, source: 'NamadaTrade cross-checks' }, tick: { text: 'The last reading of every source completed', at, source: 'NamadaTrade' } });
-    expect(some).toContain('Cross-checks that pass: 10 of 20');
+    const some = pageHtml(route, { checks: { text: 'Cross-checks that pass, of those that could be compared: 10 of 15', at, source: 'NamadaTrade cross-checks' }, tick: { text: 'The last reading of every source completed', at, source: 'NamadaTrade' } });
+    expect(some).toContain('Cross-checks that pass, of those that could be compared: 10 of 15');
     expect(some).toContain('(NamadaTrade cross-checks, 2026-11-10 05:30 UTC)');
     expect(some).toContain('The last reading of every source completed');
   });
@@ -293,7 +293,8 @@ describe('the figures the served pages state', () => {
     const row = (status: string, ageMs: number, everyMs?: number) => ({ status, detail: everyMs ? JSON.stringify({ everyMs }) : '{}', checked_at: at - ageMs });
     const f = statusFacts([row('ok', 60_000), row('ok', 20 * 60_000), row('ok', 50 * 60_000, 60 * 60_000), row('warn', 60_000), row('idle', 60_000)], at - 30_000, at);
     // the second passed, but ran twenty minutes ago on the usual interval: not counted; the third's own interval is an hour
-    expect(f.checks).toEqual({ text: 'Cross-checks that pass: 2 of 5', at: at - 60_000, source: 'NamadaTrade cross-checks' });
+    // the fifth ran with nothing to compare: it is in neither number (owner decision 48)
+    expect(f.checks).toEqual({ text: 'Cross-checks that pass, of those that could be compared: 2 of 4', at: at - 60_000, source: 'NamadaTrade cross-checks' });
     expect(f.tick).toEqual({ text: 'The last reading of every source completed', at: at - 30_000, source: 'NamadaTrade' });
     expect(statusFacts(null, null, at)).toEqual({});
     expect(statusFacts([], undefined, at)).toEqual({});

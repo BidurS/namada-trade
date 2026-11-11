@@ -45,8 +45,9 @@ function everyMsOf(detail: string | null): unknown {
 }
 
 /**
- * The status page's two figures. The cross-checks that pass, of all of them, judged as /api/integrity judges them
- * (api.ts checkOf: a check that has not run for its interval is not counted as passing), dated by the newest check;
+ * The status page's two figures. The cross-checks that pass, of those that could be compared (one that ran with
+ * nothing to compare is in neither number), judged as /api/integrity judges them (api.ts checkOf: a check that has
+ * not run for its interval is not counted as passing), dated by the newest check;
  * and the last reading of every source that completed. Each is left out when its read failed or holds nothing: no
  * rows is not "0 of 0", and no completed reading is not a time.
  */
@@ -57,8 +58,12 @@ export function statusFacts(checkRows: { key?: string; status: string; detail: s
   const said = blocksSentence(b);
   if (said && b.readAt != null) f.blocks = { text: [said, blocksWho(b)].filter(Boolean).join(' '), at: b.readAt, source: b.indexerHeight != null ? 'Namada nodes and the network indexer' : 'Namada nodes' };
   if (checkRows?.length) {
-    const passing = checkRows.filter((r) => r.status === 'ok' && now - Number(r.checked_at) <= Math.max(CHECK_STALE_MS, checkStaleMs(everyMsOf(r.detail)))).length;
-    f.checks = { text: `Cross-checks that pass: ${num(passing)} of ${num(checkRows.length)}`, at: Math.max(...checkRows.map((r) => Number(r.checked_at))), source: 'NamadaTrade cross-checks' };
+    const current = (r: { detail: string | null; checked_at: number }) => now - Number(r.checked_at) <= Math.max(CHECK_STALE_MS, checkStaleMs(everyMsOf(r.detail)));
+    const passing = checkRows.filter((r) => r.status === 'ok' && current(r)).length;
+    // a check that ran with nothing to compare is neither a pass nor a fault: the passes are counted against the
+    // checks that could be compared, as the header and the Sources sheet count them (owner decision 48)
+    const idle = checkRows.filter((r) => r.status === 'idle' && current(r)).length;
+    f.checks = { text: `Cross-checks that pass, of those that could be compared: ${num(passing)} of ${num(checkRows.length - idle)}`, at: Math.max(...checkRows.map((r) => Number(r.checked_at))), source: 'NamadaTrade cross-checks' };
   }
   if (lastTickAt != null && Number.isFinite(lastTickAt)) f.tick = { text: 'The last reading of every source completed', at: lastTickAt, source: 'NamadaTrade' };
   return f;

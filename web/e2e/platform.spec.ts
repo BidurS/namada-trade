@@ -85,9 +85,11 @@ test.describe('the words and the reference', () => {
     await expect(rows.first()).toBeVisible();
     const n = await rows.count();
     expect(n).toBeGreaterThan(0);
-    // the band states the same total ("10 of 20 cross-checks pass"), after the figure for Namada's blocks
+    // the band counts the passes against the checks that could be compared ("10 of 15 cross-checks that could be
+    // compared pass"), after the figure for Namada's blocks: every check listed, less those with nothing to compare
     const band = (await page.locator('.seo-hero').innerText()).replace(/\s+/g, ' ');
-    expect(band).toMatch(new RegExp(`\\bof ${n} cross-checks pass`));
+    const idle = await rows.filter({ hasText: 'Nothing to compare' }).count();
+    expect(band).toMatch(new RegExp(`\\bof ${n - idle} cross-checks that could be compared pass`));
     // operator text is only under "How it is computed"
     await expect(page.locator('details.how.st-how')).toHaveCount(1);
     await expect(page.locator('details.how.st-how')).not.toHaveAttribute('open', '');
