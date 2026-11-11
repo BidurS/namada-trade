@@ -239,6 +239,21 @@
      one row per day with NAM, so every figure reads without hover ---------- */
   .ul-days .chartsec__title { display: grid; gap: var(--s-2); }
   .ul-days__now { color: var(--c-ink); max-width: 64ch; }
+  /* the NAM past its wait by how long ago the wait ended: one bar and a line a band, the oldest the faintest */
+  .ul-over { display: grid; gap: var(--s-2); max-width: 64ch; margin-top: var(--s-2); }
+  .ul-over__h, .ul-over__how { color: var(--c-ink-2); }
+  .ul-over__bar { display: flex; gap: 2px; height: 10px; }
+  .ul-over__bar i { display: block; min-width: 2px; flex-basis: 0; }
+  .ul-over__f--month { background: var(--c-ink); }
+  .ul-over__f--quarter { background: var(--c-ink-2); }
+  .ul-over__f--year { background: var(--c-line-strong); }
+  .ul-over__f--older { background: repeating-linear-gradient(135deg, var(--c-line-strong) 0 2px, transparent 2px 5px); box-shadow: inset 0 0 0 1px var(--c-line-strong); }
+  .ul-over__list { display: grid; margin: 0; padding: 0; list-style: none; }
+  .ul-over__row { display: grid; grid-template-columns: minmax(0, 1fr) auto; grid-template-areas: "when amt" "when n"; column-gap: var(--s-3); padding: 8px 0; border-top: 1px solid var(--c-line); font-size: var(--t-13); line-height: 20px; }
+  .ul-over__when { grid-area: when; display: flex; align-items: center; gap: 8px; color: var(--c-ink); }
+  .ul-over__sw { display: inline-block; flex: none; width: 10px; height: 10px; }
+  .ul-over__amt { grid-area: amt; text-align: right; font-weight: var(--w-medium); white-space: nowrap; }
+  .ul-over__n { grid-area: n; text-align: right; color: var(--c-ink-2); white-space: nowrap; }
   .ul-days__key { margin: 0; }
   .ul-days__key .key__i { display: flex; align-items: baseline; gap: 0; }
   .ul-days__key .key__sw { flex: none; align-self: center; }

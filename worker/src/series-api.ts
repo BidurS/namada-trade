@@ -132,6 +132,8 @@ const dailyMaspKey = (what: string): SeriesKeyDef => ({
   gapWhy: 'Not counted: the block follower had not scanned the whole day when the daily writer ran, or the writer did not run.',
   startNote: (s) => `${what} for each UTC day since ${s}, counted by block, transaction and batch index from this site's own record of each block. Earlier days are not counted.`,
 });
+/** The source of the two unstaking sums: the chain's own bond listing, read from a Namada node. */
+export const BOND_LISTING_SERIES_SOURCE = 'Namada node (bond listing)';
 const DAILY_FLOWS = 'D1 flow index (daily)';
 const dailyFlowKey = (unit: SeriesUnit, what: string): SeriesKeyDef => ({
   unit, agg: 'sum', sparse: false, native: '1d', source: DAILY_FLOWS, backfilled: true, maxAgeMs: 2 * D, graceMs: 2 * H, gapWhy: 'The daily writer did not record this day.', osmosisRecord: true,
@@ -206,6 +208,15 @@ export const SERIES_KEYS: Record<string, SeriesKeyDef> = {
   [MASP_ACTIVITY_KEYS.namOut]: dailyMaspKey('Shielded transactions in a block with NAM moving out of the shielded pool'),
   [MASP_ACTIVITY_KEYS.bridge]: dailyMaspKey('Shielded transactions in a block with NAM crossing the bridge straight into or out of the shielded pool'),
   [MASP_ACTIVITY_KEYS.inside]: dailyMaspKey('Shielded transactions in a block with no NAM moving into or out of the shielded pool (entirely inside it, in another coin, or paying a fee from it and nothing else)'),
+  // The chain's list of every unstaking request, summed at each complete bond listing (series.ts stakeListingStmts):
+  // the NAM past its wait and not withdrawn, and the NAM still in its wait. Stored since the listing shipped and
+  // served by nothing until the Supply tab stated the first by age.
+  'stake.withdrawable_nam': hourlyClock('nam', BOND_LISTING_SERIES_SOURCE,
+    (s) => `NAM whose unstaking wait is over and that was not withdrawn, from requests of every size, at each complete listing of the chain's bonds since ${s}. No listing of every request exists before then.`,
+    'No complete bond listing finished in these hours.'),
+  'stake.unbonding_nam': hourlyClock('nam', BOND_LISTING_SERIES_SOURCE,
+    (s) => `NAM still in its unstaking wait, from requests of every size, at each complete listing of the chain's bonds since ${s}. No listing of every request exists before then.`,
+    'No complete bond listing finished in these hours.'),
   'holders.namada': hourlyClock('count', 'NamadaTrade holder index',
     (s) => `Addresses holding spendable or staked NAM on Namada (protocol accounts left out), counted at each complete chain balance listing since ${s}. No count of every address exists before then.`,
     'No complete balance listing finished in these hours.'),

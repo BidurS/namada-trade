@@ -16,6 +16,7 @@ import { useEffect, useMemo, useState } from 'react';
 import type { Overview, Pressure, UnlockEntry } from '../../../../shared/types';
 import { SELLS_MOST_CUT, SELLS_MOST_PCT } from '../../../../shared/supply-thresholds';
 import { DAY_MS, HISTORY_ALL_DAYS, historyCapReached } from '../../../../shared/history';
+import { epochWords, waitOverByAge } from '../../../../shared/unbond-age';
 import { fetchMetricHistory } from '../../api';
 import { plainSource, unbondingStamp, type Stamp } from '../../lib/prov';
 import { AddrName, Button, Notice, Num, ProvScope, RecordLink, Segmented, SkeletonBlock, SourceLine, Tag, Term, YouTag, derive, namTick, niceTicks, useShowAll, useSize, useUiNow, type ScopeItem, type SeriesRange } from '../../ui';
@@ -426,9 +427,13 @@ function UnstakeDays({ wall, data, cov, waitStamp }: { wall: Wall; data: Pressur
   const [boxRef, { w, h }] = useSize<HTMLDivElement>();
   const days = wall.days;
   const termStamp: Stamp | null = data.unbondTermStructureProv ? { ...data.unbondTermStructureProv, plain: 'Namada node' } : null;
+  // the NAM past its wait by how long ago the wait ended (shared/unbond-age.ts): only when the chain's own list was
+  // read with a measured epoch length; without one there are no ages, and the sentence above stands alone
+  const over = wall.fromChain && termStamp && termStamp.status !== 'missing' ? waitOverByAge(data.unbondTermStructure) : null;
   const splitStamp = derive(waitStamp ? [cov, waitStamp] : [cov], `what each listed address did with what it unlocked before, cut at ${fmtPctRule(SELLS_MOST_PCT, 0)}`);
   const scope: ScopeItem[] = [
     ...(wall.fromChain && termStamp ? [{ label: 'NAM whose wait ends each day: the chain’s own list of every unstaking request', p: termStamp }] : []),
+    ...(over && termStamp ? [{ label: 'NAM past its wait, by how long ago the wait ended', p: derive([termStamp], 'the epochs since each wait ended x the measured epoch length') }] : []),
     { label: wall.fromChain ? 'Which addresses: the large unstaking requests and what each address did with earlier unlocks' : 'NAM whose wait ends each day: the large unstaking requests, and what each address did with earlier unlocks', p: splitStamp },
     { label: 'Unstaking wait (the days the chart runs)', p: waitStamp },
   ];
@@ -483,6 +488,29 @@ function UnstakeDays({ wall, data, cov, waitStamp }: { wall: Wall; data: Pressur
         <p className="cap ul-days__now">
           Not in the chart: <Num v={wall.nowNam} fmt={fmtNamRule} unit="NAM" /> on the chain&rsquo;s list has already finished its wait and has not been withdrawn, from requests of every size and age. It can be withdrawn and moved at any time.
         </p>
+      ) : null}
+      {/* that NAM by how long ago its wait ended: counted from the list's epochs and the measured epoch length, so every age is "about" */}
+      {over ? (
+        <div className="ul-over" data-prov-group="">
+          <p className="cap ul-over__h">
+            How long ago that wait ended, in <span data-num="">{fmtCount(over.count)}</span> {over.count === 1 ? 'request' : 'requests'}:
+          </p>
+          <div className="ul-over__bar" aria-hidden="true">
+            {over.bands.map((b) => (b.nam > 0 ? <i key={b.key} className={`ul-over__f ul-over__f--${b.key}`} style={{ flexGrow: b.nam }} /> : null))}
+          </div>
+          <ul className="ul-over__list">
+            {over.bands.map((b) => (
+              <li key={b.key} className="ul-over__row">
+                <span className="ul-over__when"><i className={`ul-over__sw ul-over__f--${b.key}`} aria-hidden="true" />{b.words}</span>
+                <span className="ul-over__amt"><Num v={b.nam} fmt={fmtNamRule} unit="NAM" /></span>
+                <span className="ul-over__n"><span data-num="">{fmtCount(b.count)}</span> {b.count === 1 ? 'request' : 'requests'}</span>
+              </li>
+            ))}
+          </ul>
+          <p className="cap ul-over__how">
+            The ages are counted, not read: the epochs since each wait ended, at {over.epochSecSource ?? `${epochWords(over.epochSec)} an epoch`}. Epochs have not always been that long, so each age is about right, and a request near the edge of a band may belong to the next. Whether any of this NAM will be withdrawn is not known.
+          </p>
+        </div>
       ) : null}
 
       <ul className="key ul-days__key">
