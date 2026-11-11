@@ -8,6 +8,7 @@ import type { ReactNode } from 'react';
 import type { Check, Pressure, Provenance, SourceStatus, Sourced } from '../../../shared/types';
 import { MINUS, ageOf, fmtCount, fmtDayMonthYear, fmtMonthYear, fmtNamRule, fmtPctRule, fmtSharePct, fmtUtcClock, fmtUtcLong } from './format';
 import { DEPTH_CHECK_TITLES } from '../../../shared/depth-checks';
+import { notJudgedAcross } from '../../../shared/halts';
 
 export type Status = SourceStatus;
 /** The four data states as the UI names them (the `data-status` attribute values). */
@@ -241,6 +242,17 @@ const nam6 = (v: unknown): string | null => {
 };
 /** An epoch number as the chain names it ("2738", no grouping). */
 const epochNo = (n: number | null): string => (n == null ? '—' : String(Math.round(n)));
+/**
+ * A pair not judged across a stretch in which Namada made no blocks (shared/halts.ts), from a check's detail.halt, in
+ * the words the Worker wrote its note in; null when the detail carries none.
+ */
+const acrossWords = (h: unknown): string | null => {
+  const o = h && typeof h === 'object' ? (h as Record<string, unknown>) : null;
+  const lastBlock = detailNum(o?.lastBlock);
+  if (lastBlock == null) return null;
+  const w = notJudgedAcross({ lastBlock, lastBlockAt: detailNum(o?.lastBlockAt), resumedAt: detailNum(o?.resumedAt) });
+  return w.charAt(0).toUpperCase() + w.slice(1);
+};
 /** A base-unit string without its sign. */
 const unsigned = (base: unknown): unknown => (typeof base === 'string' ? base.replace(/^-/, '') : base);
 /** Why the mint rule did not judge a minute (worker/src/cron.ts MintNotJudged), in words. */
@@ -453,6 +465,7 @@ export function checkDetail(c: Check): string | null {
           case 'pending':
             return height == null ? null : `The reading at block ${fmtCount(height)} does not fit the one before; the next minute decides`;
           case 'not-judged': {
+            if (d.why === 'halt') return acrossWords(d.halt);
             const why = typeof d.why === 'string' ? MINT_NOT_JUDGED[d.why] : undefined;
             const last = detailNum(d.judgedAt);
             return `Not judged this minute${why ? `: ${why}` : ''}${last != null ? `; last judged ${fmtUtcLong(last)}` : ''}`;
@@ -509,6 +522,8 @@ export function checkDetail(c: Check): string | null {
           }
           case 'balance-not-read': return `${day}: not judged, the pool's balance was not read at the ${d.endRead === false ? 'end' : 'start'} of the day`;
           case 'nothing-happened': return `${day}: no move into or out of the shielded pool, and its balance did not change`;
+          case 'halt': { const w = acrossWords(d.halt); return w ? `${day}: ${w.charAt(0).toLowerCase()}${w.slice(1)}` : `${day}: not judged`; }
+          case 'halt-unread': return `${day}: not judged yet, the time blocks were made again after a halt could not be read; tried again`;
           case 'reward-unknown': return `${day}: not judged, whether a shielded-reward epoch started in the day could not be told${typeof d.note === 'string' && d.note ? ` (${d.note})` : ''}`;
           case 'reward-not-read': return `${day}: a shielded-reward day: not judged, the chain's total of shielded rewards was not read at both ends of the day`;
           default: return `${day}: not judged`;
@@ -538,6 +553,7 @@ export function checkDetail(c: Check): string | null {
             return n == null || from == null || h == null ? null : `${plural(Math.abs(n), 'epoch', 'epochs')} started between the listings at blocks ${fmtCount(from)} and ${fmtCount(h)}: not judged, the chain keeps only the last epoch's staking inflation`;
           }
           case 'no-figures': return 'The last bond listing carries no figures for this check yet; the next listing does';
+          case 'halt': return acrossWords(d.halt);
           case 'no-new-listing': return `No complete bond listing since ${fmtUtcLong(detailNum(d.listingCompleteAt))}${h != null ? ` (block ${fmtCount(h)})` : ''}: nothing new to judge`;
           default: return null;
         }

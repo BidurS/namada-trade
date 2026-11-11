@@ -137,6 +137,8 @@ export interface AdapterExtras {
   priceSource?: QuoteSource;
   /** The record of how the quote was read (kv price.how), so a change's base read another way is named. */
   priceHow?: PriceHowRead;
+  /** The header time of the first block after each stretch with no blocks whose end is not in shared/halts.ts, as measured (kv halt.resumed.*); null when it could not be read. */
+  resumed?: Record<number, number> | null;
 }
 
 /** The bridge's found-late rows by side from the reads' GROUP BY (Osmosis ibc_in: to Osmosis; ibc_out: to Namada). */
@@ -399,6 +401,7 @@ export function toMessageFigures(f: ReadFigures, x: AdapterExtras = {}): Message
 
   return {
     kind: f.kind, now: f.now, from: f.from, to: f.to,
+    ...(x.resumed === null ? { resumed: null } : x.resumed && Object.keys(x.resumed).length ? { resumed: x.resumed } : {}),
     anchors: anchorsOf(f),
     staked, requests, pipeline, rewards, price, trades, bridge, masp, holders, governance, validators, depth,
     charts: x.charts ?? [],
@@ -871,7 +874,7 @@ export function quoteSourceAt(how: PriceHowRead, at: number | null): QuoteSource
 
 /** The reads figures.ts and operator.ts leave to the wiring: the daily's 7 d price base, the health log's first entry
  *  and the record of how the quote was read. */
-async function readExtras(db: D1Database, f: ReadFigures, log?: Prepared[]): Promise<{ priceWeek: Change | NotRead | undefined; healthLogFirstAt: number | null | NotRead; priceHow: PriceHowRead }> {
+async function readExtras(db: D1Database, f: ReadFigures, log?: Prepared[]): Promise<{ priceWeek: Change | NotRead | undefined; healthLogFirstAt: number | null | NotRead; priceHow: PriceHowRead; resumed: Record<number, number> | null }> {
   const A7 = f.now - 7 * DAY_MS;
   const quote = isNotRead(f.price) || isNotRead(f.price.value.quote) ? null : f.price.value.quote.value;
   const w = new Wave(db, log);
@@ -882,7 +885,19 @@ async function readExtras(db: D1Database, f: ReadFigures, log?: Prepared[]): Pro
     [DIGEST_HEALTH_LOG_KV],
   );
   const howRow = w.add<{ value: string }>('SELECT value FROM kv WHERE key = ?', [PRICE_HOW_KEY]);
+  // the measured end of each stretch with no blocks the table does not end yet (shared/halts.ts resumedKv)
+  const resumedRows = w.add<{ key: string; value: string }>("SELECT key, value FROM kv WHERE key >= 'halt.resumed.' AND key < 'halt.resumed/'", []);
   await w.run();
+  // null: the read failed, and the two lines say a pair reaching past an open stretch's last block is not judged
+  const resumed: Record<number, number> | null = resumedRows.answer.ok ? {} : null;
+  if (resumed && resumedRows.answer.ok) {
+    for (const r of resumedRows.answer.rows) {
+      const lastBlock = Number(r.key.slice('halt.resumed.'.length));
+      let ts = Number.NaN;
+      try { ts = Number(JSON.parse(r.value)?.ts); } catch { /* a record that cannot be read is no end */ }
+      if (Number.isInteger(lastBlock) && Number.isFinite(ts)) resumed[lastBlock] = ts;
+    }
+  }
   let priceHow: PriceHowRead;
   if (!howRow.answer.ok) priceHow = notRead(PRICE_HOW_KEY, null, DB_NOT_ANSWERED);
   else {
@@ -901,7 +916,7 @@ async function readExtras(db: D1Database, f: ReadFigures, log?: Prepared[]): Pro
   // no log row, or a log with no entry, is a log that holds no flip yet
   const at = logFirst.answer.ok ? logFirst.answer.rows[0]?.first_at : null;
   const healthLogFirstAt = !logFirst.answer.ok ? notRead(DIGEST_HEALTH_LOG_KV, null, DB_NOT_ANSWERED) : at != null && Number.isFinite(Number(at)) ? Number(at) : null;
-  return { priceWeek, healthLogFirstAt, priceHow };
+  return { priceWeek, healthLogFirstAt, priceHow, resumed };
 }
 
 /**
@@ -943,7 +958,7 @@ export async function readAndBuildDigest(db: D1Database, now: number, kind: Dige
   const quoteFig = isNotRead(figures.price) ? null : figures.price.value.quote;
   const quoteAt = quoteFig == null ? null : isNotRead(quoteFig) ? quoteFig.lastAt : quoteFig.value.at;
   const priceSource = quoteSourceAt(extras.priceHow, quoteAt);
-  const messageFigures = toMessageFigures(figures, { priceWeek: extras.priceWeek, bridgeLate: bridgeLateOf(reads), charts: chartRefs, priceSource, priceHow: extras.priceHow });
+  const messageFigures = toMessageFigures(figures, { priceWeek: extras.priceWeek, bridgeLate: bridgeLateOf(reads), charts: chartRefs, priceSource, priceHow: extras.priceHow, resumed: extras.resumed });
   const body = buildDigest(messageFigures, now, kind);
 
   // each picture's alt text is its title and its caption's first sentence (the words the caption field would keep)

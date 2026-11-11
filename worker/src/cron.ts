@@ -7,7 +7,7 @@ import * as depth from './depth/index';
 import { KV_KEYS as DEPTH_KV } from './depth/sql';
 import { PRICE_HOW_KEY, priceHealth, priceHowAt, priceHowStmt, storedPriceSource, type PriceHowLog } from './price-how';
 import { QUOTE_KEYS } from '../../shared/settle';
-import { NO_AGREED_HEAD, NO_NODE_AT_HEAD, namProtocolBalance, namTotalSupply, namTotalStake, namadaEpochRead, mintKeysAt, namadaStatusAll, delegationsAt, answeringRpcs, listingHeads, QUICK, RpcBreaker, allNamBalances, allBonds, ListingTooLargeError, LISTING_MAX_VALUE_BYTES, namProtocolBalanceAt, posLastInflationAt, maspTotalRewards, maspEpochMultiplier, type BalanceListing, type BondListing, type MintKeys, type ReadOpts, type Rpc } from './sources/namada';
+import { NO_AGREED_HEAD, NO_NODE_AT_HEAD, blockMetas, namProtocolBalance, namTotalSupply, namTotalStake, namadaEpochRead, mintKeysAt, namadaStatusAll, delegationsAt, answeringRpcs, listingHeads, QUICK, RpcBreaker, allNamBalances, allBonds, ListingTooLargeError, LISTING_MAX_VALUE_BYTES, namProtocolBalanceAt, posLastInflationAt, maspTotalRewards, maspEpochMultiplier, type BalanceListing, type BondListing, type MintKeys, type ReadOpts, type Rpc } from './sources/namada';
 import { MASP_INDEXER_HEALTH, MASP_INDEXER_MAX_HEIGHTS, maspIndexerHeight, maspIndexerTxs, type MaspIndexerTx } from './sources/masp-indexer';
 import { MASP_SEEN_RANGE_SQL, seenKey } from './masp-seen';
 import { MASP_ADDRESS, SQL as DIGEST_SQL } from './digest/sql';
@@ -33,6 +33,7 @@ import { INDEXER_IBC_STATUS, STUCK_PACKETS_KV, innerTxOfRow, reconcileStuckPacke
 import type { AlertsPending, LiveBondStatus, LiveUnbondStatus, LiveScanStatus } from './live-hub';
 import { SCANNED_KV, scannedOf } from './masp-activity';
 import { noteBlocksSeen, type StatusLike } from './blocks-seen';
+import { acrossDetail, noBlocksAcrossTimes, noBlocksBetween, notJudgedAcross, openStretches, resumedKv } from '../../shared/halts';
 import type { AlertsSkipped } from './sources/discord';
 import {
   INTERNAL_ADDRS, BALANCE_LISTING_SRC, BOND_LISTING_SRC, SPAN_EXTEND_MS, HAS_READING, listingTimes, readHolderFigures, refreshHolderFigures, figuresDue,
@@ -622,7 +623,7 @@ export function mintReadingOf(
 
 /** Whether judging `r` needs the chain's record of an epoch step (mintKeysAt at r's block): one epoch after the anchor. */
 export function mintKeysWanted(prev: MintRuleState | null | undefined, r: MintReading): boolean {
-  return !!prev?.anchor && r.epoch === prev.anchor.epoch + 1 && r.height >= prev.anchor.height;
+  return !!prev?.anchor && r.epoch === prev.anchor.epoch + 1 && r.height >= prev.anchor.height && !noBlocksBetween(prev.anchor.height, r.height);
 }
 
 /**
@@ -725,6 +726,14 @@ export function mintRuleNext(
   if (!s.anchor) {
     s.anchor = r;
     return { state: s, status: waitStatus(), detail: detail({ verdict: 'first', note: 'the first reading: the next tick is judged against it' }) };
+  }
+  // The held reading and this one on either side of a stretch in which Namada made no blocks (shared/halts.ts): not
+  // judged; this one is held for the next, which is judged against it as any other.
+  const across = noBlocksBetween(s.anchor.height, r.height);
+  if (across) {
+    const fromHeight = s.anchor.height;
+    s.anchor = r; s.pending = null;
+    return { state: s, status: waitStatus(), detail: detail({ verdict: 'not-judged', why: 'halt', fromHeight, halt: acrossDetail(across), note: notJudgedAcross(across) }) };
   }
   const v = judgeMint(s.anchor, r, keys);
   if (v.kind === 'older' || v.kind === 'keys') {
@@ -917,6 +926,40 @@ export interface MaspLedgerInputs {
   multiplier: number | null;
   /** the readings of the chain's total of shielded rewards on record, this run's included */
   rewards: MaspRewardReading[];
+  /**
+   * the header time of the first block after each stretch with no blocks whose end is not in the table, as measured
+   * (readResumed), by the stretch's last block; null when it could not be read (the day is then tried again)
+   */
+  resumed?: Record<number, number> | null;
+}
+
+/** How far the chain is known to have reached: the block scan's cursor or a node's newest block, whichever is higher (the scan may stand just below the head). */
+export const chainReachedTo = (cursor: { height: number } | null | undefined, headHeight: number | null | undefined): number | null =>
+  Math.max(Number.isFinite(cursor?.height) ? cursor!.height : 0, Number.isFinite(headHeight) ? headHeight! : 0) || null;
+
+/**
+ * The header time of the first block made after each stretch whose end is not in the table (shared/halts.ts), by the
+ * stretch's last block: as the block scan recorded it (kv resumedKv), or, when the chain is past it (`pastTo`: the
+ * scan's cursor or a node's newest block) and no record is there, read from a node now and recorded. Throws when a
+ * record or the read fails, so the ledger tries the day again rather than judge it without knowing.
+ */
+export async function readResumed(db: D1Database, pastTo: number | null, read: ReadOpts): Promise<Record<number, number>> {
+  const open = openStretches();
+  if (!open.length) return {};
+  const keys = open.map((s) => resumedKv(s.lastBlock));
+  const rows = (await db.prepare(`SELECT key, value FROM kv WHERE key IN (${keys.map(() => '?').join(', ')})`).bind(...keys).all<{ key: string; value: string }>()).results ?? [];
+  const out: Record<number, number> = {};
+  for (const s of open) {
+    const v = safeParseJson(rows.find((r) => r.key === resumedKv(s.lastBlock))?.value ?? '', null) as { ts?: unknown } | null;
+    if (v && Number.isFinite(Number(v.ts))) { out[s.lastBlock] = Number(v.ts); continue; }
+    if (pastTo == null || pastTo <= s.lastBlock) continue;
+    const first = s.lastBlock + 1;
+    const m = (await blockMetas(first, first, read)).find((x) => x.height === first);
+    if (!m) throw new Error(`block ${first}: no header time in the answer`);
+    out[s.lastBlock] = m.ts;
+    await db.prepare('INSERT INTO kv (key, value, updated_at) VALUES (?, ?, ?) ON CONFLICT(key) DO NOTHING').bind(resumedKv(s.lastBlock), JSON.stringify({ height: first, ts: m.ts }), Date.now()).run();
+  }
+  return out;
 }
 
 /**
@@ -942,6 +985,13 @@ export function maspLedgerCheck(inp: MaspLedgerInputs, now: number): Stmt {
     startEpoch: start.epoch, endEpoch: end.epoch,
   };
   if (legs.moves === 0 && Math.abs(deltaNam) < MASP_LEDGER_TOLERANCE_NAM) return idle('nothing-happened', { ...figures, note: 'no move into or out of the shielded pool, and its balance did not change' });
+  // the day's two balances on either side of a stretch in which Namada made no blocks (shared/halts.ts): not judged;
+  // when the end of an open stretch could not be read, the day is tried again rather than judged without it
+  if (inp.resumed === null && openStretches().some((s) => s.lastBlockAt < end.ts)) {
+    return idle('halt-unread', { ...figures, retry: true, note: 'the time blocks were made again after a halt could not be read; tried again' });
+  }
+  const across = noBlocksAcrossTimes(start.ts, end.ts, inp.resumed ?? {});
+  if (across) return idle('halt', { ...figures, halt: acrossDetail(across), note: notJudgedAcross(across) });
   if (Math.abs(residualNam) <= MASP_LEDGER_TOLERANCE_NAM) return stmt.check('masp_ledger', 'ok', MASP_LEDGER_TITLE, { ...base, judged: true, ...figures, rewardDay: false }, now);
   // More than the moves account for: on a day a shielded-reward epoch started, the rest may be the rewards the chain
   // credited to the pool's own NAM, which its total of shielded rewards records. undefined: cannot be told.
@@ -1024,6 +1074,8 @@ export function posRemainderReads(state: PosRemainderState | null | undefined, r
   const last = state?.last ?? null;
   if (!last) return { inflation: false };
   if (rec.height <= last.height) return null;
+  // across a stretch with no blocks the pair is not judged (posRemainderNext), so the inflation is not read
+  if (noBlocksBetween(last.height, rec.height)) return { inflation: false };
   const apart = rec.epoch - last.epoch;
   return { inflation: apart === 1 };
 }
@@ -1054,6 +1106,9 @@ export function posRemainderNext(state: PosRemainderState | null | undefined, re
   if (!reads || 'error' in reads) { s.failedAt = now; return { state: s, row: null }; }
   const figures: PosListingFigures = { height: rec.height, epoch: rec.epoch, at: rec.at, provider: reads.provider, posBase: reads.posBase.toString(), ...fig };
   if (!last) { s.last = figures; return done(idle('first', { note: 'no earlier complete listing to compare with; this one is kept for the next' })); }
+  // the two listings on either side of a stretch in which Namada made no blocks (shared/halts.ts): not judged
+  const across = noBlocksBetween(last.height, rec.height);
+  if (across) { s.last = figures; return done(idle('halt', { fromHeight: last.height, fromEpoch: last.epoch, halt: acrossDetail(across), note: notJudgedAcross(across) })); }
   const apart = rec.epoch - last.epoch;
   if (apart < 0 || apart > 1) { s.last = figures; return done(idle('epochs-apart', { fromHeight: last.height, fromEpoch: last.epoch, epochsApart: apart, note: `${n0(Math.abs(apart))} epochs between the listings at blocks ${n0(last.height)} and ${n0(rec.height)}: the chain keeps only the last epoch's staking inflation` })); }
   if (apart === 1 && reads.inflationBase == null) { s.failedAt = now; return { state: s, row: null }; }
@@ -2936,18 +2991,21 @@ export async function runCron(env: Env) {
         const day = ledgerState === undefined ? null : await readMaspDay(env.DB, dayStartOf(now) - DAY_MS).catch((e) => { console.error('masp ledger', e); return null; });
         if (day) {
           let reading: MaspRewardReading | null = null, multiplier: number | null = null;
+          // the end of each stretch with no blocks whose end is not in the table (null: not read; the day is tried again)
+          let resumed: Record<number, number> | null = null;
           const endAt = trustPhaseEnd(deadlineAt, Date.now());
           if (endAt != null && !late()) {
             const phase = phaseSignal(signal, endAt);
             const ropts = { ...nread, rpcs: preferProvider(rpcs, epochRes?.provider), signal: phase.signal };
             try {
+              resumed = await readResumed(env.DB, chainReachedTo(ix?.namadaCursor, headHeight), ropts).catch((e) => { console.error('masp ledger: the end of a halt was not read', redact(String(e))); return null; });
               const [r, m] = await Promise.all([maspTotalRewards(ropts).catch((e) => { console.error('masp total rewards', redact(String(e))); return null; }), maspEpochMultiplier(ropts).catch(() => null)]);
               if (r) reading = { at: now, height: r.height, provider: r.provider, epoch, totalBase: r.total.toString() };
               multiplier = m?.multiplier ?? null;
             } finally { phase.done(); }
           }
           const rewards = keepReadings(ledgerState?.rewards ?? [], reading);
-          checkStmts.push(maspLedgerCheck({ day, scan: scanPosition(ix?.namadaCursor, headHeight), multiplier, rewards }, now), stmt.kvSet(MASP_LEDGER_KV, JSON.stringify({ rewards }), now));
+          checkStmts.push(maspLedgerCheck({ day, scan: scanPosition(ix?.namadaCursor, headHeight), multiplier, rewards, resumed }, now), stmt.kvSet(MASP_LEDGER_KV, JSON.stringify({ rewards }), now));
         }
       }
     }

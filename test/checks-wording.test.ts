@@ -139,13 +139,14 @@ describe('the supply checks of 2026-11-02, in words', () => {
   it('what it could not judge is said as not judged, never as a pass', () => {
     expect(mint(mintRuleNext(same.state, { why: 'minted-not-read', note: 'x' }, null, T + 3 * MIN))).toBe('Not judged this minute: the total of all NAM was not read; last judged 2 Nov 2026, 14:02\u00a0UTC');
     expect(mint(mintRuleNext(same.state, { why: 'different-blocks', note: 'x' }, null, T + 3 * MIN))).toBe('Not judged this minute: the total and the epoch came from different blocks; last judged 2 Nov 2026, 14:02\u00a0UTC');
-    const gap = mintRuleNext(same.state, r(2740, m0, 8_600_000, T + 13 * 3600_000), null, T + 13 * 3600_000);
-    expect(mint(gap)).toBe('Not judged across 2 epochs: no reading between blocks 8,516,991 and 8,600,000');
+    // (heights below block 8,517,986: a pair across it is not judged for another reason, test/halts.test.ts)
+    const gap = mintRuleNext(same.state, r(2740, m0, 8_517_900, T + 13 * 3600_000), null, T + 13 * 3600_000);
+    expect(mint(gap)).toBe('Not judged across 2 epochs: no reading between blocks 8,516,991 and 8,517,900');
     expect(mint(mintRuleNext(same.state, r(2739, m0, 8_517_100, T + 6 * 3600_000), k({ pgfRate: '0.01' }), T + 6 * 3600_000))).toBe('Not judged exactly as epoch 2739 started: public funding mints NAM too, on a base this check does not compute');
     // the span is said after the next minutes' lines while it is held, never dropped for an 'ok' line
-    const after = mintRuleNext(gap.state, r(2740, m0, 8_600_008, T + 13 * 3600_000 + MIN), null, T + 13 * 3600_000 + MIN);
+    const after = mintRuleNext(gap.state, r(2740, m0, 8_517_908, T + 13 * 3600_000 + MIN), null, T + 13 * 3600_000 + MIN);
     expect(after.status).toBe('warn');
-    expect(mint(after)).toBe('Unchanged within epoch 2740 (block 8,600,008); on 3 Nov 2026, 03:00\u00a0UTC, not judged across 2 epochs: no reading between blocks 8,516,991 and 8,600,000');
+    expect(mint(after)).toBe('Unchanged within epoch 2740 (block 8,517,908); on 3 Nov 2026, 03:00\u00a0UTC, not judged across 2 epochs: no reading between blocks 8,516,991 and 8,517,900');
   });
 
   const BAL = JSON.parse(readFileSync(new URL('./fixtures/balance_listing.json', import.meta.url), 'utf8'));

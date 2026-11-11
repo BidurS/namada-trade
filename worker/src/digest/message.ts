@@ -6,6 +6,7 @@
 // input and a fixed "now", so the tests run on literal figures. The figures object is defined here from the spec; the
 // module that reads it from D1 is written apart and fills this shape.
 import type { Provenance } from '../../../shared/types';
+import { noBlocksAcrossTimes, notJudgedAcross, openStretches } from '../../../shared/halts';
 import { DIGEST_HOUR_UTC } from '../../../shared/alerts';
 import { explorerHashOf, safeHttpUrl } from '../../../shared/flow-rules';
 import { NAMADA } from '../config';
@@ -249,6 +250,8 @@ export interface DigestFigures {
   now: number;
   from: number;
   to: number;
+  /** the measured end of each stretch with no blocks the table does not end yet (shared/halts.ts), by its last block; null: not read */
+  resumed?: Record<number, number> | null;
   anchors: Anchors;
   staked: Figure<StakedValue>;
   requests: Figure<RequestsValue>;
@@ -570,6 +573,17 @@ interface Ctx {
   win: ChangeLabel;
   horizonMs: number;
   epochs: EpochRange | null;
+}
+
+/**
+ * Why a change from `baseAt` to `at` is said and not judged, or null when it is judged: the two on either side of a
+ * stretch with no blocks (shared/halts.ts), or, when the measured ends could not be read, a pair reaching past the
+ * last block of a stretch whose end the table does not give.
+ */
+function acrossWords(c: Ctx, baseAt: number, at: number): string | null {
+  if (c.fig.resumed === null && openStretches().some((s) => at > s.lastBlockAt)) return 'not judged: the time blocks were made again after a halt could not be read';
+  const across = noBlocksAcrossTimes(baseAt, at, c.fig.resumed ?? {});
+  return across ? notJudgedAcross(across) : null;
 }
 
 const epochsWords = (from: number, to: number): string => (from === to ? `epoch ${int(to)}` : `epochs ${int(from)}–${int(to)}`);
@@ -989,7 +1003,9 @@ function fieldBridge(c: Ctx): EmbedField {
     if (b && 'at' in b.base) {
       const d = e.value - b.base.value;
       const diff = Math.abs(d + net);
-      change = `, ${signed2(d)} / ${b.label}${diff <= 1 ? ' (matches)' : ` (differs by ${nam(diff)})`}`;
+      // the base and this reading on either side of a stretch with no blocks: the change is said, not judged
+      const across = acrossWords(c, b.base.at, e.at);
+      change = `, ${signed2(d)} / ${b.label}${across ? ` (${across})` : diff <= 1 ? ' (matches)' : ` (differs by ${nam(diff)})`}`;
     } else if (b) change = ` ${baseNote(b, c)}`;
     parts.push(`Escrow ${nam(e.value)} ${c.marks.sup('escrow')}${asOf(e, c)}${change}.`);
   }
@@ -1022,7 +1038,8 @@ function fieldMasp(c: Ctx): EmbedField {
     if (b && 'at' in b.base) {
       const d = bal.value - b.base.value;
       const diff = Math.abs(d - net);
-      change = `, ${signed2(d)} / ${b.label}${diff <= 1 ? ' (matches)' : ` (differs by ${nam(diff)}: shielded rewards accrue inside the pool once per MASP epoch with no event)`}`;
+      const across = acrossWords(c, b.base.at, bal.at);
+      change = `, ${signed2(d)} / ${b.label}${across ? ` (${across})` : diff <= 1 ? ' (matches)' : ` (differs by ${nam(diff)}: shielded rewards accrue inside the pool once per MASP epoch with no event)`}`;
     } else if (b) change = ` ${baseNote(b, c)}`;
     parts.push(`Pool balance ${nam(bal.value)} ${c.marks.sup('maspBalance')}${asOf(bal, c)}${change}.`);
   }
