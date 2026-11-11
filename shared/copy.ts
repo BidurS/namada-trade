@@ -670,10 +670,12 @@ export const SUPPLY_WORDS = {
 /**
  * Whether the incidents timeline is shown: the "What happened on Namada" section of the Shielded page and the dotted
  * markers it explains on the Trade price chart and the Shielded trend. Hidden on the owner's word of 2026-11-08
- * ("hide it for now, will add later if needed"; docs/design/owner-decisions.md row 39): the rows (scripts/incidents.ts),
- * their tests and the generated file stay, so showing it again is this one flag.
+ * ("hide it for now, will add later if needed"; docs/design/owner-decisions.md row 39): the rows (scripts/incidents.ts)
+ * and their tests stay, and the generated file the site ships holds no row while it is hidden (scripts/export-proof.ts
+ * shippedIncidents), so showing it again is this one flag and `npm run gen`. The flag is in a file of its own
+ * (shared/timeline-flag.ts) so the generator can read it.
  */
-export const TIMELINE_SHOWN = false;
+export { TIMELINE_SHOWN } from './timeline-flag';
 
 /**
  * The Supply page's genesis cohorts (2026-11-07, migration 0023): what the addresses funded at genesis hold now, by

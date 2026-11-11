@@ -22,6 +22,14 @@ import { fileURLToPath, pathToFileURL } from 'node:url';
 import { evaluateFlows, type AlertThresholds } from '../shared/alerts.ts';
 import type { Flow } from '../shared/types.ts';
 import { INCIDENTS, type Incident } from './incidents.ts';
+import { TIMELINE_SHOWN } from '../shared/timeline-flag.ts';
+
+/**
+ * The timeline's rows as the site ships them: all of them while the timeline is shown, none while it is hidden
+ * (shared/copy.ts TIMELINE_SHOWN), so a hidden timeline's text is not in the files a browser downloads. The rows stay
+ * in scripts/incidents.ts with their tests; showing the timeline again is the flag and `npm run gen`.
+ */
+export const shippedIncidents = (rows: Incident[]): Incident[] => (TIMELINE_SHOWN ? rows : []);
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), '..');
 const H = 3600000;
@@ -549,7 +557,7 @@ export function exportProof(root = ROOT): { proof: Proof; files: string[] } {
   mkdirSync(out, { recursive: true });
   const files = [join(out, 'proof.ts'), join(out, 'events.ts'), join(out, 'supply.ts')];
   writeFileSync(files[0], renderProofTs(proof));
-  writeFileSync(files[1], renderEventsTs(buildMarkers(ev), ev.generatedAt, INCIDENTS));
+  writeFileSync(files[1], renderEventsTs(buildMarkers(ev), ev.generatedAt, shippedIncidents(INCIDENTS)));
   writeFileSync(files[2], renderSupplyTs(split));
   return { proof, files };
 }

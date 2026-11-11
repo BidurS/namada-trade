@@ -3,7 +3,7 @@
 import { describe, it, expect } from 'vitest';
 import { existsSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
-import { parseReport, buildProof, buildMarkers, renderProofTs, renderEventsTs, readSupplySplit, renderSupplyTs } from '../scripts/export-proof';
+import { parseReport, buildProof, buildMarkers, renderProofTs, renderEventsTs, readSupplySplit, renderSupplyTs, shippedIncidents } from '../scripts/export-proof';
 import { INCIDENTS } from '../scripts/incidents';
 
 const ROOT = join(__dirname, '..');
@@ -63,7 +63,7 @@ describe('export-proof', () => {
   it('never exports the owner\'s own trades (owner decision 10)', async () => {
     const ev = events();
     const proofTs = renderProofTs(buildProof(parseReport(await readReport()), ev));
-    const eventsTs = renderEventsTs(buildMarkers(ev), ev.generatedAt, INCIDENTS);
+    const eventsTs = renderEventsTs(buildMarkers(ev), ev.generatedAt, shippedIncidents(INCIDENTS));
     // The public events.json never holds the owner's trades; they live in private/ (git-ignored). When that file
     // is present (the owner's machine), nothing from it may reach the exported files either.
     expect(ev.events.filter((e: any) => e.type === 'trade')).toHaveLength(0);
@@ -87,7 +87,7 @@ describe('export-proof', () => {
     const at = Number(/"reportGeneratedAt": (\d+)/.exec(proofFile)![1]);
     const date = /"reportDate": "([\d-]+)"/.exec(proofFile)![1];
     expect(renderProofTs({ ...p, reportGeneratedAt: at, reportDate: date })).toBe(proofFile);
-    expect(renderEventsTs(buildMarkers(ev), ev.generatedAt, INCIDENTS)).toBe(readFileSync(join(ROOT, 'web', 'src', 'generated', 'events.ts'), 'utf8'));
+    expect(renderEventsTs(buildMarkers(ev), ev.generatedAt, shippedIncidents(INCIDENTS))).toBe(readFileSync(join(ROOT, 'web', 'src', 'generated', 'events.ts'), 'utf8'));
     // the NAM-supply split since genesis, from docs/data (the periods checked against the per-epoch table)
     expect(renderSupplyTs(readSupplySplit(ROOT))).toBe(readFileSync(join(ROOT, 'web', 'src', 'generated', 'supply.ts'), 'utf8'));
   });

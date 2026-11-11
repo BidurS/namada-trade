@@ -34,7 +34,8 @@ const H = 3_600_000;
 describe('the rows', () => {
   it('pass the generator\'s checks and are what the generated file carries', () => {
     expect(checkIncidents(INCIDENTS)).toBe(INCIDENTS);
-    expect(GENERATED).toEqual(INCIDENTS);
+    // the file the site ships holds the rows only while the timeline is shown (scripts/export-proof.ts shippedIncidents)
+    expect(GENERATED).toEqual(TIMELINE_SHOWN ? INCIDENTS : []);
     expect(INCIDENTS.length).toBeGreaterThanOrEqual(10);
   });
 
@@ -169,6 +170,10 @@ describe('the chart markers', () => {
 describe('the owner\'s call of 2026-11-08 (owner-decisions row 39)', () => {
   it('the timeline is hidden: the section and the markers render nothing while the rows and words stay', () => {
     expect(TIMELINE_SHOWN).toBe(false);
+    // and a hidden timeline's rows are not in the file a browser downloads (owner, 2026-11-10)
+    expect(GENERATED).toEqual([]);
+    const shipped = readFileSync(new URL('../web/src/generated/events.ts', import.meta.url), 'utf8');
+    for (const r of INCIDENTS) { expect(shipped, r.id).not.toContain(r.id); expect(shipped, r.id).not.toContain(r.title); }
     const tl = readFileSync(new URL('../web/src/screens/shielded/Timeline.tsx', import.meta.url), 'utf8');
     expect(tl).toContain('if (!TIMELINE_SHOWN || !wide) return null;');
     for (const f of ['../web/src/screens/trade/index.tsx', '../web/src/screens/shielded/index.tsx']) {
