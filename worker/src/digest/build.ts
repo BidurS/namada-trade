@@ -5,6 +5,7 @@
 // not read: no field falls back to a default that could print 0), places the attention section, attaches the files
 // the embeds name, and returns each recipient's Discord posts in order. readAndBuildDigest runs every read of one
 // digest with its bounds; nothing here posts anything, claims anything or writes to the database.
+import { openStretches, validEnd } from '../../../shared/halts';
 import {
   collectDigestReads, shapeDigestFigures,
   type Anchors, type DigestFigures as ReadFigures, type DigestReads, type RequestKind,
@@ -874,6 +875,27 @@ export function quoteSourceAt(how: PriceHowRead, at: number | null): QuoteSource
 
 /** The reads figures.ts and operator.ts leave to the wiring: the daily's 7 d price base, the health log's first entry
  *  and the record of how the quote was read. */
+/**
+ * The measured ends of the stretches with no blocks the table does not end (kv halt.resumed.*, by last block), as the
+ * digest's two balance lines take them: null when they cannot be relied on, so the lines say a pair reaching past such a
+ * stretch is not judged. That is when the rows could not be read (`rows` null), or when the block scan's cursor
+ * (`cursor`: kv namada.cursor; undefined: not read) is past an open stretch whose end is not recorded yet (the tick
+ * records it within a minute of the block that tells it).
+ */
+export function measuredEnds(rows: readonly { key: string; value: string }[] | null, cursor: string | null | undefined): Record<number, number> | null {
+  if (!rows) return null;
+  const out: Record<number, number> = {};
+  for (const r of rows) {
+    const lastBlock = Number(r.key.slice('halt.resumed.'.length));
+    let ts = Number.NaN;
+    try { ts = Number(JSON.parse(r.value)?.ts); } catch { /* a record that cannot be read is no end */ }
+    if (Number.isInteger(lastBlock) && Number.isFinite(ts)) out[lastBlock] = ts;
+  }
+  const at = cursor === undefined ? Number.NaN : Number(cursor);
+  const past = (s: { lastBlock: number }) => cursor === undefined || (Number.isFinite(at) && at > s.lastBlock);
+  return openStretches().some((s) => past(s) && !validEnd(s, out[s.lastBlock])) ? null : out;
+}
+
 async function readExtras(db: D1Database, f: ReadFigures, log?: Prepared[]): Promise<{ priceWeek: Change | NotRead | undefined; healthLogFirstAt: number | null | NotRead; priceHow: PriceHowRead; resumed: Record<number, number> | null }> {
   const A7 = f.now - 7 * DAY_MS;
   const quote = isNotRead(f.price) || isNotRead(f.price.value.quote) ? null : f.price.value.quote.value;
@@ -887,17 +909,9 @@ async function readExtras(db: D1Database, f: ReadFigures, log?: Prepared[]): Pro
   const howRow = w.add<{ value: string }>('SELECT value FROM kv WHERE key = ?', [PRICE_HOW_KEY]);
   // the measured end of each stretch with no blocks the table does not end yet (shared/halts.ts resumedKv)
   const resumedRows = w.add<{ key: string; value: string }>("SELECT key, value FROM kv WHERE key >= 'halt.resumed.' AND key < 'halt.resumed/'", []);
+  const cursorRow = w.add<{ value: string }>("SELECT value FROM kv WHERE key = 'namada.cursor'", []);
   await w.run();
-  // null: the read failed, and the two lines say a pair reaching past an open stretch's last block is not judged
-  const resumed: Record<number, number> | null = resumedRows.answer.ok ? {} : null;
-  if (resumed && resumedRows.answer.ok) {
-    for (const r of resumedRows.answer.rows) {
-      const lastBlock = Number(r.key.slice('halt.resumed.'.length));
-      let ts = Number.NaN;
-      try { ts = Number(JSON.parse(r.value)?.ts); } catch { /* a record that cannot be read is no end */ }
-      if (Number.isInteger(lastBlock) && Number.isFinite(ts)) resumed[lastBlock] = ts;
-    }
-  }
+  const resumed = measuredEnds(resumedRows.answer.ok ? resumedRows.answer.rows : null, cursorRow.answer.ok ? cursorRow.answer.rows[0]?.value ?? null : undefined);
   let priceHow: PriceHowRead;
   if (!howRow.answer.ok) priceHow = notRead(PRICE_HOW_KEY, null, DB_NOT_ANSWERED);
   else {

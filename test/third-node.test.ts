@@ -16,10 +16,11 @@
 // from real answers (test/fixtures/balance_listing.json, bonds_listing.json).
 import { describe, it, expect, vi, afterEach } from 'vitest';
 import { readFileSync } from 'node:fs';
-import { runCron, MINT_RULE_KV, type BondListingRecord } from '../worker/src/cron';
+import { runCron, MINT_RULE_KV, resetResumedMemory, type BondListingRecord } from '../worker/src/cron';
 import { NAMADA } from '../worker/src/config';
 import { answeringRpcs, HEAD_MAX_AGE_MS, indexedRpcs, namTotalStake, NO_NODE_AT_HEAD, READ_MAX_SLOW_NODES, transferHeights } from '../worker/src/sources/namada';
 import { blocksSeenKv, resetBlocksSeenMemory } from '../worker/src/blocks-seen';
+import { resumedKv } from '../shared/halts';
 import { HALT } from '../shared/halt';
 import { toNam } from '../worker/src/util';
 import { testD1, type TestD1 } from './d1-sqlite';
@@ -50,7 +51,7 @@ const BEHIND = (blockTime: number): NodeAnswers => ({ height: HEAD - 40_000, blo
  * `posts`: every post to Discord or Telegram, with its body (both are taken). `o.queriesFail`: nodes that answer their
  * status and refuse every query at once (HTTP 502). `o.indexer`: the indexer's newest block (default HEAD - 10).
  */
-function network(up: Record<string, NodeAnswers>, posts: { url: string; body: any }[] = [], o: { queriesFail?: Set<string>; indexer?: number } = {}) {
+function network(up: Record<string, NodeAnswers>, posts: { url: string; body: any }[] = [], o: { queriesFail?: Set<string>; indexer?: number; metas?: Record<number, string> } = {}) {
   const calls: string[] = [];
   vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
     const url = String(input);
@@ -64,6 +65,13 @@ function network(up: Record<string, NodeAnswers>, posts: { url: string; body: an
     if (node) {
       if (url.includes('/status')) return json({ result: { node_info: { network: NAMADA.chainId }, sync_info: { latest_block_height: String(node.height), latest_block_time: new Date(node.blockTime).toISOString(), catching_up: false, earliest_block_height: '1' } } });
       if (url.includes('abci_query') && o.queriesFail?.has(host)) return new Response('<html>502 Bad Gateway</html>', { status: 502, headers: { 'content-type': 'text/html' } });
+      // `o.metas`: the header times the node answers for /blockchain, by height
+      if (url.includes('/blockchain?') && o.metas) {
+        const q = new URL(url).searchParams, lo = Number(q.get('minHeight')), hi = Number(q.get('maxHeight'));
+        const metas = Object.entries(o.metas).map(([h, t]) => ({ h: Number(h), t })).filter((m) => m.h >= lo && m.h <= hi).sort((a, b) => b.h - a.h)
+          .map((m) => ({ header: { chain_id: NAMADA.chainId, height: String(m.h), time: m.t } }));
+        return json({ result: { last_height: String(hi), block_metas: metas } });
+      }
       if (url.includes('abci_query')) {
         const path = decodeURIComponent((url.split('path=')[1] ?? '').split('&')[0]).replace(/^"|"$/g, '');
         // An address without a self-bond gets code 1 ("Cannot find bond"), as the real nodes answer.
@@ -428,5 +436,41 @@ describe('a node without an event index (Rpc.indexed false)', () => {
   it('the history scan reads where the index starts only on the nodes that have one', () => {
     const src = readFileSync(new URL('../scripts/backfill-namada.ts', import.meta.url), 'utf8');
     expect(src).toContain('const floors = await Promise.all(indexedRpcs(NAMADA.rpcs).map(async (r) => {');
+  });
+});
+
+describe('the end of the stretch after block 8,517,986, recorded by the tick', () => {
+  afterEach(() => resetResumedMemory());
+  const LAST_BLOCK = 8_517_986;
+  // block 8,517,986 was agreed on at 22:49:51 on 2 November, so the block after it carries that time; the block after
+  // that carries the time blocks were made again
+  const AGREED = '2026-11-02T22:49:51.200Z';
+  const AGAIN = Date.UTC(2026, 10, 11, 14, 0, 7);
+  const AT = Date.UTC(2026, 10, 11, 14, 5, 5);
+  const metas = { [LAST_BLOCK + 1]: AGREED, [LAST_BLOCK + 2]: new Date(AGAIN).toISOString() };
+  const ahead = (at: number) => ({ [FIRST.host]: { ...AT_HEAD(at - 20_000), height: LAST_BLOCK + 40 }, [LAST.host]: { ...AT_HEAD(at - 20_000), height: LAST_BLOCK + 40 } });
+  const blockchainCalls = (calls: string[]) => calls.filter((u) => u.includes(`/blockchain?minHeight=${LAST_BLOCK + 1}`));
+
+  it('the scan\'s run stopped at the block after it, so the scan recorded nothing: the next tick reads both headers once and records the end', async () => {
+    const db = testD1();
+    db.raw.prepare("INSERT INTO kv (key, value, updated_at) VALUES ('namada.cursor', ?, 0)").run(String(LAST_BLOCK + 1));
+    const calls = network(ahead(AT), [], { metas });
+    await virtualTick({ DB: db, KEPLR_KEY: 'k' }, AT);
+    expect(kv(db, resumedKv(LAST_BLOCK))).toEqual({ height: LAST_BLOCK + 2, ts: AGAIN });
+    expect(blockchainCalls(calls)).toHaveLength(1);
+    // the next tick in the same isolate asks nothing more
+    const again = network(ahead(AT + MIN), [], { metas });
+    await virtualTick({ DB: db, KEPLR_KEY: 'k' }, AT + MIN);
+    expect(blockchainCalls(again)).toEqual([]);
+  });
+
+  it('every node at the old block, as today: no request for it, and nothing recorded', async () => {
+    const db = testD1();
+    db.raw.prepare("INSERT INTO kv (key, value, updated_at) VALUES ('namada.cursor', ?, 0)").run(String(LAST_BLOCK));
+    const old = Date.parse('2026-11-02T22:49:36.642Z');
+    const calls = network({ [FIRST.host]: { ...AT_HEAD(old), height: LAST_BLOCK }, [LAST.host]: { ...AT_HEAD(old), height: LAST_BLOCK } }, [], { metas });
+    await virtualTick({ DB: db, KEPLR_KEY: 'k' }, AT);
+    expect(calls.filter((u) => u.includes('/blockchain?'))).toEqual([]);
+    expect(kv(db, resumedKv(LAST_BLOCK))).toBeNull();
   });
 });

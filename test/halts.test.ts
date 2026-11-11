@@ -12,7 +12,7 @@ import { NAMADA } from '../worker/src/config';
 import { chainReachedTo, mintKeysWanted, mintRuleNext, posRemainderNext, posRemainderReads, maspLedgerCheck, readResumed, type MintReading, type BondListingRecord, type MaspDay } from '../worker/src/cron';
 import { checkDetail } from '../web/src/lib/prov';
 import { readDigestFigures } from '../worker/src/digest/figures';
-import { toMessageFigures } from '../worker/src/digest/build';
+import { measuredEnds, toMessageFigures } from '../worker/src/digest/build';
 import { renderShared } from '../worker/src/digest/message';
 import { testD1 } from './d1-sqlite';
 import { seedSurvey, T as SURVEY_T } from './digest-survey';
@@ -236,6 +236,23 @@ describe('the shielded pool\'s daily ledger', () => {
     const DAY = Date.UTC(2026, 10, 11);
     const still: MaspDay = { ...day(DAY), end: { ts: DAY + D - MIN, nam: 1_000_000, epoch: 2741 }, legs: { shieldNam: 0, ibcInNam: 0, unshieldNam: 0, ibcOutNam: 0, feesNam: 0, moves: 0, otherKinds: [] } };
     for (const resumed of [null, {}, { 8_517_986: DAY + 14 * H }]) expect(judge(still, resumed).detail, JSON.stringify(resumed)).toMatchObject({ notJudged: 'nothing-happened' });
+  });
+});
+
+describe('the ends the digest takes', () => {
+  const row = (lastBlock: number, ts: number) => ({ key: resumedKv(lastBlock), value: JSON.stringify({ height: lastBlock + 2, ts }) });
+  const AGAIN = Date.UTC(2026, 10, 11, 14, 0, 7);
+  it('a recorded end is taken; with the scan past the stretch and no end that can be one, none can be relied on', () => {
+    expect(measuredEnds([row(8_517_986, AGAIN)], '8518100')).toEqual({ 8_517_986: AGAIN });
+    // the scan still at the stretch: nothing is past it, the lines judge as before
+    expect(measuredEnds([], '8517986')).toEqual({});
+    // past it with no record, or with a record of the block agreed on seconds after the last one: not relied on
+    expect(measuredEnds([], '8517987')).toBeNull();
+    expect(measuredEnds([row(8_517_986, Date.UTC(2026, 10, 2, 22, 49, 51))], '8518100')).toBeNull();
+    // a read that failed: the rows, or the cursor
+    expect(measuredEnds(null, '8518100')).toBeNull();
+    expect(measuredEnds([row(8_517_986, AGAIN)], undefined)).toEqual({ 8_517_986: AGAIN });
+    expect(measuredEnds([], undefined)).toBeNull();
   });
 });
 

@@ -933,6 +933,10 @@ export interface MaspLedgerInputs {
   resumed?: Record<number, number> | null;
 }
 
+/** The stretches whose end this isolate has seen recorded (readResumed in the tick): not asked again. */
+const resumedRecorded = new Set<number>();
+/** Forgets what this isolate knows of recorded ends (the tests' fresh isolate). */
+export const resetResumedMemory = () => resumedRecorded.clear();
 /** How far the chain is known to have reached: the block scan's cursor or a node's newest block, whichever is higher (the scan may stand just below the head). */
 export const chainReachedTo = (cursor: { height: number } | null | undefined, headHeight: number | null | undefined): number | null =>
   Math.max(Number.isFinite(cursor?.height) ? cursor!.height : 0, Number.isFinite(headHeight) ? headHeight! : 0) || null;
@@ -2977,6 +2981,19 @@ export async function runCron(env: Env) {
       if (lastShare !== undefined && streamShareDue(lastShare, now)) {
         const r = await env.DB.prepare(STREAM_SHARE_SQL).bind(now - STREAM_SHARE_WINDOW_MS, now).first<{ n: number | null; late: number | null; repaired: number | null }>().catch((e) => { console.error('stream share', e); return null; });
         if (r) checkStmts.push(streamShareCheck(Number(r.n ?? 0), Number(r.late ?? 0), now, Number(r.repaired ?? 0)));
+      }
+    }
+
+    // The end of a stretch with no blocks whose end is not in the table, recorded within a minute of the block that
+    // tells it (readResumed: the two headers after the stretch, one read), whatever the block scan's runs recorded. Only
+    // while such a stretch has no end recorded here and the chain has reached the second block after it; once each is
+    // recorded the isolate stops asking (resumedRecorded).
+    if (!late()) {
+      const reached = chainReachedTo(ix?.namadaCursor, headHeight);
+      const due = openStretches().filter((s) => !resumedRecorded.has(s.lastBlock) && reached != null && reached > s.lastBlock + 1);
+      if (due.length) {
+        await readResumed(env.DB, reached, nread)
+          .then((r) => { for (const s of due) if (r[s.lastBlock] != null) resumedRecorded.add(s.lastBlock); }, (e) => console.error('the end of a halt was not recorded this tick', redact(String(e))));
       }
     }
 
