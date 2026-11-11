@@ -43,7 +43,7 @@ export function SourcesSheet({ onClose }: { onClose: () => void }) {
     <>Checks were not recorded then. Every figure below is as of {fmtUtcLong(at)}, with its own source and age.</>
   ) : checks.length ? (
     <>
-      <b>{fmtCount(pass.length)} of {fmtCount(checks.length)}</b> cross-checks pass{look.length ? `, ${fmtCount(look.length)} need a look` : ''}{quiet.length ? `, ${fmtCount(quiet.length)} ${quiet.length === 1 ? 'has' : 'have'} no recent result` : ''}{idle.length ? `, ${fmtCount(idle.length)} had nothing to compare` : ''}. They ran {ran != null ? fmtAgo(ran, now) : 'at an unknown time'}.
+      <b>{fmtCount(pass.length)} of {fmtCount(checks.length - idle.length)}</b> cross-checks that could be compared pass{look.length ? `, ${fmtCount(look.length)} need a look` : ''}{quiet.length ? `, ${fmtCount(quiet.length)} ${quiet.length === 1 ? 'has' : 'have'} no recent result` : ''}{idle.length ? `; ${fmtCount(idle.length)} more had nothing to compare and ${idle.length === 1 ? 'is' : 'are'} listed below as that` : ''}. They ran {ran != null ? fmtAgo(ran, now) : 'at an unknown time'}.
     </>
   ) : (
     'No cross-checks were reported. Every figure below still shows its own source and age.'

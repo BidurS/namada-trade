@@ -1,5 +1,6 @@
 // SourceLine: the panel footer, one button for every figure in the panel (system.md 8, 12).
-// "● Source · {source | N sources} · {age or range} · {state word}"; only the lead word is
+// "● Source · {source | N sources} · {age or range} · {state word}", or, when the panel's figures
+// are not all in one state, a count of each ("7 fresh · 1 not read"); only the lead word is
 // underlined. Opens the scope sheet listing each figure (label, source, UTC time, age, state).
 //
 // ProvScope (N1 as clarified, owner decision 2): a number may sit inside a scope whose
@@ -40,14 +41,34 @@ const SEP = `${NBSP}· `;
 /** Every " · " in a tail (the screens' own `text` too) keeps its dot on the line before. */
 const glueSeps = (t: string) => t.replace(/ · /g, SEP);
 
+/** The words of a count in a panel whose figures are not all in one state ("7 fresh", "1 not read"), in the order they are said. */
+const COUNT_ORDER: ReturnType<typeof uiStatus>[] = ['fresh', 'old', 'disagree', 'none'];
+const COUNT_WORD: Record<ReturnType<typeof uiStatus>, string> = { fresh: 'fresh', old: 'old', disagree: 'disagree', none: 'not read' };
+
+/**
+ * What a panel's source line says of its figures. When every figure is in one state the line ends with that state's
+ * word, as before ("fresh", "old", "no data", "sources disagree"). When they differ it counts them by state ("8
+ * sources · 7 fresh · 1 not read"), so one figure that was not read no longer makes the line say "no data" over a full table
+ * (owner decision 48, 2026-11-10). The dot is then the worst state among the figures that were read: the one that
+ * was not read is in the count and on its own row, and does not colour the whole panel.
+ */
 export function scopeSummary(items: ScopeItem[], now: number): { status: ReturnType<typeof uiStatus>; text: string } {
   const stamps = items.map((i) => i.p).filter((p): p is Stamp => !!p);
   const worst = stamps.length ? worstStatus(stamps.map((s) => s.status)) : 'missing';
-  const ui = uiStatus(worst);
   // the ages of the stamps that have a value: a missing figure has no age to show ("Flow index · no data", as the stamp says it)
   const aged = stamps.filter((s) => s.status !== 'missing');
   const age = aged.length ? `${SEP}${ageRange(aged, now)}` : '';
-  return { status: ui, text: `${SEP}${sourcesText(items)}${age}${SEP}${STATUS_WORD[ui]}` };
+  const states = stamps.map((s) => uiStatus(s.status));
+  const mixed = new Set(states).size > 1;
+  if (!mixed) {
+    const ui = uiStatus(worst);
+    return { status: ui, text: `${SEP}${sourcesText(items)}${age}${SEP}${STATUS_WORD[ui]}` };
+  }
+  const counts = COUNT_ORDER.map((u) => [u, states.filter((x) => x === u).length] as const).filter(([, n]) => n > 0);
+  const read = uiStatus(worstStatus(aged.map((s) => s.status)));
+  // the counts stand in place of the age range: each figure's own age is on its row and in the sheet, and the line
+  // stays one line on a phone (with the range it wrapped, and the panel under it moved as it loaded)
+  return { status: read, text: `${SEP}${sourcesText(items)}${counts.map(([u, n]) => `${SEP}${n}${NBSP}${COUNT_WORD[u]}`).join('')}` };
 }
 
 export function SourceLine({ items, label, lead = 'Source', text, bare, className }: SourceLineProps) {

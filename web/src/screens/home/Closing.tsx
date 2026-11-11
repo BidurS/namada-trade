@@ -155,9 +155,9 @@ function Trust({ checks, rewound, failed }: { checks: Check[]; rewound: boolean;
   // the section's one summary line: the second of the three points from 1024 px, on its own above the closed line under it
   const summary = checks.length ? (
     <p>
-      <b data-num="" data-status="fresh">{pass.length} of {checks.length}</b> <Term id="cross-check">cross-checks</Term> pass {rewound ? 'at that moment' : 'right now'}
+      <b data-num="" data-status="fresh">{pass.length} of {checks.length - idle.length}</b> <Term id="cross-check">cross-checks</Term> that could be compared pass {rewound ? 'at that moment' : 'right now'}
       {look.length ? <>, <b data-num="" data-status="fresh">{look.length}</b> need a look</> : null}
-      {idle.length ? <>, <b data-num="" data-status="fresh">{idle.length}</b> had nothing to compare</> : null}.
+      {idle.length ? <>; <b data-num="" data-status="fresh">{idle.length}</b> more had nothing to compare</> : null}.
     </p>
   ) : (
     <p>{failed ? 'The cross-checks did not load.' : rewound ? `${REWIND_WORDS.checks}, so no cross-check result is shown for this moment.` : 'The cross-checks have not answered yet.'}</p>

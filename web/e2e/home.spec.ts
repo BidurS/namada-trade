@@ -246,14 +246,24 @@ test.describe('Home, once', () => {
     }
   });
 
-  test('supply: the legend sums to 100%; the escrow notice shows exactly when the bridge check is not ok', async ({ page }) => {
+  test('supply: each share is rounded on its own and the legend says what they read together when that is not 100%; the escrow notice shows exactly when the bridge check is not ok', async ({ page }) => {
     await gotoRoute(page, '/');
     await loaded(page);
     const shares = (await page.locator('.home .legend .lg__p').allInnerTexts()).map((t) => Number(t.replace('%', '')));
     // five segments, six once the server sends the staking account's unstaking part separately (2026-10-18)
     const ov0 = await (await page.request.get('/api/overview')).json();
     expect(shares).toHaveLength(ov0.supply.unstaking != null ? 6 : 5);
-    expect(Math.round(shares.reduce((a, b) => a + b, 0) * 10) / 10).toBe(100);
+    // Each printed share is rounded on its own (owner decision 45, 2026-11-10), so a share reads the same here as on
+    // every other page. Together they read 100.0 or a tenth or two off, and then one line under the legend says what
+    // they read; nothing is nudged to make them add up.
+    const sum = Math.round(shares.reduce((a, b) => a + b, 0) * 10) / 10;
+    expect(Math.abs(sum - 100)).toBeLessThanOrEqual(0.3);
+    const said = page.locator('.home .supply__sum');
+    if (sum === 100) await expect(said).toHaveCount(0);
+    else await expect(said).toContainText(`together they read ${sum.toFixed(1)}%`);
+    // the staked share on the bar is the staked share the page states elsewhere
+    const staked = (await page.locator('.home .legend .lg--staked .lg__p').innerText()).trim();
+    expect(staked).toBe(`${(Math.round((ov0.supply.bonded / (ov0.supply.total ?? NaN)) * 1000) / 10).toFixed(1)}%`.replace('NaN%', staked));
     const ov = await (await page.request.get('/api/overview')).json();
     const bridge = (ov.checks as Check[]).find((c) => c.key === 'ibc_conservation');
     const notice = page.locator('section:has(> #home-where) .notice');
@@ -453,9 +463,10 @@ test.describe('Home, once', () => {
     // The strip's one SourceLine spans three figures (holders, shielded share, Osmosis share) and prints the youngest and the
     // oldest age of the three (lib/prov.ts ageRange), so the 2.8-day holder reading shows in the line only when it is one of
     // those two; the supply figures' age is live data (the chain's state at the halt is days old while HALT.on). Asserted:
-    // the line carries an age in the site's units and reads old, and the count's stamp is the fixture's.
+    // the line reads old, and the count's stamp is the fixture's. When the three figures are not all in one state the
+    // line counts them by state (owner decision 48: "2 fresh · 1 old"); when all are old it carries the age and "old".
     const line = facts.locator('.srcb');
-    await expect(line).toContainText(/\d\s(s|min|h|days?)\s·\sold$/, { timeout: 30_000 });
+    await expect(line).toContainText(/(\d\s(s|min|h|days?)\s·\sold|\d\sold)$/, { timeout: 30_000 });
     await expect(line).toHaveAttribute('data-status', 'old');
     await expect(facts.locator('.fact', { hasText: 'holders on Namada' }).locator('[data-num]')).toHaveAttribute('data-status', 'old');
   });

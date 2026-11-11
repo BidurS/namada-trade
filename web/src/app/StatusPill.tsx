@@ -1,6 +1,10 @@
-// The header status pill (system.md 3 and the "header 5/7" red flag): a check icon (amber
-// when any cross-check needs a look) plus "5/7" on phones, "5 of 7" from 400 px, "5 of 7
-// checks" from 640 px. It opens the Sources sheet ("Where every number comes from").
+// The header status pill (system.md 3). It counts the cross-checks that pass against the ones
+// that could be compared: a check that ran with nothing to compare (no trade in its window)
+// is neither a pass nor a fault, so it is left out of both numbers and named in the Sources
+// sheet (owner decision 48, 2026-11-10). In words at every width, never a bare fraction: "10
+// of 15", and "10 of 15 checks" from 640 px. Under 400 px the row has no room for the words
+// beside the check icon, so the words stand without it and an amber rule round the pill says
+// that a check needs a look. It opens the Sources sheet ("Where every number comes from").
 // Under Rewind overview.checks is empty: the pill reads "no data", "Checks were not recorded
 // then" (build-plan W7). Before the first answer it keeps its width and says nothing. When the
 // page stops refreshing (a poll failed, or two went unanswered) the count stays but the pill turns
@@ -18,17 +22,19 @@ export interface CheckCount {
   look: number;
   /** checks that ran with nothing to compare (idle): not a fault, so they never turn the pill amber */
   idle: number;
+  /** the checks that had something to compare: every check less the idle ones. The passes are counted against this. */
+  compared: number;
 }
 
 export function useCheckCount(): CheckCount {
   const { overview, error } = useOverview();
-  if (!overview) return { state: error ? 'none' : 'wait', ok: 0, total: 0, look: 0, idle: 0 };
+  if (!overview) return { state: error ? 'none' : 'wait', ok: 0, total: 0, look: 0, idle: 0, compared: 0 };
   const total = overview.checks.length;
-  if (!total) return { state: 'none', ok: 0, total: 0, look: 0, idle: 0 };
+  if (!total) return { state: 'none', ok: 0, total: 0, look: 0, idle: 0, compared: 0 };
   const ok = overview.checks.filter((c) => c.status === 'ok').length;
   const idle = overview.checks.filter((c) => c.status === 'idle').length;
   const look = total - ok - idle;
-  return { state: look ? 'look' : 'ok', ok, total, look, idle };
+  return { state: look ? 'look' : 'ok', ok, total, look, idle, compared: total - idle };
 }
 
 export function StatusPill({ onOpen }: { onOpen: () => void }) {
@@ -42,9 +48,8 @@ export function StatusPill({ onOpen }: { onOpen: () => void }) {
   const label =
     c.state === 'wait' ? 'Cross-checks are being read. Where every number comes from.'
     : c.state === 'none' ? `No data: ${(rewound ? REWIND_WORDS.checks : error ?? 'No cross-checks were reported').replace(/\.$/, '')}. Where every number comes from.`
-    : `${c.ok} of ${c.total} checks pass${c.look ? `, ${c.look} need a look or have no recent result` : ''}${c.idle ? `, ${c.idle} had nothing to compare` : ''}.${staleWords ? ` ${staleWords}` : ''} Where every number comes from.`;
-  // The name starts with the words on screen ("5 of 7 checks", "no data": WCAG 2.5.3, label in name).
-  // The phone short form "5/7" is drawn from data-s by CSS, so it is not a second, different name.
+    : `${c.ok} of ${c.compared} checks that could be compared pass${c.look ? `, ${c.look} need a look or have no recent result` : ''}${c.idle ? `; ${c.idle} more had nothing to compare` : ''}.${staleWords ? ` ${staleWords}` : ''} Where every number comes from.`;
+  // The name starts with the words on screen ("10 of 15 checks", "no data": WCAG 2.5.3, label in name).
   return (
     <button type="button" className="hbtn hbtn--status" data-status={status} aria-label={label} title={c.state === 'none' && rewound ? REWIND_WORDS.checks : staleWords ?? undefined} onClick={onOpen}>
       <Icon name={c.state === 'none' ? 'info' : 'check'} />
@@ -57,8 +62,7 @@ export function StatusPill({ onOpen }: { onOpen: () => void }) {
         </span>
       ) : (
         <span>
-          <span className="hbtn__s" data-s={`${c.ok}/${c.total}`} aria-hidden="true" />
-          <span className="hbtn__l">{c.ok} of {c.total}</span>
+          <span className="hbtn__l">{c.ok} of {c.compared}</span>
           <span className="hbtn__more"> checks</span>
         </span>
       )}

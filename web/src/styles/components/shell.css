@@ -79,8 +79,6 @@
   .hbtn--rewind[data-on] { background: var(--accent); border-color: var(--accent); color: #000; --c-focus: var(--accent); }
   .hbtn--rewind[data-on] .ico { color: #000; }
   .hbtn__more { display: none; }
-  .hbtn__s::before { content: attr(data-s); }
-  .hbtn__l { display: none; }
   .hbtn__nl { display: none; }
   .hbtn__wait { display: inline-block; width: 2.2em; height: 10px; border-radius: var(--r-1); background: var(--chrome-line); }
   .ibtn { order: 6; flex: none; position: relative; display: grid; place-items: center; width: 44px; height: 44px; padding: 0; background: none; border: 0; border-radius: 50%; color: var(--chrome-ink-2); transition: color var(--d-1) var(--ease-state), background var(--d-1) var(--ease-state); }
@@ -95,7 +93,13 @@
   /* at 320 px the row read 322 (live, with the status pill's count): a narrower gutter keeps it inside the screen */
   @media (max-width: 359px) { .hdr__in { padding-inline: 4px; } .hprice { padding-left: 4px; } }
   @media (min-width: 360px) { .hbtn__ns { display: none; } .hbtn__nl { display: inline; } }
-  @media (min-width: 400px) { .hbtn__s { display: none; } .hbtn__l { display: inline; } }
+  /* under 400 px the row has no room for the count in words beside the check icon (owner decision 48: words, never a
+     bare fraction): the words stand alone, and an amber rule round the pill says that a check needs a look */
+  @media (max-width: 399px) {
+    .hbtn--status .ico { display: none; }
+    .hbtn--status { padding-inline: 10px; }
+    .hbtn--status[data-status="old"] { border-color: var(--c-warn); }
+  }
   @media (min-width: 640px) {
     .hdr__in { padding-inline: var(--gutter); gap: 8px; }
     .brand__word { display: block; }
