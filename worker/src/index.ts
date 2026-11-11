@@ -105,7 +105,11 @@ export default {
     const assetReq = page ? withoutValidators(request) : request;
     let res = await env.ASSETS.fetch(assetReq);
     const isHtml = (res.headers.get('content-type') || '').includes('text/html');
-    const notFound = () => withSiteHeaders(new Response('Not found', { status: 404, headers: { 'content-type': 'text/plain; charset=utf-8', 'cache-control': 'public, max-age=300' } }), url);
+    // A path that is not there is remembered for five minutes, so a probe asked again costs nothing. Not a file of
+    // the build: in the seconds around a deploy a page of the new version can name a script that the answering
+    // server does not hold yet, and a browser that kept that 404 would show the page without the app for five
+    // minutes (seen on 2026-11-11). A missing file under /assets/ is therefore never kept: the next load asks again.
+    const notFound = () => withSiteHeaders(new Response('Not found', { status: 404, headers: { 'content-type': 'text/plain; charset=utf-8', 'cache-control': url.pathname.startsWith('/assets/') ? 'no-store' : 'public, max-age=300' } }), url);
     // a file or /assets path the static host does not have (/wp-login.php, /.env): a real 404, not the app shell;
     // nor the static host's own redirect (/index → /) or method refusal for a path that is not a page
     if (action.kind === 'not_found' && action.asset && (isHtml || res.status === 404)) return notFound();

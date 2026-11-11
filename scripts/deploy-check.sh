@@ -326,6 +326,9 @@ check "plain http www is a 301 to https" "301 https://www.namada.trade/api/overv
 check "/api/auth/me is no-store"       1 "$(curl -s -D - -o /dev/null "$H/api/auth/me" | grep -ci 'cache-control: .*no-store' || true)"
 check "home is 200"                    200 "$(curl -s -o /dev/null -w '%{http_code}' "$H/")"
 check "unknown page is 404"            404 "$(curl -s -o /dev/null -w '%{http_code}' "$H/no-such-page")"
+# a missing file of the build must never be remembered: around a deploy a new page can name a script the answering
+# server does not hold yet, and a kept 404 leaves the page without its app (2026-11-11)
+check "a missing build file is not cached" "no-store" "$(curl -s -o /dev/null -D - "$H/assets/index-NOSUCHFILE.js" | tr -d '\r' | awk -F': ' 'tolower($1)=="cache-control"{print $2}')"
 check "CSP is enforced"                1 "$(curl -s -I "$H/" | grep -ci '^content-security-policy: default-src' || true)"
 # a day the Trade page asks for (30 days back): another day is limited on a miss (worker/src/http.ts seriesFromDays)
 day=$(python3 -c "import datetime; print((datetime.datetime.now(datetime.timezone.utc) - datetime.timedelta(days=30)).strftime('%Y-%m-%d'))")

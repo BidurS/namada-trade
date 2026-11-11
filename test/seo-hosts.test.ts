@@ -196,6 +196,19 @@ describe('a path that is not a page is a 404 with noindex, never a copy of the a
     }
   });
 
+  it('a missing file of the build is never kept by a browser or a cache; any other missing path is, for five minutes', async () => {
+    // around a deploy a new page can name a script the answering server does not hold yet: that 404 must not be
+    // remembered, or the page stays without its app until the memory of it runs out
+    for (const p of ['/assets/missing.js', '/assets/index-NOSUCHFILE.js', '/assets/index-NOSUCHFILE.css', '/assets/x/y.woff2']) {
+      const r = await get(`https://namada.trade${p}`);
+      expect(r.status, p).toBe(404);
+      expect(r.headers.get('cache-control'), p).toBe('no-store');
+    }
+    for (const p of ['/wp-login.php', '/.env', '/config.json', '/trade.html']) {
+      expect((await get(`https://namada.trade${p}`)).headers.get('cache-control'), p).toBe('public, max-age=300');
+    }
+  });
+
   it('unknown page paths are the 404 view with noindex in the header and the page', async () => {
     for (const p of ['/admin', '/no-such-page', '/trade/extra', '/guides/no-such-guide', '/learn/other', '/__ui', '/trade;jsessionid=1', '/%74rade']) {
       const r = await get(`https://namada.trade${p}`);
