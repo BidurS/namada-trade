@@ -18,10 +18,16 @@
 // ladder rows all set it. With the live quote answering any amount is quoted live; with it down
 // only the size table's listed sizes (and straight-line estimates, labelled) are shown.
 // Under Rewind no live quote, size table or pool request is made (N3, W12).
-import { useMemo, useState } from 'react';
+//
+// The phone cut (platform plan, release E; owner-decisions row 42): under 1024 px the ticket and the token header stay
+// on top, and a segmented strip under them shows one band of the evidence at a time: the price (the chart, what recent
+// buyers paid, what trades against the depth, bought and sold each day), the size block, the pools, the latest trades.
+// Every band stays a labelled section in the DOM and is fetched once, whichever is shown; a link to a part of a band
+// that is not shown (/trade#h-pools) shows its band first. From 1024 px the strip is hidden and every band shows.
+import { useEffect, useMemo, useRef, useState } from 'react';
 import type { ScreenProps } from '../../app/index';
-import { REWIND_WORDS, useClock, useOverview, useOverviewFailed, useReplay } from '../../app/index';
-import { Button, Notice, Num, OrderflowChart, PriceChart, ProvScope, SkeletonBlock, useMinWidth, type ChartRange } from '../../ui/index';
+import { REWIND_WORDS, useClock, useLocation, useOverview, useOverviewFailed, useReplay } from '../../app/index';
+import { Button, Notice, Num, OrderflowChart, PriceChart, ProvScope, Segmented, SkeletonBlock, useMinWidth, type ChartRange } from '../../ui/index';
 import type { Stamp } from '../../ui/index';
 import { fmtCount, fmtNamRule, fmtPctSigned, fmtUtcClock } from '../../lib/format';
 import { ageOutStamps } from '../../lib/prov';
@@ -38,6 +44,9 @@ import { Head } from './Head';
 import { Tape } from './Tape';
 import { Buyers } from './Buyers';
 import { routeById } from '../../../../shared/routes';
+import { LABEL_BANDS } from '../../../../shared/depth';
+import { BANDS, FIRST_BAND, bandOfId, hashId, type Band } from './bands';
+import { PhoneFold } from '../home/bits';
 
 const TRADE = routeById('trade')!;
 
@@ -45,6 +54,8 @@ const EVENTS = markerEvents(PRICE_MOVES, (p) => fmtPctSigned(p, 1));
 
 /** What the second chart is, in the words the button, the heading and the stamp use. */
 const FLOW_WHAT = 'What was bought and sold';
+/** The price chart's notes on how it is drawn and since when its series are recorded: one closed line under 1024 px. */
+const CHART_NOTES = 'How the chart is drawn, and since when';
 /** The stamp of the record of what was bought and sold when the server does not serve it. */
 const FLOW_UNSERVED: Stamp = {
   source: 'D1 flow index',
@@ -178,6 +189,40 @@ export default function TradeScreen({ route }: ScreenProps) {
   const depth = depthOf(pools.data, overview);
   const sizes = mode === 'table' || asking ? pts.map((p) => p.amountNam) : PRESET_SIZES;
 
+  // ---- the phone cut: one band of the evidence at a time under 1024 px (a class, as on the depth page: from 1024 px every band shows)
+  const [band, setBand] = useState<Band>(FIRST_BAND);
+  const off = (b: Band) => (band !== b ? ' is-off' : '');
+  // A link to a part of a band that is not shown (a pasted /trade#h-pools, an in-page link): the band is shown first,
+  // then the page goes to the target and gives it focus, as the router does for a target that is on screen.
+  const { hash } = useLocation();
+  const shown = useRef(band);
+  shown.current = band;
+  const target = useRef<{ id: string; band: Band } | null>(null);
+  useEffect(() => {
+    if (wide) return;
+    const follow = () => {
+      const id = hashId(location.hash);
+      const b = bandOfId(id);
+      if (!id || !b || b === shown.current) return;
+      target.current = { id, band: b };
+      setBand(b);
+    };
+    follow();
+    window.addEventListener('hashchange', follow);
+    return () => window.removeEventListener('hashchange', follow);
+  }, [hash, wide]);
+  useEffect(() => {
+    // once the target's band is the one shown (not in the pass that asked for it, where it is still hidden)
+    const t = target.current;
+    if (!t || t.band !== band) return;
+    target.current = null;
+    const el = document.getElementById(t.id);
+    if (!el) return;
+    el.scrollIntoView({ block: 'start' });
+    if (!el.matches('a[href], button, input, select, textarea, [tabindex]')) el.setAttribute('tabindex', '-1');
+    el.focus({ preventScroll: true });
+  }, [band]);
+
   return (
     <div className="trade" data-decision="D1" data-mode={mode} data-rewound={rewound || undefined}>
       <div className="split">
@@ -203,7 +248,10 @@ export default function TradeScreen({ route }: ScreenProps) {
         </div>
         <div className="split__b ground-ink">
           <Head overview={overview} overviewFailed={overviewFailed} depth={depth} changes={changes} volume={volume} rewound={rewound} />
-          <div className="tk-chart">
+          <div className="tk-stripband">
+            <Segmented label={LABEL_BANDS} block className="tk-strip" value={band} onChange={setBand} options={BANDS} />
+          </div>
+          <div className={`tk-chart${off('price')}`} data-band="price">
             {/* the chart's stamps come with the overview: it waits for them (or for the overview to fail) so no figure shows unsourced */}
             {history.data && (overview || overviewFailed) ? (
               <ProvScope old={kept} oldSentence={kept ? <>The latest refresh of the price history did not answer, so this is the history fetched at {fmtUtcClock(history.fetchedAt)}, and it is shown dimmed.</> : null}>
@@ -228,6 +276,7 @@ export default function TradeScreen({ route }: ScreenProps) {
                   cursorAt={at}
                   prov={chartProv}
                   bucketMs={history.data.executedBucketMs}
+                  notes={(n) => <PhoneFold label={CHART_NOTES} className="tk-fold">{n}</PhoneFold>}
                 />
                 {priceCapped ? <CapNote what="trades" /> : null}
               </ProvScope>
@@ -287,12 +336,12 @@ export default function TradeScreen({ route }: ScreenProps) {
               </div>
             ) : null}
           </div>
-          <Buyers volume={volume} daily={daily} overview={overview} depth={depth} rewound={rewound} />
-          <SizeBlock rewound={rewound} table={table} amount={amount} side={side} onPick={pick} />
+          <Buyers volume={volume} daily={daily} overview={overview} depth={depth} rewound={rewound} off={band !== 'price'} />
+          <SizeBlock rewound={rewound} table={table} amount={amount} side={side} onPick={pick} off={band !== 'size'} />
         </div>
       </div>
-      <Pools rewound={rewound} pools={pools} pairs={live ? pairs : null} depth={depth} overview={overview} />
-      <Tape load={trades} rewound={rewound} maker={maker} onMaker={setMaker} />
+      <Pools rewound={rewound} pools={pools} pairs={live ? pairs : null} depth={depth} overview={overview} off={band !== 'pools'} />
+      <Tape load={trades} rewound={rewound} maker={maker} onMaker={setMaker} off={band !== 'trades'} />
     </div>
   );
 }

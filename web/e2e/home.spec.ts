@@ -2,6 +2,10 @@
 // shell's. Layout checks run in every project of the G6 matrix; the data and behaviour checks run once
 // (375x812), against production data through the dev proxy, so they assert relations between what the
 // API sends and what the page shows rather than fixed numbers.
+//
+// The phone cut (platform plan, release E; owner-decisions row 42): under 1024 px "How NAM gets from a wallet to a sale"
+// shows its first step and one closed line for the rest, and "Why you can trust these numbers" its one summary line and
+// one closed line. A check on a folded part opens its line first (openFolds, a no-op from 1024 px, where nothing is folded).
 import fs from 'node:fs';
 import type { Check, Holder, QuoteCurveResponse } from '../../shared/types';
 import { ALERT_WINDOW_DAYS } from '../../shared/alerts';
@@ -39,6 +43,17 @@ async function loaded(page: import('@playwright/test').Page) {
   await expect(page.locator('.home .lg, .home .sec .home-none').first()).toBeVisible({ timeout: 30_000 });
 }
 
+/** Open every closed line of the phone cut under `scope` (there is none from 1024 px). */
+async function openFolds(page: import('@playwright/test').Page, scope = '.home') {
+  for (const d of await page.locator(`${scope} details.pfold`).all()) if ((await d.getAttribute('open')) == null) await d.locator('> summary').click();
+}
+/** Disclosure lines in view that are under 44 px tall (the gate's audit does not list <summary>). */
+const shortSummaries = (page: import('@playwright/test').Page, scope = 'main') =>
+  page.evaluate((sel) => [...document.querySelectorAll(`${sel} summary`)].map((el) => ({ h: el.getBoundingClientRect().height, t: (el.textContent ?? '').trim().slice(0, 30) })).filter((x) => x.h > 0 && x.h < 44).map((x) => `${Math.round(x.h)} "${x.t}"`), scope);
+/** The page was 11.5 screens at 375 x 812 before the cut; the target is about 7, 15% slack allowed. */
+const HOME_SCREENS = 7;
+const SLACK = 1.15;
+
 test.describe('Home layout, every viewport', () => {
   test('one h1 equal to RouteDef.h1; no overflow, no <table>, 44 px targets, text at least 11 px', async ({ page }) => {
     await gotoRoute(page, '/');
@@ -49,6 +64,74 @@ test.describe('Home layout, every viewport', () => {
     expect(a.tables).toBe(0);
     expect(a.smallText).toEqual([]);
     expect(a.smallTargets).toEqual([]);
+    expect(await shortSummaries(page)).toEqual([]);
+    // and with the phone cut's closed lines open (under 1024 px), so what they hold is measured too
+    await openFolds(page);
+    const b = await layoutAudit(page, 'main');
+    expect(b.overflowX, `folds open: scrollWidth ${b.scrollWidth} > ${b.innerWidth}`).toBe(false);
+    expect(b.smallText).toEqual([]);
+    expect(b.smallTargets).toEqual([]);
+    expect(await shortSummaries(page)).toEqual([]);
+  });
+
+  test('the phone cut: under 1024 px the path and the trust section are folded behind one line each; from 1024 px nothing is', async ({ page }) => {
+    await gotoRoute(page, '/');
+    await loaded(page);
+    const path = page.locator('.home .path');
+    const trust = page.locator('.home .sec--trust');
+    if (page.viewportSize()!.width >= 1024) {
+      // as before: no closed line, the four steps one list on one rail, the three points, the proof block and the explore panel in view
+      await expect(page.locator('.home details.pfold')).toHaveCount(0);
+      await expect(path.locator('ol.steps')).toHaveCount(1);
+      await expect(path.locator('ol.steps > .step')).toHaveCount(4);
+      for (let i = 0; i < 4; i++) await expect(path.locator('.step').nth(i)).toBeVisible();
+      await expect(path.locator('.explore')).toBeVisible();
+      await expect(trust.locator('.why > li')).toHaveCount(PROOF.rewindExample ? 3 : 2);
+      await expect(trust.locator('.proof')).toBeVisible();
+      await expect(trust.locator('.trust__sum')).toHaveCount(0);
+      return;
+    }
+    // the path: its lead and its first step, then one closed line; the other three steps, the explore panel, the side note and the links are in the DOM behind it
+    const pathFold = path.locator('details.pfold');
+    await expect(pathFold).toHaveCount(1);
+    await expect(pathFold).not.toHaveAttribute('open', '');
+    await expect(path.getByText(BODY.home.paras[1], { exact: true })).toBeVisible();
+    await expect(path.locator('.step')).toHaveCount(4);
+    await expect(path.locator('.step').first()).toBeVisible();
+    for (const i of [1, 2, 3]) await expect(path.locator('.step').nth(i)).toBeHidden();
+    for (const sel of ['.explore', '.sidenote', '.path__more']) {
+      await expect(pathFold.locator(sel), sel).toHaveCount(1);
+      await expect(pathFold.locator(sel), sel).toBeHidden();
+    }
+    await expect(pathFold.locator('ol.steps')).toHaveAttribute('start', '2');
+    await pathFold.locator('> summary').click();
+    for (let i = 0; i < 4; i++) await expect(path.locator('.step').nth(i)).toBeVisible();
+    for (const sel of ['.explore', '.sidenote', '.path__more']) await expect(pathFold.locator(sel), sel).toBeVisible();
+    // the steps follow the line they were opened from, in their order
+    const tops = await path.locator('.step__k').evaluateAll((els) => els.map((el) => el.getBoundingClientRect().top));
+    const line = await pathFold.locator('> summary').evaluate((el) => el.getBoundingClientRect().top);
+    expect(tops[0]).toBeLessThan(line);
+    expect(line).toBeLessThan(tops[1]);
+    expect([...tops].sort((x, y) => x - y)).toEqual(tops);
+    await pathFold.locator('> summary').click();
+    await expect(path.locator('.step').nth(1)).toBeHidden();
+
+    // the trust section: its one summary line, one closed line, and its SourceLine in view
+    const trustFold = trust.locator('details.pfold');
+    await expect(trustFold).toHaveCount(1);
+    await expect(trustFold).not.toHaveAttribute('open', '');
+    await expect(trust.locator('.trust__sum')).toBeVisible();
+    await expect(trust.locator('.trust__sum')).toContainText(/cross-checks/);
+    await expect(trust.locator('.srcb')).toBeVisible();
+    for (const sel of ['.why', '.proof']) {
+      await expect(trustFold.locator(sel), sel).toHaveCount(1);
+      await expect(trustFold.locator(sel), sel).toBeHidden();
+    }
+    await trustFold.locator('> summary').click();
+    await expect(trustFold.locator('.why')).toBeVisible();
+    await expect(trustFold.locator('.proof')).toBeVisible();
+    // the summary line is said once: it is not repeated among the points behind the line
+    await expect(trustFold.locator('.why > li')).toHaveCount(PROOF.rewindExample ? 2 : 1);
   });
 
   test('rewound: banner, the same h1, no overflow, no small targets', async ({ page }) => {
@@ -117,6 +200,40 @@ test.describe('Home, once', () => {
     expect(orphans).toEqual([]);
   });
 
+  test('N1 holds for what the phone cut folds: with both closed lines open, every figure in view has its control or a SourceLine', async ({ page }) => {
+    await gotoRoute(page, '/');
+    await loaded(page);
+    await openFolds(page);
+    await expect(page.locator('.home .path .step').nth(3)).toBeVisible();
+    await page.waitForTimeout(1500);
+    const orphans = await page.evaluate(() => {
+      const seen = (el: Element | null | undefined) => !!el && el.getBoundingClientRect().width > 0;
+      const out: string[] = [];
+      for (const n of document.querySelectorAll('main [data-num]')) {
+        if (!seen(n)) continue;
+        const own = n.closest('.num')?.querySelector('[data-prov]') ?? n.closest('[data-prov-group]')?.querySelector('[data-prov]');
+        const scope = n.closest('[data-prov-scope]');
+        const line = scope ? [...scope.querySelectorAll('.srcb')].some(seen) : false;
+        if (!seen(own) && !line) out.push((n.textContent ?? '').trim().slice(0, 30));
+      }
+      return out;
+    });
+    expect(orphans).toEqual([]);
+  });
+
+  test('the page is about seven screens at 375 x 812 with both lines closed', async ({ page }) => {
+    await gotoRoute(page, '/');
+    await loaded(page);
+    await expect(page.locator('main .skel__b, main [aria-busy="true"]')).toHaveCount(0, { timeout: 30_000 });
+    // While the Namada network is halted (shared/halt.ts HALT.on) the halt bar stands above every page; it is not part of
+    // this page's length, so its measured height is allowed for, as the first-screen check above does.
+    const bar = HALT.on ? ((await page.locator('.upd--halt').boundingBox())?.height ?? 0) : 0;
+    const m = await page.evaluate(() => ({ h: document.documentElement.scrollHeight, vh: window.innerHeight }));
+    const screens = (m.h - bar) / m.vh;
+    test.info().annotations.push({ type: 'screens', description: `/ at 375 x 812: ${(m.h / m.vh).toFixed(2)} screens (${m.h} px) with the halt bar's ${bar} px, ${screens.toFixed(2)} without` });
+    expect(screens, `${m.h} px, the halt bar's ${bar} px allowed for`).toBeLessThanOrEqual(HOME_SCREENS * SLACK);
+  });
+
   test('latest moves: six rows of 1,000 NAM or more from /api/flows?minNam=1000', async ({ page, baseURL }) => {
     const reqs = trackRequests(page);
     await gotoRoute(page, '/');
@@ -162,6 +279,7 @@ test.describe('Home, once', () => {
     const curve: QuoteCurveResponse = await (await page.request.get('/api/quote/curve')).json();
     const sizes = curve.curve.map((p) => p.amountNam).sort((a, b) => a - b);
     test.skip(sizes.length < 2, 'the size table is empty right now');
+    await openFolds(page, '.home .path');
     const slider = page.locator('.home .explore input[type=range]');
     await expect(slider).toBeVisible({ timeout: 30_000 });
     const out = page.locator('.home .explore .curve__size');
@@ -192,6 +310,7 @@ test.describe('Home, once', () => {
   test('an empty size table: the explore panel says so with its source line, no endless skeleton, no "Drag the size below."', async ({ page }) => {
     await page.route(/\/api\/quote\/curve/, (r) => r.fulfill({ json: EMPTY_CURVE }));
     await gotoRoute(page, '/');
+    await openFolds(page, '.home .path');
     const explore = page.locator('.home .explore');
     await expect(explore.locator('.notice')).toContainText('The size table is empty.', { timeout: 30_000 });
     await expect(explore).toContainText(BUSY);
@@ -205,6 +324,7 @@ test.describe('Home, once', () => {
     let good = true;
     await page.route(/\/api\/quote\/curve/, (r) => r.fulfill({ json: good ? { ...SNAP.curve, prov: { ...SNAP.curve.prov, at: Date.now() } } : EMPTY_CURVE }));
     await gotoRoute(page, '/');
+    await openFolds(page, '.home .path');
     const explore = page.locator('.home .explore');
     await expect(explore.locator('input[type=range]')).toBeVisible({ timeout: 30_000 });
     good = false;
@@ -319,10 +439,14 @@ test.describe('Home, once', () => {
     await page.route(/\/api\/holders\?/, (r) => r.fulfill({ json: holdersRead(2.8 * 86_400_000) }));
     // a server that stamps the count itself (overview.concentration.namadaProv) is given the same 2.8-day-old reading
     await page.route('**/api/overview*', async (r) => {
-      const res = await r.fetch();
-      const ov = await res.json();
-      if (ov.concentration) ov.concentration.namadaProv = { source: 'NamadaTrade holder index', at: Date.now() - 2.8 * 86_400_000, status: 'stale', note: 'fixture' };
-      await r.fulfill({ response: res, json: ov });
+      try {
+        const res = await r.fetch();
+        const ov = await res.json();
+        if (ov.concentration) ov.concentration.namadaProv = { source: 'NamadaTrade holder index', at: Date.now() - 2.8 * 86_400_000, status: 'stale', note: 'fixture' };
+        await r.fulfill({ response: res, json: ov });
+      } catch {
+        /* the test ended while a poll was in flight (gates.spec.ts editOverview does the same) */
+      }
     });
     await gotoRoute(page, '/');
     const facts = page.locator('.home .hero .scope-facts');
@@ -342,6 +466,8 @@ test.describe('Home, once', () => {
     const day = `${d} ${['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'][m - 1]} ${y}`;
     await expect(page.locator('.home .proof')).toContainText(`Static, dated ${day}`);
     await expect(page.locator('.home .proof')).toContainText(`report of ${day}`);
+    await openFolds(page, '.home .sec--trust');
+    await expect(page.locator('.home .proof')).toBeVisible();
     const link = page.locator('.home .why a');
     await expect(link).toHaveAttribute('href', `/supply?at=${EXAMPLE_AT}`);
     await link.click();

@@ -3,12 +3,18 @@
 // State checks run once (375x812) with the quote endpoints answered from the dated design snapshot
 // (docs/design/data/snapshot.json, captured 17 Oct 2026 11:24 UTC), so the degraded, live and down
 // states are each exercised whatever production is doing at the time.
+//
+// The phone cut (platform plan, release E; owner-decisions row 42): under 1024 px the evidence under the ticket and the
+// token header shows one band at a time behind a strip (Price, Size, Pools, Trades), and two sets of notes sit behind a
+// closed line each. A check on a part that is not in the first band shows its band first (showBand), and one on a
+// folded note opens its line first (openFolds); both do nothing from 1024 px, where every band and note is in view.
 import fs from 'node:fs';
 import type { Page } from '@playwright/test';
 import AxeBuilder from '@axe-core/playwright';
 import { BODY } from '../../shared/copy';
 import { fmtDayMonthYear } from '../../shared/format';
 import { routeById } from '../../shared/routes';
+import { HALT } from '../../shared/halt';
 import { REWIND_AT, VIEWPORTS, apiUrls, expect, gotoRoute, isExempt, isLiveOnly, layoutAudit, onlyIn, test, trackRequests } from './helpers';
 import type {
   ExecutedVolume, PairRow, PairsResponse, PriceChange, PriceChangesResponse, Provenance, SeriesResponse, SeriesSample, SeriesStep, TradeGroup, TradeRow, TradesResponse, VolumeResponse,
@@ -51,6 +57,39 @@ async function settled(page: Page) {
   await expect(page.locator('.get__v [data-num]')).toBeVisible();
 }
 
+/** The strip's four bands, in its order, each with an element that is in its band (web/src/screens/trade/bands.ts). */
+const BANDS = [
+  { name: 'Price', sel: '.tk-chart' },
+  { name: 'Size', sel: '.ladder' },
+  { name: 'Pools', sel: '.pools' },
+  { name: 'Trades', sel: '.tk-tape' },
+] as const;
+type BandName = (typeof BANDS)[number]['name'];
+/** Is the strip in use (under 1024 px)? From 1024 px it is hidden and every band shows. */
+const hasStrip = (page: Page) => page.locator('.tk-strip').isVisible();
+/** Show one band of the evidence, as a reader does with the strip; nothing to do from 1024 px. */
+async function showBand(page: Page, name: BandName) {
+  if (!(await hasStrip(page))) return;
+  await page.locator('.tk-strip').getByRole('radio', { name, exact: true }).check();
+  await expect(page.locator(BANDS.find((b) => b.name === name)!.sel)).toBeVisible();
+}
+/** The bands a reader can reach: each in turn under 1024 px, all at once (one pass) from 1024 px. */
+async function eachBand(page: Page, check: (band: BandName | 'all') => Promise<void>) {
+  if (!(await hasStrip(page))) return check('all');
+  for (const b of BANDS) {
+    await showBand(page, b.name);
+    await check(b.name);
+  }
+  await showBand(page, 'Price');
+}
+/** Open every closed line of the phone cut that is in view (there is none from 1024 px). */
+async function openFolds(page: Page, scope = 'main') {
+  for (const d of await page.locator(`${scope} details.pfold`).all()) if ((await d.isVisible()) && (await d.getAttribute('open')) == null) await d.locator('> summary').click();
+}
+/** Disclosure lines in view that are under 44 px tall (the gate's audit does not list <summary>). */
+const shortSummaries = (page: Page, scope = 'main') =>
+  page.evaluate((sel) => [...document.querySelectorAll(`${sel} summary`)].map((el) => ({ h: el.getBoundingClientRect().height, t: (el.textContent ?? '').trim().slice(0, 30) })).filter((x) => x.h > 0 && x.h < 44).map((x) => `${Math.round(x.h)} "${x.t}"`), scope);
+
 test.describe('layout, every viewport', () => {
   test('live: one h1, no overflow, no <table>, 44 px targets, text at least 11 px', async ({ page }) => {
     await gotoRoute(page, '/trade');
@@ -58,11 +97,16 @@ test.describe('layout, every viewport', () => {
     await expect(page.locator('#h-chart')).toBeVisible({ timeout: 30_000 });
     await expect(page.locator('h1')).toHaveCount(1);
     await expect(page.locator('h1')).toHaveText(ROUTE.h1);
-    const a = await layoutAudit(page);
-    expect(a.overflowX, `scrollWidth ${a.scrollWidth} > ${a.innerWidth}`).toBe(false);
-    expect(a.tables).toBe(0);
-    expect(a.smallText).toEqual([]);
-    expect(a.smallTargets).toEqual([]);
+    // every band a reader can reach, with the phone cut's closed lines open
+    await eachBand(page, async (band) => {
+      await openFolds(page);
+      const a = await layoutAudit(page);
+      expect(a.overflowX, `${band}: scrollWidth ${a.scrollWidth} > ${a.innerWidth}`).toBe(false);
+      expect(a.tables, band).toBe(0);
+      expect(a.smallText, band).toEqual([]);
+      expect(a.smallTargets, band).toEqual([]);
+      expect(await shortSummaries(page), band).toEqual([]);
+    });
   });
 
   test('rewound: no overflow, no live-only request', async ({ page }) => {
@@ -84,16 +128,22 @@ test.describe('once', () => {
   test('the h1, the page text from shared/copy.ts and the key figures render', async ({ page }) => {
     await gotoRoute(page, '/trade');
     await expect(page.locator('h1')).toHaveText(ROUTE.h1);
-    for (const p of BODY.trade.paras) await expect(page.getByText(p, { exact: true })).toBeVisible();
+    // the first paragraph is the ticket's; the second is the size block's, one band along on a phone
+    await expect(page.getByText(BODY.trade.paras[0], { exact: true })).toBeVisible();
     await expect(page.locator('[data-decision="D1"]')).toHaveCount(1);
     await settled(page);
     await expect(page.locator('.get__prov [data-prov]')).toBeVisible();
     await expect(page.locator('#h-chart')).toBeVisible({ timeout: 30_000 });
     await expect(page.locator('.chartsec .cstats [data-num]').first()).toBeVisible();
-    await expect(page.locator('#h-ladder')).toBeVisible();
-    await expect(page.locator('#h-pools')).toBeVisible();
     // every panel ends in a SourceLine
-    for (const sel of ['.tk-chart', '.ladder', '.pools']) await expect(page.locator(`${sel} .srcb`).first()).toBeVisible();
+    await expect(page.locator('.tk-chart .srcb').first()).toBeVisible();
+    await showBand(page, 'Size');
+    for (const p of BODY.trade.paras.slice(1)) await expect(page.getByText(p, { exact: true })).toBeVisible();
+    await expect(page.locator('#h-ladder')).toBeVisible();
+    await expect(page.locator('.ladder .srcb').first()).toBeVisible();
+    await showBand(page, 'Pools');
+    await expect(page.locator('#h-pools')).toBeVisible();
+    await expect(page.locator('.pools .srcb').first()).toBeVisible();
   });
 
   test('degraded: the size-table marker, paragraph and chip; listed sizes only; one figure everywhere', async ({ page }) => {
@@ -114,6 +164,7 @@ test.describe('once', () => {
     await expect(page.locator('.curve__read')).toContainText(move);
     await expect(page.locator('.lrow.is-sel .lrow__smv')).toHaveText(move);
     // a ladder row sets the ticket
+    await showBand(page, 'Size');
     await page.locator('.lrow__pick[aria-label="Quote 25,000 NAM"]').click();
     await expect(page.locator('.tk-field input')).toHaveValue('25,000');
     await expect(page.locator('.lrow.is-sel .lrow__size')).toContainText('25,000');
@@ -165,8 +216,12 @@ test.describe('once', () => {
     await page.route(/\/api\/quote\/curve/, (r) => r.fulfill({ json: good ? { ...SNAP.curve, prov: { ...SNAP.curve.prov, at: Date.now() } } : { ...SNAP.curve, curve: [], prov: { source: 'Osmosis SQS', at: null, status: 'missing', note: DOWN } } }));
     await page.route(/\/api\/pools/, (r) => r.fulfill({ json: good ? { ...SNAP.pools, prov: { ...SNAP.pools.prov, at: Date.now() } } : { pools: [], prov: { source: 'Osmosis SQS pools', at: null, status: 'missing', note: DOWN } } }));
     await page.route(/\/api\/quote\?/, (r) => r.fulfill({ json: { quote: null, error: DOWN, code: 'unavailable' } }));
+    // the stored pool list is what this test reads: the pairs list, which takes its place on the page when it answers, is
+    // answered as not served, so which of the two shows does not hang on how fast production answers
+    await page.route(/\/api\/series\/pairs/, (r) => r.fulfill({ status: 501, json: { error: NOT_SERVED, reason: 'Not built yet.', endpoint: '/api/series/pairs' }, headers: { 'Cache-Control': 'no-store' } }));
     await gotoRoute(page, '/trade');
     await expect(page.locator('.lrow')).toHaveCount(6);
+    await showBand(page, 'Pools');
     await expect(page.locator('.pools .prow').first()).toBeVisible();
     good = false;
     await page.clock.runFor(125_000);
@@ -860,10 +915,14 @@ test.describe('screener basics, served (route mocks), at 375', () => {
     await expect(box.locator('rect.c-bar')).toHaveCount(3);
     await expect(box.locator('rect.c-slot')).toHaveCount(21);
     await expect(box.locator('path.c-band').first()).toBeVisible();
-    // the sparse sentence reads its counts from the data
-    await expect(chart.locator(':scope > .cap').first()).toContainText(/only 3 of the 24 hours since \d+ \w+ had one/);
+    // the sparse sentence reads its counts from the data (on a phone it is behind the chart's closed line: opened here)
+    await openFolds(page, '.tk-chart');
+    const note = chart.locator(':scope > .cap, :scope > .pfold > .pfold__body > .cap').first();
+    await expect(note).toBeVisible();
+    await expect(note).toContainText(/only 3 of the 24 hours since \d+ \w+ had a NAM \/ USDC trade of at least 50 NAM through one pool, the trades this line takes its price from/);
     await expect(chart.locator('.key')).toContainText('Bars under the chart: NAM traded in each hour; an empty slot is an hour without a trade');
     await expect(chart.locator('.key')).toContainText('Shaded: the lowest and highest quote in each hour');
+    await expect(chart.locator('.c-starts')).toBeVisible();
     await expect(chart.locator('.c-starts')).toHaveText(`Recorded since: executed price 11 Aug 2026 (filled in once from stored trades); quoted price ${fmtDayMonthYear(quotedStart)}; NAM traded per hour 11 Aug 2026 (filled in once from stored trades). Nothing is drawn before a series begins.`);
     // the scope lists the bars; the readout says what traded in the hour it reads
     await expect(chart.locator('.srcb')).toHaveAttribute('data-scope', /NAM traded per hour/);
@@ -967,6 +1026,7 @@ test.describe('screener basics, served (route mocks), at 375', () => {
     const tape = page.locator('.tk-tape');
     const rows = tape.locator('.tr');
     await expect(rows).toHaveCount(4, { timeout: 30_000 });
+    await showBand(page, 'Trades');
     const run = rows.first();
     await expect(run).toHaveAttribute('data-n', '12');
     await expect(run.locator('.tr__fold')).toContainText('12 buys of about 355 NAM by the same address');
@@ -1025,7 +1085,9 @@ test.describe('screener basics, served (route mocks), at 375', () => {
     await expect(page.locator('.tk-buyers')).toContainText(NOT_SERVED);
     await expect(page.locator('.pools .tk-pairsmiss')).toContainText(`Dollars traded per pool: — ${NOT_SERVED}`);
     await expect(page.locator('.tk-tape .tk-tape__note')).toContainText(NOT_SERVED);
-    for (const sel of ['.tk-head', '.tk-buyers', '.tk-tape']) {
+    for (const [sel, band] of [['.tk-head', 'Price'], ['.tk-buyers', 'Price'], ['.tk-tape', 'Trades']] as const) {
+      await showBand(page, band);
+      await expect(page.locator(sel)).toBeVisible();
       await expect(page.locator(sel).getByRole('button', { name: /Try again|Ask again/ })).toHaveCount(0);
       await expect(page.locator(sel)).not.toContainText(/did not load|error/i);
     }
@@ -1036,6 +1098,7 @@ test.describe('screener basics, served (route mocks), at 375', () => {
     await mockSeries(page, { now: REWIND_AT });
     const reqs = trackRequests(page);
     await gotoRoute(page, `/trade?at=${REWIND_AT}`);
+    await showBand(page, 'Trades');
     await expect(page.locator('.tk-tape .tr').first()).toBeVisible({ timeout: 30_000 });
     await page.waitForLoadState('networkidle');
     const urls = apiUrls(reqs, new URL(page.url()).origin).filter((u) => u.pathname.startsWith('/api/series'));
@@ -1086,12 +1149,17 @@ test.describe('screener basics, plain words and sources (route mocks), at 375', 
   test('every new figure has its own stamp or a scope whose SourceLine lists it (N1), and no banned or expert word is printed', async ({ page }) => {
     await mockSeries(page, { now: Date.now() });
     await gotoRoute(page, '/trade');
+    await expect(page.locator('.tk-buyers .bars')).toBeVisible({ timeout: 30_000 });
+    await showBand(page, 'Trades');
     await expect(page.locator('.tk-tape .tr').first()).toBeVisible({ timeout: 30_000 });
-    await expect(page.locator('.tk-buyers .bars')).toBeVisible();
     await page.locator('.tk-tape .tr__tog').first().click();
     await page.locator('.tk-head .tk-chg__c').nth(2).click();
-    const panels = ['.tk-head', '.tk-chart', '.tk-buyers', '.pools', '.tk-tape'];
-    const orphans = await page.evaluate((sels) => {
+    const panels = ['.tk-head', '.tk-chart', '.tk-buyers', '.ladder', '.pools', '.tk-tape'];
+    // every band a reader can reach, with the phone cut's closed lines open, so no figure is passed over for being out of view
+    const orphans: string[] = [];
+    await eachBand(page, async (band) => {
+      await openFolds(page);
+      orphans.push(...(await page.evaluate((sels) => {
       const seen = (el: Element | null | undefined) => !!el && (el as HTMLElement).getBoundingClientRect().width > 0 && getComputedStyle(el).visibility !== 'hidden';
       const out: string[] = [];
       for (const s of sels) for (const n of document.querySelectorAll(`${s} [data-num]`)) {
@@ -1103,13 +1171,14 @@ test.describe('screener basics, plain words and sources (route mocks), at 375', 
         if (!ok) out.push(`${s}: ${(n.textContent ?? '').trim().slice(0, 24)}`);
       }
       return out;
-    }, panels);
+      }, panels)).map((o) => `${band}: ${o}`));
+    });
     expect(orphans).toEqual([]);
     const text = await page.evaluate((sels) => sels.map((s) => {
       const c = document.querySelector(s)?.cloneNode(true) as HTMLElement | undefined;
       c?.querySelectorAll('.pop, script, style').forEach((x) => x.remove());
       return c?.textContent ?? '';
-    }).join('\n'), panels);
+    }).join('\n'), [...panels, '.tk-stripband']);
     expect(BANNED_WORDS.filter((re) => re.test(text)).map(String)).toEqual([]);
   });
 });
@@ -1121,13 +1190,18 @@ test.describe('screener basics, accessibility (route mocks)', () => {
       await page.addInitScript((l) => { try { localStorage.setItem('nt.theme', l ? 'light' : 'dark'); } catch { /* none */ } }, light);
       await mockSeries(page, { now: Date.now() });
       await gotoRoute(page, '/trade', { reducedMotion: true });
-      await expect(page.locator('.tk-tape .tr').first()).toBeVisible({ timeout: 30_000 });
-      await expect(page.locator('.tk-buyers .bars')).toBeVisible();
+      await expect(page.locator('.tk-buyers .bars')).toBeVisible({ timeout: 30_000 });
       await expect(page.locator('.tk-chart .chartsec').first()).toBeVisible({ timeout: 30_000 });
+      await showBand(page, 'Trades');
+      await expect(page.locator('.tk-tape .tr').first()).toBeVisible({ timeout: 30_000 });
       await page.locator('.tk-tape .tr__tog').first().click();
       await page.locator('.tk-head .tk-chg__c').nth(1).click();
-      const r = await new AxeBuilder({ page }).withTags(['wcag2a', 'wcag2aa', 'wcag21a', 'wcag21aa', 'wcag22aa']).disableRules(['target-size']).include('main').analyze();
-      expect(r.violations.map((v) => `${v.id}: ${v.nodes.slice(0, 3).map((n) => n.target.join(' ')).join(' | ')}`), light ? 'light' : 'dark').toEqual([]);
+      // every band a reader can reach (axe passes over what is not shown), with the phone cut's closed lines open
+      await eachBand(page, async (band) => {
+        await openFolds(page);
+        const r = await new AxeBuilder({ page }).withTags(['wcag2a', 'wcag2aa', 'wcag21a', 'wcag21aa', 'wcag22aa']).disableRules(['target-size']).include('main').analyze();
+        expect(r.violations.map((v) => `${v.id}: ${v.nodes.slice(0, 3).map((n) => n.target.join(' ')).join(' | ')}`), `${light ? 'light' : 'dark'}, ${band}`).toEqual([]);
+      });
     }
   });
 });
@@ -1136,19 +1210,142 @@ test.describe('screener basics, served (route mocks), every viewport', () => {
   test('layout: one h1, no overflow, no <table>, 44 px targets, text at least 11 px, with every new panel full', async ({ page }) => {
     await mockSeries(page, { now: Date.now() });
     await gotoRoute(page, '/trade');
+    await expect(page.locator('.tk-head .tk-chg__c').first()).toBeVisible({ timeout: 30_000 });
+    await showBand(page, 'Pools');
+    await expect(page.locator('.pools .pa__row').first()).toBeVisible({ timeout: 30_000 });
+    await showBand(page, 'Trades');
     await expect(page.locator('.tk-tape .tr').first()).toBeVisible({ timeout: 30_000 });
-    await expect(page.locator('.pools .pa__row').first()).toBeVisible();
-    await expect(page.locator('.tk-head .tk-chg__c').first()).toBeVisible();
     // open a run and a change, so their lines are measured too
     await page.locator('.tk-tape .tr__tog').first().click();
     await page.locator('.tk-head .tk-chg__c').first().click();
     await expect(page.locator('h1')).toHaveCount(1);
-    const a = await layoutAudit(page);
-    expect(a.overflowX, `scrollWidth ${a.scrollWidth} > ${a.innerWidth}`).toBe(false);
-    expect(a.tables).toBe(0);
-    expect(a.smallText).toEqual([]);
-    expect(a.smallTargets).toEqual([]);
+    // every band a reader can reach, with the phone cut's closed lines open
+    await eachBand(page, async (band) => {
+      await openFolds(page);
+      const a = await layoutAudit(page);
+      expect(a.overflowX, `${band}: scrollWidth ${a.scrollWidth} > ${a.innerWidth}`).toBe(false);
+      expect(a.tables, band).toBe(0);
+      expect(a.smallText, band).toEqual([]);
+      expect(a.smallTargets, band).toEqual([]);
+      expect(await shortSummaries(page), band).toEqual([]);
+    });
     const vp = page.viewportSize()!;
     if (vp.width === VIEWPORTS[1].width) await page.screenshot({ path: test.info().outputPath('trade-served-375.png'), fullPage: true });
   });
 });
+
+// ---------------------------------------------------------------------------------------------------
+// The phone cut (platform plan, release E; owner-decisions row 42). Production data through the proxy.
+// ---------------------------------------------------------------------------------------------------
+/** The page was 15.5 screens at 375 x 812 before the cut; the target is about 6 with the first band, 15% slack allowed. */
+const TRADE_SCREENS = 6;
+const SLACK = 1.15;
+
+test.describe('the phone cut, every viewport', () => {
+  test('under 1024 px a strip shows one band at a time; from 1024 px there is no strip and every band shows', async ({ page }) => {
+    await gotoRoute(page, '/trade');
+    await settled(page);
+    await expect(page.locator('#h-chart')).toBeVisible({ timeout: 30_000 });
+    const strip = page.locator('.tk-strip');
+    const wide = page.viewportSize()!.width >= 1024;
+    if (wide) {
+      await expect(strip).toBeHidden();
+      for (const b of BANDS) await expect(page.locator(b.sel), b.name).toBeVisible();
+      await expect(page.locator('.tk-buyers')).toBeVisible();
+      // the notes the phone cut folds are in view, with no closed line around them
+      await expect(page.locator('main details.pfold')).toHaveCount(0);
+      await expect(page.locator('.tk-chart .c-starts')).toBeVisible();
+      return;
+    }
+    // the strip: four choices in the order of the page, the price first; it sits under the token header
+    await expect(strip).toBeVisible();
+    await expect(strip.getByRole('radio')).toHaveCount(BANDS.length);
+    expect(await strip.locator('.seg__opt').allInnerTexts()).toEqual(BANDS.map((b) => b.name));
+    await expect(strip.getByRole('radio', { name: 'Price', exact: true })).toBeChecked();
+    const headEnd = await page.locator('.tk-head').evaluate((el) => el.getBoundingClientRect().bottom);
+    expect(await strip.evaluate((el) => el.getBoundingClientRect().top)).toBeGreaterThanOrEqual(headEnd);
+    // one band at a time: the price band (the chart and the buyers' panels) and no other; every band is still in the DOM
+    const shown = async () => (await Promise.all(BANDS.map(async (b) => ((await page.locator(b.sel).isVisible()) ? b.name : null)))).filter(Boolean);
+    expect(await shown()).toEqual(['Price']);
+    await expect(page.locator('.tk-buyers')).toBeVisible();
+    for (const id of ['h-chart', 'h-buyers', 'h-turn', 'h-ladder', 'h-pools', 'h-tape']) await expect(page.locator(`#${id}`), id).toHaveCount(1);
+    // switching shows the other and hides the first
+    for (const b of [...BANDS.slice(1), BANDS[0]]) {
+      await strip.getByRole('radio', { name: b.name, exact: true }).check();
+      expect(await shown(), b.name).toEqual([b.name]);
+      await expect(page.locator('.tk-buyers'), b.name)[b.name === 'Price' ? 'toBeVisible' : 'toBeHidden']();
+    }
+    // the ticket and the token header stay above the strip whichever band shows
+    await expect(page.locator('.ticket')).toBeVisible();
+    await expect(page.locator('.tk-head')).toBeVisible();
+  });
+});
+
+test.describe('the phone cut, once', () => {
+  test.beforeEach(({}, info) => test.skip(onlyIn(info.project.name), 'runs in 375x812'));
+
+  test('a link to a part of a band that is not shown shows its band first, then goes there', async ({ page }) => {
+    const inView = (id: string) => page.locator(`#${id}`).evaluate((el) => { const r = el.getBoundingClientRect(); return r.top >= 0 && r.top < window.innerHeight; });
+    // a pasted link
+    await gotoRoute(page, '/trade#h-pools');
+    const strip = page.locator('.tk-strip');
+    await expect(strip.getByRole('radio', { name: 'Pools', exact: true })).toBeChecked();
+    await expect(page.locator('.pools')).toBeVisible();
+    await expect(page.locator('.tk-chart')).toBeHidden();
+    await expect.poll(() => inView('h-pools')).toBe(true);
+    // an in-page jump, from another band
+    await strip.getByRole('radio', { name: 'Price', exact: true }).check();
+    await expect(page.locator('.pools')).toBeHidden();
+    await page.evaluate(() => { location.hash = '#h-tape'; });
+    await expect(strip.getByRole('radio', { name: 'Trades', exact: true })).toBeChecked();
+    await expect(page.locator('.tk-tape')).toBeVisible();
+    await expect.poll(() => inView('h-tape')).toBe(true);
+    await expect(page.locator('#h-tape')).toBeFocused();
+    // the strip still works after a jump, and a jump to the band that is shown changes nothing
+    await strip.getByRole('radio', { name: 'Size', exact: true }).check();
+    await expect(page.locator('.ladder')).toBeVisible();
+    await page.evaluate(() => { location.hash = '#h-ladder'; });
+    await expect(strip.getByRole('radio', { name: 'Size', exact: true })).toBeChecked();
+  });
+
+  test('nothing is fetched twice: a band not shown is in the DOM, and showing it asks for nothing new', async ({ page }) => {
+    const reqs = trackRequests(page);
+    await gotoRoute(page, '/trade');
+    await settled(page);
+    await expect(page.locator('#h-chart')).toBeVisible({ timeout: 30_000 });
+    await page.waitForTimeout(2500);
+    const asked = () => [...new Set(apiUrls(reqs, new URL(page.url()).origin).map((u) => u.pathname))].sort();
+    // the bands that are not shown were asked for with the page (the size table, the pools)
+    for (const path of ['/api/quote/curve', '/api/pools']) expect(asked(), path).toContain(path);
+    for (const b of BANDS) await expect(page.locator(b.sel), b.name).toHaveCount(1);
+    const before = asked();
+    for (const b of BANDS) await showBand(page, b.name);
+    await page.waitForTimeout(600);
+    // a timed refresh may repeat a request already made; showing a band asks no endpoint the page had not asked
+    expect(asked()).toEqual(before);
+  });
+
+  test('the page is about six screens with the first band, and no control is under 44 px', async ({ page }) => {
+    await gotoRoute(page, '/trade');
+    await settled(page);
+    await expect(page.locator('#h-chart')).toBeVisible({ timeout: 30_000 });
+    await expect(page.locator('main .skel__b, main [aria-busy="true"]')).toHaveCount(0, { timeout: 30_000 });
+    await expect(page.locator('.tk-buyers .bars')).toBeVisible({ timeout: 30_000 });
+    // While the Namada network is halted (shared/halt.ts HALT.on) the halt bar stands above every page; it is not part of
+    // this page's length, so its measured height is allowed for, as the Home spec does for its first screen.
+    const bar = HALT.on ? ((await page.locator('.upd--halt').boundingBox())?.height ?? 0) : 0;
+    const m = await page.evaluate(() => ({ h: document.documentElement.scrollHeight, vh: window.innerHeight }));
+    const screens = (m.h - bar) / m.vh;
+    test.info().annotations.push({ type: 'screens', description: `/trade at 375 x 812, first band: ${(m.h / m.vh).toFixed(2)} screens (${m.h} px) with the halt bar's ${bar} px, ${screens.toFixed(2)} without` });
+    expect(screens, `${m.h} px, the halt bar's ${bar} px allowed for`).toBeLessThanOrEqual(TRADE_SCREENS * SLACK);
+    // every control of every band, the strip and the closed lines among them
+    await eachBand(page, async (band) => {
+      const a = await layoutAudit(page, 'main');
+      expect(a.smallTargets, band).toEqual([]);
+      expect(await shortSummaries(page), band).toEqual([]);
+    });
+    const opts = await page.locator('.tk-strip .seg__opt').evaluateAll((els) => els.map((el) => Math.round(el.getBoundingClientRect().height)));
+    for (const h of opts) expect(h).toBeGreaterThanOrEqual(44);
+  });
+});
+

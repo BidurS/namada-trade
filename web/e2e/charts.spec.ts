@@ -176,6 +176,8 @@ test.describe('charts, at 375 px', () => {
     await page.route(/\/api\/quote\/curve/, (r) => r.fulfill({ json: tableWithSlices(10_000) }));
     await page.route(/\/api\/quote\?/, (r) => r.fulfill({ json: { quote: null, error: DOWN, code: 'unavailable' } }));
     await gotoRoute(page, '/trade');
+    // under 1024 px the size block is one band along (the phone cut's strip, web/src/screens/trade/bands.ts)
+    await page.locator('.tk-strip').getByRole('radio', { name: 'Size', exact: true }).check();
     const block = page.locator('.ladder');
     await expect(block.locator('.curve__mode')).toBeVisible({ timeout: 30_000 });
     await expect(block.getByRole('radio', { name: 'Each slice' })).toBeEnabled();
@@ -233,6 +235,8 @@ test.describe('charts, at 375 px', () => {
     await page.route(/\/api\/quote\/curve/, (r) => r.fulfill({ json: bare }));
     await page.route(/\/api\/quote\?/, (r) => r.fulfill({ json: { quote: null, error: DOWN, code: 'unavailable' } }));
     await gotoRoute(page, '/trade');
+    // under 1024 px the size block is one band along (the phone cut's strip, web/src/screens/trade/bands.ts)
+    await page.locator('.tk-strip').getByRole('radio', { name: 'Size', exact: true }).check();
     const block = page.locator('.ladder');
     await expect(block.locator('.curve__mode')).toBeVisible({ timeout: 30_000 });
     await expect(block.getByRole('radio', { name: 'Each slice' })).toBeDisabled();
@@ -248,8 +252,11 @@ test.describe('charts, at 375 px', () => {
     // the series' stamps come with the overview; the line holds its place until then
     await expect(chart.locator('.srcb')).toBeVisible({ timeout: 30_000 });
     await expect(chart.locator('.chartsec__title .cap')).toHaveText(/^USDC paid per NAM in real trades: each point is the middle price of one hour’s trades, [\d,]+ points?\.$/);
-    // the sparse sentence (the start dates are their own line under it, .c-starts)
-    const caps = chart.locator(':scope > .cap:not(.c-starts)');
+    // the sparse sentence (the start dates are their own line under it, .c-starts); under 1024 px both sit behind the
+    // chart's closed line (the phone cut), opened here
+    await chart.locator('details.pfold > summary').click();
+    const caps = chart.locator(':scope > .pfold > .pfold__body > .cap:not(.c-starts)');
+    await expect(caps).toBeVisible();
     await expect(caps).toContainText(/of the [\d,]+ hours since \d+ \w+ had/);
     await expect(caps).not.toContainText('bucketed');
     // A thinned range is one the series route answers in steps longer than an hour: the finest of 1h, 6h, 1d that keeps the

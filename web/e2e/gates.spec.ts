@@ -704,7 +704,16 @@ test('SEO: every BODY paragraph and section heading is visible text on its route
     if (!copy) continue;
     await gotoRoute(page, r.path);
     await settled(page);
-    const text = (await page.locator('main').innerText()).replace(/\s+/g, ' ');
+    let text = (await page.locator('main').innerText()).replace(/\s+/g, ' ');
+    // /trade under 1024 px shows one band of its evidence at a time behind a strip (the phone cut, owner-decisions row 42), and
+    // its second BODY paragraph is the size block's: the page's text is read with each band shown in turn, as a reader reaches it
+    if (r.id === 'trade') {
+      for (const band of await page.locator('.tk-strip input[type="radio"]').all()) {
+        if (!(await band.isVisible())) continue;
+        await band.check();
+        text += ` ${(await page.locator('main').innerText()).replace(/\s+/g, ' ')}`;
+      }
+    }
     // /depth under 1024 px shows the one-line lead the owner chose (shared/depth.ts depthLeadShort, 2026-10-31) in place of
     // the first BODY paragraph: that line is accepted as the paragraph's visible text on a phone; the second paragraph is
     // still asked for as written

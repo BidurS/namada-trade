@@ -113,6 +113,11 @@ export interface PriceChartProps {
    * stepMs). Without it the chart takes a range up to HOURLY_HISTORY_DAYS as hourly and a longer one as thinned.
    */
   bucketMs?: number | null;
+  /**
+   * Wraps the notes under the stats (how the series is drawn, and since when each is recorded), so a screen can put
+   * them behind a disclosure on a phone. Default: the notes as they are.
+   */
+  notes?: (notes: React.ReactNode) => React.ReactNode;
   className?: string;
 }
 
@@ -162,7 +167,7 @@ const clean = <T extends { t: number }>(list: T[] | undefined, ok: (p: T) => boo
 
 export function PriceChart({
   series, bars, barsStepMs, barsMissing, band, flatHours, poolStepMs, poolMissing, starts, executedStart,
-  events = [], marks = [], marksKey, range, onRange, end, cursorAt, prov, title, headingId, level = 2, variant = 'price', unit, bucketMs, className = '',
+  events = [], marks = [], marksKey, range, onRange, end, cursorAt, prov, title, headingId, level = 2, variant = 'price', unit, bucketMs, notes, className = '',
 }: PriceChartProps) {
   const now = useUiNow();
   const [boxRef, { w, h }] = useSize<HTMLDivElement>();
@@ -292,6 +297,30 @@ export function PriceChart({
   const cur = sel ? [X(sel.t), Y(sel.v)] : null;
   const atX = cursorAt != null && cursorAt >= tStart && cursorAt <= tEnd ? X(cursorAt) : null;
   const shownBar = shown && !readPool ? barAt(shown.t) : null;
+
+  // the notes under the stats: how the series is drawn, then since when each series is recorded
+  const noteEls = isPrice && (E.length || starts?.length) ? (
+    <>
+      {E.length ? (
+        <p className="cap">
+          {lastQ ? 'A quote is what the pools offer now; a trade price is what someone actually paid. ' : null}
+          {hourly ? (
+            withTrades < hours * SPARSE_SHARE ? (
+              <>Trades are sparse: only <span data-num="">{withTrades}</span> of the <span data-num="">{hours}</span> hours since {fmtDayMonth(countFrom)} {PRICE_HOURS_HAD}, so each is a dot, joined to the next only when that hour had one too{fewQuoted}.</>
+            ) : (
+              <><span data-num="">{withTrades}</span> of the <span data-num="">{hours}</span> hours since {fmtDayMonth(countFrom)} {PRICE_HOURS_HAD}{fewQuoted}.</>
+            )
+          ) : (
+            <>At this range the server keeps {bucketMs != null && bucketMs > HOUR_MS ? `at most one point per ${spanWords(bucketMs)}` : 'fewer points'}: the chart shows the <span data-num="">{E.length}</span> since {fmtDayMonth(first?.t)}, joined only between neighbouring points, and a gap is not an hour without a trade{fewQuoted}.</>
+          )}
+          {E.length <= 2 ? ' With this few points the dots are shown without a line.' : ''}
+          {/* an old stamp says why, in the chart's own words */}
+          {prov?.executed?.status === 'stale' && prov.executed.at != null ? <> The trade line reads old: its last hour with a trade began {fmtAgo(prov.executed.at, now)}.</> : null}
+        </p>
+      ) : null}
+      {starts?.length ? <StartLine starts={starts} /> : null}
+    </>
+  ) : null;
 
   return (
     <section className={`chartsec ${className}`} aria-labelledby={headingId} data-prov-scope="">
@@ -444,25 +473,7 @@ export function PriceChart({
         {isPrice ? <div><dt>Pools quote now</dt><dd data-num="">{lastQ ? <>{fmtV(lastQ.v)}<small>{fmtAgo(readAt(lastQ), now)}</small></> : '—'}</dd></div> : null}
       </dl>
 
-      {isPrice && E.length ? (
-        <p className="cap">
-          {lastQ ? 'A quote is what the pools offer now; a trade price is what someone actually paid. ' : null}
-          {hourly ? (
-            withTrades < hours * SPARSE_SHARE ? (
-              <>Trades are sparse: only <span data-num="">{withTrades}</span> of the <span data-num="">{hours}</span> hours since {fmtDayMonth(countFrom)} {PRICE_HOURS_HAD}, so each is a dot, joined to the next only when that hour had one too{fewQuoted}.</>
-            ) : (
-              <><span data-num="">{withTrades}</span> of the <span data-num="">{hours}</span> hours since {fmtDayMonth(countFrom)} {PRICE_HOURS_HAD}{fewQuoted}.</>
-            )
-          ) : (
-            <>At this range the server keeps {bucketMs != null && bucketMs > HOUR_MS ? `at most one point per ${spanWords(bucketMs)}` : 'fewer points'}: the chart shows the <span data-num="">{E.length}</span> since {fmtDayMonth(first?.t)}, joined only between neighbouring points, and a gap is not an hour without a trade{fewQuoted}.</>
-          )}
-          {E.length <= 2 ? ' With this few points the dots are shown without a line.' : ''}
-          {/* an old stamp says why, in the chart's own words */}
-          {prov?.executed?.status === 'stale' && prov.executed.at != null ? <> The trade line reads old: its last hour with a trade began {fmtAgo(prov.executed.at, now)}.</> : null}
-        </p>
-      ) : null}
-
-      {isPrice && starts?.length ? <StartLine starts={starts} /> : null}
+      {noteEls ? (notes ? notes(noteEls) : noteEls) : null}
 
       {/* the stamps arrive with the overview: until then the line's height is held, so nothing shifts when they land */}
       {scope.length ? <SourceLine items={scope} label={isPrice ? 'Where the chart comes from' : 'Where the readings come from'} /> : <p className="src src--wait" aria-hidden="true" />}

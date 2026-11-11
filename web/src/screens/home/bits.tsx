@@ -1,8 +1,32 @@
 // Small pieces the Home sections share: the "All activity →" link (a real <a href> that keeps
-// ?at=), the path's step ring, and the plain line shown when a request did not answer.
+// ?at=), the path's step ring, the plain line shown when a request did not answer, and the phone
+// cut's disclosure (Trade uses it too).
 import React from 'react';
 import { Link } from '../../app/index';
-import { Icon } from '../../ui/index';
+import { Icon, useMinWidth } from '../../ui/index';
+
+/** From this width a PhoneFold is not a disclosure: its children render as they were. */
+export const FOLD_UNDER_PX = 1024;
+
+/**
+ * The phone cut's disclosure (platform plan, release E; owner-decisions row 42). Under 1024 px: a <details>, closed
+ * until it is tapped, with a one-line summary; what it holds stays in the DOM. From 1024 px: its children exactly as
+ * they were, with no element around them, so the desktop page is the one it was. The look is `.pfold` in home.css
+ * (the "Recently decided" line of the Supply tab: a hairline, 13 px medium, a 44 px line).
+ */
+export function PhoneFold({ label, children, className = '' }: { label: React.ReactNode; children: React.ReactNode; className?: string }) {
+  const wide = useMinWidth(FOLD_UNDER_PX);
+  if (wide) return <>{children}</>;
+  return (
+    <details className={`pfold ${className}`}>
+      <summary>
+        <span>{label}</span>
+        <Icon name="chev" className="ico" />
+      </summary>
+      <div className="pfold__body">{children}</div>
+    </details>
+  );
+}
 
 /** A text link with a 2 px underline and a trailing icon, 44 px tall (system.md 8 "Link"). Keeps ?at=. */
 export function MoreLink({ to, icon = 'arrow', children, className = '', keepAt = true }: { to: string; icon?: 'arrow' | 'rewind'; children: React.ReactNode; className?: string; keepAt?: boolean }) {

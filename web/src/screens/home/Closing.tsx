@@ -3,17 +3,21 @@
 // said in words), and "Why you can trust these numbers": three points, the dated static proof block
 // parsed from the replay report at build time, the checks that need a look, the ones that pass behind
 // a disclosure, and one SourceLine.
+//
+// The phone cut (platform plan, release E; owner-decisions row 42): under 1024 px "Why you can trust these numbers"
+// shows its one summary line (how many cross-checks pass) and one closed line that holds the other points, the proof
+// block and the checks; the SourceLine stays in view. From 1024 px the three points and the rest are in view as before.
 import { useEffect, useState } from 'react';
 import type { Check, Overview, PriceQuote, QuoteCurveResponse } from '../../../../shared/types';
 import { SITE } from '../../../../shared/copy';
 import { PROOF } from '../../generated/proof';
 import { Link, REWIND_WORDS } from '../../app/index';
-import { CHECK_TITLES, Icon, Notice, Num, ProvChip, SkeletonBlock, SourceLine, Tag, Term, checkUi } from '../../ui/index';
+import { CHECK_TITLES, Icon, Notice, Num, ProvChip, SkeletonBlock, SourceLine, Tag, Term, checkUi, useMinWidth } from '../../ui/index';
 import type { Stamp } from '../../lib/prov';
 import { NBSP, fmtAge, fmtCoin, fmtNamRule, fmtPctSigned, fmtUsdRule, fmtUtcLong } from '../../lib/format';
 import { TICKET_NAM, type Res } from './data';
 import { checkDetail, checksStamp } from '../../lib/prov';
-import { MoreLink } from './bits';
+import { FOLD_UNDER_PX, MoreLink, PhoneFold } from './bits';
 import { DepthLine } from '../depth/Line';
 import { SITE_SYMBOL } from '../../../../shared/depth';
 
@@ -27,6 +31,9 @@ export interface ClosingProps {
   /** The overview never answered, so the cross-checks it carries did not load either. */
   failed?: boolean;
 }
+
+/** The closed line the points, the proof block and the checks sit behind under 1024 px. */
+const TRUST_REST = 'How these numbers are checked';
 
 const MON = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
 /** "2026-10-17" → "17 Oct 2026" (the report's own date, UTC). */
@@ -144,64 +151,64 @@ function Trust({ checks, rewound, failed }: { checks: Check[]; rewound: boolean;
   const ex = PROOF.rewindExample;
   const day = reportDay(PROOF.reportDate);
   const each = PROOF.priceMovesFlagged === PROOF.priceMovesTested;
+  const wide = useMinWidth(FOLD_UNDER_PX);
+  // the section's one summary line: the second of the three points from 1024 px, on its own above the closed line under it
+  const summary = checks.length ? (
+    <p>
+      <b data-num="" data-status="fresh">{pass.length} of {checks.length}</b> <Term id="cross-check">cross-checks</Term> pass {rewound ? 'at that moment' : 'right now'}
+      {look.length ? <>, <b data-num="" data-status="fresh">{look.length}</b> need a look</> : null}
+      {idle.length ? <>, <b data-num="" data-status="fresh">{idle.length}</b> had nothing to compare</> : null}.
+    </p>
+  ) : (
+    <p>{failed ? 'The cross-checks did not load.' : rewound ? `${REWIND_WORDS.checks}, so no cross-check result is shown for this moment.` : 'The cross-checks have not answered yet.'}</p>
+  );
 
   return (
     <section className="sec sec--trust" aria-labelledby="home-trust" data-prov-scope="">
       <h2 id="home-trust" className="h2">Why you can trust these numbers</h2>
-      <ol className="why">
-        <li>
-          <p><b>Every number shows its source and age.</b> Tap a dot and age, or the source line under a list, to see them.</p>
-        </li>
-        <li>
-          {checks.length ? (
-            <p>
-              <b data-num="" data-status="fresh">{pass.length} of {checks.length}</b> <Term id="cross-check">cross-checks</Term> pass {rewound ? 'at that moment' : 'right now'}
-              {look.length ? <>, <b data-num="" data-status="fresh">{look.length}</b> need a look</> : null}
-              {idle.length ? <>, <b data-num="" data-status="fresh">{idle.length}</b> had nothing to compare</> : null}.
-            </p>
-          ) : (
-            <p>{failed ? 'The cross-checks did not load.' : rewound ? `${REWIND_WORDS.checks}, so no cross-check result is shown for this moment.` : 'The cross-checks have not answered yet.'}</p>
-          )}
-        </li>
-        {ex ? (
+      {wide ? null : <div className="trust__sum">{summary}</div>}
+      <PhoneFold label={TRUST_REST} className="trust__fold">
+        <ol className="why">
           <li>
-            <p>
-              <b>Rewind:</b> see the site as it was. Try{' '}
-              <Link to={`/supply?at=${ex.rewindAt}`} className="why__a">{fmtUtcLong(ex.firstAlertAt)}</Link>, the first alert before {fmtNamRule(Math.floor(ex.amountNam / 1e6))} million NAM {ex.kind === 'withdraw' ? 'were withdrawn from staking' : 'moved out of the staking account in one transfer'}.
-            </p>
+            <p><b>Every number shows its source and age.</b> Tap a dot and age, or the source line under a list, to see them.</p>
           </li>
+          {wide ? <li>{summary}</li> : null}
+          {ex ? (
+            <li>
+              <p>
+                <b>Rewind:</b> see the site as it was. Try{' '}
+                <Link to={`/supply?at=${ex.rewindAt}`} className="why__a">{fmtUtcLong(ex.firstAlertAt)}</Link>, the first alert before {fmtNamRule(Math.floor(ex.amountNam / 1e6))} million NAM {ex.kind === 'withdraw' ? 'were withdrawn from staking' : 'moved out of the staking account in one transfer'}.
+              </p>
+            </li>
+          ) : null}
+        </ol>
+
+        <div className="proof">
+          <Tag cat={`Static, dated ${day}`} />
+          <p>
+            Tested on {PROOF.marketEventsTested} past events (report of {day}): {each ? `each of the ${PROOF.priceMovesTested}` : `${PROOF.priceMovesFlagged} of the ${PROOF.priceMovesTested}`} biggest price moves had an
+            alert-size flow in the prior {PROOF.windowHours} hours{PROOF.medianLeadHours != null ? `, median ${PROOF.medianLeadHours.toFixed(1)} hours ahead` : ''}.
+            {PROOF.baseRatePct != null ? ` Such flows precede ${Math.round(PROOF.baseRatePct)}% of all hours, so this shows the alerts are not blind, not that they predict direction.` : ''}
+          </p>
+        </div>
+
+        {checks.length && look.length ? (
+          <ul className="chks">
+            {look.map((c) => <CheckRow key={c.key} c={c} />)}
+          </ul>
         ) : null}
-      </ol>
-
-      <div className="proof">
-        <Tag cat={`Static, dated ${day}`} />
-        <p>
-          Tested on {PROOF.marketEventsTested} past events (report of {day}): {each ? `each of the ${PROOF.priceMovesTested}` : `${PROOF.priceMovesFlagged} of the ${PROOF.priceMovesTested}`} biggest price moves had an
-          alert-size flow in the prior {PROOF.windowHours} hours{PROOF.medianLeadHours != null ? `, median ${PROOF.medianLeadHours.toFixed(1)} hours ahead` : ''}.
-          {PROOF.baseRatePct != null ? ` Such flows precede ${Math.round(PROOF.baseRatePct)}% of all hours, so this shows the alerts are not blind, not that they predict direction.` : ''}
-        </p>
-      </div>
-
-      {checks.length ? (
-        <>
-          {look.length ? (
+        {checks.length && pass.length ? (
+          <details className="passes">
+            <summary>
+              <span>The {pass.length} that pass</span>
+              <Icon name="chev" className="ico" />
+            </summary>
             <ul className="chks">
-              {look.map((c) => <CheckRow key={c.key} c={c} />)}
+              {pass.map((c) => <CheckRow key={c.key} c={c} />)}
             </ul>
-          ) : null}
-          {pass.length ? (
-            <details className="passes">
-              <summary>
-                <span>The {pass.length} that pass</span>
-                <Icon name="chev" className="ico" />
-              </summary>
-              <ul className="chks">
-                {pass.map((c) => <CheckRow key={c.key} c={c} />)}
-              </ul>
-            </details>
-          ) : null}
-        </>
-      ) : null}
+          </details>
+        ) : null}
+      </PhoneFold>
       <SourceLine
         lead="Cross-checks"
         items={[{ label: 'The cross-checks', p: cs }]}

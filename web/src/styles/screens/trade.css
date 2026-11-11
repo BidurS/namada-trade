@@ -144,7 +144,7 @@
 @layer components {
   /* ---------- the token header ---------- */
   .tk-head { container: tkhead / inline-size; display: grid; gap: var(--s-4); align-content: start; padding: var(--s-7) var(--gutter) var(--s-6); min-width: 0; }
-  .tk-head + .tk-chart { border-top: 1px solid var(--c-line); }
+  .tk-head ~ .tk-chart { border-top: 1px solid var(--c-line); }   /* a later sibling: the phone cut's strip sits between them in the DOM */
   .tk-price { display: grid; gap: var(--s-1); }
   .tk-price__k { font-size: var(--t-13); line-height: 18px; font-weight: var(--w-medium); color: var(--c-ink-2); }
   .tk-price__v { display: flex; flex-wrap: wrap; align-items: baseline; gap: var(--s-2) var(--s-3); min-height: 32px; font-size: var(--t-24); line-height: var(--lh-24); font-weight: var(--w-medium); letter-spacing: var(--track-num); }
@@ -222,5 +222,35 @@
     .tk-head, .tk-buyers { padding-inline: var(--s-6) max(var(--gutter), calc((100vw - var(--max)) / 2 + var(--gutter))); }
     .tk-head { padding-top: var(--s-8); }
     .tk-tape { padding-block: var(--s-8); }
+  }
+}
+
+/* ==========================================================================
+   Trade, the phone cut (platform plan, release E; owner-decisions row 42).
+   Under 1024 px the ticket and the token header stay on top, and a segmented
+   strip under them shows one band of the evidence at a time (.is-off is a
+   band not picked; every band stays in the DOM): the price, the size block,
+   the pools, the latest trades. The strip takes the place of the rule between
+   the header and the chart, and a band starts one step under it. The chart's
+   notes and the averages' counting notes sit behind one closed line each
+   (.pfold, home.css). From 1024 px the strip is hidden and the page is as
+   before. Reads --c-* ground tokens only; every control 44 px.
+   ========================================================================== */
+@layer components {
+  .tk-stripband { padding: var(--s-5) var(--gutter); border-top: 1px solid var(--c-line); min-width: 0; }
+  .tk-strip { max-width: 30rem; }
+  .tk-strip .seg__opt > span { padding-inline: 4px; white-space: nowrap; }   /* four one-word choices keep one line in a quarter of 288 px */
+  @media (min-width: 1024px) {
+    .tk-stripband { display: none; }
+  }
+  @media (max-width: 1023px) {
+    .trade [data-band].is-off { display: none; }
+    .tk-head { padding-bottom: var(--s-5); }
+    .tk-head ~ .tk-chart { border-top: 0; }
+    .tk-chart { padding-block: 0 var(--s-6); }
+    .split__b > .ladder { padding-top: var(--s-6); }
+    .trade > .pools, .trade > .tk-tape { padding-top: 0; border-top: 0; }
+    /* a closed line right under a ruled block (the chart's stats, the averages' rows) takes that block's last rule as its own */
+    .tk-chart .cstats + .pfold, .tk-paid + .pfold { border-top: 0; margin-top: calc(var(--s-4) * -1); }
   }
 }

@@ -28,6 +28,8 @@ export interface PoolsProps {
   pairs?: HistoryLoad<PairsResponse> | null;
   depth: Depth | null;
   overview: Overview | null;
+  /** The phone cut: another band of the evidence is the one shown under 1024 px (index.tsx). */
+  off?: boolean;
 }
 
 /** The pairs answer as rows: the pools above the share line (at most POOL_ROW_MAX), the rest folded into one row. */
@@ -81,7 +83,7 @@ function PairsBody({ r, osmosisLine }: { r: PairsResponse; osmosisLine: ReactNod
   );
 }
 
-export function Pools({ rewound, pools, pairs, depth, overview }: PoolsProps) {
+export function Pools({ rewound, pools, pairs, depth, overview, off = false }: PoolsProps) {
   const now = useUiNow();
   const list = pools.data?.pools ?? [];
   const osmosis = overview ? { value: overview.supply.osmosis, prov: { ...overview.supply.osmosisProv, plain: 'Osmosis supply' } as Stamp } : null;
@@ -197,7 +199,7 @@ export function Pools({ rewound, pools, pairs, depth, overview }: PoolsProps) {
   }
 
   return (
-    <div className="band ground-ink pools">
+    <div className={`band ground-ink pools${off ? ' is-off' : ''}`} data-band="pools">
       <div className="wrap">
         <section className="tk-sec" aria-labelledby="h-pools">
           <h2 id="h-pools" className="h2">Where NAM trades</h2>

@@ -25,12 +25,14 @@ export interface SizeBlockProps {
   amount: number | null;
   side: Side;
   onPick: (n: number) => void;
+  /** The phone cut: another band of the evidence is the one shown under 1024 px (index.tsx). */
+  off?: boolean;
 }
 
 /** What the jump figures are, in the SourceLine and its sheet. */
 const JUMP_LABEL = 'Where selling starts to cost much more per NAM';
 
-export function SizeBlock({ rewound, table, amount, side, onPick }: SizeBlockProps) {
+export function SizeBlock({ rewound, table, amount, side, onPick, off = false }: SizeBlockProps) {
   const now = useUiNow();
   const pts = tablePoints(table.data);
   const stamp = tableStamp(table.data);
@@ -137,7 +139,7 @@ export function SizeBlock({ rewound, table, amount, side, onPick }: SizeBlockPro
   }
 
   return (
-    <section className="band g-accent-to-ink ladder" aria-labelledby="h-ladder">
+    <section className={`band g-accent-to-ink ladder${off ? ' is-off' : ''}`} data-band="size" aria-labelledby="h-ladder">
       <div className="wrap">
         <h2 id="h-ladder" className="h2">How size moves the price</h2>
         {pts.length && !rewound ? <p className="lead">Tap a size to quote it. Every dot is a real quote from the pools.</p> : null}

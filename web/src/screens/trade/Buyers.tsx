@@ -8,6 +8,10 @@
 // Descriptive only: "above what buyers paid" is arithmetic, never a reason to act. A window the record does not
 // cover is "—" with the reason; a route this server does not serve reads NOT_SERVED. A window that reaches back before
 // the stored Osmosis record is complete (shared/osmosis-gap.ts) says so under the table, its figures as stored.
+//
+// The phone cut (platform plan, release E): under 1024 px the notes on how the averages are counted (addresses per
+// hour, the hours with a trade, the record's gap) sit behind one closed line; the caution that only a few addresses
+// bought stays in view. From 1024 px the notes are in view as before.
 import type { ExecutedVolume, Overview, VolumeResponse } from '../../../../shared/types';
 import { NOT_SERVED } from '../../../../shared/types';
 import { Num, ProvScope, SkeletonBlock, SourceLine, derive, type Stamp } from '../../ui/index';
@@ -20,6 +24,7 @@ import type { Depth } from './model';
 import { PAID_WINDOWS, WINDOW_WORD, turnoverPct, vsPaidPct } from './series';
 import { osmosisGapWindows, reachesOsmosisGap } from '../../../../shared/osmosis-gap';
 import { ANY_TRADE_HOURS_HAD } from '../../../../shared/price-trades';
+import { PhoneFold } from '../home/bits';
 
 export interface BuyersProps {
   volume: HistoryLoad<VolumeResponse>;
@@ -28,7 +33,12 @@ export interface BuyersProps {
   depth: Depth | null;
   /** Rewind: the quoted price is the one at the rewound time, so it reads "then", never "now" */
   rewound?: boolean;
+  /** The phone cut: another band of the evidence is the one shown under 1024 px (index.tsx). */
+  off?: boolean;
 }
+
+/** The closed line the counting notes sit behind under 1024 px. */
+const COUNT_NOTES = 'How these averages are counted';
 
 const fin = (x: number | null | undefined): x is number => x != null && Number.isFinite(x);
 const WINDOW_LONG: Record<string, string> = { h24: 'Last 24 hours', d7: 'Last 7 days', d30: 'Last 30 days' };
@@ -38,7 +48,7 @@ const WINDOW_SPAN: Record<string, string> = { h24: '24-hour', d7: '7-day', d30: 
 /** "—" with the reason for a figure whose route does not answer. */
 const missing = (why: string): Stamp => ({ source: 'executed NAM swaps (hourly rows)', plain: 'Executed swaps', at: null, status: 'missing', note: why });
 
-export function Buyers({ volume, daily, overview, depth, rewound = false }: BuyersProps) {
+export function Buyers({ volume, daily, overview, depth, rewound = false, off = false }: BuyersProps) {
   const when = rewound ? 'then' : 'now';
   const v = volume.data;
   const why = volume.unserved ? NOT_SERVED : volume.error ?? NOT_SERVED;
@@ -52,6 +62,8 @@ export function Buyers({ volume, daily, overview, depth, rewound = false }: Buye
     w ? null : volStamp ? { ...volStamp, status: 'missing', note: v?.start != null ? 'The record does not cover this window yet.' : 'No trade hour is recorded yet.' } : null;
   // the windows shown that reach back before the stored Osmosis record is complete
   const gapped = v ? PAID_WINDOWS.filter((w) => { const x = v.windows[w]; return !!x && reachesOsmosisGap(x.from); }) : [];
+  // an older server counts an address once per hour it traded in: said with the averages
+  const perHour = v ? PAID_WINDOWS.some((w) => v.windows[w]?.tradersHow === 'distinct_per_hour_summed') : false;
 
   // ---- what traded against the pools' depth
   const h24 = v?.windows.h24 ?? null;
@@ -86,7 +98,7 @@ export function Buyers({ volume, daily, overview, depth, rewound = false }: Buye
   const dStart0 = dd ? Math.min(dd.buy.start ?? Infinity, dd.sell.start ?? Infinity) : Infinity;
 
   return (
-    <div className="tk-buyers">
+    <div className={`tk-buyers${off ? ' is-off' : ''}`} data-band="price">
       <section className="tk-sub" aria-labelledby="h-buyers" data-prov-scope="">
         <h2 id="h-buyers" className="h2">What recent buyers paid</h2>
         {volume.loading ? (
@@ -132,15 +144,19 @@ export function Buyers({ volume, daily, overview, depth, rewound = false }: Buye
                 Only <span data-num="">{fmtCount(d7.buyers)}</span> {d7.buyers === 1 ? 'address' : 'addresses'} bought in the last 7 days, so these averages are their trades, not a broad market.
               </p>
             ) : null}
-            {PAID_WINDOWS.some((w) => v.windows[w]?.tradersHow === 'distinct_per_hour_summed') ? (
-              <p className="cap">Addresses are counted once in each hour with a trade, and the hours added up, so one address trading in many hours counts many times.</p>
+            {perHour || v.windows.d30 || gapped.length ? (
+              <PhoneFold label={COUNT_NOTES} className="tk-fold">
+                {perHour ? (
+                  <p className="cap">Addresses are counted once in each hour with a trade, and the hours added up, so one address trading in many hours counts many times.</p>
+                ) : null}
+                {v.windows.d30 ? (
+                  <p className="cap">
+                    <span data-num="">{fmtCount(v.windows.d30.hoursWithTrade)}</span> of the last <span data-num="">{fmtCount(v.windows.d30.hours)}</span> hours {ANY_TRADE_HOURS_HAD}. An average over few trades moves with each one.
+                  </p>
+                ) : null}
+                {gapped.length ? <p className="cap tk-gap">{osmosisGapWindows(gapped.map((w) => WINDOW_SPAN[w] ?? WINDOW_WORD[w]))}</p> : null}
+              </PhoneFold>
             ) : null}
-            {v.windows.d30 ? (
-              <p className="cap">
-                <span data-num="">{fmtCount(v.windows.d30.hoursWithTrade)}</span> of the last <span data-num="">{fmtCount(v.windows.d30.hours)}</span> hours {ANY_TRADE_HOURS_HAD}. An average over few trades moves with each one.
-              </p>
-            ) : null}
-            {gapped.length ? <p className="cap tk-gap">{osmosisGapWindows(gapped.map((w) => WINDOW_SPAN[w] ?? WINDOW_WORD[w]))}</p> : null}
           </>
         )}
         <SourceLine items={scope} label="Where the average prices come from" />

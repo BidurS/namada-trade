@@ -675,6 +675,9 @@ describe.skipIf(!ready)('the depth page, built, on the fixtures (375, 320 and 12
     for (const path of ['/', '/trade']) {
       const { page, ctx } = await open(375, 812, path);
       try {
+        // on Trade the line is the pools band's, one of the four the phone cut shows one at a time under 1024 px
+        // (web/src/screens/trade/bands.ts): the strip's "Pools" is picked first, as a reader would
+        if (path === '/trade') await page.locator('.tk-strip').getByRole('radio', { name: 'Pools', exact: true }).check();
         const line = page.locator('.dp-line');
         await seen(line);
         await text(line).toContain(sellQuotableLead('10,000', 'NAM'));

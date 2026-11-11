@@ -250,3 +250,59 @@
     .home .steps__nam { display: none; }
   }
 }
+
+/* ==========================================================================
+   Home, the phone cut (platform plan, release E; owner-decisions row 42).
+   The hero: under 640 px the price's chip keeps its own line under the label
+   whatever its words, so the hero is one height while the price loads and
+   after (the chip used to drop under the label only once it had its words);
+   the first fact's column is wider, so "holders on Namada" is one line; and
+   the field starts one gutter under the header and the source line sits
+   closer to the facts and to the ruler, so the ruler is on the first screen
+   of a 375 by 812 phone. Under 1024 px the path shows its first step and one
+   closed line for the rest, and the trust section its one summary line and
+   one closed line (.pfold below). From 1024 px nothing here applies.
+   ========================================================================== */
+@layer components {
+  @media (max-width: 639px) {
+    .home .hero { padding-top: var(--s-4); }
+    .home .hero .hero-n__top { flex-direction: column; align-items: flex-start; flex-wrap: nowrap; }
+    .home .hero__facts .facts { grid-template-columns: minmax(0, 1.3fr) repeat(2, minmax(0, 1fr)); }
+    .home .hero__facts .src { margin-top: 0; }
+    .home .hero > .wrap { padding-bottom: var(--s-2); }
+  }
+  @media (max-width: 1023px) {
+    .home .path__fold { margin-top: var(--s-5); }
+    .home .path:has(.path__fold:not([open])) { padding-bottom: var(--s-5); }   /* closed, the line is the band's last thing */
+    .home .path__fold > .pfold__body { display: block; padding-bottom: 0; }   /* the folded parts keep their own top margins */
+    .home .path__fold .steps-box { margin-top: var(--s-2); }
+    .home .path .wrap > .steps-box .steps__nam { display: none; }   /* one step: no rail for the travelling NAM to ride (the folded three keep theirs) */
+    .home .path__fold .explore { margin-top: var(--s-6); }
+    .home .trust__sum { font-size: var(--t-15); line-height: var(--lh-15); max-width: 56ch; }
+    .home .trust__fold > .pfold__body { padding-bottom: 0; }
+  }
+  /* 900 to 1023 px, where the rail lies flat: the three folded steps fill their row */
+  @media (min-width: 900px) and (max-width: 1023px) {
+    .home .path__fold .steps { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+  }
+}
+
+/* ==========================================================================
+   The phone cut's disclosure (platform plan, release E; owner-decisions row
+   42), used by Home and by Trade (screens/home/bits.tsx PhoneFold). Under
+   1024 px a closed <details> with a one-line summary, in the look of the
+   page's other disclosures (the Supply tab's "Recently decided", Home's "The
+   N that pass"): a hairline above, 13 px medium, a chevron that turns, a line
+   at least 44 px tall. From 1024 px the component renders no <details>, so
+   nothing here applies. Reads --c-* ground tokens only.
+   ========================================================================== */
+@layer components {
+  .pfold { border-top: 1px solid var(--c-line); min-width: 0; }
+  .pfold > summary { display: flex; align-items: center; justify-content: space-between; gap: var(--s-3); min-height: 48px; font-size: var(--t-13); line-height: 18px; font-weight: var(--w-medium); color: var(--c-ink); cursor: pointer; list-style: none; }
+  .pfold > summary::-webkit-details-marker { display: none; }
+  .pfold > summary:focus-visible { outline: var(--ring-w) solid var(--c-focus); outline-offset: var(--ring-o); }
+  .pfold > summary .ico { flex: none; width: 16px; height: 16px; transition: transform var(--d-2) var(--ease-state); }
+  .pfold[open] > summary .ico { transform: rotate(180deg); }
+  .pfold__body { display: grid; gap: var(--s-4); padding-bottom: var(--s-4); min-width: 0; }
+}
+

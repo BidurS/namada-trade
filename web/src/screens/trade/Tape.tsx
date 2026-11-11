@@ -28,9 +28,11 @@ export interface TapeProps {
   rewound: boolean;
   maker: string | null;
   onMaker: (m: string | null) => void;
+  /** The phone cut: another band of the evidence is the one shown under 1024 px (index.tsx). */
+  off?: boolean;
 }
 
-export function Tape({ load, rewound, maker, onMaker }: TapeProps) {
+export function Tape({ load, rewound, maker, onMaker, off = false }: TapeProps) {
   const now = useUiNow();
   const { liveFlows, stream, streamedIds } = useOverview();
   const page = load.data;
@@ -94,7 +96,7 @@ export function Tape({ load, rewound, maker, onMaker }: TapeProps) {
   }
 
   return (
-    <div className="band ground-ink tk-tape">
+    <div className={`band ground-ink tk-tape${off ? ' is-off' : ''}`} data-band="trades">
       <div className="wrap">
         <section className="tk-sec" aria-labelledby="h-tape" ref={secRef}>
           <h2 id="h-tape" className="h2" tabIndex={-1}>The latest trades</h2>
