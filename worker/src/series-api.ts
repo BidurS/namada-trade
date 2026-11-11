@@ -455,8 +455,10 @@ function seriesAnswer(def: SeriesKeyDef, key: string, native: NativePoint[], sta
     // Quiet hours make the newest point old by nature; what can go stale is the writer, so its marker decides.
     const job = finite(jobRaw != null ? safeParseJson(jobRaw, null) : null);
     const fresh = job != null && job >= Math.floor(asOf / H) * H - H;
+    // current: the newest point is the record of the last hour with a trade, an event and not a reading that ages,
+    // so a page says "last trade N ago" for it (Provenance.event, owner decision 48)
     prov = fresh
-      ? { source: def.source, at: newest.at, status: 'live', note: `Written only for hours with a trade; the newest one began ${fmtDayTime(newest.at)}.` }
+      ? { source: def.source, at: newest.at, status: 'live', event: 'trade', note: `Written only for hours with a trade; the newest one began ${fmtDayTime(newest.at)}.` }
       : { source: def.source, at: newest.at, status: 'stale', note: job != null ? `Trades are counted up to ${fmtDayTime(job)}; the hourly writer has not run since, so newer trades are not counted yet.` : 'The hourly writer has not run yet.' };
   } else {
     prov = provAt(def.source, newest.at, asOf, def.maxAgeMs);

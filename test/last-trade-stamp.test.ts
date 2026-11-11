@@ -3,6 +3,7 @@
 // and says how long ago that trade was. It reads "old" only when the record itself is behind (a newer trade may
 // not be counted yet), which is a reading that is overdue.
 import { describe, it, expect } from 'vitest';
+import { readFileSync } from 'node:fs';
 import { LAST_TRADE_BEHIND, LAST_TRADE_CURRENT, LAST_TRADE_SOURCE, LAST_TRADE_STALE_MS, lastTradeProv } from '../worker/src/analytics';
 import { stampText } from '../web/src/lib/prov';
 import type { Provenance } from '../shared/types';
@@ -32,6 +33,14 @@ describe('the stamp of the last trade price', () => {
     expect(lastTradeProv(NOW - H, NOW, null)).toEqual({ source: LAST_TRADE_SOURCE, at: NOW - H, status: 'live' });
     expect(lastTradeProv(NOW - LAST_TRADE_STALE_MS - 1, NOW, null)).toMatchObject({ status: 'stale' });
     expect(lastTradeProv(NOW - H, NOW, null)).not.toHaveProperty('event');
+  });
+
+  it('a series written only for hours with a trade is stamped the same way while its writer is current', () => {
+    // the line under the Trade chart takes this stamp: its newest point is the last hour with a trade
+    const src = readFileSync(new URL('../worker/src/series-api.ts', import.meta.url), 'utf8');
+    expect(src).toContain("? { source: def.source, at: newest.at, status: 'live', event: 'trade', note: `Written only for hours with a trade; the newest one began ${fmtDayTime(newest.at)}.` }");
+    // and a writer that has not run leaves it old, with no event mark
+    expect(src).toMatch(/: \{ source: def\.source, at: newest\.at, status: 'stale', note: job != null \?/);
   });
 
   it('reads "last trade N ago" when current, and "old" only when the record is behind', () => {
