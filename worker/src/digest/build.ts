@@ -376,7 +376,7 @@ export function toMessageFigures(f: ReadFigures, x: AdapterExtras = {}): Message
     const compared = v.stateChanges.filter((s) => s.from != null && s.to != null);
     return {
       value: {
-        today: day(v.dayRow, v.day), base: day(v.baseRow, v.baseDay), noListingToday: v.noListingToday, baseIsOldest: v.baseIsOldest,
+        today: day(v.dayRow, v.day), base: day(v.baseRow, v.baseDay), noListingToday: v.noListingToday, baseIsOldest: v.baseIsOldest, ...(v.baseIsEarlier ? { baseIsEarlier: true } : {}),
         statesNotCompared: v.stateChanges.length - compared.length,
         joined: v.joined, left: v.left, gross: need(v.gross, 'gross stake change'),
         movers: v.moves.map((m) => ({ validator: m.validator, name: m.name, state: m.state, d: m.delta, delegatorsToday: m.delegators, delegatorsBase: m.delegatorsBefore })),

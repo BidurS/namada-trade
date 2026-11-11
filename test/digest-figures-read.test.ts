@@ -469,6 +469,49 @@ describe('every "not read" rule (spec section 5): no value, the last reading\'s 
   });
 });
 
+describe('the validator base day when the day a period back has no snapshot', () => {
+  const fresh = () => { const db = testD1(); seedSurvey(db); return db; };
+  /** Nine days with no listing before today's: the last snapshot before them is 14 Oct, and an older one exists too. */
+  function nineDayHole() {
+    const db = fresh();
+    db.exec("UPDATE validator_daily SET day = '2026-10-14' WHERE day = '2026-10-22'");
+    db.exec(`INSERT INTO validator_daily (day, validator, stake, delegators, commission, state, name, as_of, height, names_at)
+      SELECT '2026-10-01', validator, stake - 7, delegators, commission, state, name, as_of - 13 * ${D}, height - 100000, names_at FROM validator_daily WHERE day = '2026-10-14'`);
+    return db;
+  }
+
+  it('daily: the base is the last snapshot before the missing day, not the oldest on record, and the figure says which it is', async () => {
+    const db = nineDayHole();
+    const log: Prepared[] = [];
+    const w = v((await readDigestFigures(db, T, 'daily', log)).validators);
+    expect(w).toMatchObject({ day: '2026-10-23', baseDay: '2026-10-14', baseIsEarlier: true, baseIsOldest: false, noListingToday: false });
+    // the comparison is against that day's rows
+    expect(w.moves[0].delta).toBe(100000);
+    expect(log.find((s) => s.sql === SQL.vdDayBefore)!.params).toEqual(['2026-10-22']);
+  });
+
+  it('weekly: the same day is the base when the day seven days back falls in the hole', async () => {
+    const w = v((await readDigestFigures(nineDayHole(), T, 'weekly')).validators);
+    expect(w).toMatchObject({ day: '2026-10-23', baseDay: '2026-10-14', baseIsEarlier: true, baseIsOldest: false });
+  });
+
+  it('with no snapshot older than the missing day the oldest on record is the base, as in the table\'s first days', async () => {
+    const log: Prepared[] = [];
+    const w = v((await readDigestFigures(fresh(), T, 'weekly', log)).validators);
+    expect(w).toMatchObject({ day: '2026-10-23', baseDay: '2026-10-22', baseIsOldest: true });
+    expect(w.baseIsEarlier).toBeUndefined();
+    expect(log.find((s) => s.sql === SQL.vdDayBefore)!.params).toEqual(['2026-10-16']);
+  });
+
+  it('the digest says it in words: no snapshot a period back, the base is the last one before it', () => {
+    const src = readFileSync(join(__dirname, '..', 'worker', 'src', 'digest', 'message.ts'), 'utf8');
+    expect(src).toContain("if (v.baseIsEarlier) parts.push(`No snapshot ${c.kind === 'weekly' ? '7 days' : '1 day'} back; the base is the last one before it, ${dayMon(v.base.asOf)}.`);");
+    // and the written opening leaves the joined and left counts out of such a comparison, as it does for the table's first days
+    const opening = readFileSync(join(__dirname, '..', 'worker', 'src', 'digest', 'opening.ts'), 'utf8');
+    expect(opening).toContain('!fig.validators.value.baseIsOldest && !fig.validators.value.baseIsEarlier');
+  });
+});
+
 describe('the bounds reused from the code stay in step with it', () => {
   it('bond and balance listing bounds are three listings, the executed-price window and the check staleness are the cron\'s and the API\'s, the holder figures\' and the link cap the modules\' own', () => {
     expect(BOND_LISTING_BOUND_MS).toBe(3 * BOND_LISTING_MS);

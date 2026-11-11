@@ -497,14 +497,15 @@ describe('the cron tick', () => {
   ] as const) {
     // "the other node down" of the two-node days is now both other nodes down (Papadritta and StakeAndRelax: the stub
     // answers 404 for the third, so its status is no answer too), and the note names all three
-    it(`the other nodes down and 5ElementsNodes' status ${what}: the indexer alone is no head, no listing is read, and the record backs off`, async () => {
+    it(`the other nodes down and 5ElementsNodes' status ${what}: the indexer alone is no head, no listing is read, and the record waits the shortest wait`, async () => {
       const db = seeded(8343300, 8343300, 'Papadritta');
       const calls = network({ fiveElements: five, papadritta: null, indexer: R });
       await tick(db, PLAIN);
       expect(listingReads(calls)).toHaveLength(0);
       if (what === 'names another chain') expect(calls.filter((u) => u.includes('5elementsnodes') && u.includes('abci_query'))).toHaveLength(0);
       const rec = kv<BalanceListingRecord>(db, 'balance.listing');
-      expect(rec).toMatchObject({ height: 8343300, failedAt: PLAIN, failures: 1 });
+      // a tick with no head read nothing: recorded with its time and reason, and not as a failed read in a row
+      expect(rec).toMatchObject({ height: 8343300, failedAt: PLAIN, failures: 0 });
       // whole, with the indexer's block: the record's 160 characters hold three nodes' reasons
       expect(rec.error).toMatch(/^Not applied: no two answers agree on the head \(5ElementsNodes: (no answer|names another chain); Papadritta: no answer; StakeAndRelax: no answer; indexer 8343400\)$/);
       expect(healthOf(db)['Namada RPC (balance listing)']).toMatchObject({ ok: false });
@@ -523,7 +524,7 @@ describe('the cron tick', () => {
     const calls = network({ fiveElements: null, papadritta: { height: STALE, catchingUp: true }, indexer: null });
     await tick(db, PLAIN);
     expect(listingReads(calls)).toHaveLength(0);
-    expect(kv<BalanceListingRecord>(db, 'balance.listing')).toMatchObject({ height: REAL, failures: 1 });
+    expect(kv<BalanceListingRecord>(db, 'balance.listing')).toMatchObject({ height: REAL, failedAt: PLAIN, failures: 0 });
     expect(maxHeight(db)).toBe(REAL + 40);
     expect(db.raw.prepare('SELECT balance, updated_height FROM holders WHERE address=?').get(NEW_HOLDER)).toMatchObject({ balance: '5000000000', updated_height: REAL + 40 });
   });
@@ -535,7 +536,7 @@ describe('the cron tick', () => {
     const calls = network({ fiveElements: { height: STALE, catchingUp: true }, papadritta: { height: STALE, catchingUp: true }, indexer: REAL + 60 });
     await tick(db, PLAIN);
     expect(listingReads(calls)).toHaveLength(0);
-    expect(kv<BalanceListingRecord>(db, 'balance.listing')).toMatchObject({ height: REAL, failures: 1 });
+    expect(kv<BalanceListingRecord>(db, 'balance.listing')).toMatchObject({ height: REAL, failedAt: PLAIN, failures: 0 });
     expect(db.raw.prepare('SELECT balance, updated_height FROM holders WHERE address=?').get(NEW_HOLDER)).toMatchObject({ balance: '5000000000', updated_height: REAL + 40 });
   });
 });

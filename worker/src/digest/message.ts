@@ -212,6 +212,8 @@ export interface ValidatorsValue {
   noListingToday: boolean;
   /** true when the day a period back has no snapshot and the oldest day present is the base (the table's first days) */
   baseIsOldest?: boolean;
+  /** true when the day a period back has no snapshot and the base is the last snapshot before it */
+  baseIsEarlier?: boolean;
   /** validators whose state is not on record in one of the two snapshots: not compared, never counted as a change */
   statesNotCompared?: number;
   joined: number;
@@ -1161,6 +1163,7 @@ function fieldValidators(c: Ctx): EmbedField {
   const parts: string[] = [];
   if (v.noListingToday) parts.push(`No listing yet today; last snapshot ${dayMon(v.today.asOf)} as of ${timeWords(v.today.asOf, c.now)}.`);
   if (v.baseIsOldest) parts.push(`The snapshots start ${dayMon(v.base.asOf)}, so that day is the base, not ${c.kind === 'weekly' ? '7 days' : '1 day'} back.`);
+  if (v.baseIsEarlier) parts.push(`No snapshot ${c.kind === 'weekly' ? '7 days' : '1 day'} back; the base is the last one before it, ${dayMon(v.base.asOf)}.`);
   const both = v.today.validators - v.joined;
   // A state not on record in one snapshot is not compared, never counted as a change (nor as "0 changes" when no
   // state could be compared at all).

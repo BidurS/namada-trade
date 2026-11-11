@@ -262,7 +262,13 @@ const BOND_LIVE: LivePosRequest = { kind: 'bond', kv: 'namada.bonds.live', parse
  * above the head, and heads it could not follow, surfaced by the cron health probe.
  */
 export interface LiveScanStatus {
-  failures: { height: number; at: number; note: string }[];
+  /**
+   * `kind` 'head': a head the scan could not follow, or nodes that disagreed on it (noteHead). It says the scan is
+   * waiting, so a block scanned after it supersedes it (cron.ts liveScanRow). 'block': a block it could not read, or
+   * a cursor it had to move: it stands for its day whatever is scanned after. An entry stored before kinds were has
+   * none and stands as a block does.
+   */
+  failures: { height: number; at: number; note: string; kind?: 'head' | 'block' }[];
 }
 /**
  * The most blocks one tick reads on one node's word (no two nodes agree on the head) and in a re-read of blocks read so
@@ -1015,9 +1021,9 @@ export class LiveHub extends DurableObject<Env> {
   }
 
   /** A block the scan could not read as a block, or a head or a cursor it could not follow: recorded for the health view (kv `namada.scan`). */
-  private async noteScanFailure(height: number, note: string) {
+  private async noteScanFailure(height: number, note: string, kind: 'head' | 'block' = 'block') {
     const status = (await kvGetJson<LiveScanStatus>(this.env.DB, 'namada.scan').catch(() => null)) ?? { failures: [] };
-    status.failures = [...status.failures, { height, at: Date.now(), note: note.slice(0, 300) }].slice(-20);
+    status.failures = [...status.failures, { height, at: Date.now(), note: note.slice(0, 300), kind }].slice(-20);
     await kvSet(this.env.DB, 'namada.scan', status).catch(() => {});
   }
 
@@ -1030,7 +1036,7 @@ export class LiveHub extends DurableObject<Env> {
     const now = Date.now();
     if (this.headNote && this.headNote.kind === kind && now - this.headNote.at < HEAD_NOTE_EVERY_MS) return;
     this.headNote = { kind, at: now };
-    await this.noteScanFailure(height, note);
+    await this.noteScanFailure(height, note, 'head');
   }
 
   /** A catch-up transaction that makes no row: the newest OSMO_ROWLESS_MAX are let go unread by later searches. */

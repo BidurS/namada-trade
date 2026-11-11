@@ -113,7 +113,7 @@ export function openingFacts(fig: DigestFigures): OpeningFact[] {
     }
   }
 
-  if (!isNotRead(fig.validators) && !fig.validators.value.noListingToday && !fig.validators.value.baseIsOldest) {
+  if (!isNotRead(fig.validators) && !fig.validators.value.noListingToday && !fig.validators.value.baseIsOldest && !fig.validators.value.baseIsEarlier) {
     add('Validators that joined', int(fig.validators.value.joined));
     add('Validators that left', int(fig.validators.value.left));
   }

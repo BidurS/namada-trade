@@ -31,6 +31,7 @@ import { unbondAddresses, fetchUnbonds, buildUnbondTermStructure, cachedChainPar
 import { chainParams, indexState, NAMADA_CURSOR_MAX_LAG, NAMADA_CURSOR_STALE_MS, OSMOSIS_LIVE_STALE_MS, OSMOSIS_SWEEP_STALE_MS, timedOutSends, ibcRowOf, safeParseJson } from './analytics';
 import { INDEXER_IBC_STATUS, STUCK_PACKETS_KV, innerTxOfRow, reconcileStuckPackets, stuckTotalNam, type StuckCandidate, type StuckList } from './ibc-stuck';
 import type { AlertsPending, LiveBondStatus, LiveUnbondStatus, LiveScanStatus } from './live-hub';
+import { SCANNED_KV, scannedOf } from './masp-activity';
 import type { AlertsSkipped } from './sources/discord';
 import {
   INTERNAL_ADDRS, BALANCE_LISTING_SRC, BOND_LISTING_SRC, SPAN_EXTEND_MS, HAS_READING, listingTimes, readHolderFigures, refreshHolderFigures, figuresDue,
@@ -1773,7 +1774,8 @@ export function listingRetryMs(failures: number): number {
 /**
  * A listing is due when there is none, when its last pass has rows left to write, or when its interval has passed;
  * not within the retry wait of a failed or refused read (listingRetryMs: 5 minutes, then 15, then 60, so a slow
- * day does not cost the nodes a cut-off download every five minutes).
+ * day does not cost the nodes a cut-off download every five minutes). A tick that read nothing because no head was
+ * agreed on records no failure in a row (recordListingFailure), so it waits the 5 minutes each time.
  */
 export function listingDue(rec: { at: number; remaining: number; failedAt?: number | null; failures?: number } | null | undefined, everyMs: number, now: number): boolean {
   if (rec?.failedAt != null && now - rec.failedAt < listingRetryMs(rec.failures ?? 1)) return false;
@@ -2606,10 +2608,12 @@ export async function runCron(env: Env) {
     const bondDue = listingDue(bondPrev, BOND_LISTING_MS, now);
     const due: 'bond' | 'balance' | null = late() ? null : bondDue && epoch ? 'bond' : listingDue(balPrev, BALANCE_LISTING_MS, now) ? 'balance' : null;
     // With no head the answers agree on, the listing due is not read: one node's word would be all its height is
-    // checked against. It is recorded as a failed read, so the retry wait applies, and its row says why (5a, 5d).
+    // checked against. It is recorded so its row says why (5a, 5d) and the next try waits the shortest wait, however
+    // many ticks in a row had no head: nothing was read, so nothing is spared by waiting longer, and the first tick
+    // with a head again is at most that wait away (recordListingFailure `read`).
     const which = listingHead.head == null ? null : due;
     const noHead = due && listingHead.head == null ? `Not read this tick: ${listingHead.note}` : null;
-    if (due && noHead) await recordListingFailure(env.DB, due === 'bond' ? 'bond.listing' : 'balance.listing', now, `Not applied: ${listingHead.note}`.slice(0, 160));
+    if (due && noHead) await recordListingFailure(env.DB, due === 'bond' ? 'bond.listing' : 'balance.listing', now, `Not applied: ${listingHead.note}`.slice(0, 160), false);
     const lread: ReadOpts = { rpcs: listingRpcs(rpcs, which === 'bond' ? bondPrev : balPrev), signal, breaker };
     const bondRead = which === 'bond' ? allBonds({ timeoutMs: LISTING_TIMEOUT_MS, retries: 0, ...lread }).then((v) => ({ v }), (e) => ({ e })) : null;
     const balRead = which === 'balance' ? allNamBalances({ timeoutMs: LISTING_TIMEOUT_MS, retries: 0, ...lread }).then((v) => ({ v }), (e) => ({ e })) : null;
@@ -2830,10 +2834,11 @@ export async function runCron(env: Env) {
 
     // Live scan (LiveHub alarm): blocks it could not read as blocks, and heads or cursors it could not follow, recorded by noteScanFailure()
     const scan = await kvGetJson<LiveScanStatus>(env.DB, 'namada.scan');
-    if (scan?.failures.length) {
-      const last = scan.failures[scan.failures.length - 1];
-      const recent = now - last.at < 24 * 3600000;
-      health.push({ name: 'Namada RPC (live block scan)', ok: !recent, at: last.at, ...(recent ? { failedAt: last.at } : {}), note: (recent ? last.note : `last unreadable block ${last.height}, more than a day ago`).slice(0, 160) });
+    if (scan?.failures?.length) {
+      // the newest block the scan read (kv namada.scanned): a note about the head from before it no longer stands
+      const scanned = scannedOf(await kvGetJson<unknown>(env.DB, SCANNED_KV).catch(() => null));
+      const row = liveScanRow(scan, scanned, now);
+      if (row) health.push(row);
     }
     // Alert posts that could not be sent (sources/discord.ts postAll: deadline passed or a webhook backed off). A
     // Worker that does not send alerts keeps the row pushed first (alertDeliveryOff), which this one never replaces.
@@ -3306,17 +3311,44 @@ export async function runCron(env: Env) {
   }
 }
 
+/** A note of the live scan keeps its row not ok this long. */
+export const SCAN_NOTE_STANDS_MS = 24 * 3600000;
+/**
+ * The live scan's health row from its notes (kv namada.scan) and the newest block it read (kv namada.scanned); null
+ * with no note. A note about the head (no node at it, nodes that disagree on it) says the scan is waiting: once a
+ * block has been scanned after it, it no longer stands, so the row is ok from that block on and not a day later. A
+ * note about a block the scan could not read, or a cursor it had to move, stands for SCAN_NOTE_STANDS_MS whatever was
+ * scanned since: that block was not read. The row is the newest note standing.
+ */
+export function liveScanRow(scan: LiveScanStatus | null | undefined, scanned: { height: number; at: number } | null, now: number): SourceHealth | null {
+  const notes = scan?.failures ?? [];
+  if (!notes.length) return null;
+  const name = 'Namada RPC (live block scan)';
+  const standing = notes.filter((f) => !(f.kind === 'head' && scanned != null && scanned.at > f.at));
+  const last = standing[standing.length - 1];
+  if (!last) {
+    const head = notes[notes.length - 1];
+    return { name, ok: true, at: scanned!.at, note: `block ${scanned!.height} scanned after the last note about the chain's head (${new Date(head.at).toISOString().slice(11, 16)} UTC)`.slice(0, 160) };
+  }
+  const recent = now - last.at < SCAN_NOTE_STANDS_MS;
+  return { name, ok: !recent, at: last.at, ...(recent ? { failedAt: last.at } : {}), note: (recent ? last.note : `last unreadable block ${last.height}, more than a day ago`).slice(0, 160) };
+}
+
 /**
  * A listing that was not applied this tick for a reason outside its answer (no head the answers agree on, the tick
  * failed after its read started) is recorded as a failed read, so the retry wait applies (listingDue) instead of the
  * same multi-megabyte read every minute. The record is read again here and nothing is written when that read fails:
  * the tick's own first read of it may have failed too, and a record built from nothing would replace a complete one
  * (its completeAt, height, counts and spans) with a blank.
+ *
+ * `read`: a read was started (the default). A tick with no head starts none (`read` false): it is not one more
+ * failure in a row, so the count starts over and the next try is one LISTING_RETRY_MS later (listingRetryMs), not the
+ * hour that three failed reads in a row wait. A count already raised by such ticks is put back by the next one.
  */
-export async function recordListingFailure(db: D1Database, key: 'bond.listing' | 'balance.listing', now: number, error: string): Promise<void> {
+export async function recordListingFailure(db: D1Database, key: 'bond.listing' | 'balance.listing', now: number, error: string, read = true): Promise<void> {
   let cur: (Partial<BondListingRecord> & Partial<BalanceListingRecord>) | null;
   try { cur = await kvGetJson<Partial<BondListingRecord> & Partial<BalanceListingRecord>>(db, key); } catch { return; }
-  await kvSet(db, key, { at: 0, completeAt: null, remaining: 0, ...cur, failedAt: now, error, failures: (cur?.failures ?? 0) + 1 }).catch(() => {});
+  await kvSet(db, key, { at: 0, completeAt: null, remaining: 0, ...cur, failedAt: now, error, failures: read ? (cur?.failures ?? 0) + 1 : 0 }).catch(() => {});
 }
 
 /**

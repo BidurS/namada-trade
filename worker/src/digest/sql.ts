@@ -146,8 +146,10 @@ export const SQL = {
     FROM validator_daily WHERE day IN (?, ?) GROUP BY day`,
   /** the two newest snapshot days, read only when today's rows do not exist yet */
   vdNewestDays: 'SELECT DISTINCT day FROM validator_daily ORDER BY day DESC LIMIT 2',
-  /** the oldest snapshot day, read only when the weekly's base day does not exist yet */
+  /** the oldest snapshot day, read only when the base day has no snapshot: the base when no snapshot is older than the base day */
   vdOldestDay: 'SELECT MIN(day) day FROM validator_daily',
+  /** the newest snapshot day before the base day (?), read only when the base day has no snapshot: the last snapshot before the window */
+  vdDayBefore: 'SELECT MAX(day) day FROM validator_daily WHERE day < ?',
   /** the five largest stake moves between the base day (?1) and the day (?2) */
   vdMoves: `SELECT a.validator, a.name, a.state, a.stake s_today, b.stake s_yday, a.stake - COALESCE(b.stake, 0) d, a.delegators d_today, b.delegators d_yday
     FROM validator_daily a LEFT JOIN validator_daily b ON b.validator = a.validator AND b.day = ?

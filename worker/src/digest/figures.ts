@@ -131,7 +131,7 @@ export interface DigestReads {
   depthHour: Answer<DepthHourRow>;
   depthDay: Answer<DepthDayRow>;
   /** the two days compared, decided while reading; null when validator_daily could not be read */
-  vdCompared: { day: string; baseDay: string; noListingToday: boolean; baseIsOldest: boolean } | null;
+  vdCompared: { day: string; baseDay: string; noListingToday: boolean; baseIsOldest: boolean; baseIsEarlier?: boolean } | null;
 }
 
 export const instantKey = (key: string, t: number) => `${key}@${t}`;
@@ -267,6 +267,8 @@ export interface Validators {
   joined: number; left: number; stateChanges: { validator: string; name: string | null; from: string | null; to: string | null }[];
   stakeDelta: number | null; gross: number | null; moves: ValidatorMove[];
   noListingToday: boolean; baseIsOldest: boolean;
+  /** the day a period back has no snapshot and the base is the last snapshot before it (days without a listing lie between) */
+  baseIsEarlier?: boolean;
 }
 
 /** One depth line: a figure of the newest closed hour with the hour it names and the read it came from. */
@@ -424,12 +426,18 @@ export async function collectDigestReads(db: D1Database, win: DigestWindow, log?
   // the validator days: today's rows may not exist yet (the first listing lands about 00:10–00:30 UTC), the weekly's base day may be before the table starts
   let vdCompared: DigestReads['vdCompared'] = null;
   let vdFallback: Handle<{ day: string | null }> | null = null;
+  // the base day without a snapshot: the last snapshot before it is the base (days with no listing lie between);
+  // only when none is older than the base day is it the oldest day on record (the table's first days)
+  let vdBefore: Handle<{ day: string | null }> | null = null;
   if (vdDays.answer.ok) {
     const days = vdDays.answer.rows.map((r) => r.day);
     const hasToday = days.includes(today), hasBase = days.includes(baseDay);
     if (hasToday && hasBase) vdCompared = { day: today, baseDay, noListingToday: false, baseIsOldest: false };
     else if (!hasToday) vdFallback = w2.add<{ day: string | null }>(SQL.vdNewestDays, []);
-    else vdFallback = w2.add<{ day: string | null }>(SQL.vdOldestDay, []);
+    else {
+      vdBefore = w2.add<{ day: string | null }>(SQL.vdDayBefore, [baseDay]);
+      vdFallback = w2.add<{ day: string | null }>(SQL.vdOldestDay, []);
+    }
   }
   const vdEarly = vdCompared ? { moves: w2.add<VdMoveRow>(SQL.vdMoves, [vdCompared.baseDay, vdCompared.day]), sets: w2.add<VdSetsRow>(SQL.vdSets, [vdCompared.day, vdCompared.baseDay]), states: w2.add<VdStateRow>(SQL.vdStates, [vdCompared.baseDay, vdCompared.day]) } : null;
   await w2.run();
@@ -450,8 +458,11 @@ export async function collectDigestReads(db: D1Database, win: DigestWindow, log?
   if (vdFallback && vdFallback.answer.ok) {
     const days = vdFallback.answer.rows.map((r) => r.day).filter((d): d is string => !!d);
     const known = vdDays.answer.ok ? vdDays.answer.rows.map((r) => r.day) : [];
+    const before = vdBefore && vdBefore.answer.ok ? first(vdBefore.answer)?.day ?? null : null;
     if (!known.includes(today) && days.length >= 2) vdCompared = { day: days[0], baseDay: days[1], noListingToday: true, baseIsOldest: false };
-    else if (known.includes(today) && days.length === 1 && days[0] < today) vdCompared = { day: today, baseDay: days[0], noListingToday: false, baseIsOldest: true };
+    else if (known.includes(today) && before) vdCompared = { day: today, baseDay: before, noListingToday: false, baseIsOldest: false, baseIsEarlier: true };
+    // the read of the day before failed: no base is guessed from the oldest day (it would say the snapshots start there)
+    else if (known.includes(today) && vdBefore?.answer.ok && days.length === 1 && days[0] < today) vdCompared = { day: today, baseDay: days[0], noListingToday: false, baseIsOldest: true };
     if (vdCompared) {
       const need = [vdCompared.day, vdCompared.baseDay].filter((d) => !known.includes(d));
       vdLate = { moves: w3.add<VdMoveRow>(SQL.vdMoves, [vdCompared.baseDay, vdCompared.day]), sets: w3.add<VdSetsRow>(SQL.vdSets, [vdCompared.day, vdCompared.baseDay]), states: w3.add<VdStateRow>(SQL.vdStates, [vdCompared.baseDay, vdCompared.day]) };
@@ -995,7 +1006,7 @@ export function shapeValidators(r: DigestReads, win: DigestWindow): Figure<Valid
     value: {
       day, baseDay, dayRow, baseRow, joined: sets?.joined ?? 0, left: sets?.left_ ?? 0, stateChanges,
       stakeDelta: dayRow.stake != null && baseRow.stake != null ? dayRow.stake - baseRow.stake : null, gross: sets?.gross ?? null, moves,
-      noListingToday: r.vdCompared.noListingToday, baseIsOldest: r.vdCompared.baseIsOldest,
+      noListingToday: r.vdCompared.noListingToday, baseIsOldest: r.vdCompared.baseIsOldest, ...(r.vdCompared.baseIsEarlier ? { baseIsEarlier: true } : {}),
     },
     stamp: { source: src, at: dayRow.as_of ?? win.now, height: dayRow.height, status: r.vdCompared.noListingToday ? 'stale' : 'live', ...(dayRow.names_at ? { note: `names by indexer.namada.net, read ${fmtClock(dayRow.names_at)}` } : {}) },
   };

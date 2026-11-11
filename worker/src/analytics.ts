@@ -335,12 +335,19 @@ export function coverageProv(cov: { osmosis: number | null; namada: number | nul
 
 export type { ChainParams } from '../../shared/types';
 
+/** An epoch longer than this many of the chain's minimums is left out of the measured length (measureEpochSec says why). */
+export const EPOCH_MAX_MINIMUMS = 2;
 /**
  * Measured epoch length (seconds) from the recorded `epoch` metric (one reading a minute): an epoch's length is
  * the time between the first readings of it and of the next one, counted only when the readings around both
  * changes are at most 5 minutes apart (a gap in the readings would make an epoch look longer). The average over
  * the last 30 days' epochs, when at least 3 qualify; else the average since genesis. Never below the chain's
  * minimum. Returns how it was measured, in plain words.
+ *
+ * An epoch ends at the first block made after the chain's minimum has passed, so an epoch longer than
+ * EPOCH_MAX_MINIMUMS minimums held a stretch in which Namada made no blocks. It says nothing about how long an epoch
+ * is while blocks are made, and it would stretch every date counted in epochs for thirty days, so it is left out of
+ * the mean and the note says how many were.
  */
 export async function measureEpochSec(db: D1Database, now: number, minEpochSec: number, genesisMs: number | null): Promise<{ sec: number; note: string }> {
   const r = await db
@@ -351,11 +358,15 @@ export async function measureEpochSec(db: D1Database, now: number, minEpochSec: 
   const rows = r.results || [];
   const TIGHT = 5 * 60000;
   const tightStart = (i: number) => i > 0 && rows[i - 1].e === rows[i].e - 1 && rows[i].first - rows[i - 1].last <= TIGHT;
-  const lengths: number[] = [];
-  for (let i = 1; i < rows.length - 1; i++) if (tightStart(i) && tightStart(i + 1)) lengths.push((rows[i + 1].first - rows[i].first) / 1000);
+  const seen: number[] = [];
+  for (let i = 1; i < rows.length - 1; i++) if (tightStart(i) && tightStart(i + 1)) seen.push((rows[i + 1].first - rows[i].first) / 1000);
+  const longest = minEpochSec > 0 ? minEpochSec * EPOCH_MAX_MINIMUMS : Infinity;
+  const lengths = seen.filter((x) => x <= longest);
+  const leftOut = seen.length - lengths.length;
   if (lengths.length >= 3) {
     const v = Math.max(minEpochSec, lengths.reduce((a, x) => a + x, 0) / lengths.length);
-    return { sec: v, note: `about ${(v / 3600).toFixed(2)} h an epoch, measured over the last ${lengths.length} epochs` };
+    const out = leftOut ? `; ${leftOut} ${leftOut === 1 ? 'epoch' : 'epochs'} left out, in which Namada made no blocks for a time` : '';
+    return { sec: v, note: `about ${(v / 3600).toFixed(2)} h an epoch, measured over the last ${lengths.length} epochs${out}` };
   }
   const last = await metricAt(db, 'epoch', now);
   if (genesisMs && last && last.value > 0) {
