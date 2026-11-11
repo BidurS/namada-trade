@@ -18,7 +18,7 @@ import {
   type QuoteSource, type RequestSide, type TrimState, type WatchLine as MessageWatchLine,
 } from './message';
 import { PRICE_HOW_KEY, priceHowAt, storedPriceNote, storedPriceSource, type PriceHowLog } from '../price-how';
-import { DIGEST_HEALTH_LOG_KV, HEALTH_LOG_PER_NAME, digestKeysAsked, readOperatorFigures, type OperatorFigures as ReadOperator } from './operator';
+import { DIGEST_HEALTH_LOG_KV, HEALTH_LOG_PER_NAME, digestKeysAsked, pausedThrough, pausedWithin, readOperatorFigures, type OperatorFigures as ReadOperator } from './operator';
 import { SQL } from './sql';
 import { OPENING_MARK } from '../../../shared/digest-opening';
 import {
@@ -458,10 +458,11 @@ export function toMessageOperator(o: ReadOperator, x: OperatorExtras): MessageOp
   // the previous period: its delivery record when digest.last is that period's, a missed day when some digest was
   // recorded before it and its key was never claimed, nothing about days before the first digest on record
   let previous: MessageOperator['previous'];
+  let pausedIn: MessageOperator['pausedIn'];
   const d = o.delivery;
   if (isNotRead(d)) previous = nr(d);
   else {
-    const { last, previous: prev, dailiesNotSent } = d.value;
+    const { last, previous: prev, dailiesNotSent, paused } = d.value;
     // digest.last holds the latest digest only: it is the previous period's record when it carries that period's key
     const lastMatches = !!last && last.key === prev.key;
     const missed: string[] = [];
@@ -476,9 +477,17 @@ export function toMessageOperator(o: ReadOperator, x: OperatorExtras): MessageOp
       const existedBefore = prev.sentAt != null || (last != null && last.at < weekStart);
       asked.forEach((k, i) => { if (notSent.has(k) && (existedBefore || (firstClaimed >= 0 && i > firstClaimed))) missed.push(dateOfKey(k)!); });
     }
-    previous = { last: lastMatches ? last : null, missed, sentWithoutRecord: prev.sentAt != null && !lastMatches };
+    // a day that ended inside the recorded pause had runs, each held: it is named as held, never as a day with no run
+    const dayEnd = (date: string) => Date.parse(`${date}T00:00:00Z`) + DAY_MS;
+    const held = missed.filter((date) => pausedThrough(paused ?? [], dayEnd(date)));
+    previous = { last: lastMatches ? last : null, missed: missed.filter((date) => !held.includes(date)), ...(held.length ? { held } : {}), sentWithoutRecord: prev.sentAt != null && !lastMatches };
+    // the stretches of the pause that reach into this digest's window: a claim taken in one was not posted. The line
+    // names the newest; `before`: it began before the window did; `n`: how many stretches reach into the window
+    const within = pausedWithin(paused ?? [], o.from, o.now);
+    const newest = within[within.length - 1];
+    if (newest) pausedIn = { from: Math.max(newest.from, o.from), to: Math.min(newest.to, o.now), before: newest.from < o.from, n: within.length };
   }
-  return { health, healthLog, checks, claims, skipped, previous, channels: x.channels, subscribers: x.subscribers, watchCapWallets: x.watchCapWallets };
+  return { health, healthLog, checks, claims, skipped, previous, ...(pausedIn ? { pausedIn } : {}), channels: x.channels, subscribers: x.subscribers, watchCapWallets: x.watchCapWallets };
 }
 
 // ------------------------------------------------------------------------------------------------- watchlists

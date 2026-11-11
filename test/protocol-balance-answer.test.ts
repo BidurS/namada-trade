@@ -71,7 +71,7 @@ describe('a protocol balance answered without a value', () => {
     expect(coded.message).toBe(`abci ${key} code 1: storage error`);
     // the error keeps the whole key for its readers
     expect(coded.path).toContain(NAMADA.internal.pgf);
-    await expect(namProtocolBalance(NAMADA.internal.pgf, { ...QUICK, rpcs: [] })).rejects.toThrow(`abci ${key}: no node on this chain to ask`);
+    await expect(namProtocolBalance(NAMADA.internal.pgf, { ...QUICK, rpcs: [] })).rejects.toThrow(`abci ${key}: no node on this chain at its newest block to ask`);
     const gone = new AbortController();
     gone.abort();
     await expect(namProtocolBalance(NAMADA.internal.pgf, { ...QUICK, rpcs, signal: gone.signal })).rejects.toThrow(`abci ${key}: deadline passed`);

@@ -205,7 +205,7 @@ describe('the tick', () => {
     const noInflation = (_: 'A' | 'B', path: string) => path.endsWith('/last_inflation_amount');
     network(noInflation, { epoch: 2716, minted: MINTED + inflation, keys });
     await tick(db, PLAIN + MIN);
-    expect(asked.filter((u) => u.includes('&height=')).length).toBe(NAMADA.rpcs.length); // each configured node asked once (three since 2026-11-07)
+    expect(asked.filter((u) => u.includes('&height=')).length).toBe(NAMADA.rpcs.length); // each configured node asked once
     // nothing judged yet (the first minute only anchored): idle
     expect(row(db, 'supply_mint_rule')).toMatchObject({ status: 'idle', detail: { verdict: 'not-judged', why: 'step-not-read' } });
     expect(JSON.parse(db.raw.prepare('SELECT value FROM kv WHERE key = ?').get(MINT_RULE_KV).value)).toMatchObject({ keysFailedAt: PLAIN + MIN, anchor: { epoch: 2715 } });

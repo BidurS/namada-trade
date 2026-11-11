@@ -252,6 +252,45 @@ describe('the opening in the digest', () => {
     expect(opened).toEqual(plain);
   });
 
+  it('a digest whose window reaches into a time when alerts were paused goes out without the opening, and the model is not asked; one whose window is clear of it has the opening again', { timeout: 180_000 }, async () => {
+    const plainDb = seeded();
+    await run(plainDb);
+    const plain = sent.map((p) => p.json);
+
+    // the newest held run is two hours before this digest: inside its 24 hours
+    resetDigestMemory(); resetClaimMemory(); stubDiscord();
+    const db = seeded();
+    await kvSet(db as any, 'digest.paused', { stretches: [{ from: T - 3 * 86_400_000, to: T - 2 * 3_600_000 }] });
+    const held = write(OPENING);
+    await run(db, openingMakerWith(db as any, deps(held, reads(true))));
+    expect(held).not.toHaveBeenCalled();
+    expect(sent[0].json.embeds[0].description).toBe(plain[0].embeds[0].description);
+    expect(JSON.stringify(sent.map((p) => p.json))).not.toContain(OPENING_MARK);
+
+    // the newest held run is 26 hours before: the daily's window is clear of it, and the opening is written
+    resetDigestMemory(); resetClaimMemory(); stubDiscord();
+    const clear = seeded();
+    await kvSet(clear as any, 'digest.paused', { stretches: [{ from: T - 5 * 86_400_000, to: T - 26 * 3_600_000 }] });
+    const asked = write(OPENING);
+    await run(clear, openingMakerWith(clear as any, deps(asked, reads(true))));
+    expect(asked).toHaveBeenCalledTimes(1);
+    expect(sent[0].json.embeds[0].description.startsWith(`${OPENING}\n*${OPENING_MARK}*`)).toBe(true);
+  });
+
+  it('the record of the pause could not be read: the digest goes out without the opening, on time', { timeout: 120_000 }, async () => {
+    const db = seeded();
+    const real = db.prepare.bind(db);
+    (db as any).prepare = (sql: string) => {
+      if (sql === 'SELECT value FROM kv WHERE key = ?') return { bind: () => ({ first: async () => { throw new Error('D1_ERROR: simulated'); } }) };
+      return real(sql);
+    };
+    const w = write(OPENING);
+    await run(db, openingMakerWith(db as any, deps(w, reads(true))));
+    expect(w).not.toHaveBeenCalled();
+    expect(sent.length).toBeGreaterThan(0);
+    expect(JSON.stringify(sent.map((p) => p.json))).not.toContain(OPENING_MARK);
+  });
+
   it('a model that fails leaves the digest exactly as it is today', { timeout: 120_000 }, async () => {
     const plainDb = seeded();
     await run(plainDb);

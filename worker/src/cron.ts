@@ -32,6 +32,7 @@ import { chainParams, indexState, NAMADA_CURSOR_MAX_LAG, NAMADA_CURSOR_STALE_MS,
 import { INDEXER_IBC_STATUS, STUCK_PACKETS_KV, innerTxOfRow, reconcileStuckPackets, stuckTotalNam, type StuckCandidate, type StuckList } from './ibc-stuck';
 import type { AlertsPending, LiveBondStatus, LiveUnbondStatus, LiveScanStatus } from './live-hub';
 import { SCANNED_KV, scannedOf } from './masp-activity';
+import { noteBlocksSeen, type StatusLike } from './blocks-seen';
 import type { AlertsSkipped } from './sources/discord';
 import {
   INTERNAL_ADDRS, BALANCE_LISTING_SRC, BOND_LISTING_SRC, SPAN_EXTEND_MS, HAS_READING, listingTimes, readHolderFigures, refreshHolderFigures, figuresDue,
@@ -2509,6 +2510,9 @@ export async function runCron(env: Env) {
   // Nodes that fail a read this tick are asked last for the rest of it (a node can answer its status and hang on
   // every query, which the status check cannot see).
   const breaker = new RpcBreaker();
+  // The one line of a paused Worker that sees blocks being made (blocks-seen.ts), started once the tick knows its
+  // head; it ends before the tick's lock is released.
+  let blocksSeen: Promise<void> = Promise.resolve();
 
   // 0. Forum and governance alerts run beside the chain reads (they need nothing from them), so a slow chain node
   //    cannot hold them up and they cannot delay the chain reads; expired sign-in records are swept first.
@@ -2607,6 +2611,11 @@ export async function runCron(env: Env) {
     // indexer's latest block). One node's status far from every other answer is not the head, and a listing or a
     // stored height above it is not one the chain has reached (heightCeiling).
     const listingHead = listingHeads(rpcStatuses as { provider: string; error?: string; height?: number; time?: number; catchingUp?: boolean; network?: string }[], Number(idxBlock?.block), now);
+    // While the alerts are paused: one line to the operator, once, the first time two witnesses say a block was made
+    // after the one the nodes stood at (blocks-seen.ts). It is awaited at the end of the tick and costs the tick
+    // nothing when it fails.
+    blocksSeen = noteBlocksSeen(env, rpcStatuses as StatusLike[], Number(idxBlock?.block), now)
+      .then((did) => { if (did !== 'not paused' && did !== 'no new block' && did !== 'told before') console.log(`blocks seen while paused: ${did}`); }, (e) => console.error('blocks seen', e));
     // The bond listing needs the epoch (its rows' verified_epoch), so a tick without one does not start it and the
     // balance listing takes the turn when due. A bond read started for nothing never reaches its record: it would be
     // due again every minute, and the balance listing would never be chosen.
@@ -3306,6 +3315,8 @@ export async function runCron(env: Env) {
     await summaries;
     await askReview;
     if (health.length > merged) await mergeHealth(env, health.slice(merged));
+    // the one line of a paused Worker that sees blocks being made (blocks-seen.ts) ends before the lock is released too
+    await blocksSeen;
     // The operator's incidents (ops.ts): the tick's rows and checks judged once all are written, and the tick's
     // completion recorded (the live hub and /api/health read it). The lock expires TICK_LOCK_MS after it was taken,
     // and a tick whose end ran past that may have a later one running: the lock is renewed first, so no later tick can

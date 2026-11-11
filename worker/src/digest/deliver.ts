@@ -13,7 +13,7 @@ import type { StoredSettings } from '../settings';
 import { readAndBuildDigest, type DigestBuild, type DigestPost } from './build';
 import type { OpeningMaker } from './opening';
 import { DIGEST_LATE_NOTE_MS, ago, clock, dayMon, digestDueAt, digestKey, digestLabel, isoDate, lateNote, plural } from './message';
-import { DIGEST_LAST_KV, dailyClaimKey, digestLastKv } from './operator';
+import { DIGEST_LAST_KV, DIGEST_PAUSED_KV, PAUSED_STRETCHES_KEPT, PAUSE_GAP_MS, PAUSE_NOTE_EVERY_MS, dailyClaimKey, digestLastKv, parsePaused, pausedInWindow, pausedThrough, type PausedStretch } from './operator';
 import { DAY_MS, DB_NOT_ANSWERED, isNotRead, notRead, type DigestKind, type NotRead } from './types';
 import { readWatchlists, type WatchResult } from './watchlists';
 
@@ -59,8 +59,54 @@ function parseRecord(raw: string | null | undefined): DigestRecord | null {
 const known = new Set<string>();
 /** The UTC dates whose day before this isolate has looked at for a missed digest. */
 const missedAsked = new Set<string>();
+/** When this isolate last recorded a run held by the pause (notePaused). */
+let pausedNotedAt = 0;
+/** Whether this isolate has looked, while sending, for a stretch of the pause left open (closePaused). */
+let pausedClosed = false;
 /** Forgets what this isolate knows (the tests' fresh isolate). */
-export function resetDigestMemory() { known.clear(); missedAsked.clear(); previewBuild = null; }
+export function resetDigestMemory() { known.clear(); missedAsked.clear(); previewBuild = null; pausedNotedAt = 0; pausedClosed = false; }
+
+/**
+ * A run that sends alerts closes the newest stretch of the pause, once an isolate: a held run after it starts a
+ * stretch of its own, so the minutes in which alerts were sent are never counted as paused. One read an isolate; one
+ * write the first time after a pause.
+ */
+export async function closePaused(db: D1Database, now: number): Promise<void> {
+  if (pausedClosed) return;
+  // marked once the read has answered: a read that fails is made again on the isolate's next run
+  const row = await db.prepare('SELECT value FROM kv WHERE key = ?').bind(DIGEST_PAUSED_KV).first<{ value: string }>();
+  pausedClosed = true;
+  const list = parsePaused(row?.value);
+  const newest = list[list.length - 1];
+  if (!row || !newest || newest.closed) return;
+  newest.closed = true;
+  await db.prepare('UPDATE kv SET value = ?, updated_at = ? WHERE key = ? AND value = ?').bind(JSON.stringify({ stretches: list }), now, DIGEST_PAUSED_KV, row.value).run();
+}
+
+/**
+ * Records that this run was held by the pause (kv digest.paused), at most every PAUSE_NOTE_EVERY_MS in an isolate.
+ * The newest stretch goes on while held runs keep coming; a held run more than PAUSE_GAP_MS after its newest starts
+ * a stretch of its own, and the older ones are kept. The first record of all, written when the last daily digest on
+ * record is more than a day old, starts at the hour the first digest after it was due: a digest was skipped then, and
+ * before this record existed nothing else could say the runs were held (a day with no run had its own row at the
+ * time). Any other stretch starts at its own first run.
+ */
+export async function notePaused(db: D1Database, now: number): Promise<void> {
+  if (now - pausedNotedAt < PAUSE_NOTE_EVERY_MS) return;
+  pausedNotedAt = now;
+  const r = await db.prepare('SELECT key, value FROM kv WHERE key IN (?, ?)').bind(DIGEST_PAUSED_KV, DIGEST_LAST_KV).all<{ key: string; value: string }>();
+  const rows = r.results ?? [];
+  const had = rows.find((x) => x.key === DIGEST_PAUSED_KV);
+  const list = parsePaused(had?.value);
+  const newest = list[list.length - 1];
+  if (newest && !newest.closed && now >= newest.to && now - newest.to <= PAUSE_GAP_MS) newest.to = now;
+  else {
+    const last = had ? null : parseRecord(rows.find((x) => x.key === DIGEST_LAST_KV)?.value);
+    const skipped = last && now - last.at > DAY_MS ? Math.min(digestDueAt(last.at + DAY_MS), now) : null;
+    list.push({ from: skipped ?? now, to: now });
+  }
+  await db.prepare('INSERT OR REPLACE INTO kv (key, value, updated_at) VALUES (?, ?, ?)').bind(DIGEST_PAUSED_KV, JSON.stringify({ stretches: list.slice(-PAUSED_STRETCHES_KEPT) }), now).run();
+}
 
 /**
  * Whether a period is still open: 'new' when its key was never claimed, 'done' when its record says no channel waits,
@@ -80,17 +126,23 @@ export async function periodState(db: D1Database, key: string, kind: DigestKind)
 /**
  * The health row of a day whose digest was never sent: the day before `now` had no run from 08:00 to midnight UTC
  * (its key was never claimed) while an earlier digest is on record (the first day after the deploy had none to
- * miss). Asked once a UTC day in an isolate, until that day's digest is sent; null when nothing was missed.
+ * miss). Asked once a UTC day in an isolate, until that day's digest is sent; null when nothing was missed. A day
+ * that ended inside a recorded stretch of the pause (kv digest.paused) had runs, each held: its digest was not
+ * missed. Its row says so and is ok, so the row the held runs left ("Off while the alerts are paused") does not
+ * stand on after the pause is lifted, until the next digest's own row replaces it.
  */
 export async function missedYesterday(db: D1Database, now: number): Promise<SourceHealth | null> {
   const day = isoDate(now);
   if (missedAsked.has(day)) return null;
   const yKey = dailyClaimKey(now - DAY_MS);
-  const r = await db.prepare('SELECT key, value FROM kv WHERE key IN (?, ?)').bind(yKey, DIGEST_LAST_KV).all<{ key: string; value: string }>();
+  const r = await db.prepare('SELECT key, value FROM kv WHERE key IN (?, ?, ?)').bind(yKey, DIGEST_LAST_KV, DIGEST_PAUSED_KV).all<{ key: string; value: string }>();
   missedAsked.add(day);
   if (missedAsked.size > 8) missedAsked.delete(missedAsked.values().next().value!);
   const rows = r.results ?? [];
   if (rows.some((x) => x.key === yKey)) return null;
+  if (pausedThrough(parsePaused(rows.find((x) => x.key === DIGEST_PAUSED_KV)?.value), Date.parse(`${day}T00:00:00Z`))) {
+    return { name: DIGEST_HEALTH, ok: true, at: now, note: `No digest on ${dayMon(now - DAY_MS)}: alerts were paused. The next one is due at ${hourWords} UTC.` };
+  }
   const rec = parseRecord(rows.find((x) => x.key === DIGEST_LAST_KV)?.value);
   if (!rec || rec.key >= yKey) return null;
   return { name: DIGEST_HEALTH, ok: false, at: now, note: `No digest on ${dayMon(now - DAY_MS)}: no run between ${hourWords} and 24:00 UTC.` };
@@ -121,8 +173,23 @@ export async function prepareDigests(db: D1Database, now: number, sends: boolean
   const due = digestsDue(now);
   if (!sends) {
     if (due.length) rows.push({ name: DIGEST_HEALTH, ok: false, at: now, note: offNote() });
+    // held by the pause (a Worker that sends, paused; never one without SEND_ALERTS): the run is put on record, so
+    // the days it covers are known as held once the pause is lifted. A write that fails costs the run nothing.
+    if (alertsPaused()) await notePaused(db, now).catch((e) => console.error('digest: the paused run was not recorded', e));
     return { jobs, rows };
   }
+  // The stretch in which runs were held by the pause, read once in a run that has a maker and a period due: a
+  // period whose window reaches into it gets no written opening (pausedInWindow). A read that fails is taken as
+  // reaching into it: a digest without an opening is whole, and an opening is never the reason one is late.
+  let pausedRec: PausedStretch[] | undefined | 'unread';
+  const heldIn = async (kind: DigestKind): Promise<boolean> => {
+    if (pausedRec === undefined) {
+      pausedRec = await db.prepare('SELECT value FROM kv WHERE key = ?').bind(DIGEST_PAUSED_KV).first<{ value: string }>()
+        .then((r) => parsePaused(r?.value), () => 'unread' as const);
+    }
+    return pausedRec === 'unread' || pausedInWindow(pausedRec, now, kind);
+  };
+  await closePaused(db, now).catch((e) => console.error('digest: the record of the pause was not closed', e));
   for (const kind of due) {
     const key = digestKey(now, kind), what = digestLabel(now, kind);
     if (known.has(key)) continue;
@@ -135,7 +202,11 @@ export async function prepareDigests(db: D1Database, now: number, sends: boolean
     const build: Promise<DigestBuild | { error: string }> = readAndBuildDigest(db, now, kind).catch((e) => ({ error: errText(e) }));
     const state = st.state;
     // A Worker that does not send never comes here (above), so the pause and a preview deployment make no model call.
-    const opening = makeOpening
+    // A period whose window reaches into a time when alerts were paused has no written opening: it is the first of
+    // its kind after the pause (or holds part of it), and it goes out as the figures alone.
+    const plain = makeOpening ? await heldIn(kind) : false;
+    if (plain) console.log(`${what}: no written opening: its window reaches into a time when alerts were paused`);
+    const opening = makeOpening && !plain
       ? build.then((b) => ('error' in b ? null : makeOpening(b, state))).catch((e) => { console.error(`${what}: no opening: ${errText(e)}`); return null; })
       : undefined;
     jobs.push({ kind, key, what, now, state, record: st.record, build, opening });

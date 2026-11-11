@@ -461,6 +461,26 @@ describe('the operator\'s previous period and the watch lines', () => {
     expect(nr.previous).toEqual({ notRead: true, source: 'digest.last', lastAt: null, reason: DB_NOT_ANSWERED });
   });
 
+  it('a day that ended inside a recorded stretch of the pause is held, not missed; the stretch in the window is cut to it, and one that began before it says so', () => {
+    const DAY = 86_400_000;
+    const older = { ...last, key: 'alert:digest:daily:2026-10-21', at: Date.UTC(2026, 9, 21, 8) };
+    const withPause = (paused: { from: number; to: number }[]) =>
+      toMessageOperator({ ...base, delivery: { ...base.delivery, value: { last: older, paused, previous: { key: last.key, sentAt: null }, dailiesNotSent: [] } } as OperatorFigures['delivery'] }, x);
+    // 22 Oct ended (23 Oct 00:00) inside a stretch that began two days before the window and ended inside it
+    const held = withPause([{ from: A24 - 2 * DAY, to: T - 3_600_000 }]);
+    expect(held.previous).toEqual({ last: null, missed: [], held: ['2026-10-22'], sentWithoutRecord: false });
+    expect(held.pausedIn).toEqual({ from: A24, to: T - 3_600_000, before: true, n: 1 });
+    // a stretch that began after the day ended, or ended hours before it did: the day is a day with no run
+    const dayEnd = Date.UTC(2026, 9, 23);
+    expect(withPause([{ from: dayEnd + 60_000, to: T - 3_600_000 }]).previous).toMatchObject({ missed: ['2026-10-22'] });
+    expect(withPause([{ from: A24 - DAY, to: dayEnd - 2 * 3_600_000 }]).previous).toMatchObject({ missed: ['2026-10-22'] });
+    // a stretch wholly before the window is not in it
+    expect(withPause([{ from: A24 - 3 * DAY, to: A24 - DAY }]).pausedIn).toBeUndefined();
+    // two in the window: the newest is named, with its own start, and how many there were
+    expect(withPause([{ from: A24 + 3_600_000, to: A24 + 2 * 3_600_000 }, { from: A24 + 5 * 3_600_000, to: A24 + 6 * 3_600_000 }]).pausedIn)
+      .toEqual({ from: A24 + 5 * 3_600_000, to: A24 + 6 * 3_600_000, before: false, n: 2 });
+  });
+
   it('a failing check says since when its flip is in the health log, else as of its last run; a stale one says it has not run', () => {
     const o = toMessageOperator({
       ...base,

@@ -67,9 +67,51 @@ export interface AlertsLine {
   skipped: { total: number; last: { what: string; n: number; at: number } } | null;
 }
 export interface DigestLast { key: string; at: number; targets: number; posted: number; skipped: number }
+/**
+ * kv digest.paused: the stretches in which the runs of a Worker that sends alerts were held by the pause, newest
+ * last, each from its first held run to its newest (deliver.ts notePaused writes it, at most every
+ * PAUSE_NOTE_EVERY_MS; the newest PAUSED_STRETCHES_KEPT are kept). No digest is claimed or sent in a stretch, and an
+ * alert's claim is taken and its post is not sent. A day that ended inside one had runs: its digest was held, not
+ * missed. A stretch ends when a run sends alerts again (deliver.ts closePaused marks it closed), or when held runs stop
+ * coming for PAUSE_GAP_MS (no run was made, or the record of one was not written).
+ */
+export const DIGEST_PAUSED_KV = 'digest.paused';
+/** `closed`: a run that sent alerts came after its newest held run, so a held run after it starts a stretch of its own. */
+export interface PausedStretch { from: number; to: number; closed?: boolean }
+export const PAUSED_STRETCHES_KEPT = 12;
+export function parsePaused(raw: string | null | undefined): PausedStretch[] {
+  if (!raw) return [];
+  try {
+    const v = JSON.parse(raw);
+    const list: unknown[] = Array.isArray(v?.stretches) ? v.stretches : [];
+    return list
+      .filter((x): x is PausedStretch => !!x && Number.isFinite((x as PausedStretch).from) && Number.isFinite((x as PausedStretch).to) && (x as PausedStretch).from <= (x as PausedStretch).to)
+      .map((x) => ({ from: Number(x.from), to: Number(x.to), ...(x.closed === true ? { closed: true } : {}) }));
+  } catch { return []; }
+}
+/** A run is recorded at most this often, so the newest one on record is at most this old while the pause lasts. */
+export const PAUSE_NOTE_EVERY_MS = 10 * 60_000;
+/** A held run this long after the newest one on record starts a stretch of its own: runs were not held between them. */
+export const PAUSE_GAP_MS = 45 * 60_000;
+/** How far before a day's end the newest held run of a stretch may lie for the day to have ended inside it. */
+export const PAUSED_DAY_SLACK_MS = 30 * 60_000;
+/** Whether the UTC day ending at `dayEnd` ended inside a recorded stretch: its runs were held to the end of the day. */
+export const pausedThrough = (list: readonly PausedStretch[], dayEnd: number): boolean =>
+  list.some((s) => s.from < dayEnd && s.to >= dayEnd - PAUSED_DAY_SLACK_MS);
+/** The recorded stretches that reach into [from, to), oldest first. */
+export const pausedWithin = (list: readonly PausedStretch[], from: number, to: number): PausedStretch[] => list.filter((s) => s.to > from && s.from < to);
+/**
+ * Whether the window of the `kind` digest sent at `now` (its 24 hours, or its 7 days) reaches into a recorded
+ * stretch. Such a digest is the first of its kind after the pause, or holds part of it.
+ */
+export const pausedInWindow = (list: readonly PausedStretch[], now: number, kind: DigestKind): boolean =>
+  pausedWithin(list, now - (kind === 'weekly' ? 7 : 1) * DAY_MS, now).length > 0;
+
 export interface DeliveryLine {
   /** the last digest's record, whatever its period */
   last: DigestLast | null;
+  /** the recorded stretches in which runs were held by the pause (kv digest.paused); empty when none is on record */
+  paused?: PausedStretch[];
   /** the previous period's key and whether it was claimed (sent) */
   previous: { key: string; sentAt: number | null };
   /** the weekly: the daily keys of the week not claimed */
@@ -238,7 +280,7 @@ export function shapeDelivery(r: OperatorReads, kind: DigestKind = 'daily'): Fig
   const [previousKey, ...dailies] = r.digestKeysAsked;
   const claimedAt = (key: string) => claims.find((c) => c.key === key)?.updated_at ?? null;
   return {
-    value: { last, previous: { key: previousKey, sentAt: claimedAt(previousKey) }, dailiesNotSent: dailies.filter((k) => claimedAt(k) == null) },
+    value: { last, paused: parsePaused(kv.find((x) => x.key === DIGEST_PAUSED_KV)?.value), previous: { key: previousKey, sentAt: claimedAt(previousKey) }, dailiesNotSent: dailies.filter((k) => claimedAt(k) == null) },
     stamp: { source: DIGEST_LAST_KV, at: last?.at ?? (raw?.updated_at ?? 0), status: 'live' },
   };
 }

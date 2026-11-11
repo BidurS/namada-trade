@@ -199,7 +199,7 @@ export const SQL = {
     FROM kv c INDEXED BY kv_alert_claim_time LEFT JOIN flows f ON c.key LIKE 'alert:flow:%' AND f.id = substr(c.key, 12)
     WHERE c.key >= 'alert:' AND c.key < 'alert;' AND c.updated_at >= ? AND c.updated_at < ?`,
   /** the operator's kv rows: the last digest's delivery record and the posts not sent (PK lookups) */
-  operatorKv: "SELECT key, value, updated_at FROM kv WHERE key IN ('digest.last', 'digest.last.weekly', 'alerts.skipped')",
+  operatorKv: "SELECT key, value, updated_at FROM kv WHERE key IN ('digest.last', 'digest.last.weekly', 'alerts.skipped', 'digest.paused')",
   /** whether a digest key was claimed (PK lookups, one row per key given) */
   digestClaims: (n: number) => `SELECT key, updated_at FROM kv WHERE key IN (${marks(n)})`,
 

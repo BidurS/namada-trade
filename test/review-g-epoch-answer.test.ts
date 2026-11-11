@@ -77,7 +77,7 @@ describe('an epoch answer that is not an epoch', () => {
 
   it('a node list given empty (every node names another chain) leaves no node to ask', async () => {
     const asked = nodes(() => ({ result: { response: { code: 0, value: EPOCH_2715, height: '9' } } }));
-    await expect(namadaEpoch({ ...QUICK, rpcs: [] })).rejects.toThrow('abci /shell/epoch: no node on this chain to ask');
+    await expect(namadaEpoch({ ...QUICK, rpcs: [] })).rejects.toThrow('abci /shell/epoch: no node on this chain at its newest block to ask');
     expect(asked).toEqual([]);
   });
 

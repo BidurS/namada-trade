@@ -97,14 +97,17 @@ export const NAMADA = {
    * masp and token events from block 4,546,325; nothing below. Polkachu (namada-rpc.polkachu.com) keeps every block
    * too but has event indexing off: an empty block_search page from it would read as "no blocks". A node like that
    * can be listed only with `indexed: false` (sources/namada.ts Rpc), which keeps it out of every search of the
-   * index (scripts/backfill-namada.ts transferHeights asks the indexed nodes of this list). Stake&Relax was added on
+   * index (scripts/backfill-namada.ts transferHeights asks the indexed nodes of this list). It is listed last, so it
+   * is a witness of the head beside the others and a source of blocks and state when they do not answer. Stake&Relax was added on
    * 2026-11-07, when the first two answered HTTP 502 for hours and every Namada read of the site failed with them.
    */
   rpcs: [
     { provider: '5ElementsNodes', url: 'https://rpc-namada.5elementsnodes.com' },
     { provider: 'Papadritta', url: 'https://rpc.papadritta.com' },
     { provider: 'StakeAndRelax', url: 'https://namada-rpc.stakeandrelax.net' },
-  ],
+    // keeps every block and answers state queries; no event index, so it is never asked for a search (indexed: false)
+    { provider: 'Polkachu', url: 'https://namada-rpc.polkachu.com', indexed: false },
+  ] as readonly { provider: string; url: string; indexed?: boolean }[],
   /** Stale (~850k blocks behind at research time) – used only for static metadata */
   staleIndexer: 'https://indexer.namada.citizenweb3.com',
   valopersValidators: 'https://raw.githubusercontent.com/alxnode/valopers/refs/heads/main/namada/validators.json',

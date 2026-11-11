@@ -152,7 +152,8 @@ describe('the live scan follows only nodes at this chain\'s head', () => {
     await hub.scanNamada();
     expect(blockReads(calls)).toEqual([]);
     expect(cursor(db)).toBe('8300000');
-    expect(notes(db)).toEqual([`no Namada node is at the chain's head (5ElementsNodes: catching up; Papadritta: names another network than ${NAMADA.chainId}; StakeAndRelax: no answer)`]);
+    // the nodes the stub does not answer for are named together under the one reason, however many they are
+    expect(notes(db)).toEqual([`no Namada node is at the chain's head (5ElementsNodes: catching up; Papadritta: names another network than ${NAMADA.chainId}; ${NAMADA.rpcs.slice(2).map((r) => r.provider).join(', ')}: no answer)`]);
     expect(kinds(db)).toEqual(['head']); // the scan waits: the first block scanned after it answers the note
   });
 
@@ -202,7 +203,7 @@ describe('chainHead', () => {
   const st = (provider: string, o: Partial<namada.NodeStatus> = {}): namada.NodeStatus => ({ provider, network: NAMADA.chainId, height: 8_300_000, time: NOW - 7000, catchingUp: false, ...o });
   it('refuses a height that is not one and a newest block from the future', () => {
     expect(namada.chainHead([st('5ElementsNodes', { height: 2e9 }), st('Papadritta', { time: NOW + 3_600_000 })], NOW))
-      .toEqual({ height: null, rpcs: [], note: "no Namada node is at the chain's head (5ElementsNodes: an invalid height; Papadritta: newest block not from the last 5 minutes; StakeAndRelax: no answer)", agreed: false, byNodes: false, disputed: false });
+      .toEqual({ height: null, rpcs: [], note: `no Namada node is at the chain's head (5ElementsNodes: an invalid height; Papadritta: newest block not from the last 5 minutes; ${NAMADA.rpcs.slice(2).map((r) => r.provider).join(', ')}: no answer)`, agreed: false, byNodes: false, disputed: false });
   });
   it('one node at the head is enough; a node with no answer is left out of the reads', () => {
     const h = namada.chainHead([{ provider: '5ElementsNodes', error: 'timeout' }, st('Papadritta')], NOW);

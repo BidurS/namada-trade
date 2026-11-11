@@ -53,7 +53,9 @@ const ctxOf = (statuses: { height?: number; catchingUp?: boolean; error?: string
 const NO_HEAD = "Not applied: no two of this tick's answers agree on the chain's head, so the balance listing's height cannot be checked";
 
 describe('a node that names another chain', () => {
-  const [five, papa, sar] = NAMADA.rpcs.map((r) => r.provider);
+  // the first two nodes of the list and the rest, whichever they are: nothing here names a node or counts them
+  const [five, papa, ...rest] = NAMADA.rpcs.map((r) => r.provider);
+  const down = (provider: string) => ({ provider, error: 'down' });
   const other = { provider: five, height: 999_999_900, catchingUp: false, network: 'other-chain-1' };
   const here = { provider: papa, height: 8343400, catchingUp: false, network: NAMADA.chainId };
 
@@ -66,11 +68,11 @@ describe('a node that names another chain', () => {
   });
 
   it('is never asked, even when no node on this chain answered its status', () => {
-    // every other configured node down (two since 2026-11-07): the ones that failed their status are asked, the one on another chain never
-    expect(answeringRpcs([other, { provider: papa, error: 'down' }, { provider: sar, error: 'down' }]).map((r) => r.provider)).toEqual([papa, sar]);
-    expect(answeringRpcs([other, { ...here, network: 'other-chain-2' }, { ...here, provider: sar, network: 'other-chain-3' }])).toEqual([]);
+    // every other configured node down: the ones that failed their status are asked, the one on another chain never
+    expect(answeringRpcs([other, down(papa), ...rest.map(down)]).map((r) => r.provider)).toEqual([papa, ...rest]);
+    expect(answeringRpcs([other, { ...here, network: 'other-chain-2' }, ...rest.map((provider) => ({ ...here, provider, network: 'other-chain-3' }))])).toEqual([]);
     // nodes that only failed their status or are catching up are still asked, as before (nothing better answered)
-    expect(answeringRpcs([{ provider: five, error: 'down' }, { ...here, catchingUp: true }, { provider: sar, error: 'down' }]).map((r) => r.provider)).toEqual([five, papa, sar]);
+    expect(answeringRpcs([down(five), { ...here, catchingUp: true }, ...rest.map(down)]).map((r) => r.provider)).toEqual([five, papa, ...rest]);
   });
 });
 
@@ -124,10 +126,14 @@ describe('the head the answers agree on', () => {
     expect(listingHeads([st(8318300, true), st(8318300, true)], 8343360)).toMatchObject({ head: null });
     expect(listingHeads([st(8318300, true), st(8343400)], 8343360).head).toBe(8343400);
     expect(listingHeads([st(8318300, true), { error: 'down' }]).note).toBe("no two answers agree on the head (a node: catching up; a node: no answer; indexer: no answer)");
-    // the note fits a listing record's 160 characters after "Not applied: " with three nodes' reasons and the indexer's block
+    // the note fits a listing record's 160 characters after "Not applied: " with every node's reason and the indexer's
+    // block: the nodes that gave the same reason are named together, however many the list holds
     const three = (what: string) => listingHeads(NAMADA.rpcs.map((r, i) => (i === 0 ? { provider: r.provider, height: 8343400, network: what === 'chain' ? 'other-chain-1' : NAMADA.chainId, catchingUp: what === 'catching up', time: what === 'stale' ? 0 : Date.now() } : { provider: r.provider, error: 'down' })), 8343400, Date.now()).note!;
     for (const what of ['chain', 'catching up', 'stale']) expect(`Not applied: ${three(what)}`.length, what).toBeLessThanOrEqual(160);
-    expect(three('stale')).toBe('no two answers agree on the head (5ElementsNodes: newest block over 5 min old; Papadritta: no answer; StakeAndRelax: no answer; indexer 8343400)');
+    const [first, ...others] = NAMADA.rpcs.map((r) => r.provider);
+    expect(three('stale')).toBe(`no two answers agree on the head (${first}: newest block over 5 min old; ${others.join(', ')}: no answer; indexer 8343400)`);
+    // two nodes with the same reason share it; a node that gave a height stands alone
+    expect(listingHeads([{ provider: 'a', error: 'down' }, { provider: 'b', height: 8343400, network: NAMADA.chainId }, { provider: 'c', error: 'down' }]).note).toBe('no two answers agree on the head (a, c: no answer; b 8343400; indexer: no answer)');
   });
 });
 
@@ -506,8 +512,12 @@ describe('the cron tick', () => {
       const rec = kv<BalanceListingRecord>(db, 'balance.listing');
       // a tick with no head read nothing: recorded with its time and reason, and not as a failed read in a row
       expect(rec).toMatchObject({ height: 8343300, failedAt: PLAIN, failures: 0 });
-      // whole, with the indexer's block: the record's 160 characters hold three nodes' reasons
-      expect(rec.error).toMatch(/^Not applied: no two answers agree on the head \(5ElementsNodes: (no answer|names another chain); Papadritta: no answer; StakeAndRelax: no answer; indexer 8343400\)$/);
+      // whole, with the indexer's block: the record's 160 characters hold every node's reason
+      const [first, ...others] = NAMADA.rpcs.map((r) => r.provider);
+      expect(rec.error).toBe(what === 'fails'
+        ? `Not applied: no two answers agree on the head (${[first, ...others].join(', ')}: no answer; indexer 8343400)`
+        : `Not applied: no two answers agree on the head (${first}: names another chain; ${others.join(', ')}: no answer; indexer 8343400)`);
+      expect(rec.error.length).toBeLessThanOrEqual(160);
       expect(healthOf(db)['Namada RPC (balance listing)']).toMatchObject({ ok: false });
       expect(healthOf(db)['Namada RPC (balance listing)'].note).toMatch(/^Not read this tick: no two answers agree on the head/);
       expect(maxHeight(db)).toBe(8343300);

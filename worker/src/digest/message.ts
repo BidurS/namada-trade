@@ -284,7 +284,10 @@ export interface OperatorFigures {
   skipped: { what: string; n: number; at: number; total: number } | null | NotRead;
   /** the previous period's digest.last, the days with no digest, and this one's targets; `sentWithoutRecord` when the
    *  previous period's claim exists but no delivery record was written for it */
-  previous: { last: DigestLast | null; missed: string[]; sentWithoutRecord?: boolean } | NotRead;
+  previous: { last: DigestLast | null; missed: string[]; held?: string[]; sentWithoutRecord?: boolean } | NotRead;
+  /** the newest stretch of the pause inside the window (kv digest.paused), cut to the window: a claim taken in it was
+   *  not posted. `before`: it began before the window did; `n`: the stretches that reach into the window */
+  pausedIn?: { from: number; to: number; before?: boolean; n?: number };
   channels: number;
   subscribers: number;
   watchCapWallets: number;
@@ -1347,8 +1350,8 @@ export function operatorEmbed(ops: OperatorFigures, now: number, kind: DigestKin
     !isNotRead(h) && h.value.notOk.length === 0 &&
     !isNotRead(log) && log.value.flips.length === 0 && log.value.firstAt != null && log.value.firstAt <= now - (kind === 'daily' ? DAY : 7 * DAY) &&
     !isNotRead(ch) && ch.value.failing.length === 0 &&
-    ops.skipped == null &&
-    !isNotRead(ops.previous) && ops.previous.missed.length === 0 && ops.previous.last != null && ops.previous.last.posted === ops.previous.last.targets;
+    ops.skipped == null && !ops.pausedIn &&
+    !isNotRead(ops.previous) && ops.previous.missed.length === 0 && !ops.previous.held?.length && ops.previous.last != null && ops.previous.last.posted === ops.previous.last.targets;
   if (allClear) {
     lines.push('All sources answered through the day; every check passed; no alert post was held back; the digest reached every channel.');
     lines.push(`This digest: ${channels}.`);
@@ -1412,13 +1415,27 @@ export function operatorEmbed(ops: OperatorFigures, now: number, kind: DigestKin
       const other = v.n - v.moves;
       const moves = `${int(v.moves)} moves${v.crossings > 0 ? `, ${int(v.crossings)} of them bridge crossings` : ''}`;
       const kinds = v.n ? ` (${[moves, other > 0 ? `${int(other)} other` : ''].filter(Boolean).join(', ')}${v.firstAt != null && v.lastAt != null ? `; first ${timeWords(v.firstAt, now)}, last ${timeWordsToday(v.lastAt, now)}` : ''})` : '';
-      lines.push(`Alerts in the ${win}: ${int(v.n)} posted${kinds}; ${skipped}.`);
+      // a claim taken while alerts were paused was held, not posted: with a pause in the window the count is of claims,
+      // and the posts not sent for another reason are said apart
+      const pi = ops.pausedIn;
+      if (!pi) lines.push(`Alerts in the ${win}: ${int(v.n)} posted${kinds}; ${skipped}.`);
+      else {
+        const span = `${pi.before ? 'from before this window' : `from ${timeWords(pi.from, now)}`} to ${timeWordsToday(pi.to, now)}`;
+        const more = (pi.n ?? 1) > 1 ? ` (the last of ${int(pi.n!)} such stretches in the window)` : '';
+        lines.push(`Alerts in the ${win}: ${int(v.n)} claimed${kinds}. Alerts were paused ${span}${more}: a claim taken while paused was held, not posted. Apart from that: ${skipped}.`);
+      }
     }
     // d) this digest's channels and the previous period's delivery
     const prev = ops.previous;
     let previous: string;
     if (isNotRead(prev)) previous = notReadLine(kind === 'daily' ? "Yesterday's digest" : 'The previous weekly digest', prev, now).replace(/\.$/, '');
-    else if (prev.missed.length) previous = `No digest was sent on ${prev.missed.map((d) => dayMon(Date.parse(`${d}T00:00:00Z`))).join(', ')} (no run between 08:00 and 24:00 UTC)`;
+    else if (prev.missed.length || prev.held?.length) {
+      const days = (l: string[]) => l.map((d) => dayMon(Date.parse(`${d}T00:00:00Z`))).join(', ');
+      previous = [
+        prev.held?.length ? `No digest was sent on ${days(prev.held)}: alerts were paused` : '',
+        prev.missed.length ? `No digest was sent on ${days(prev.missed)} (no run between 08:00 and 24:00 UTC)` : '',
+      ].filter(Boolean).join('. ');
+    }
     else if (prev.sentWithoutRecord) previous = `${kind === 'daily' ? "Yesterday's digest" : 'The previous weekly digest'} was sent; its delivery count is not on record`;
     else if (prev.last) {
       const cut = prev.last.targets - prev.last.posted;

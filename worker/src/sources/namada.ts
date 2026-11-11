@@ -53,16 +53,37 @@ export const namesOtherChain = (s: { network?: string }): boolean => !!s.network
  * do are asked. A node can sit at an old block and say it is not catching up; its answers are that block's state,
  * and a figure read from it would be stored under this tick's time while another node is at the chain's head. When
  * no node's newest block is that new (no block is being made, or every clock is off), the list is as without `now`:
- * the nodes' answers are then the newest there are.
+ * the nodes' answers are then the newest there are. One case between the two: a block that new is seen only on a
+ * node that is not asked (it says it is catching up) while the nodes that would be asked sit at older blocks. Their
+ * answers are an older state than the chain's, so no node is asked that tick: its figures are missing for a
+ * minute, not an old state stored under this minute.
  */
 export function answeringRpcs(statuses: { provider: string; error?: string; catchingUp?: boolean; network?: string; time?: number }[], now?: number): readonly Rpc[] {
   const statusOf = (r: Rpc) => statuses.find((s) => s.provider === r.provider);
   const ok = RPCS.filter((r) => { const s = statusOf(r); return !!s && !s.error && !s.catchingUp && !namesOtherChain(s); });
   if (now != null) {
-    const fresh = ok.filter((r) => { const t = Number(statusOf(r)!.time); return t > now - HEAD_MAX_AGE_MS && t < now + 60_000; });
+    const isFresh = (r: Rpc) => { const t = Number(statusOf(r)?.time); return t > now - HEAD_MAX_AGE_MS && t < now + 60_000; };
+    const fresh = ok.filter(isFresh);
     if (fresh.length) return fresh;
+    const seenElsewhere = RPCS.some((r) => { const s = statusOf(r); return !!s && !s.error && !namesOtherChain(s) && isFresh(r); });
+    if (seenElsewhere && ok.length) return [];
   }
   return ok.length ? ok : RPCS.filter((r) => { const s = statusOf(r); return !s || !namesOtherChain(s); });
+}
+
+/**
+ * What each node said, in the list's order, with the nodes that gave the same reason named together ("A, B: no
+ * answer"), so a note stays short however many nodes the list holds. A node that gave a height stands alone.
+ */
+export function saidTogether(items: readonly { who: string; no?: string | null; height?: number }[]): string[] {
+  const parts: ({ no: string; whos: string[] } | { text: string })[] = [];
+  for (const it of items) {
+    if (!it.no) { parts.push({ text: `${it.who} ${it.height}` }); continue; }
+    const same = parts.find((p): p is { no: string; whos: string[] } => 'no' in p && p.no === it.no);
+    if (same) same.whos.push(it.who);
+    else parts.push({ no: it.no, whos: [it.who] });
+  }
+  return parts.map((p) => ('no' in p ? `${p.whos.join(', ')}: ${p.no}` : p.text));
 }
 
 /** The head the chain listings are checked against this tick (listingHeads). */
@@ -88,12 +109,13 @@ export interface ListingHead {
  * node's word is not checked against anything (a node far ahead would have its own listing applied there, a node
  * restored from an old snapshot would roll the rows back), so no listing is applied that tick. A node that says it
  * is catching up is not an answer, so two such nodes cannot vouch for each other. The note is kept short: the listing
- * record and the health row cut it at 160 characters after "Not applied: ", and with three nodes (2026-11-07) each
- * node's reason and the indexer's block must still fit.
+ * record and the health row cut it at 160 characters after "Not applied: ", so the nodes that gave the same reason
+ * are named together (saidTogether). With four nodes each giving a different reason it is longer than that, and the
+ * cut drops its end (the indexer's block); the reasons the nodes give most (no answer, an old block) fit.
  */
 export function listingHeads(statuses: readonly { provider?: string; error?: string; height?: number; time?: number; catchingUp?: boolean; network?: string }[], indexerHeight?: number | null, now?: number): ListingHead {
   const isHeight = (h: unknown): h is number => Number.isInteger(h) && (h as number) > 0 && (h as number) <= MAX_HEAD_HEIGHT;
-  const said: string[] = [];
+  const each: { who: string; no?: string | null; height?: number }[] = [];
   const nodes: number[] = [];
   for (const s of statuses) {
     const who = s.provider ?? 'a node';
@@ -101,9 +123,10 @@ export function listingHeads(statuses: readonly { provider?: string; error?: str
     const stale = now != null && !(t > now - HEAD_MAX_AGE_MS && t < now + 60_000);
     const no = s.error ? 'no answer' : namesOtherChain(s) ? 'names another chain' : s.catchingUp ? 'catching up' : !isHeight(s.height) ? 'an invalid height'
       : stale ? `newest block over ${HEAD_MAX_AGE_MS / 60_000} min old` : null;
-    if (no) said.push(`${who}: ${no}`);
-    else { nodes.push(s.height as number); said.push(`${who} ${s.height}`); }
+    if (no) each.push({ who, no });
+    else { nodes.push(s.height as number); each.push({ who, height: s.height as number }); }
   }
+  const said = saidTogether(each);
   const indexer = isHeight(indexerHeight) ? indexerHeight : null;
   said.push(indexer != null ? `indexer ${indexer}` : 'indexer: no answer');
   const all = indexer != null ? [...nodes, indexer] : nodes;
@@ -122,7 +145,7 @@ export const HEAD_AGREE_BLOCKS = 100;
 /** A node whose newest block is older than this is not at the head, whatever catching_up says (Namada makes a block about every 7 s). */
 export const HEAD_MAX_AGE_MS = 5 * 60_000;
 /** A block height past this is not a height (the bound cron.ts MAX_REASONABLE_HEIGHT puts on a listing's height). */
-const MAX_HEAD_HEIGHT = 1_000_000_000;
+export const MAX_HEAD_HEIGHT = 1_000_000_000;
 /** A vote counts only when it was stored this recently (the cron stores it every minute). */
 export const HEAD_VOTE_MAX_AGE_MS = 3 * 60_000;
 /** About how long Namada takes to make a block: a vote is moved on by the blocks made since it was stored. */
@@ -189,7 +212,7 @@ export function headSince(last: { height: number; at: number } | null, now: numb
  * The note says which happened.
  */
 export function chainHead(statuses: NodeStatus[], now: number, cursor = 0, vote: HeadVote | null = null, bound: number | null = null, since: number | null = null, loneBound: number | null = null): ChainHead {
-  const why: string[] = [];
+  const not: { who: string; no: string }[] = [];
   const at: { rpc: Rpc; height: number }[] = [];
   for (const r of RPCS) {
     const s = statuses.find((x) => x.provider === r.provider);
@@ -201,10 +224,10 @@ export function chainHead(statuses: NodeStatus[], now: number, cursor = 0, vote:
       : !Number.isInteger(h) || h <= 0 || h > MAX_HEAD_HEIGHT ? 'an invalid height'
       : !(t > now - HEAD_MAX_AGE_MS && t < now + 60_000) ? `newest block not from the last ${HEAD_MAX_AGE_MS / 60_000} minutes`
       : null;
-    if (no) why.push(`${r.provider}: ${no}`);
+    if (no) not.push({ who: r.provider, no });
     else at.push({ rpc: r, height: h });
   }
-  if (!at.length) return { height: null, rpcs: [], note: `${NO_NODE_AT_HEAD} (${why.join('; ')})`, agreed: false, byNodes: false, disputed: false };
+  if (!at.length) return { height: null, rpcs: [], note: `${NO_NODE_AT_HEAD} (${saidTogether(not).join('; ')})`, agreed: false, byNodes: false, disputed: false };
   const names = (rpcs: Rpc[]) => rpcs.map((r) => r.provider).join(' and ');
   const split = at.length > 1 ? `the Namada nodes disagree on the head (${at.map((a) => `${a.rpc.provider} ${a.height}`).join(', ')})` : null;
   // The nodes within HEAD_AGREE_BLOCKS of another counted node agree on the head: the lowest of them, a height every
@@ -253,10 +276,13 @@ async function rpcRead<T>(fn: (base: string) => Promise<T>, opts: ReadOpts): Pro
   const base = opts.rpcs?.length ? opts.rpcs : RPCS;
   const list = opts.breaker ? opts.breaker.order(base) : base;
   let lastErr: unknown;
+  let slow = 0;
   for (const r of list) {
-    if (opts.signal?.aborted) break;
+    if (opts.signal?.aborted || slow >= READ_MAX_SLOW_NODES) break;
+    const t0 = Date.now();
     try { return { value: await fn(r.url), provider: r.provider }; } catch (e) {
       lastErr = e;
+      if (slowFailure(t0, opts.timeoutMs ?? 10_000)) slow++;
       if (!opts.signal?.aborted) opts.breaker?.failed(r.provider);
     }
   }
@@ -351,7 +377,16 @@ export async function transferHeights(lo: number, hi: number, page = 1, perPage 
  */
 export interface ReadOpts { rpcs?: readonly Rpc[]; timeoutMs?: number; retries?: number; signal?: AbortSignal; breaker?: RpcBreaker }
 
-/** One attempt per node, a short timeout: for batches, so a slow node cannot stall them (≤ 2 requests a read). */
+/**
+ * A read stops asking further nodes once this many have each taken at least half their timeout without an answer
+ * (nodes that hang). A node that refuses at once does not count, so a read whose first nodes refuse fast reaches every
+ * node of the list (the tick's first reads are made before its breaker has seen any node fail), while a read that
+ * hangs on every node takes at most this many timeouts, however many nodes the list holds.
+ */
+export const READ_MAX_SLOW_NODES = 3;
+/** Whether an attempt that failed took long enough to count as a node that hangs (READ_MAX_SLOW_NODES). */
+const slowFailure = (t0: number, timeoutMs: number): boolean => Date.now() - t0 >= timeoutMs / 2;
+/** One attempt per node, a short timeout: for batches, so a slow node cannot stall them (at most READ_MAX_SLOW_NODES timeouts a read). */
 export const QUICK: ReadOpts = { timeoutMs: 8000, retries: 0 };
 
 /**
@@ -401,8 +436,10 @@ async function abci(path: string, opts: ReadOpts = {}, accept?: (resp: AbciRespo
   const said = path.replace(/tnam1[02-9ac-hj-np-z]{10,}/g, (a) => `${a.slice(0, 10)}…`);
   let value: any, provider = '';
   let lastErr: unknown;
+  let slow = 0;
   for (const r of list) {
-    if (opts.signal?.aborted) break;
+    if (opts.signal?.aborted || slow >= READ_MAX_SLOW_NODES) break;
+    const t0 = Date.now();
     try {
       const v = await run(r.url);
       // An answer without a response (a JSON-RPC error, a proxy's page) is no answer: the next node is asked, as
@@ -414,11 +451,12 @@ async function abci(path: string, opts: ReadOpts = {}, accept?: (resp: AbciRespo
       value = v; provider = r.provider; break;
     } catch (e) {
       lastErr = e;
+      if (slowFailure(t0, opts.timeoutMs ?? 15000)) slow++;
       // A read cut by the tick's own deadline says nothing about the node.
       if (!opts.signal?.aborted) opts.breaker?.failed(r.provider);
     }
   }
-  if (!provider) throw lastErr ?? new Error(list.length ? `abci ${said}: deadline passed` : `abci ${said}: no node on this chain to ask`);
+  if (!provider) throw lastErr ?? new Error(list.length ? `abci ${said}: deadline passed` : `abci ${said}: no node on this chain at its newest block to ask`);
   const resp = value.result.response;
   if (resp.code && resp.code !== 0) throw new AbciCodeError(path, Number(resp.code), String(resp.info || resp.log || ''), said);
   return { value: resp.value as string | null, height: Number(resp.height || 0), provider };
@@ -453,8 +491,10 @@ async function abciListing(path: string, opts: ReadOpts = {}): Promise<ListingAn
   const list = opts.breaker ? opts.breaker.order(base) : base;
   const notes: string[] = [];
   let tooLarge = 0;
+  let slow = 0;
   for (const r of list) {
     if (opts.signal?.aborted) { notes.push(`${r.provider}: not asked, the deadline had passed`); break; }
+    if (slow >= READ_MAX_SLOW_NODES) break;
     const t0 = Date.now();
     try {
       const { text, bytes } = await fetchText(`${r.url}/abci_query?path=${encodeURIComponent(`"${path}"`)}`, { timeoutMs: opts.timeoutMs ?? 180_000, signal: opts.signal });
@@ -466,6 +506,7 @@ async function abciListing(path: string, opts: ReadOpts = {}): Promise<ListingAn
       const cut = e instanceof ReadCutError && (e.message.startsWith('timeout') || e.message.startsWith('deadline'));
       const big = e instanceof ReadCutError && e.message.startsWith('response too large');
       if (big) tooLarge++;
+      if (!big && slowFailure(t0, opts.timeoutMs ?? 180_000)) slow++;
       if (!cut && !big && !opts.signal?.aborted) opts.breaker?.failed(r.provider);
       notes.push(`${r.provider}: ${e instanceof ReadCutError ? e.message : String(e instanceof Error ? e.message : e).slice(0, 120)}`);
     }
