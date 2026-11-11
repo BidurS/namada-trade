@@ -775,7 +775,7 @@ export const API_CATALOG: ApiEndpoint[] = [
     path: '/api/series', group: 'series', title: 'One series',
     what: 'One stored series over a range at a chosen step, with its sources, the day its record begins and its gaps.',
     params: [
-      { name: 'key', type: 'text', required: true, what: 'The name of the stored series, for example `price.usd`. The series cover prices, hourly and daily trading, pool totals and single pools, staked and shielded NAM, staking inflation, counts of shielded transactions, holder counts and the genesis cohorts; an unknown name is answered as not found, with the names served.' },
+      { name: 'key', type: 'text', required: true, what: 'The name of the stored series, for example `price.usd`. The series cover prices, hourly and daily trading, pool totals and single pools, staked and shielded NAM, how many addresses stake and with how many validators, staking inflation, counts of shielded transactions, holder counts and the genesis cohorts; an unknown name is answered as not found, with the names served.' },
       { name: 'from', type: 'when', what: 'The start of the range. Left out: thirty days before `to`; a start that is not before `to` is refused.' },
       { name: 'to', type: 'when', what: 'The end of the range, not included; a day means its end. Left out, or later than the moment the answer is as of: that moment.' },
       { name: 'step', type: 'choice', values: Object.keys(SERIES_STEP_MS), what: 'The length of a step. A step finer than the series is written at is raised to the series’ own, and one that would hold more points than one answer takes is refused; left out, the finest step that fits one answer.' },

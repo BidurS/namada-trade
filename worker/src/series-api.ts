@@ -134,6 +134,8 @@ const dailyMaspKey = (what: string): SeriesKeyDef => ({
 });
 /** The source of the two unstaking sums: the chain's own bond listing, read from a Namada node. */
 export const BOND_LISTING_SERIES_SOURCE = 'Namada node (bond listing)';
+/** Why a share of the total stake has no point for an hour: no listing, or a listing with no total to divide by. */
+export const STAKE_SHARE_GAP = 'No complete bond listing finished in these hours, or the chain\'s total stake was not read when one did.';
 const DAILY_FLOWS = 'D1 flow index (daily)';
 const dailyFlowKey = (unit: SeriesUnit, what: string): SeriesKeyDef => ({
   unit, agg: 'sum', sparse: false, native: '1d', source: DAILY_FLOWS, backfilled: true, maxAgeMs: 2 * D, graceMs: 2 * H, gapWhy: 'The daily writer did not record this day.', osmosisRecord: true,
@@ -217,6 +219,24 @@ export const SERIES_KEYS: Record<string, SeriesKeyDef> = {
   'stake.unbonding_nam': hourlyClock('nam', BOND_LISTING_SERIES_SOURCE,
     (s) => `NAM still in its unstaking wait, from requests of every size, at each complete listing of the chain's bonds since ${s}. No listing of every request exists before then.`,
     'No complete bond listing finished in these hours.'),
+  // Who stakes and with whom, counted from the same listing at the same times (series.ts stakeStructure): stored
+  // since the listing shipped, stated by the daily digest, and served by nothing until now. The two shares are
+  // against the chain's total stake, so a listing read in a tick that did not read the total has no share.
+  'stake.validators': hourlyClock('count', BOND_LISTING_SERIES_SOURCE,
+    (s) => `Validators with NAM staked to them, counted at each complete listing of the chain's bonds since ${s}. No listing of every bond exists before then.`,
+    'No complete bond listing finished in these hours.'),
+  'stake.stakers': hourlyClock('count', BOND_LISTING_SERIES_SOURCE,
+    (s) => `Addresses with NAM staked, counted at each complete listing of the chain's bonds since ${s}. No listing of every bond exists before then.`,
+    'No complete bond listing finished in these hours.'),
+  'stake.stakers_1m_plus': hourlyClock('count', BOND_LISTING_SERIES_SOURCE,
+    (s) => `Addresses with 1,000,000 NAM or more staked, counted at each complete listing of the chain's bonds since ${s}. No listing of every bond exists before then.`,
+    'No complete bond listing finished in these hours.'),
+  'stake.top10_pct': hourlyClock('pct', BOND_LISTING_SERIES_SOURCE,
+    (s) => `The share of the chain's total stake that is staked with the ten validators holding the most, in percent, at each complete listing of the chain's bonds since ${s}. A listing read when the chain's total stake was not read has no share.`,
+    STAKE_SHARE_GAP),
+  'stake.share_1m_plus': hourlyClock('pct', BOND_LISTING_SERIES_SOURCE,
+    (s) => `The share of the chain's total stake that is staked by addresses with 1,000,000 NAM or more staked, in percent, at each complete listing of the chain's bonds since ${s}. A listing read when the chain's total stake was not read has no share.`,
+    STAKE_SHARE_GAP),
   'holders.namada': hourlyClock('count', 'NamadaTrade holder index',
     (s) => `Addresses holding spendable or staked NAM on Namada (protocol accounts left out), counted at each complete chain balance listing since ${s}. No count of every address exists before then.`,
     'No complete balance listing finished in these hours.'),
