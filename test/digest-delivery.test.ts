@@ -91,6 +91,8 @@ describe('days on which the alerts were paused', () => {
     expect(digestTitles()[0]).toMatch(/^NAM daily digest · Sat 24 Oct 2026/);
     expect(operatorText()).toContain('No digest was sent on 23 Oct: alerts were paused.');
     expect(operatorText()).not.toContain('no run between');
+    // the first digest after the pause, built before this tick's rows replace the held runs': no row of the pause's own
+    expect(operatorText()).not.toContain('(ALERTS_PAUSED)');
     expect(kvKeys(db, 'alert:digest:daily:2026-10-23%')).toEqual([]);
   });
 
@@ -135,11 +137,11 @@ describe('days on which the alerts were paused', () => {
     await sendingTick(db, T - DAY); // 22 Oct 08:00: sent
     await pausedTick(db, T - 10 * H); // 22 Oct 14:00, held
     resetDigestMemory(); // another isolate, as after a deploy
-    await sendingTick(db, T - 10 * H + 15 * MIN); // 14:15: sending (the pause lifted)
-    expect(stretches(db)).toEqual([{ from: T - 10 * H, to: T - 10 * H, closed: true }]);
+    await sendingTick(db, T - 10 * H + 15 * MIN); // 14:15: sending (the pause lifted); the runs before it were held
+    expect(stretches(db)).toEqual([{ from: T - 10 * H, to: T - 10 * H + 15 * MIN, closed: true }]);
     resetDigestMemory();
     await pausedTick(db, T - 10 * H + 30 * MIN); // 14:30: held again, within PAUSE_GAP_MS of the first
-    expect(stretches(db)).toEqual([{ from: T - 10 * H, to: T - 10 * H, closed: true }, { from: T - 10 * H + 30 * MIN, to: T - 10 * H + 30 * MIN }]);
+    expect(stretches(db)).toEqual([{ from: T - 10 * H, to: T - 10 * H + 15 * MIN, closed: true }, { from: T - 10 * H + 30 * MIN, to: T - 10 * H + 30 * MIN }]);
   });
 
   it('production\'s own start: the last digest nine days old and no record of the pause; held runs, the pause lifted before 08:00, then the daily and the weekly', { timeout: 420_000 }, async () => {

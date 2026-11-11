@@ -207,8 +207,16 @@ export function healthEpisodes(rows: HealthLogRow[]): HealthEpisode[] {
   return out.sort((a, b) => a.from - b.from || a.name.localeCompare(b.name));
 }
 
+/**
+ * A row the pause itself wrote ("Off … while the alerts are paused (ALERTS_PAUSED) …": sources/discord.ts PAUSED_NOTE,
+ * cron.ts alertDeliveryOff). A digest is built only by a run that sends, so such a row is one this run has not yet
+ * replaced (the tick merges its rows after the digest is built), never the state of a source.
+ */
+export const pauseRow = (h: { ok: unknown; note?: string | null }): boolean =>
+  !(h.ok === true || h.ok === 1) && typeof h.note === 'string' && h.note.startsWith('Off') && h.note.includes('(ALERTS_PAUSED)');
+
 export function shapeSources(r: OperatorReads, win: DigestWindow): Figure<SourcesLine> {
-  const health = rowsOf(r.health, 'source.health');
+  const health = rowsOf(r.health, 'source.health').filter((h) => !pauseRow(h));
   const logRows = rowsOf(r.healthLog, 'source.health.log').filter((e) => e.at >= win.from && e.at < win.to);
   const okRows = health.filter((h) => h.ok === true || h.ok === 1);
   const notOk = health.filter((h) => !(h.ok === true || h.ok === 1)).map((h) => ({ name: h.name, since: h.at, note: h.note }));

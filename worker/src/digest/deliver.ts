@@ -68,8 +68,10 @@ export function resetDigestMemory() { known.clear(); missedAsked.clear(); previe
 
 /**
  * A run that sends alerts closes the newest stretch of the pause, once an isolate: a held run after it starts a
- * stretch of its own, so the minutes in which alerts were sent are never counted as paused. One read an isolate; one
- * write the first time after a pause.
+ * stretch of its own, so the minutes in which alerts were sent are never counted as paused. The stretch is taken to
+ * this run when its newest held run on record is within PAUSE_GAP_MS (held runs are recorded every PAUSE_NOTE_EVERY_MS
+ * at most, so the runs between that one and this were held too). One read an isolate; one write the first time after
+ * a pause.
  */
 export async function closePaused(db: D1Database, now: number): Promise<void> {
   if (pausedClosed) return;
@@ -80,6 +82,7 @@ export async function closePaused(db: D1Database, now: number): Promise<void> {
   const newest = list[list.length - 1];
   if (!row || !newest || newest.closed) return;
   newest.closed = true;
+  if (now > newest.to && now - newest.to <= PAUSE_GAP_MS) newest.to = now;
   await db.prepare('UPDATE kv SET value = ?, updated_at = ? WHERE key = ? AND value = ?').bind(JSON.stringify({ stretches: list }), now, DIGEST_PAUSED_KV, row.value).run();
 }
 
