@@ -13,7 +13,7 @@ export const HALT = {
   id: 'namada-halt-2026-11-02',
   title: 'Namada is halted',
   /** What the Namada team said, and who said it where. */
-  said: 'The Namada team says it has found the cause of the 2 November halt, is working on a fix and hopes to be ready to restart the network in the week of 9 November.',
+  said: 'The Namada team says it has found the cause of the 2 November halt, is working on a fix and hopes to be ready to restart the network.',
   source: 'Adrian Brink in the Namada Discord, 6 November 2026',
   /** What it means on this site. */
   here: 'No new Namada data arrives while the network is halted; Osmosis prices and trades keep updating. Alerts on Discord, X and Telegram are paused until the network is back.',

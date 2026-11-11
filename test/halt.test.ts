@@ -56,7 +56,7 @@ afterEach(() => { vi.unstubAllGlobals(); configureAlerts(undefined, true, false)
 describe('the halt words', () => {
   it('are the approved words, attributed', () => {
     expect(HALT.title).toBe('Namada is halted');
-    expect(HALT.said).toBe('The Namada team says it has found the cause of the 2 November halt, is working on a fix and hopes to be ready to restart the network in the week of 9 November.');
+    expect(HALT.said).toBe('The Namada team says it has found the cause of the 2 November halt, is working on a fix and hopes to be ready to restart the network.');
     expect(HALT.source).toBe('Adrian Brink in the Namada Discord, 6 November 2026');
     expect(HALT.here).toBe('No new Namada data arrives while the network is halted; Osmosis prices and trades keep updating. Alerts on Discord, X and Telegram are paused until the network is back.');
     expect(HALT_NOTICE).toBe('Namada is halted. The Namada team says it has found the cause of the 2 November halt and is working on a fix (Adrian Brink, Namada Discord, 6 November). NamadaTrade alerts are paused until the network is back.');
