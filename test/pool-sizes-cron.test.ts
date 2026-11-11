@@ -118,7 +118,9 @@ describe('the cron tick stores the Osmosis answers visitors read', () => {
     // tokens): pool 3020's UM is 3,491.227565 coins, and the pool is not priced for want of a price, as the minute says
     const um = row.pools.find((p) => p.id === '3020')!;
     expect(um.counterReserve).toBeCloseTo(3_491.227565, 6);
-    expect(um.sizeProv!.note).toBe(notPricedWords(noCoinPrice('the other coin')));
+    // the pool list cut the coin's denomination short; the depth module's metadata names it, so the reason says which coin
+    expect(um.sizeProv!.note).toBe(notPricedWords(noCoinPrice('UM')));
+    expect(um).toMatchObject({ counterSymbol: 'UM', pair: 'NAM / UM' });
     expect(latest.unpriced.find((u: any) => u.id === '3020').why).toMatch(/gives this coin no price/);
     expect(row.pools.every((p) => !('counterBase' in p) && !p.sizeProv?.note?.includes('decimals'))).toBe(true);
     const health = kv<Record<string, any>>(db, 'source.health');
