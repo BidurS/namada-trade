@@ -5,7 +5,7 @@
 // shown on stretches from the past, and the pages say it in the same words.
 import { describe, it, expect, vi, afterEach } from 'vitest';
 import { readFileSync, readdirSync } from 'node:fs';
-import { NO_BLOCKS, noBlocksAcrossTimes, noBlocksBetween, notJudgedAcross, openStretches, resumedKv, resumedSeen } from '../shared/halts';
+import { END_GAP_MS, NO_BLOCKS, endAfter, noBlocksAcrossTimes, noBlocksBetween, notJudgedAcross, openStretches, resumedKv, resumedSeen } from '../shared/halts';
 import { INCIDENTS } from '../scripts/incidents';
 import { HALT } from '../shared/halt';
 import { NAMADA } from '../worker/src/config';
@@ -34,7 +34,7 @@ describe('the table of stretches with no blocks', () => {
     expect(openStretches().map((s) => s.lastBlock)).toEqual([8_517_986]);
   });
 
-  it('its times are the chain\'s own header times of the last block before each stretch and the first after it', () => {
+  it('its times are the chain\'s own header times: the last block before each stretch, and its end as endAfter tells it from the blocks after', () => {
     const header = new Map<number, number>();
     for (const f of readdirSync(new URL('./fixtures/', import.meta.url)).filter((n) => n.startsWith('namada_blockchain_'))) {
       const d = JSON.parse(readFileSync(new URL(`./fixtures/${f}`, import.meta.url), 'utf8'));
@@ -42,7 +42,7 @@ describe('the table of stretches with no blocks', () => {
     }
     for (const s of NO_BLOCKS) {
       expect(s.lastBlockAt, `${s.lastBlock}`).toBe(header.get(s.lastBlock));
-      if (s.resumedAt != null) expect(s.resumedAt, `${s.lastBlock + 1}`).toBe(header.get(s.lastBlock + 1));
+      if (s.resumedAt != null) expect(s.resumedAt, `${s.lastBlock}: end`).toBe(endAfter(s, (h) => header.get(h))?.ts);
     }
   });
 
@@ -68,6 +68,8 @@ describe('the table of stretches with no blocks', () => {
     expect(noBlocksAcrossTimes(...day)).toBeNull();
     expect(noBlocksAcrossTimes(...day, { 8_517_986: Date.UTC(2026, 10, 11, 14) })).toMatchObject({ lastBlock: 8_517_986, resumedAt: Date.UTC(2026, 10, 11, 14) });
     expect(noBlocksAcrossTimes(Date.UTC(2026, 9, 31), Date.UTC(2026, 10, 1), { 8_517_986: Date.UTC(2026, 9, 31, 14) })).toBeNull();
+    // a measured end seconds after the last block (the block agreed on then) is no end
+    expect(noBlocksAcrossTimes(Date.UTC(2026, 10, 2), Date.UTC(2026, 10, 3), { 8_517_986: Date.UTC(2026, 10, 2, 22, 49, 51) })).toBeNull();
   });
 
   it('says it in measured words: from when to when no block was made, or for a time after which block', () => {
@@ -77,13 +79,31 @@ describe('the table of stretches with no blocks', () => {
 });
 
 describe('the time blocks were made again after the current stretch', () => {
-  it('the block scan records the first block after an open stretch once, when it reads it', () => {
-    const times = new Map([[8_517_987, Date.UTC(2026, 10, 11, 14, 0, 7)], [8_517_988, Date.UTC(2026, 10, 11, 14, 0, 14)]]);
-    expect(resumedSeen(8_517_986, 8_517_990, (h) => times.get(h))).toEqual([{ key: resumedKv(8_517_986), height: 8_517_987, ts: Date.UTC(2026, 10, 11, 14, 0, 7) }]);
-    // a later read of blocks after it, or one that has not reached it, records nothing
-    expect(resumedSeen(8_517_987, 8_517_995, (h) => times.get(h))).toEqual([]);
+  const LAST_AT = Date.UTC(2026, 10, 2, 22, 49, 36, 642);
+  // a block's header time is when the block before it was agreed on: block 8,517,986 was agreed on at 22:49:51 on
+  // 2 November (its precommits), so block 8,517,987 carries that time whenever it is made, and the block after it the
+  // time blocks were made again
+  const AGREED = Date.UTC(2026, 10, 2, 22, 49, 51, 200);
+  const AGAIN = Date.UTC(2026, 10, 11, 14, 0, 7);
+
+  it('the end is the first block after the stretch whose header is well after the last block\'s', () => {
+    const s = { lastBlock: 8_517_986, lastBlockAt: LAST_AT };
+    expect(END_GAP_MS).toBe(10 * MIN);
+    expect(endAfter(s, (h) => new Map([[8_517_987, AGREED], [8_517_988, AGAIN]]).get(h))).toEqual({ height: 8_517_988, ts: AGAIN });
+    // the shape of every stretch before: the last block agreed on only when blocks were made again
+    expect(endAfter(s, (h) => new Map([[8_517_987, AGAIN]]).get(h))).toEqual({ height: 8_517_987, ts: AGAIN });
+    // the block after next not known: cannot be told yet; neither far after: none
+    expect(endAfter(s, (h) => new Map([[8_517_987, AGREED]]).get(h))).toBeUndefined();
+    expect(endAfter(s, (h) => new Map([[8_517_987, AGREED], [8_517_988, AGREED + 7000]]).get(h))).toBeNull();
+  });
+
+  it('the block scan records it once, when the blocks that tell it are read on one run', () => {
+    const times = new Map([[8_517_987, AGREED], [8_517_988, AGAIN], [8_517_989, AGAIN + 7000]]);
+    expect(resumedSeen(8_517_986, 8_517_990, (h) => times.get(h))).toEqual([{ key: resumedKv(8_517_986), height: 8_517_988, ts: AGAIN }]);
+    // read on two runs: the second run does not hold the first block's time, so nothing is recorded (the ledger reads them)
+    expect(resumedSeen(8_517_986, 8_517_987, (h) => times.get(h))).toEqual([]);
+    expect(resumedSeen(8_517_987, 8_517_995, (h) => (h >= 8_517_988 ? times.get(h) : undefined))).toEqual([]);
     expect(resumedSeen(8_517_980, 8_517_986, (h) => times.get(h))).toEqual([]);
-    expect(resumedSeen(8_517_986, 8_517_990, () => undefined)).toEqual([]);
   });
 
   it('how far the chain reached is the scan\'s cursor (as the tick holds it, a record with a height) or a node\'s newest block, the higher', () => {
@@ -93,21 +113,29 @@ describe('the time blocks were made again after the current stretch', () => {
     expect(chainReachedTo(undefined, undefined)).toBeNull();
   });
 
-  it('the ledger reads it as recorded; with no record and the scan past the block, reads the header from a node and records it; a failed read throws', async () => {
+  it('the ledger reads it as recorded; with no record, or one that cannot be an end, reads the two headers from a node and records the end; a read that cannot tell it throws', async () => {
+    const node = { rpcs: [{ provider: 'a', url: 'https://node.example' }], retries: 0 };
     const recorded = testD1();
-    recorded.raw.prepare('INSERT INTO kv (key, value, updated_at) VALUES (?, ?, 0)').run(resumedKv(8_517_986), JSON.stringify({ height: 8_517_987, ts: Date.UTC(2026, 10, 11, 14) }));
-    expect(await readResumed(recorded as any, 8_518_500, {})).toEqual({ 8_517_986: Date.UTC(2026, 10, 11, 14) });
+    recorded.raw.prepare('INSERT INTO kv (key, value, updated_at) VALUES (?, ?, 0)').run(resumedKv(8_517_986), JSON.stringify({ height: 8_517_988, ts: AGAIN }));
+    expect(await readResumed(recorded as any, 8_518_500, {})).toEqual({ 8_517_986: AGAIN });
     // the scan not past the stretch: nothing to read
     expect(await readResumed(testD1() as any, 8_517_986, {})).toEqual({});
 
+    const meta = (h: number, iso: string) => ({ header: { chain_id: NAMADA.chainId, height: String(h), time: iso } });
+    const answer = (metas: unknown[]) => vi.fn(async (input: RequestInfo | URL) => {
+      expect(String(input)).toContain('/blockchain?minHeight=8517987&maxHeight=');
+      return new Response(JSON.stringify({ result: { block_metas: metas } }), { headers: { 'content-type': 'application/json' } });
+    });
+    // a record of the block agreed on seconds after the last one (as the scan of an earlier version wrote it) is no end
     const db = testD1();
-    vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL) => {
-      expect(String(input)).toContain('/blockchain?minHeight=8517987&maxHeight=8517987');
-      return new Response(JSON.stringify({ result: { block_metas: [{ header: { chain_id: NAMADA.chainId, height: '8517987', time: '2026-11-11T14:00:07.123Z' } }] } }), { headers: { 'content-type': 'application/json' } });
-    }));
-    const node = { rpcs: [{ provider: 'a', url: 'https://node.example' }], retries: 0 };
-    expect(await readResumed(db as any, 8_518_500, node)).toEqual({ 8_517_986: Date.UTC(2026, 10, 11, 14, 0, 7, 123) });
-    expect(JSON.parse((db.raw.prepare('SELECT value FROM kv WHERE key = ?').get(resumedKv(8_517_986)) as any).value)).toEqual({ height: 8_517_987, ts: Date.UTC(2026, 10, 11, 14, 0, 7, 123) });
+    db.raw.prepare('INSERT INTO kv (key, value, updated_at) VALUES (?, ?, 0)').run(resumedKv(8_517_986), JSON.stringify({ height: 8_517_987, ts: AGREED }));
+    vi.stubGlobal('fetch', answer([meta(8_517_988, '2026-11-11T14:00:07.000Z'), meta(8_517_987, '2026-11-02T22:49:51.200Z')]));
+    expect(await readResumed(db as any, 8_518_500, node)).toEqual({ 8_517_986: AGAIN });
+    expect(JSON.parse((db.raw.prepare('SELECT value FROM kv WHERE key = ?').get(resumedKv(8_517_986)) as any).value)).toEqual({ height: 8_517_988, ts: AGAIN });
+
+    // the chain at the block after the stretch only, its header the old agreement: the end cannot be told yet
+    vi.stubGlobal('fetch', answer([meta(8_517_987, '2026-11-02T22:49:51.200Z')]));
+    await expect(readResumed(testD1() as any, 8_517_987, node)).rejects.toThrow(/cannot be told yet/);
 
     vi.stubGlobal('fetch', vi.fn(async () => new Response('down', { status: 502 })));
     await expect(readResumed(testD1() as any, 8_518_500, node)).rejects.toThrow();

@@ -252,6 +252,17 @@ describe('noteBlocksSeen', () => {
     expect(hookCalls(calls)).toBe(1);
   });
 
+  it('two nodes at the first block after a stretch whose header carries the time the last block was agreed on: the line says when it was read, not that time', async () => {
+    const calls = places();
+    const db = testD1();
+    // the nodes standing at the last block of the current stretch, then at the block after it (its header: 2 November)
+    const AT = Date.UTC(2026, 10, 11, 14, 0);
+    const last = Date.UTC(2026, 10, 2, 22, 49, 36, 642), agreed = Date.UTC(2026, 10, 2, 22, 49, 51, 200);
+    await noteBlocksSeen(env(db), [node(8_517_986, last), node(8_517_986, last)], 8_517_986, AT - MIN);
+    expect(await noteBlocksSeen(env(db), [node(8_517_987, agreed), node(8_517_987, agreed)], 8_517_986, AT)).toBe('told');
+    expect(calls[0].body.content).toMatch(/^Namada nodes report new blocks: block 8,517,987, read 2026-11-11 14:00 UTC, read on 2 nodes\. /);
+  });
+
   it('two runs at once: one posts', async () => {
     const calls = places();
     const db = testD1();

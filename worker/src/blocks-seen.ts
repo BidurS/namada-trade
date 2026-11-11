@@ -22,6 +22,7 @@
 // What it says is measured: the block, its time, and who gave it. It says nothing about why.
 import type { Env } from './util';
 import { HALT } from '../../shared/halt';
+import { END_GAP_MS, NO_BLOCKS } from '../../shared/halts';
 import { NAMADA } from './config';
 import { HEAD_AGREE_BLOCKS, HEAD_MAX_AGE_MS, MAX_HEAD_HEIGHT } from './sources/namada';
 import { SENDER, WEBHOOK_TIMEOUT_MS, alertsPausedIn, textSafe } from './sources/discord';
@@ -90,10 +91,13 @@ export function witnessesOf(nodes: readonly NodeSeen[], indexerHeight: number | 
 }
 
 const utc = (ms: number) => `${new Date(ms).toISOString().slice(0, 16).replace('T', ' ')} UTC`;
-/** The line, in measured words: what the nodes report and which of the site's own switches are on. */
-export function blocksSeenLine(seen: HeadSeen, haltBarOn: boolean = HALT.on): string {
+/**
+ * The line, in measured words: what the nodes report and which of the site's own switches are on. The block's own time
+ * is said when it is the time it was made; with none (`blockAt` null), the time it was read (`readAt`), when given.
+ */
+export function blocksSeenLine(seen: HeadSeen, haltBarOn: boolean = HALT.on, readAt?: number): string {
   const who = `${seen.nodes} ${seen.nodes === 1 ? 'node' : 'nodes'}${seen.indexer ? ' and the network indexer' : ''}`;
-  const when = seen.blockAt != null ? `, made ${utc(seen.blockAt)}` : '';
+  const when = seen.blockAt != null ? `, made ${utc(seen.blockAt)}` : readAt != null ? `, read ${utc(readAt)}` : '';
   const still = haltBarOn ? 'The halt bar and the alert pause on this site are still on.' : 'The alert pause on this site is still on.';
   return `${seen.nodes >= 2 ? 'Namada nodes report' : 'A Namada node reports'} new blocks: block ${seen.height.toLocaleString('en-US')}${when}, read on ${who}. ${still}`;
 }
@@ -179,7 +183,11 @@ export async function noteBlocksSeen(env: BlocksEnv, statuses: readonly StatusLi
     ? env.DB.prepare('UPDATE kv SET value = ?, updated_at = ? WHERE key = ? AND value = ?').bind(text, now, key, row.value)
     : env.DB.prepare('INSERT INTO kv (key, value, updated_at) VALUES (?, ?, ?) ON CONFLICT(key) DO NOTHING').bind(key, text, now)).run();
   if (!w.meta?.changes) return 'another run';
-  const outcomes = await tell(env, blocksSeenLine(seen));
+  // the first block after a stretch can carry the time the last one was agreed on, before the stretch (shared/halts.ts
+  // endAfter): such a time is not when it was made, so the line says when it was read instead
+  const stretch = NO_BLOCKS.find((s) => s.lastBlock === before);
+  const said = stretch && seen.blockAt != null && seen.blockAt - stretch.lastBlockAt < END_GAP_MS ? { ...seen, blockAt: null } : seen;
+  const outcomes = await tell(env, blocksSeenLine(said, HALT.on, now));
   const done: BlocksSeen | null = outcomes.includes('took') ? { ...pending, toldAt: now } : outcomes.every((o) => o === 'refused') ? { ...pending, refusedAt: now } : null;
   // a try whose outcome is unknown stays as written: no further try is made
   if (done) {

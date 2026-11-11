@@ -6,12 +6,15 @@
 // judged as any other.
 //
 // Each stretch is named by the last block made before it: a reading at that block or before it and a reading at a
-// later block are on either side, so no end has to be known for a pair of blocks. A pair of times needs one: the header
-// time of the first block made after it. The table gives the header times measured for the stretches of the past (the
-// chain's own blocks, test/fixtures/namada_blockchain_*.json; a test holds them equal). For a stretch whose end is not
-// in the table, this site's block scan records that block's time when it reads it (kv resumedKv, live-hub.ts), and
-// until it has, a pair of times is judged as before. The heights are the ones scripts/incidents.ts lists with their
-// sources; a test holds the two lists equal.
+// later block are on either side, so no end has to be known for a pair of blocks. A pair of times needs one: the time
+// blocks were made again. A block's header time is the time the block before it was agreed on, so the first block
+// after a stretch carries either the time blocks were made again (when the last block was agreed on only then) or a
+// time seconds after the last block's (when it was agreed on before the stretch); the end is the header time of the
+// first block after the stretch that is END_GAP_MS or more after the last block's (endAfter). The table gives the ends
+// measured for the stretches of the past (the chain's own blocks, test/fixtures/namada_blockchain_*.json; a test
+// holds them equal). For a stretch whose end is not in the table, this site's block scan records it when it reads the
+// block (kv resumedKv, live-hub.ts), and the ledger reads it from a node when the scan did not. The heights are the
+// ones scripts/incidents.ts lists with their sources; a test holds the two lists equal.
 import { fmtCount, fmtUtcLong } from './format';
 
 export interface NoBlocks {
@@ -34,20 +37,36 @@ export const NO_BLOCKS: readonly NoBlocks[] = [
   { lastBlock: 8_517_986, lastBlockAt: Date.UTC(2026, 10, 2, 22, 49, 36, 642), resumedAt: null },
 ];
 
-/** Where the block scan records the header time of the first block made after a stretch whose end is not in the table. */
+/** A header this long or more after the last block's is the time blocks were made again; a shorter one is the time the last block was agreed on. */
+export const END_GAP_MS = 10 * 60_000;
+/**
+ * The end of a stretch from the header times of the blocks after it (`timeOf`, by height): the first of the two blocks
+ * after its last block whose header is END_GAP_MS or more after the last block's. undefined when a header needed to
+ * tell is not known (the next block not read, or not made yet); null when neither of the two is that far after it.
+ */
+export function endAfter(s: Pick<NoBlocks, 'lastBlock' | 'lastBlockAt'>, timeOf: (height: number) => number | undefined): { height: number; ts: number } | null | undefined {
+  for (const h of [s.lastBlock + 1, s.lastBlock + 2]) {
+    const t = timeOf(h);
+    if (t == null || !Number.isFinite(t)) return undefined;
+    if (t - s.lastBlockAt >= END_GAP_MS) return { height: h, ts: t };
+  }
+  return null;
+}
+/** Where the block scan records the end of a stretch whose end is not in the table (endAfter: the block and its header time). */
 export const resumedKv = (lastBlock: number): string => `halt.resumed.${lastBlock}`;
 /** The stretches whose end is not in the table: the block scan records it. */
 export const openStretches = (list: readonly NoBlocks[] = NO_BLOCKS): NoBlocks[] => list.filter((s) => s.resumedAt == null);
 
 /**
  * The records the block scan writes after reading blocks `lastScanned + 1` to `done`: for each stretch whose end is
- * not in the table, the first block after it, with its header time, when that block was among the ones read.
+ * not in the table, its end (endAfter), when the blocks that tell it were among the ones read (`timeOf` holds the
+ * header times of the blocks read this time). When they were read on two runs, the ledger reads them from a node.
  */
 export function resumedSeen(lastScanned: number, done: number, timeOf: (height: number) => number | undefined, list: readonly NoBlocks[] = NO_BLOCKS): { key: string; height: number; ts: number }[] {
   const out: { key: string; height: number; ts: number }[] = [];
   for (const s of openStretches(list)) {
-    const first = s.lastBlock + 1, ts = timeOf(first);
-    if (lastScanned < first && done >= first && Number.isFinite(ts)) out.push({ key: resumedKv(s.lastBlock), height: first, ts: ts! });
+    const end = endAfter(s, (h) => (h > lastScanned && h <= done ? timeOf(h) : undefined));
+    if (end) out.push({ key: resumedKv(s.lastBlock), height: end.height, ts: end.ts });
   }
   return out;
 }
@@ -59,7 +78,9 @@ export function noBlocksBetween(from: number | null | undefined, to: number | nu
 }
 
 /** The time of the first block after `s`: the table's, else the one the block scan recorded for it (`measured`, by last block). */
-export const resumedOf = (s: NoBlocks, measured: Readonly<Record<number, number>> = {}): number | null => s.resumedAt ?? (Number.isFinite(measured[s.lastBlock]) && measured[s.lastBlock] > s.lastBlockAt ? measured[s.lastBlock] : null);
+export const resumedOf = (s: NoBlocks, measured: Readonly<Record<number, number>> = {}): number | null => s.resumedAt ?? (validEnd(s, measured[s.lastBlock]) ? measured[s.lastBlock] : null);
+/** Whether a measured end can be a stretch's end: END_GAP_MS or more after its last block's header (a record of the block agreed on seconds after it is not). */
+export const validEnd = (s: Pick<NoBlocks, 'lastBlockAt'>, ts: unknown): ts is number => typeof ts === 'number' && Number.isFinite(ts) && ts - s.lastBlockAt >= END_GAP_MS;
 
 /**
  * The stretch two readings at times `startTs` and `endTs` are on either side of: one taken before the first block

@@ -33,7 +33,7 @@ import { INDEXER_IBC_STATUS, STUCK_PACKETS_KV, innerTxOfRow, reconcileStuckPacke
 import type { AlertsPending, LiveBondStatus, LiveUnbondStatus, LiveScanStatus } from './live-hub';
 import { SCANNED_KV, scannedOf } from './masp-activity';
 import { noteBlocksSeen, type StatusLike } from './blocks-seen';
-import { acrossDetail, noBlocksAcrossTimes, noBlocksBetween, notJudgedAcross, openStretches, resumedKv } from '../../shared/halts';
+import { acrossDetail, endAfter, noBlocksAcrossTimes, noBlocksBetween, notJudgedAcross, openStretches, resumedKv, validEnd } from '../../shared/halts';
 import type { AlertsSkipped } from './sources/discord';
 import {
   INTERNAL_ADDRS, BALANCE_LISTING_SRC, BOND_LISTING_SRC, SPAN_EXTEND_MS, HAS_READING, listingTimes, readHolderFigures, refreshHolderFigures, figuresDue,
@@ -938,10 +938,11 @@ export const chainReachedTo = (cursor: { height: number } | null | undefined, he
   Math.max(Number.isFinite(cursor?.height) ? cursor!.height : 0, Number.isFinite(headHeight) ? headHeight! : 0) || null;
 
 /**
- * The header time of the first block made after each stretch whose end is not in the table (shared/halts.ts), by the
- * stretch's last block: as the block scan recorded it (kv resumedKv), or, when the chain is past it (`pastTo`: the
- * scan's cursor or a node's newest block) and no record is there, read from a node now and recorded. Throws when a
- * record or the read fails, so the ledger tries the day again rather than judge it without knowing.
+ * The end of each stretch whose end is not in the table (shared/halts.ts endAfter), by the stretch's last block: as the
+ * block scan recorded it (kv resumedKv), or, when the chain is past the stretch (`pastTo`: the scan's cursor or a
+ * node's newest block) and no record that can be an end is there, read from a node now (the headers of the two blocks
+ * after it) and recorded. Throws when a record or the read fails, or when the chain is past the stretch and its end
+ * cannot be told yet (the block after next not made), so the ledger tries the day again rather than judge it.
  */
 export async function readResumed(db: D1Database, pastTo: number | null, read: ReadOpts): Promise<Record<number, number>> {
   const open = openStretches();
@@ -951,13 +952,14 @@ export async function readResumed(db: D1Database, pastTo: number | null, read: R
   const out: Record<number, number> = {};
   for (const s of open) {
     const v = safeParseJson(rows.find((r) => r.key === resumedKv(s.lastBlock))?.value ?? '', null) as { ts?: unknown } | null;
-    if (v && Number.isFinite(Number(v.ts))) { out[s.lastBlock] = Number(v.ts); continue; }
+    if (v && validEnd(s, Number(v.ts))) { out[s.lastBlock] = Number(v.ts); continue; }
     if (pastTo == null || pastTo <= s.lastBlock) continue;
-    const first = s.lastBlock + 1;
-    const m = (await blockMetas(first, first, read)).find((x) => x.height === first);
-    if (!m) throw new Error(`block ${first}: no header time in the answer`);
-    out[s.lastBlock] = m.ts;
-    await db.prepare('INSERT INTO kv (key, value, updated_at) VALUES (?, ?, ?) ON CONFLICT(key) DO NOTHING').bind(resumedKv(s.lastBlock), JSON.stringify({ height: first, ts: m.ts }), Date.now()).run();
+    const metas = await blockMetas(s.lastBlock + 1, Math.min(s.lastBlock + 2, pastTo), read);
+    const end = endAfter(s, (h) => metas.find((x) => x.height === h)?.ts);
+    if (!end) throw new Error(`the end of the stretch after block ${s.lastBlock} cannot be told yet from blocks ${s.lastBlock + 1} to ${Math.min(s.lastBlock + 2, pastTo)}`);
+    out[s.lastBlock] = end.ts;
+    // written over a record that cannot be an end (the block agreed on seconds after the last one)
+    await db.prepare('INSERT OR REPLACE INTO kv (key, value, updated_at) VALUES (?, ?, ?)').bind(resumedKv(s.lastBlock), JSON.stringify({ height: end.height, ts: end.ts }), Date.now()).run();
   }
   return out;
 }
