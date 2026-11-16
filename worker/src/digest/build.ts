@@ -138,7 +138,7 @@ export interface AdapterExtras {
   priceSource?: QuoteSource;
   /** The record of how the quote was read (kv price.how), so a change's base read another way is named. */
   priceHow?: PriceHowRead;
-  /** The header time of the first block after each stretch with no blocks whose end is not in shared/halts.ts, as measured (kv halt.resumed.*); null when it could not be read. */
+  /** When blocks were made again after each stretch with no blocks whose end is not in shared/halts.ts, as measured (kv halt.resumed.*); null when it could not be read. */
   resumed?: Record<number, number> | null;
 }
 

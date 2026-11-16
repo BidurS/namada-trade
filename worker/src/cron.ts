@@ -7,7 +7,7 @@ import * as depth from './depth/index';
 import { KV_KEYS as DEPTH_KV } from './depth/sql';
 import { PRICE_HOW_KEY, priceHealth, priceHowAt, priceHowStmt, storedPriceSource, type PriceHowLog } from './price-how';
 import { QUOTE_KEYS } from '../../shared/settle';
-import { NO_AGREED_HEAD, NO_NODE_AT_HEAD, blockMetas, namProtocolBalance, namTotalSupply, namTotalStake, namadaEpochRead, mintKeysAt, namadaStatusAll, delegationsAt, answeringRpcs, listingHeads, QUICK, RpcBreaker, allNamBalances, allBonds, ListingTooLargeError, LISTING_MAX_VALUE_BYTES, namProtocolBalanceAt, posLastInflationAt, maspTotalRewards, maspEpochMultiplier, type BalanceListing, type BondListing, type MintKeys, type ReadOpts, type Rpc } from './sources/namada';
+import { NO_AGREED_HEAD, NO_NODE_AT_HEAD, blockMetas, committedAt, namProtocolBalance, namTotalSupply, namTotalStake, namadaEpochRead, mintKeysAt, namadaStatusAll, delegationsAt, answeringRpcs, listingHeads, QUICK, RpcBreaker, allNamBalances, allBonds, ListingTooLargeError, LISTING_MAX_VALUE_BYTES, namProtocolBalanceAt, posLastInflationAt, maspTotalRewards, maspEpochMultiplier, type BalanceListing, type BondListing, type MintKeys, type ReadOpts, type Rpc } from './sources/namada';
 import { MASP_INDEXER_HEALTH, MASP_INDEXER_MAX_HEIGHTS, maspIndexerHeight, maspIndexerTxs, type MaspIndexerTx } from './sources/masp-indexer';
 import { MASP_SEEN_RANGE_SQL, seenKey } from './masp-seen';
 import { MASP_ADDRESS, SQL as DIGEST_SQL } from './digest/sql';
@@ -33,7 +33,7 @@ import { INDEXER_IBC_STATUS, STUCK_PACKETS_KV, innerTxOfRow, reconcileStuckPacke
 import type { AlertsPending, LiveBondStatus, LiveUnbondStatus, LiveScanStatus } from './live-hub';
 import { SCANNED_KV, scannedOf } from './masp-activity';
 import { noteBlocksSeen, type StatusLike } from './blocks-seen';
-import { END_GAP_MS, END_SPAN, FOLLOW_GAP_MS, RESUMED_RULE, acrossDetail, endAfter, noBlocksAcrossTimes, noBlocksBetween, notJudgedAcross, openStretches, recordedEnd, resumedKv } from '../../shared/halts';
+import { END_GAP_MS, END_SPAN, FOLLOW_GAP_MS, RESUMED_RULE, recordedHow, type NoBlocks, acrossDetail, endAfter, endByCommits, noBlocksAcrossTimes, noBlocksBetween, notJudgedAcross, openStretches, recordedEnd, resumedKv } from '../../shared/halts';
 import type { AlertsSkipped } from './sources/discord';
 import {
   INTERNAL_ADDRS, BALANCE_LISTING_SRC, BOND_LISTING_SRC, SPAN_EXTEND_MS, HAS_READING, listingTimes, readHolderFigures, refreshHolderFigures, figuresDue,
@@ -927,7 +927,7 @@ export interface MaspLedgerInputs {
   /** the readings of the chain's total of shielded rewards on record, this run's included */
   rewards: MaspRewardReading[];
   /**
-   * the header time of the first block after each stretch with no blocks whose end is not in the table, as measured
+   * when blocks were made again after each stretch with no blocks whose end is not in the table, as measured
    * (readResumed), by the stretch's last block; null when it could not be read (the day is then tried again)
    */
   resumed?: Record<number, number> | null;
@@ -935,12 +935,14 @@ export interface MaspLedgerInputs {
 
 /** The stretches whose end this isolate has seen recorded (readResumed in the tick): not asked again. */
 const resumedRecorded = new Set<number>();
-/** When this isolate last found that none of the blocks after a stretch ends it (END_NONE), by last block: asked again only after RESUMED_NONE_RETRY_MS. */
+/** The stretches whose end the last readResumed returned from the headers (the commits not read): asked again later. */
+const provisionalEnds = new Set<number>();
+/** When this isolate last found that none of the blocks after a stretch ends it (END_NONE), or that its end is only provisional, by last block: asked again only after RESUMED_NONE_RETRY_MS. */
 const resumedNone = new Map<number, number>();
 /** How long the tick waits before asking again after none of the blocks after a stretch ended it. */
 export const RESUMED_NONE_RETRY_MS = 3_600_000;
 /** Forgets what this isolate knows of recorded ends (the tests' fresh isolate). */
-export const resetResumedMemory = () => { resumedRecorded.clear(); resumedNone.clear(); };
+export const resetResumedMemory = () => { resumedRecorded.clear(); resumedNone.clear(); provisionalEnds.clear(); };
 /** readResumed's error names: a block the end needs is not made yet (asked again next tick, quietly), or none of the blocks after the stretch ends it. */
 export const END_NOT_YET = 'EndNotYet', END_NONE = 'EndNone';
 /** How far the chain is known to have reached: the block scan's cursor or a node's newest block, whichever is higher (the scan may stand just below the head). */
@@ -948,10 +950,47 @@ export const chainReachedTo = (cursor: { height: number } | null | undefined, he
   Math.max(Number.isFinite(cursor?.height) ? cursor!.height : 0, Number.isFinite(headHeight) ? headHeight! : 0) || null;
 
 /**
- * The end of each stretch whose end is not in the table (shared/halts.ts endAfter), by the stretch's last block: as the
- * block scan recorded it (kv resumedKv), or, when the chain is past the stretch (`pastTo`: the scan's cursor or a
- * node's newest block) and no record the current rule told is there, read from a node now (the headers of the blocks
- * after it, shared/halts.ts endAfter) and recorded. Throws when a record or the read fails, or when the chain is past the
+ * The end of one stretch read from a node now: when the first block committed after it was committed (shared/halts.ts
+ * endByCommits; a block's commit is final once the block after it is made, so a commit is asked for only below
+ * `pastTo`); when no node gives a commit and a validator set that line up, the header rule instead (endAfter), unless
+ * `commitsOnly`. Throws END_NOT_YET while a block it needs is not made, END_NONE when none of the blocks ends it.
+ */
+async function endOfStretch(s: Pick<NoBlocks, 'lastBlock' | 'lastBlockAt'>, pastTo: number, read: ReadOpts, commitsOnly = false): Promise<{ height: number; ts: number; how: 'commit' | 'header' }> {
+  const notYet = (what: string) => Object.assign(new Error(`the end of the stretch after block ${s.lastBlock} cannot be told yet: ${what}`), { name: END_NOT_YET });
+  const none = (what: string) => Object.assign(new Error(`none of the blocks after block ${s.lastBlock} ends its stretch (${what}); the end has to be put in shared/halts.ts by hand`), { name: END_NONE });
+  try {
+    const seen = new Map<number, number>();
+    for (let h = s.lastBlock; h <= s.lastBlock + END_SPAN; h++) {
+      if (h + 1 > pastTo) break;
+      const t = await committedAt(h, read);
+      if (t === 'not yet') break;
+      seen.set(h, t);
+      if (t - s.lastBlockAt >= END_GAP_MS) break;
+    }
+    const end = endByCommits(s, (h) => seen.get(h));
+    if (end) return { ...end, how: 'commit' };
+    if (end === null) throw none(`no commit of blocks ${s.lastBlock} to ${s.lastBlock + END_SPAN} came ${END_GAP_MS / 60_000} minutes or more after the last block`);
+    throw notYet(`a commit it needs is not final yet (the chain at block ${pastTo})`);
+  } catch (e) {
+    const name = (e as { name?: string })?.name;
+    if (name === END_NOT_YET || name === END_NONE || commitsOnly || read.signal?.aborted) throw e;
+    // no node gave a commit and a set that line up: the header rule, recorded as such and read again from the commits
+    // later (readResumed)
+    console.error(`the commits after block ${s.lastBlock} could not be read; its end is told from the headers`, redact(String(e)));
+  }
+  const top = Math.min(s.lastBlock + END_SPAN + 1, pastTo);
+  const metas = await blockMetas(s.lastBlock + 1, top, read);
+  const end = endAfter(s, (h) => metas.find((x) => x.height === h)?.ts);
+  if (end === undefined) throw notYet(`blocks ${s.lastBlock + 1} to ${top} read`);
+  if (end === null) throw none(`each of blocks ${s.lastBlock + 1} to ${s.lastBlock + END_SPAN} is within ${END_GAP_MS / 60_000} minutes of the last block, or is not followed by the next within ${FOLLOW_GAP_MS / 60_000} minutes`);
+  return { ...end, how: 'header' };
+}
+
+/**
+ * The end of each stretch whose end is not in the table (shared/halts.ts endByCommits), by the stretch's last block: as
+ * recorded (kv resumedKv), or, when the chain is past the stretch (`pastTo`: the scan's cursor or a node's newest
+ * block) and no record the current rule told is there, read from a node now (endOfStretch) and recorded. An end told
+ * from the headers is provisional (provisionalEnds): it is used, and replaced once the commits can be read. Throws when a record or the read fails, or when the chain is past the
  * stretch and its end cannot be told yet (a block it needs not made), so the ledger tries the day again rather than judge it.
  */
 export async function readResumed(db: D1Database, pastTo: number | null, read: ReadOpts): Promise<Record<number, number>> {
@@ -960,18 +999,28 @@ export async function readResumed(db: D1Database, pastTo: number | null, read: R
   const keys = open.map((s) => resumedKv(s.lastBlock));
   const rows = (await db.prepare(`SELECT key, value FROM kv WHERE key IN (${keys.map(() => '?').join(', ')})`).bind(...keys).all<{ key: string; value: string }>()).results ?? [];
   const out: Record<number, number> = {};
+  const write = (s: NoBlocks, f: { height: number; ts: number; how: 'commit' | 'header' }) =>
+    db.prepare('INSERT OR REPLACE INTO kv (key, value, updated_at) VALUES (?, ?, ?)').bind(resumedKv(s.lastBlock), JSON.stringify({ height: f.height, ts: f.ts, rule: RESUMED_RULE, how: f.how }), Date.now()).run();
+  provisionalEnds.clear();
   for (const s of open) {
-    const ts = recordedEnd(s, rows.find((r) => r.key === resumedKv(s.lastBlock))?.value);
-    if (ts != null) { out[s.lastBlock] = ts; continue; }
+    const value = rows.find((r) => r.key === resumedKv(s.lastBlock))?.value;
+    const ts = recordedEnd(s, value);
+    if (ts != null) {
+      out[s.lastBlock] = ts;
+      // an end told from the headers (the commits could not be read then) is used, and the commits are asked for again:
+      // the end they give replaces it; until then it stays provisional (the tick asks again an hour later)
+      if (recordedHow(value) === 'header') {
+        const found = pastTo != null && pastTo > s.lastBlock ? await endOfStretch(s, pastTo, read, true).catch(() => null) : null;
+        if (found) { out[s.lastBlock] = found.ts; await write(s, found); } else provisionalEnds.add(s.lastBlock);
+      }
+      continue;
+    }
     if (pastTo == null || pastTo <= s.lastBlock) continue;
-    const top = Math.min(s.lastBlock + END_SPAN + 1, pastTo);
-    const metas = await blockMetas(s.lastBlock + 1, top, read);
-    const end = endAfter(s, (h) => metas.find((x) => x.height === h)?.ts);
-    if (end === undefined) throw Object.assign(new Error(`the end of the stretch after block ${s.lastBlock} cannot be told yet from blocks ${s.lastBlock + 1} to ${top}`), { name: END_NOT_YET });
-    if (end === null) throw Object.assign(new Error(`none of blocks ${s.lastBlock + 1} to ${s.lastBlock + END_SPAN} after the stretch ends it: each is within ${END_GAP_MS / 60_000} minutes of the last block, or is not followed by the next within ${FOLLOW_GAP_MS / 3_600_000} hours; the end has to be put in shared/halts.ts by hand`), { name: END_NONE });
-    out[s.lastBlock] = end.ts;
+    const found = await endOfStretch(s, pastTo, read);
+    out[s.lastBlock] = found.ts;
+    if (found.how === 'header') provisionalEnds.add(s.lastBlock);
     // written over a record that cannot be an end, or one an earlier rule told (it may hold a time from inside the stretch)
-    await db.prepare('INSERT OR REPLACE INTO kv (key, value, updated_at) VALUES (?, ?, ?)').bind(resumedKv(s.lastBlock), JSON.stringify({ height: end.height, ts: end.ts, rule: RESUMED_RULE }), Date.now()).run();
+    await write(s, found);
   }
   return out;
 }
@@ -2992,9 +3041,8 @@ export async function runCron(env: Env) {
       }
     }
 
-    // The end of a stretch with no blocks whose end is not in the table, recorded within a minute of the block that
-    // tells it (readResumed: the headers of the blocks after the stretch, one read), whatever the block scan's runs
-    // recorded. Only while such a stretch has no end recorded here and the chain has reached the second block after it;
+    // The end of a stretch with no blocks whose end is not in the table, recorded within a minute of the blocks that
+    // tell it (readResumed: the commits of the blocks around the stretch, or their headers when no commit can be read). Only while such a stretch has no end recorded here and the chain has reached the second block after it;
     // the end can need up to END_SPAN + 1 blocks after it, and until those are made the read is tried next tick without
     // a log. When none of them ends it, it is logged and asked again only an hour later. Once each is recorded the
     // isolate stops asking (resumedRecorded).
@@ -3005,7 +3053,13 @@ export async function runCron(env: Env) {
         && nowMs - (resumedNone.get(s.lastBlock) ?? -Infinity) >= RESUMED_NONE_RETRY_MS);
       if (due.length) {
         await readResumed(env.DB, reached, nread)
-          .then((r) => { for (const s of due) if (r[s.lastBlock] != null) resumedRecorded.add(s.lastBlock); }, (e: unknown) => {
+          .then((r) => {
+            for (const s of due) {
+              if (r[s.lastBlock] == null) continue;
+              if (provisionalEnds.has(s.lastBlock)) resumedNone.set(s.lastBlock, nowMs);
+              else resumedRecorded.add(s.lastBlock);
+            }
+          }, (e: unknown) => {
             const name = (e as { name?: string })?.name;
             // a block the end needs not made yet: the next tick asks again, nothing logged
             if (name === END_NOT_YET) return;

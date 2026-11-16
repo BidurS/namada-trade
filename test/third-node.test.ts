@@ -456,7 +456,8 @@ describe('the end of the stretch after block 8,517,986, recorded by the tick', (
     db.raw.prepare("INSERT INTO kv (key, value, updated_at) VALUES ('namada.cursor', ?, 0)").run(String(LAST_BLOCK + 1));
     const calls = network(ahead(AT), [], { metas });
     await virtualTick({ DB: db, KEPLR_KEY: 'k' }, AT);
-    expect(kv(db, resumedKv(LAST_BLOCK))).toEqual({ height: LAST_BLOCK + 2, ts: AGAIN, rule: RESUMED_RULE });
+    // these nodes answer no /commit, so the end is told from the headers (the commits' path: test/halts.test.ts)
+    expect(kv(db, resumedKv(LAST_BLOCK))).toEqual({ height: LAST_BLOCK + 2, ts: AGAIN, rule: RESUMED_RULE, how: 'header' });
     expect(blockchainCalls(calls)).toHaveLength(1);
     // the next tick in the same isolate asks nothing more
     const again = network(ahead(AT + MIN), [], { metas });

@@ -10,12 +10,14 @@
 // blocks were made again. A block's header time is the time the block before it was agreed on, so the first block
 // after a stretch carries either the time blocks were made again (when the last block was agreed on only then) or a
 // time seconds after the last block's (when it was agreed on before the stretch), and a block made from votes signed
-// during the stretch can carry a time from inside it; the end is the header time of the first of the three blocks after
-// the stretch that is END_GAP_MS or more after the last block's AND is followed by the next block within FOLLOW_GAP_MS
-// (endAfter): blocks were being made at that time. The table gives the ends
+// during the stretch can carry a time from inside it. So the end is measured where it happens: the time the first block
+// committed after the stretch was committed, the signing time in its commit at which two thirds of the power had
+// signed (endByCommits, commitTime). When the commits cannot be read, the end is the header time of the first of the
+// three blocks after the stretch that is END_GAP_MS or more after the last block's AND is followed by the next block
+// within FOLLOW_GAP_MS (endAfter): blocks were being made at that time. The table gives the ends
 // measured for the stretches of the past (the chain's own blocks, test/fixtures/namada_blockchain_*.json; a test
-// holds them equal). For a stretch whose end is not in the table, this site's block scan records it when it reads the
-// block (kv resumedKv, live-hub.ts), and the ledger reads it from a node when the scan did not. The heights are the
+// holds them equal). For a stretch whose end is not in the table, the tick reads it from a node within a minute of the
+// blocks that tell it and records it (kv resumedKv, cron.ts readResumed). The heights are the
 // ones scripts/incidents.ts lists with their sources; a test holds the two lists equal.
 import { fmtCount, fmtUtcLong } from './format';
 
@@ -24,18 +26,18 @@ export interface NoBlocks {
   lastBlock: number;
   /** that block's header time (unix ms) */
   lastBlockAt: number;
-  /** when blocks were made again: the header time endAfter picks among the first blocks after it; null while it is not in the table */
+  /** when blocks were made again: the time the first block after it committed (endByCommits); null while it is not in the table */
   resumedAt: number | null;
 }
 
 /** Every stretch on record, oldest first. */
 export const NO_BLOCKS: readonly NoBlocks[] = [
-  { lastBlock: 4_514_501, lastBlockAt: Date.UTC(2025, 11, 2, 16, 23, 46, 260), resumedAt: Date.UTC(2025, 11, 2, 18, 23, 14, 740) },
-  { lastBlock: 7_912_187, lastBlockAt: Date.UTC(2026, 8, 1, 23, 43, 16, 697), resumedAt: Date.UTC(2026, 8, 2, 3, 6, 47, 809) },
-  { lastBlock: 7_913_446, lastBlockAt: Date.UTC(2026, 8, 2, 6, 16, 49, 514), resumedAt: Date.UTC(2026, 8, 3, 15, 42, 46, 238) },
-  { lastBlock: 7_914_107, lastBlockAt: Date.UTC(2026, 8, 3, 17, 31, 2, 225), resumedAt: Date.UTC(2026, 8, 6, 13, 37, 42, 436) },
-  { lastBlock: 7_914_153, lastBlockAt: Date.UTC(2026, 8, 6, 13, 45, 22, 59), resumedAt: Date.UTC(2026, 8, 14, 17, 4, 34, 194) },
-  { lastBlock: 8_200_078, lastBlockAt: Date.UTC(2026, 9, 7, 10, 12, 15, 744), resumedAt: Date.UTC(2026, 9, 8, 17, 14, 23, 595) },
+  { lastBlock: 4_514_501, lastBlockAt: Date.UTC(2025, 11, 2, 16, 23, 46, 260), resumedAt: Date.UTC(2025, 11, 2, 18, 23, 14, 933) },
+  { lastBlock: 7_912_187, lastBlockAt: Date.UTC(2026, 8, 1, 23, 43, 16, 697), resumedAt: Date.UTC(2026, 8, 2, 3, 6, 53, 900) },
+  { lastBlock: 7_913_446, lastBlockAt: Date.UTC(2026, 8, 2, 6, 16, 49, 514), resumedAt: Date.UTC(2026, 8, 3, 15, 42, 53, 131) },
+  { lastBlock: 7_914_107, lastBlockAt: Date.UTC(2026, 8, 3, 17, 31, 2, 225), resumedAt: Date.UTC(2026, 8, 6, 13, 37, 29, 999) },
+  { lastBlock: 7_914_153, lastBlockAt: Date.UTC(2026, 8, 6, 13, 45, 22, 59), resumedAt: Date.UTC(2026, 8, 14, 17, 3, 27, 763) },
+  { lastBlock: 8_200_078, lastBlockAt: Date.UTC(2026, 9, 7, 10, 12, 15, 744), resumedAt: Date.UTC(2026, 9, 8, 17, 14, 16, 253) },
   { lastBlock: 8_517_986, lastBlockAt: Date.UTC(2026, 10, 2, 22, 49, 36, 642), resumedAt: null },
 ];
 
@@ -71,26 +73,54 @@ export function endAfter(s: Pick<NoBlocks, 'lastBlock' | 'lastBlockAt'>, timeOf:
   }
   return null;
 }
-/** The version of the rule a recorded end was told by: a record without it (or with an older one) is told again from the chain. */
-export const RESUMED_RULE = 3;
-/** Where the block scan records the end of a stretch whose end is not in the table (endAfter: the block and its header time). */
-export const resumedKv = (lastBlock: number): string => `halt.resumed.${lastBlock}`;
-/** The stretches whose end is not in the table: the block scan records it. */
-export const openStretches = (list: readonly NoBlocks[] = NO_BLOCKS): NoBlocks[] => list.filter((s) => s.resumedAt == null);
-
+/** One signature of a block's commit, in the order of the validator set at that height (CometBFT keeps them so). */
+export interface CommitSig { flag: number; address: string; ts: number }
+/** One validator of the set at a height, as /validators lists them. */
+export interface SetValidator { address: string; power: bigint }
 /**
- * The records the block scan writes after reading blocks `lastScanned + 1` to `done`: for each stretch whose end is
- * not in the table, its end (endAfter), when the blocks that tell it were among the ones read (`timeOf` holds the
- * header times of the blocks read this time). When they were read on two runs, the ledger reads them from a node.
+ * When a block was committed: the signing time at which the voting power of the commit's signatures (flag 2), taken in
+ * time order, first passes two thirds of the set's power, as CometBFT needs to commit. Signatures made before or
+ * during a stretch count among the earliest, and the crossing always lands on one made once enough power was back.
+ * null when the commit and the set do not line up (a different length, or a signature whose validator is another).
  */
-export function resumedSeen(lastScanned: number, done: number, timeOf: (height: number) => number | undefined, list: readonly NoBlocks[] = NO_BLOCKS): { key: string; height: number; ts: number }[] {
-  const out: { key: string; height: number; ts: number }[] = [];
-  for (const s of openStretches(list)) {
-    const end = endAfter(s, (h) => (h > lastScanned && h <= done ? timeOf(h) : undefined));
-    if (end) out.push({ key: resumedKv(s.lastBlock), height: end.height, ts: end.ts });
+export function commitTime(sigs: readonly CommitSig[], set: readonly SetValidator[]): number | null {
+  if (!sigs.length || sigs.length !== set.length) return null;
+  const total = set.reduce((a, v) => a + v.power, 0n);
+  const signed: { ts: number; power: bigint }[] = [];
+  for (let i = 0; i < sigs.length; i++) {
+    if (sigs[i].flag !== 2) continue;
+    if (sigs[i].address !== set[i].address || !Number.isFinite(sigs[i].ts)) return null;
+    signed.push({ ts: sigs[i].ts, power: set[i].power });
   }
-  return out;
+  signed.sort((a, b) => a.ts - b.ts);
+  let sum = 0n;
+  for (const x of signed) {
+    sum += x.power;
+    if (sum * 3n > total * 2n) return x.ts;
+  }
+  return null;
 }
+/**
+ * The end of a stretch from when the blocks around it were committed (`committedAt`, by height): the commit time of
+ * the first of its last block and the END_SPAN blocks after it that was committed END_GAP_MS or more after the last
+ * block's header. A last block can be committed only when blocks are made again (every stretch before 8,517,986), or
+ * seconds after it, before the stretch (8,517,986, committed at 22:49:51). undefined when a commit needed to tell is not
+ * known; null when none of them is that late.
+ */
+export function endByCommits(s: Pick<NoBlocks, 'lastBlock' | 'lastBlockAt'>, committedAt: (height: number) => number | undefined): { height: number; ts: number } | null | undefined {
+  for (let h = s.lastBlock; h <= s.lastBlock + END_SPAN; h++) {
+    const t = committedAt(h);
+    if (t == null || !Number.isFinite(t)) return undefined;
+    if (t - s.lastBlockAt >= END_GAP_MS) return { height: h, ts: t };
+  }
+  return null;
+}
+/** The version of the rule a recorded end was told by: a record without it (or with an older one) is told again from the chain. */
+export const RESUMED_RULE = 4;
+/** Where the tick records the end of a stretch whose end is not in the table (cron.ts readResumed: the block, the time, the rule, how it was told). */
+export const resumedKv = (lastBlock: number): string => `halt.resumed.${lastBlock}`;
+/** The stretches whose end is not in the table: the tick records it. */
+export const openStretches = (list: readonly NoBlocks[] = NO_BLOCKS): NoBlocks[] => list.filter((s) => s.resumedAt == null);
 
 /** The stretch between two readings at blocks `from` and `to` (one at its last block or before, the other after), or null. */
 export function noBlocksBetween(from: number | null | undefined, to: number | null | undefined, list: readonly NoBlocks[] = NO_BLOCKS): NoBlocks | null {
@@ -134,4 +164,8 @@ export function recordedEnd(s: Pick<NoBlocks, 'lastBlockAt'>, value: string | nu
   if (!v || v.rule !== RESUMED_RULE) return null;
   const ts = Number(v.ts);
   return validEnd(s, ts) ? ts : null;
+}
+/** How a kv resumedKv record's end was told: from the commits, or from the headers when no commit could be read (provisional). */
+export function recordedHow(value: string | null | undefined): 'commit' | 'header' | null {
+  try { const v = JSON.parse(value ?? ''); return v?.how === 'commit' || v?.how === 'header' ? v.how : null; } catch { return null; }
 }

@@ -5,7 +5,7 @@
 // shown on stretches from the past, and the pages say it in the same words.
 import { describe, it, expect, vi, afterEach } from 'vitest';
 import { readFileSync, readdirSync } from 'node:fs';
-import { END_GAP_MS, END_SPAN, FOLLOW_GAP_MS, NO_BLOCKS, RESUMED_RULE, endAfter, noBlocksAcrossTimes, noBlocksBetween, notJudgedAcross, openStretches, resumedKv, resumedSeen } from '../shared/halts';
+import { END_GAP_MS, END_SPAN, FOLLOW_GAP_MS, NO_BLOCKS, RESUMED_RULE, commitTime, endAfter, endByCommits, noBlocksAcrossTimes, noBlocksBetween, notJudgedAcross, openStretches, resumedKv, type CommitSig, type SetValidator } from '../shared/halts';
 import { INCIDENTS } from '../scripts/incidents';
 import { HALT } from '../shared/halt';
 import { NAMADA } from '../worker/src/config';
@@ -34,24 +34,32 @@ describe('the table of stretches with no blocks', () => {
     expect(openStretches().map((s) => s.lastBlock)).toEqual([8_517_986]);
   });
 
-  it('its times are the chain\'s own header times: the last block before each stretch, and its end as endAfter tells it from the blocks after', () => {
+  it('its times are the chain\'s own: the last block\'s header, and the end as the time the first block after the stretch was committed', () => {
     const header = new Map<number, number>();
     for (const f of readdirSync(new URL('./fixtures/', import.meta.url)).filter((n) => n.startsWith('namada_blockchain_'))) {
       const d = JSON.parse(readFileSync(new URL(`./fixtures/${f}`, import.meta.url), 'utf8'));
       for (const m of (d.result ?? d).block_metas ?? []) header.set(Number(m.header.height), Date.parse(String(m.header.time).replace(/(\.\d{3})\d+Z$/, '$1Z')));
     }
+    // the commits and the validator sets as namada-rpc.stakeandrelax.net gave them (equal on namada-rpc.polkachu.com)
+    const committed = (h: number) => {
+      const f = (n: string) => new URL(`./fixtures/${n}_${h}.json`, import.meta.url);
+      let c: any, v: any;
+      try { c = JSON.parse(readFileSync(f('namada_commit'), 'utf8')).result; v = JSON.parse(readFileSync(f('namada_validators'), 'utf8')).result; } catch { return undefined; }
+      const sigs: CommitSig[] = c.signed_header.commit.signatures.map((x: any) => ({ flag: x.block_id_flag, address: x.validator_address, ts: Date.parse(String(x.timestamp).replace(/(\.\d{3})\d+Z$/, '$1Z')) }));
+      return commitTime(sigs, v.validators.map((x: any) => ({ address: x.address, power: BigInt(x.voting_power) })) as SetValidator[]) ?? undefined;
+    };
     for (const s of NO_BLOCKS) {
       expect(s.lastBlockAt, `${s.lastBlock}`).toBe(header.get(s.lastBlock));
-      if (s.resumedAt != null) expect(s.resumedAt, `${s.lastBlock}: end`).toBe(endAfter(s, (h) => header.get(h))?.ts);
+      if (s.resumedAt == null) continue;
+      // every stretch before the current one: its last block was committed only when blocks were made again
+      expect(endByCommits(s, committed), `${s.lastBlock}: end`).toEqual({ height: s.lastBlock, ts: s.resumedAt });
     }
-    // after every restart on record the end is followed by the next block within seconds, and three first blocks
-    // after a stretch carried a header 11 to 25 minutes early (the median of their commit's signing times): no end
-    const follows = NO_BLOCKS.filter((s) => s.resumedAt != null).map((s) => {
-      const end = endAfter(s, (h) => header.get(h))!;
-      return header.get(end.height + 1)! - end.ts;
-    });
-    expect(Math.max(...follows)).toBeLessThan(MIN);
-    expect(NO_BLOCKS.filter((s) => s.resumedAt != null).map((s) => endAfter(s, (h) => header.get(h))!.height - s.lastBlock)).toEqual([1, 1, 1, 2, 2, 2]);
+    // the header rule (used when the commits cannot be read) lands within seconds of it: the first header followed by
+    // the next block within five minutes; three first blocks after a stretch carried a header 11 to 25 minutes early
+    // (the median of their commit's signing times) and are passed over
+    const byHeaders = NO_BLOCKS.filter((s) => s.resumedAt != null).map((s) => ({ s, end: endAfter(s, (h) => header.get(h))! }));
+    expect(byHeaders.map(({ s, end }) => end.height - s.lastBlock)).toEqual([1, 1, 1, 2, 2, 2]);
+    for (const { s, end } of byHeaders) expect(Math.abs(end.ts - s.resumedAt!), `${s.lastBlock}: header end near the commit`).toBeLessThan(MIN + 10_000);
   });
 
   it('a pair of blocks is across a stretch when one is at its last block or before and the other after it', () => {
@@ -123,20 +131,29 @@ describe('the time blocks were made again after the current stretch', () => {
     expect(end([[8_517_987, AGAIN], [8_517_988, AGAIN - 1000], [8_517_989, AGAIN + 7000], [8_517_990, AGAIN + 14000]])).toEqual({ height: 8_517_988, ts: AGAIN - 1000 });
   });
 
-  it('the block scan records the end after the old-dated block only when the block after the end is read on the same run', () => {
-    const times = new Map([[8_517_987, AGREED], [8_517_988, OLD_VOTES], [8_517_989, AGAIN], [8_517_990, AGAIN + 7000]]);
-    expect(resumedSeen(8_517_986, 8_517_995, (h) => times.get(h))).toEqual([{ key: resumedKv(8_517_986), height: 8_517_989, ts: AGAIN }]);
-    // the run stopped at 8,517,989: the block after it not read, nothing recorded (the ledger reads it)
-    expect(resumedSeen(8_517_986, 8_517_989, (h) => times.get(h))).toEqual([]);
+  it('a block is committed when the power of its commit\'s signatures, in time order, passes two thirds; old-dated signatures count among the first', () => {
+    const set: SetValidator[] = [{ address: 'A', power: 40n }, { address: 'B', power: 30n }, { address: 'C', power: 20n }, { address: 'D', power: 10n }];
+    const sig = (address: string, ts: number, flag = 2): CommitSig => ({ flag, address, ts });
+    // C and D signed during the stretch (30%); A back at AGAIN brings 70%: committed then
+    expect(commitTime([sig('A', AGAIN), sig('B', AGAIN + 2000), sig('C', OLD_VOTES), sig('D', OLD_VOTES)], set)).toBe(AGAIN);
+    // exactly two thirds is not enough: strictly more
+    const thirds: SetValidator[] = [{ address: 'A', power: 2n }, { address: 'B', power: 1n }];
+    expect(commitTime([sig('A', AGAIN), sig('B', AGAIN + 2000)], thirds)).toBe(AGAIN + 2000);
+    // absent (1) and nil (3) signatures carry no power; too little power signed: none
+    expect(commitTime([sig('', 0, 1), sig('B', AGAIN), sig('C', AGAIN), sig('D', AGAIN, 3)], set)).toBeNull();
+    // a commit that does not line up with the set: none
+    expect(commitTime([sig('A', AGAIN), sig('B', AGAIN)], set)).toBeNull();
+    expect(commitTime([sig('B', AGAIN), sig('A', AGAIN), sig('C', AGAIN), sig('D', AGAIN)], set)).toBeNull();
   });
 
-  it('the block scan records it once, when the blocks that tell it are read on one run', () => {
-    const times = new Map([[8_517_987, AGREED], [8_517_988, AGAIN], [8_517_989, AGAIN + 7000]]);
-    expect(resumedSeen(8_517_986, 8_517_990, (h) => times.get(h))).toEqual([{ key: resumedKv(8_517_986), height: 8_517_988, ts: AGAIN }]);
-    // read on two runs: the second run does not hold the first block's time, so nothing is recorded (the ledger reads them)
-    expect(resumedSeen(8_517_986, 8_517_987, (h) => times.get(h))).toEqual([]);
-    expect(resumedSeen(8_517_987, 8_517_995, (h) => (h >= 8_517_988 ? times.get(h) : undefined))).toEqual([]);
-    expect(resumedSeen(8_517_980, 8_517_986, (h) => times.get(h))).toEqual([]);
+  it('the end is the commit time of the first of the last block and the blocks after it committed well after the last block', () => {
+    const s = { lastBlock: 8_517_986, lastBlockAt: LAST_AT };
+    // 8,517,986 committed at 22:49:51, before the stretch; 8,517,987 committed when blocks were made again
+    expect(endByCommits(s, (h) => new Map([[8_517_986, AGREED], [8_517_987, AGAIN]]).get(h))).toEqual({ height: 8_517_987, ts: AGAIN });
+    // the shape of every stretch before: the last block committed only when blocks were made again
+    expect(endByCommits(s, (h) => new Map([[8_517_986, AGAIN]]).get(h))).toEqual({ height: 8_517_986, ts: AGAIN });
+    expect(endByCommits(s, (h) => new Map([[8_517_986, AGREED]]).get(h))).toBeUndefined();
+    expect(endByCommits(s, (h) => new Map([8_517_986, 8_517_987, 8_517_988, 8_517_989].map((x, i) => [x, AGREED + i * 7000])).get(h))).toBeNull();
   });
 
   it('how far the chain reached is the scan\'s cursor (as the tick holds it, a record with a height) or a node\'s newest block, the higher', () => {
@@ -146,42 +163,65 @@ describe('the time blocks were made again after the current stretch', () => {
     expect(chainReachedTo(undefined, undefined)).toBeNull();
   });
 
-  it('the ledger reads it as recorded; with no record, or one that cannot be an end, reads the headers after it from a node and records the end; a read that cannot tell it throws', async () => {
+  it('the ledger reads it as recorded; otherwise reads the commits from a node and records the end; with no usable commit, the headers; a read that cannot tell it throws', async () => {
     const node = { rpcs: [{ provider: 'a', url: 'https://node.example' }], retries: 0 };
     const recorded = testD1();
-    recorded.raw.prepare('INSERT INTO kv (key, value, updated_at) VALUES (?, ?, 0)').run(resumedKv(8_517_986), JSON.stringify({ height: 8_517_988, ts: AGAIN, rule: RESUMED_RULE }));
+    recorded.raw.prepare('INSERT INTO kv (key, value, updated_at) VALUES (?, ?, 0)').run(resumedKv(8_517_986), JSON.stringify({ height: 8_517_987, ts: AGAIN, rule: RESUMED_RULE, how: 'commit' }));
     expect(await readResumed(recorded as any, 8_518_500, {})).toEqual({ 8_517_986: AGAIN });
     // the scan not past the stretch: nothing to read
     expect(await readResumed(testD1() as any, 8_517_986, {})).toEqual({});
 
-    const meta = (h: number, iso: string) => ({ header: { chain_id: NAMADA.chainId, height: String(h), time: iso } });
-    const answer = (metas: unknown[]) => vi.fn(async (input: RequestInfo | URL) => {
-      expect(String(input)).toContain('/blockchain?minHeight=8517987&maxHeight=');
-      return new Response(JSON.stringify({ result: { block_metas: metas } }), { headers: { 'content-type': 'application/json' } });
+    const iso = (t: number) => new Date(t).toISOString();
+    const SET = [{ address: 'A', voting_power: '40' }, { address: 'B', voting_power: '30' }, { address: 'C', voting_power: '20' }, { address: 'D', voting_power: '10' }];
+    const all = (t: number) => SET.map((v) => ({ block_id_flag: 2, validator_address: v.address, timestamp: iso(t) }));
+    // 8,517,987's commit: C and D signed on 3 November, A and B when blocks were made again
+    const C87 = [{ block_id_flag: 2, validator_address: 'A', timestamp: iso(AGAIN) }, { block_id_flag: 2, validator_address: 'B', timestamp: iso(AGAIN + 2000) }, { block_id_flag: 2, validator_address: 'C', timestamp: iso(OLD_VOTES) }, { block_id_flag: 2, validator_address: 'D', timestamp: iso(OLD_VOTES) }];
+    const json = (v: unknown, status = 200) => new Response(JSON.stringify(v), { status, headers: { 'content-type': 'application/json' } });
+    const chain = (o: { commits?: Record<number, unknown[] | 'final not yet'>; setDown?: boolean; metas?: [number, number][] }) => vi.fn(async (input: RequestInfo | URL) => {
+      const u = new URL(String(input)), h = Number(u.searchParams.get('height'));
+      if (u.pathname === '/commit') {
+        const c = o.commits?.[h];
+        if (!c) return json({ error: 'no commit' }, 500);
+        return json({ result: { canonical: c !== 'final not yet', signed_header: { header: { chain_id: NAMADA.chainId, height: String(h) }, commit: { signatures: c === 'final not yet' ? all(AGAIN) : c } } } });
+      }
+      if (u.pathname === '/validators') return o.setDown ? json({}, 502) : json({ result: { block_height: String(h), validators: SET, count: '4', total: '4' } });
+      if (u.pathname === '/blockchain') {
+        const lo = Number(u.searchParams.get('minHeight')), hi = Number(u.searchParams.get('maxHeight'));
+        return json({ result: { block_metas: (o.metas ?? []).filter(([x]) => x >= lo && x <= hi).map(([x, t]) => ({ header: { chain_id: NAMADA.chainId, height: String(x), time: iso(t) } })) } });
+      }
+      return json({}, 404);
     });
-    // a record of the block agreed on seconds after the last one (as the scan of an earlier version wrote it) is no end
+    const stored = (db: ReturnType<typeof testD1>) => JSON.parse((db.raw.prepare('SELECT value FROM kv WHERE key = ?').get(resumedKv(8_517_986)) as any).value);
+
+    // a record of an earlier rule (it may hold a header from inside the stretch): told again from the commits and replaced
     const db = testD1();
-    db.raw.prepare('INSERT INTO kv (key, value, updated_at) VALUES (?, ?, 0)').run(resumedKv(8_517_986), JSON.stringify({ height: 8_517_987, ts: AGREED }));
-    vi.stubGlobal('fetch', answer([meta(8_517_989, '2026-11-11T14:00:14.000Z'), meta(8_517_988, '2026-11-11T14:00:07.000Z'), meta(8_517_987, '2026-11-02T22:49:51.200Z')]));
+    db.raw.prepare('INSERT INTO kv (key, value, updated_at) VALUES (?, ?, 0)').run(resumedKv(8_517_986), JSON.stringify({ height: 8_517_988, ts: OLD_VOTES, rule: RESUMED_RULE - 1 }));
+    vi.stubGlobal('fetch', chain({ commits: { 8_517_986: all(AGREED), 8_517_987: C87 } }));
     expect(await readResumed(db as any, 8_518_500, node)).toEqual({ 8_517_986: AGAIN });
-    expect(JSON.parse((db.raw.prepare('SELECT value FROM kv WHERE key = ?').get(resumedKv(8_517_986)) as any).value)).toEqual({ height: 8_517_988, ts: AGAIN, rule: RESUMED_RULE });
+    expect(stored(db)).toEqual({ height: 8_517_987, ts: AGAIN, rule: RESUMED_RULE, how: 'commit' });
 
-    // a record an earlier rule wrote, holding the time the old-dated votes carry: told again from the chain and replaced
-    const old = testD1();
-    old.raw.prepare('INSERT INTO kv (key, value, updated_at) VALUES (?, ?, 0)').run(resumedKv(8_517_986), JSON.stringify({ height: 8_517_988, ts: Date.UTC(2026, 10, 3, 21, 0, 33) }));
-    vi.stubGlobal('fetch', answer([meta(8_517_987, '2026-11-02T22:49:51.200Z'), meta(8_517_988, '2026-11-03T21:00:33.000Z'), meta(8_517_989, '2026-11-11T14:00:07.000Z'), meta(8_517_990, '2026-11-11T14:00:14.000Z')]));
-    expect(await readResumed(old as any, 8_518_500, node)).toEqual({ 8_517_986: AGAIN });
-    expect(JSON.parse((old.raw.prepare('SELECT value FROM kv WHERE key = ?').get(resumedKv(8_517_986)) as any).value)).toEqual({ height: 8_517_989, ts: AGAIN, rule: RESUMED_RULE });
-
-    // the chain at the block after the stretch only, its header the old agreement: the end cannot be told yet
-    vi.stubGlobal('fetch', answer([meta(8_517_987, '2026-11-02T22:49:51.200Z')]));
-    await expect(readResumed(testD1() as any, 8_517_987, node)).rejects.toThrow(/cannot be told yet/);
-
-    // the end needs a block not made yet, or none of the blocks after the stretch ends it: two different errors
-    vi.stubGlobal('fetch', answer([meta(8_517_987, '2026-11-02T22:49:51.200Z'), meta(8_517_988, '2026-11-03T21:00:33.000Z')]));
-    await expect(readResumed(testD1() as any, 8_517_988, node)).rejects.toMatchObject({ name: END_NOT_YET });
-    vi.stubGlobal('fetch', answer([meta(8_517_987, '2026-11-02T22:49:51.200Z'), meta(8_517_988, '2026-11-03T21:00:33.000Z'), meta(8_517_989, '2026-11-04T09:00:00.000Z'), meta(8_517_990, '2026-11-11T14:00:07.000Z')]));
+    // the chain at 8,517,987 only: its commit is not final until 8,517,988 is made, so the end cannot be told yet
+    vi.stubGlobal('fetch', chain({ commits: { 8_517_986: all(AGREED), 8_517_987: C87 } }));
+    await expect(readResumed(testD1() as any, 8_517_987, node)).rejects.toMatchObject({ name: END_NOT_YET });
+    // a node that answers 8,517,987's commit as not final yet: not yet either
+    vi.stubGlobal('fetch', chain({ commits: { 8_517_986: all(AGREED), 8_517_987: 'final not yet' } }));
+    await expect(readResumed(testD1() as any, 8_518_500, node)).rejects.toMatchObject({ name: END_NOT_YET });
+    // none of the four commits is late: no end
+    vi.stubGlobal('fetch', chain({ commits: { 8_517_986: all(AGREED), 8_517_987: all(AGREED + 7000), 8_517_988: all(AGREED + 14000), 8_517_989: all(AGREED + 21000) } }));
     await expect(readResumed(testD1() as any, 8_518_500, node)).rejects.toMatchObject({ name: END_NONE });
+
+    // no node gives a validator set: the headers tell it, the old-dated header passed over
+    const hdr = testD1();
+    vi.stubGlobal('fetch', chain({ commits: { 8_517_986: all(AGREED), 8_517_987: C87 }, setDown: true, metas: [[8_517_987, AGREED], [8_517_988, OLD_VOTES], [8_517_989, AGAIN], [8_517_990, AGAIN + 7000]] }));
+    expect(await readResumed(hdr as any, 8_518_500, node)).toEqual({ 8_517_986: AGAIN });
+    expect(stored(hdr)).toEqual({ height: 8_517_989, ts: AGAIN, rule: RESUMED_RULE, how: 'header' });
+
+    // the header end is provisional: while the commits still cannot be read it stays; once they can, it is replaced
+    expect(await readResumed(hdr as any, 8_518_500, node)).toEqual({ 8_517_986: AGAIN });
+    expect(stored(hdr).how).toBe('header');
+    vi.stubGlobal('fetch', chain({ commits: { 8_517_986: all(AGREED), 8_517_987: [...C87.slice(0, 1).map((x) => ({ ...x, timestamp: iso(AGAIN + 3000) })), ...C87.slice(1)] } }));
+    expect(await readResumed(hdr as any, 8_518_500, node)).toEqual({ 8_517_986: AGAIN + 3000 });
+    expect(stored(hdr)).toEqual({ height: 8_517_987, ts: AGAIN + 3000, rule: RESUMED_RULE, how: 'commit' });
 
     vi.stubGlobal('fetch', vi.fn(async () => new Response('down', { status: 502 })));
     await expect(readResumed(testD1() as any, 8_518_500, node)).rejects.toThrow();
@@ -202,7 +242,7 @@ describe('the mint rule, on the stretch after block 7,914,153', () => {
     expect(across.detail).toMatchObject({ verdict: 'not-judged', why: 'halt', fromHeight: 7_914_153, halt: { lastBlock: 7_914_153 } });
     expect(across.status).not.toBe('warn');
     expect(across.state).toMatchObject({ anchor: { height: 7_914_160 }, pending: null, broke: null, unjudged: null });
-    expect(words(lineOf('supply_mint_rule', across.status, across.detail))).toBe('Not judged across a halt: Namada made no blocks from 6 Sep 2026, 13:45 UTC (block 7,914,153) to 14 Sep 2026, 17:04 UTC');
+    expect(words(lineOf('supply_mint_rule', across.status, across.detail))).toBe('Not judged across a halt: Namada made no blocks from 6 Sep 2026, 13:45 UTC (block 7,914,153) to 14 Sep 2026, 17:03 UTC');
     const next = mintRuleNext(across.state, r(2500, m0 + 5n, 7_914_170, T + 9 * D + MIN), null, T + 9 * D + MIN);
     expect(next.detail).toMatchObject({ verdict: 'same' });
     expect(next.status).toBe('ok');

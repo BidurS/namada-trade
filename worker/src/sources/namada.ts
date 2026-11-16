@@ -3,6 +3,7 @@ import { decodeU256LE, decodeU64LE, fetchJson, fetchText, withFailover, ReadCutE
 import { bech32m } from '@scure/base';
 import type { NamadaBlock } from '../parse/namada';
 import { INTERNAL_ADDRESSES } from '../parse/namada-tx';
+import { commitTime, type CommitSig, type SetValidator } from '../../../shared/halts';
 // The base64 decoder lives in util.ts (the depth module reads the chain node's answers with it too); callers of this file keep their import.
 export { base64Bytes };
 
@@ -319,6 +320,51 @@ export async function blockMetas(min: number, max: number, opts: ReadOpts = {}) 
     ts: Date.parse(m.header.time),
     numTxs: Number(m.num_txs),
   }));
+}
+
+/** The validator set at a height is read a page of this many at a time (CometBFT's most); the set was 147 in 2025 and 36 in 2026. */
+const SET_PAGE = 100;
+/** No set is read past this many pages: a node that keeps answering pages is not followed. */
+const SET_PAGES_MAX = 10;
+/**
+ * When a block was committed (shared/halts.ts commitTime): its canonical commit and the validator set at its height,
+ * both from one node, the first that answers with both. 'not yet' when a node answers with a commit that is not
+ * canonical yet (the block after it not made on that node) and none answers with one that is; throws when no node
+ * answers with a commit and a set that line up.
+ */
+export async function committedAt(height: number, opts: ReadOpts = {}): Promise<number | 'not yet'> {
+  const base = opts.rpcs?.length ? opts.rpcs : RPCS;
+  const list = opts.breaker ? opts.breaker.order(base) : base;
+  const fo = { timeoutMs: opts.timeoutMs ?? 15000, retries: opts.retries, signal: opts.signal };
+  let lastErr: unknown, notYet = false, slow = 0;
+  for (const r of list) {
+    if (opts.signal?.aborted || slow >= READ_MAX_SLOW_NODES) break;
+    const t0 = Date.now();
+    try {
+      const c = await fetchJson(`${r.url}/commit?height=${height}`, fo);
+      const sh = c?.result?.signed_header;
+      if (sh?.header?.chain_id !== NAMADA.chainId || Number(sh?.header?.height) !== height || !Array.isArray(sh?.commit?.signatures)) throw new Error(`commit ${height}: not an answer for this block`);
+      if (c.result.canonical !== true) { notYet = true; continue; }
+      const sigs: CommitSig[] = (sh.commit.signatures as any[]).map((x) => ({ flag: Number(x?.block_id_flag), address: String(x?.validator_address ?? ''), ts: Date.parse(String(x?.timestamp)) }));
+      const set: SetValidator[] = [];
+      for (let page = 1; page <= SET_PAGES_MAX; page++) {
+        const v = await fetchJson(`${r.url}/validators?height=${height}&per_page=${SET_PAGE}&page=${page}`, fo);
+        const vs = v?.result?.validators;
+        if (!Array.isArray(vs) || Number(v?.result?.block_height) !== height) throw new Error(`validators ${height}: not an answer for this block`);
+        for (const x of vs) set.push({ address: String(x?.address ?? ''), power: BigInt(String(x?.voting_power ?? '0')) });
+        if (set.length >= Number(v.result.total) || !vs.length) break;
+      }
+      const t = commitTime(sigs, set);
+      if (t == null) throw new Error(`commit ${height}: its signatures and the validator set do not line up`);
+      return t;
+    } catch (e) {
+      lastErr = e;
+      if (slowFailure(t0, fo.timeoutMs)) slow++;
+      if (!opts.signal?.aborted) opts.breaker?.failed(r.provider);
+    }
+  }
+  if (notYet) return 'not yet';
+  throw lastErr ?? new Error('deadline passed before any node answered');
 }
 
 /**
