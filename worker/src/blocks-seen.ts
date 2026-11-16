@@ -22,7 +22,7 @@
 // What it says is measured: the block, its time, and who gave it. It says nothing about why.
 import type { Env } from './util';
 import { HALT } from '../../shared/halt';
-import { END_GAP_MS, NO_BLOCKS } from '../../shared/halts';
+import { END_GAP_MS, END_SPAN, NO_BLOCKS } from '../../shared/halts';
 import { NAMADA } from './config';
 import { HEAD_AGREE_BLOCKS, HEAD_MAX_AGE_MS, MAX_HEAD_HEIGHT } from './sources/namada';
 import { SENDER, WEBHOOK_TIMEOUT_MS, alertsPausedIn, textSafe } from './sources/discord';
@@ -183,10 +183,12 @@ export async function noteBlocksSeen(env: BlocksEnv, statuses: readonly StatusLi
     ? env.DB.prepare('UPDATE kv SET value = ?, updated_at = ? WHERE key = ? AND value = ?').bind(text, now, key, row.value)
     : env.DB.prepare('INSERT INTO kv (key, value, updated_at) VALUES (?, ?, ?) ON CONFLICT(key) DO NOTHING').bind(key, text, now)).run();
   if (!w.meta?.changes) return 'another run';
-  // the first block after a stretch can carry the time the last one was agreed on, before the stretch (shared/halts.ts
-  // endAfter): such a time is not when it was made, so the line says when it was read instead
-  const stretch = NO_BLOCKS.find((s) => s.lastBlock === before);
-  const said = stretch && seen.blockAt != null && seen.blockAt - stretch.lastBlockAt < END_GAP_MS ? { ...seen, blockAt: null } : seen;
+  // the first blocks after a stretch can carry the time the last one was agreed on, before the stretch, or a time from
+  // inside it (votes signed during it; shared/halts.ts endAfter): such a time is not when blocks were made again, so
+  // for those blocks the line says when it was read instead
+  const stretch = before == null ? undefined : NO_BLOCKS.find((s) => before >= s.lastBlock && before <= s.lastBlock + 1);
+  const early = stretch && seen.blockAt != null && (seen.height <= stretch.lastBlock + END_SPAN || seen.blockAt - stretch.lastBlockAt < END_GAP_MS);
+  const said = early ? { ...seen, blockAt: null } : seen;
   const outcomes = await tell(env, blocksSeenLine(said, HALT.on, now));
   const done: BlocksSeen | null = outcomes.includes('took') ? { ...pending, toldAt: now } : outcomes.every((o) => o === 'refused') ? { ...pending, refusedAt: now } : null;
   // a try whose outcome is unknown stays as written: no further try is made

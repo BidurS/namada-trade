@@ -12,7 +12,7 @@ import type { PosParse } from './parse/namada-pos';
 import { feePayersOf } from './parse/namada-tx';
 import { maspSeenOf, maspSeenStmts } from './masp-seen';
 import { SCANNED_KV, type Scanned } from './masp-activity';
-import { resumedSeen } from '../../shared/halts';
+import { RESUMED_RULE, resumedSeen } from '../../shared/halts';
 import { MASP_COINS_KV, COIN_FALL_FLOOR_USD, MASP_COIN_QUOTE, coinFallWords, coinOf, fallValueUsd, maspCoinsOf, mergeMaspCoins } from './masp-coins';
 import { blockMetas, blockResults, blockTxs, chainHead, headBound, headSince, namadaStatusAll, HEAD_AGREE_BLOCKS, HEAD_BOUND_BLOCK_MS, HEAD_VOTE_MAX_AGE_MS, RpcBreaker, LIVE_READ, type HeadVote, type ReadOpts, type Rpc } from './sources/namada';
 import type { NamadaBlock, MaspCoinSeen } from './parse/namada';
@@ -1442,10 +1442,11 @@ export class LiveHub extends DurableObject<Env> {
     if (done > lastScanned && times.has(done)) {
       await kvSet(this.env.DB, SCANNED_KV, { height: done, ts: times.get(done)!, at: Date.now() } satisfies Scanned).catch((e) => console.error('kv namada.scanned not written:', e));
     }
-    // The first block made after a stretch with no blocks whose end is not in the table (shared/halts.ts): its header
-    // time, recorded once, is the end the checks that compare two times measure against.
+    // The end of a stretch with no blocks whose end is not in the table (shared/halts.ts endAfter, from the first blocks
+    // after it, all read on this run): its header time, recorded once, is the end the checks that compare two times measure against. A record an earlier rule wrote
+    // stays until the ledger tells the end again from the chain and replaces it (cron.ts readResumed).
     for (const r of resumedSeen(lastScanned, done, (h) => times.get(h))) {
-      await this.env.DB.prepare('INSERT INTO kv (key, value, updated_at) VALUES (?, ?, ?) ON CONFLICT(key) DO NOTHING').bind(r.key, JSON.stringify({ height: r.height, ts: r.ts }), Date.now()).run()
+      await this.env.DB.prepare('INSERT INTO kv (key, value, updated_at) VALUES (?, ?, ?) ON CONFLICT(key) DO NOTHING').bind(r.key, JSON.stringify({ height: r.height, ts: r.ts, rule: RESUMED_RULE }), Date.now()).run()
         .catch((e) => console.error(`kv ${r.key} not written (the ledger reads the block's time itself):`, e));
     }
     // What the scan read while the head was agreed on (lastAgreed.read): blocks up to it are not read again.

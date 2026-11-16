@@ -20,7 +20,7 @@ import { runCron, MINT_RULE_KV, resetResumedMemory, type BondListingRecord } fro
 import { NAMADA } from '../worker/src/config';
 import { answeringRpcs, HEAD_MAX_AGE_MS, indexedRpcs, namTotalStake, NO_NODE_AT_HEAD, READ_MAX_SLOW_NODES, transferHeights } from '../worker/src/sources/namada';
 import { blocksSeenKv, resetBlocksSeenMemory } from '../worker/src/blocks-seen';
-import { resumedKv } from '../shared/halts';
+import { RESUMED_RULE, resumedKv } from '../shared/halts';
 import { HALT } from '../shared/halt';
 import { toNam } from '../worker/src/util';
 import { testD1, type TestD1 } from './d1-sqlite';
@@ -447,16 +447,16 @@ describe('the end of the stretch after block 8,517,986, recorded by the tick', (
   const AGREED = '2026-11-02T22:49:51.200Z';
   const AGAIN = Date.UTC(2026, 10, 11, 14, 0, 7);
   const AT = Date.UTC(2026, 10, 11, 14, 5, 5);
-  const metas = { [LAST_BLOCK + 1]: AGREED, [LAST_BLOCK + 2]: new Date(AGAIN).toISOString() };
+  const metas = { [LAST_BLOCK + 1]: AGREED, [LAST_BLOCK + 2]: new Date(AGAIN).toISOString(), [LAST_BLOCK + 3]: new Date(AGAIN + 7000).toISOString() };
   const ahead = (at: number) => ({ [FIRST.host]: { ...AT_HEAD(at - 20_000), height: LAST_BLOCK + 40 }, [LAST.host]: { ...AT_HEAD(at - 20_000), height: LAST_BLOCK + 40 } });
   const blockchainCalls = (calls: string[]) => calls.filter((u) => u.includes(`/blockchain?minHeight=${LAST_BLOCK + 1}`));
 
-  it('the scan\'s run stopped at the block after it, so the scan recorded nothing: the next tick reads both headers once and records the end', async () => {
+  it('the scan\'s run stopped at the block after it, so the scan recorded nothing: the next tick reads the headers after it once and records the end', async () => {
     const db = testD1();
     db.raw.prepare("INSERT INTO kv (key, value, updated_at) VALUES ('namada.cursor', ?, 0)").run(String(LAST_BLOCK + 1));
     const calls = network(ahead(AT), [], { metas });
     await virtualTick({ DB: db, KEPLR_KEY: 'k' }, AT);
-    expect(kv(db, resumedKv(LAST_BLOCK))).toEqual({ height: LAST_BLOCK + 2, ts: AGAIN });
+    expect(kv(db, resumedKv(LAST_BLOCK))).toEqual({ height: LAST_BLOCK + 2, ts: AGAIN, rule: RESUMED_RULE });
     expect(blockchainCalls(calls)).toHaveLength(1);
     // the next tick in the same isolate asks nothing more
     const again = network(ahead(AT + MIN), [], { metas });

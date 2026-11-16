@@ -9,8 +9,10 @@
 // later block are on either side, so no end has to be known for a pair of blocks. A pair of times needs one: the time
 // blocks were made again. A block's header time is the time the block before it was agreed on, so the first block
 // after a stretch carries either the time blocks were made again (when the last block was agreed on only then) or a
-// time seconds after the last block's (when it was agreed on before the stretch); the end is the header time of the
-// first block after the stretch that is END_GAP_MS or more after the last block's (endAfter). The table gives the ends
+// time seconds after the last block's (when it was agreed on before the stretch), and a block made from votes signed
+// during the stretch can carry a time from inside it; the end is the header time of the first of the three blocks after
+// the stretch that is END_GAP_MS or more after the last block's AND is followed by the next block within FOLLOW_GAP_MS
+// (endAfter): blocks were being made at that time. The table gives the ends
 // measured for the stretches of the past (the chain's own blocks, test/fixtures/namada_blockchain_*.json; a test
 // holds them equal). For a stretch whose end is not in the table, this site's block scan records it when it reads the
 // block (kv resumedKv, live-hub.ts), and the ledger reads it from a node when the scan did not. The heights are the
@@ -22,7 +24,7 @@ export interface NoBlocks {
   lastBlock: number;
   /** that block's header time (unix ms) */
   lastBlockAt: number;
-  /** the header time of the first block made after it; null while it is not in the table */
+  /** when blocks were made again: the header time endAfter picks among the first blocks after it; null while it is not in the table */
   resumedAt: number | null;
 }
 
@@ -37,21 +39,37 @@ export const NO_BLOCKS: readonly NoBlocks[] = [
   { lastBlock: 8_517_986, lastBlockAt: Date.UTC(2026, 10, 2, 22, 49, 36, 642), resumedAt: null },
 ];
 
-/** A header this long or more after the last block's is the time blocks were made again; a shorter one is the time the last block was agreed on. */
+/** A header shorter than this after the last block's is the time the last block was agreed on, never the time blocks were made again (one this long or more can be, endAfter). */
 export const END_GAP_MS = 10 * 60_000;
 /**
- * The end of a stretch from the header times of the blocks after it (`timeOf`, by height): the first of the two blocks
- * after its last block whose header is END_GAP_MS or more after the last block's. undefined when a header needed to
- * tell is not known (the next block not read, or not made yet); null when neither of the two is that far after it.
+ * A header followed by the next block's within this is a time blocks were being made. After every restart on record the
+ * second block came at most 25 minutes after the first (the table's stretches, test/fixtures); a header carried from
+ * votes signed during a stretch (8,517,987's commit holds precommits dated 3 November 2026, a day into the current one)
+ * is followed only when blocks are made again, days later.
+ */
+export const FOLLOW_GAP_MS = 3 * 3_600_000;
+/** The blocks after a stretch's last block among which its end is looked for. */
+export const END_SPAN = 3;
+/**
+ * The end of a stretch from the header times of the blocks after it (`timeOf`, by height): the first of the END_SPAN
+ * blocks after its last block whose header is END_GAP_MS or more after the last block's and whose next block's header
+ * is FOLLOW_GAP_MS or less after it (and later than it). undefined when a header needed to tell is not known (not read, or not made yet);
+ * null when none of them is.
  */
 export function endAfter(s: Pick<NoBlocks, 'lastBlock' | 'lastBlockAt'>, timeOf: (height: number) => number | undefined): { height: number; ts: number } | null | undefined {
-  for (const h of [s.lastBlock + 1, s.lastBlock + 2]) {
-    const t = timeOf(h);
-    if (t == null || !Number.isFinite(t)) return undefined;
-    if (t - s.lastBlockAt >= END_GAP_MS) return { height: h, ts: t };
+  const at = (h: number) => { const t = timeOf(h); return t != null && Number.isFinite(t) ? t : undefined; };
+  for (let h = s.lastBlock + 1; h <= s.lastBlock + END_SPAN; h++) {
+    const t = at(h);
+    if (t == null) return undefined;
+    if (t - s.lastBlockAt < END_GAP_MS) continue;
+    const next = at(h + 1);
+    if (next == null) return undefined;
+    if (next > t && next - t <= FOLLOW_GAP_MS) return { height: h, ts: t };
   }
   return null;
 }
+/** The version of the rule a recorded end was told by: a record without it (or with an older one) is told again from the chain. */
+export const RESUMED_RULE = 2;
 /** Where the block scan records the end of a stretch whose end is not in the table (endAfter: the block and its header time). */
 export const resumedKv = (lastBlock: number): string => `halt.resumed.${lastBlock}`;
 /** The stretches whose end is not in the table: the block scan records it. */
@@ -105,3 +123,12 @@ export function notJudgedAcross(s: { lastBlock: number; lastBlockAt: number | nu
 
 /** The fields a check's detail carries for it, so a page can say it in the same words. */
 export const acrossDetail = (s: NoBlocks) => ({ lastBlock: s.lastBlock, lastBlockAt: s.lastBlockAt, resumedAt: s.resumedAt });
+
+/** The end a kv resumedKv record holds, when it was told by the current rule (RESUMED_RULE) and can be an end; else null. */
+export function recordedEnd(s: Pick<NoBlocks, 'lastBlockAt'>, value: string | null | undefined): number | null {
+  let v: { ts?: unknown; rule?: unknown } | null = null;
+  try { v = JSON.parse(value ?? ''); } catch { return null; }
+  if (!v || v.rule !== RESUMED_RULE) return null;
+  const ts = Number(v.ts);
+  return validEnd(s, ts) ? ts : null;
+}

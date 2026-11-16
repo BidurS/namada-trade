@@ -5,11 +5,11 @@
 // shown on stretches from the past, and the pages say it in the same words.
 import { describe, it, expect, vi, afterEach } from 'vitest';
 import { readFileSync, readdirSync } from 'node:fs';
-import { END_GAP_MS, NO_BLOCKS, endAfter, noBlocksAcrossTimes, noBlocksBetween, notJudgedAcross, openStretches, resumedKv, resumedSeen } from '../shared/halts';
+import { END_GAP_MS, END_SPAN, FOLLOW_GAP_MS, NO_BLOCKS, RESUMED_RULE, endAfter, noBlocksAcrossTimes, noBlocksBetween, notJudgedAcross, openStretches, resumedKv, resumedSeen } from '../shared/halts';
 import { INCIDENTS } from '../scripts/incidents';
 import { HALT } from '../shared/halt';
 import { NAMADA } from '../worker/src/config';
-import { chainReachedTo, mintKeysWanted, mintRuleNext, posRemainderNext, posRemainderReads, maspLedgerCheck, readResumed, type MintReading, type BondListingRecord, type MaspDay } from '../worker/src/cron';
+import { END_NONE, END_NOT_YET, chainReachedTo, mintKeysWanted, mintRuleNext, posRemainderNext, posRemainderReads, maspLedgerCheck, readResumed, type MintReading, type BondListingRecord, type MaspDay } from '../worker/src/cron';
 import { checkDetail } from '../web/src/lib/prov';
 import { readDigestFigures } from '../worker/src/digest/figures';
 import { measuredEnds, toMessageFigures } from '../worker/src/digest/build';
@@ -44,6 +44,13 @@ describe('the table of stretches with no blocks', () => {
       expect(s.lastBlockAt, `${s.lastBlock}`).toBe(header.get(s.lastBlock));
       if (s.resumedAt != null) expect(s.resumedAt, `${s.lastBlock}: end`).toBe(endAfter(s, (h) => header.get(h))?.ts);
     }
+    // after every restart on record the next block came within the window, the slowest 25 minutes after (7,914,107)
+    const follows = NO_BLOCKS.filter((s) => s.resumedAt != null).map((s) => {
+      const end = endAfter(s, (h) => header.get(h))!;
+      return header.get(end.height + 1)! - end.ts;
+    });
+    expect(Math.max(...follows)).toBeLessThan(26 * MIN);
+    expect(Math.max(...follows)).toBeLessThan(FOLLOW_GAP_MS);
   });
 
   it('a pair of blocks is across a stretch when one is at its last block or before and the other after it', () => {
@@ -86,15 +93,38 @@ describe('the time blocks were made again after the current stretch', () => {
   const AGREED = Date.UTC(2026, 10, 2, 22, 49, 51, 200);
   const AGAIN = Date.UTC(2026, 10, 11, 14, 0, 7);
 
-  it('the end is the first block after the stretch whose header is well after the last block\'s', () => {
+  // a block made from votes signed during the stretch: 8,517,987's commit holds precommits dated 3 November
+  const OLD_VOTES = Date.UTC(2026, 10, 3, 21, 0, 33);
+
+  it('the end is the first of the blocks after the stretch whose header is well after the last block\'s and is followed by the next block soon after', () => {
     const s = { lastBlock: 8_517_986, lastBlockAt: LAST_AT };
+    const end = (m: [number, number][]) => endAfter(s, (h) => new Map(m).get(h));
     expect(END_GAP_MS).toBe(10 * MIN);
-    expect(endAfter(s, (h) => new Map([[8_517_987, AGREED], [8_517_988, AGAIN]]).get(h))).toEqual({ height: 8_517_988, ts: AGAIN });
+    expect(FOLLOW_GAP_MS).toBe(3 * H);
+    expect(END_SPAN).toBe(3);
+    expect(end([[8_517_987, AGREED], [8_517_988, AGAIN], [8_517_989, AGAIN + 7000]])).toEqual({ height: 8_517_988, ts: AGAIN });
     // the shape of every stretch before: the last block agreed on only when blocks were made again
-    expect(endAfter(s, (h) => new Map([[8_517_987, AGAIN]]).get(h))).toEqual({ height: 8_517_987, ts: AGAIN });
-    // the block after next not known: cannot be told yet; neither far after: none
-    expect(endAfter(s, (h) => new Map([[8_517_987, AGREED]]).get(h))).toBeUndefined();
-    expect(endAfter(s, (h) => new Map([[8_517_987, AGREED], [8_517_988, AGREED + 7000]]).get(h))).toBeNull();
+    expect(end([[8_517_987, AGAIN], [8_517_988, AGAIN + 7000]])).toEqual({ height: 8_517_987, ts: AGAIN });
+    // a slow restart (the second block 25 minutes after the first, as after 7,914,107) still ends at the first
+    expect(end([[8_517_987, AGAIN], [8_517_988, AGAIN + 25 * MIN]])).toEqual({ height: 8_517_987, ts: AGAIN });
+    // the header of the block after next carries the old-dated votes: it is followed only days later, so it is no end
+    expect(end([[8_517_987, AGREED], [8_517_988, OLD_VOTES], [8_517_989, AGAIN], [8_517_990, AGAIN + 7000]])).toEqual({ height: 8_517_989, ts: AGAIN });
+    // a header needed to tell it not known: cannot be told yet
+    expect(end([[8_517_987, AGREED]])).toBeUndefined();
+    expect(end([[8_517_987, AGREED], [8_517_988, AGAIN]])).toBeUndefined();
+    expect(end([[8_517_987, AGREED], [8_517_988, OLD_VOTES], [8_517_989, AGAIN]])).toBeUndefined();
+    // none of the three is an end: none
+    expect(end([[8_517_987, AGREED], [8_517_988, AGREED + 7000], [8_517_989, AGREED + 14000]])).toBeNull();
+    expect(end([[8_517_987, AGREED], [8_517_988, OLD_VOTES], [8_517_989, OLD_VOTES + 4 * H], [8_517_990, AGAIN]])).toBeNull();
+    // a next header earlier than the candidate (a node answering out of order) does not make it an end
+    expect(end([[8_517_987, AGAIN], [8_517_988, AGAIN - 1000], [8_517_989, AGAIN + 7000], [8_517_990, AGAIN + 14000]])).toEqual({ height: 8_517_988, ts: AGAIN - 1000 });
+  });
+
+  it('the block scan records the end after the old-dated block only when the block after the end is read on the same run', () => {
+    const times = new Map([[8_517_987, AGREED], [8_517_988, OLD_VOTES], [8_517_989, AGAIN], [8_517_990, AGAIN + 7000]]);
+    expect(resumedSeen(8_517_986, 8_517_995, (h) => times.get(h))).toEqual([{ key: resumedKv(8_517_986), height: 8_517_989, ts: AGAIN }]);
+    // the run stopped at 8,517,989: the block after it not read, nothing recorded (the ledger reads it)
+    expect(resumedSeen(8_517_986, 8_517_989, (h) => times.get(h))).toEqual([]);
   });
 
   it('the block scan records it once, when the blocks that tell it are read on one run', () => {
@@ -113,10 +143,10 @@ describe('the time blocks were made again after the current stretch', () => {
     expect(chainReachedTo(undefined, undefined)).toBeNull();
   });
 
-  it('the ledger reads it as recorded; with no record, or one that cannot be an end, reads the two headers from a node and records the end; a read that cannot tell it throws', async () => {
+  it('the ledger reads it as recorded; with no record, or one that cannot be an end, reads the headers after it from a node and records the end; a read that cannot tell it throws', async () => {
     const node = { rpcs: [{ provider: 'a', url: 'https://node.example' }], retries: 0 };
     const recorded = testD1();
-    recorded.raw.prepare('INSERT INTO kv (key, value, updated_at) VALUES (?, ?, 0)').run(resumedKv(8_517_986), JSON.stringify({ height: 8_517_988, ts: AGAIN }));
+    recorded.raw.prepare('INSERT INTO kv (key, value, updated_at) VALUES (?, ?, 0)').run(resumedKv(8_517_986), JSON.stringify({ height: 8_517_988, ts: AGAIN, rule: RESUMED_RULE }));
     expect(await readResumed(recorded as any, 8_518_500, {})).toEqual({ 8_517_986: AGAIN });
     // the scan not past the stretch: nothing to read
     expect(await readResumed(testD1() as any, 8_517_986, {})).toEqual({});
@@ -129,13 +159,26 @@ describe('the time blocks were made again after the current stretch', () => {
     // a record of the block agreed on seconds after the last one (as the scan of an earlier version wrote it) is no end
     const db = testD1();
     db.raw.prepare('INSERT INTO kv (key, value, updated_at) VALUES (?, ?, 0)').run(resumedKv(8_517_986), JSON.stringify({ height: 8_517_987, ts: AGREED }));
-    vi.stubGlobal('fetch', answer([meta(8_517_988, '2026-11-11T14:00:07.000Z'), meta(8_517_987, '2026-11-02T22:49:51.200Z')]));
+    vi.stubGlobal('fetch', answer([meta(8_517_989, '2026-11-11T14:00:14.000Z'), meta(8_517_988, '2026-11-11T14:00:07.000Z'), meta(8_517_987, '2026-11-02T22:49:51.200Z')]));
     expect(await readResumed(db as any, 8_518_500, node)).toEqual({ 8_517_986: AGAIN });
-    expect(JSON.parse((db.raw.prepare('SELECT value FROM kv WHERE key = ?').get(resumedKv(8_517_986)) as any).value)).toEqual({ height: 8_517_988, ts: AGAIN });
+    expect(JSON.parse((db.raw.prepare('SELECT value FROM kv WHERE key = ?').get(resumedKv(8_517_986)) as any).value)).toEqual({ height: 8_517_988, ts: AGAIN, rule: RESUMED_RULE });
+
+    // a record an earlier rule wrote, holding the time the old-dated votes carry: told again from the chain and replaced
+    const old = testD1();
+    old.raw.prepare('INSERT INTO kv (key, value, updated_at) VALUES (?, ?, 0)').run(resumedKv(8_517_986), JSON.stringify({ height: 8_517_988, ts: Date.UTC(2026, 10, 3, 21, 0, 33) }));
+    vi.stubGlobal('fetch', answer([meta(8_517_987, '2026-11-02T22:49:51.200Z'), meta(8_517_988, '2026-11-03T21:00:33.000Z'), meta(8_517_989, '2026-11-11T14:00:07.000Z'), meta(8_517_990, '2026-11-11T14:00:14.000Z')]));
+    expect(await readResumed(old as any, 8_518_500, node)).toEqual({ 8_517_986: AGAIN });
+    expect(JSON.parse((old.raw.prepare('SELECT value FROM kv WHERE key = ?').get(resumedKv(8_517_986)) as any).value)).toEqual({ height: 8_517_989, ts: AGAIN, rule: RESUMED_RULE });
 
     // the chain at the block after the stretch only, its header the old agreement: the end cannot be told yet
     vi.stubGlobal('fetch', answer([meta(8_517_987, '2026-11-02T22:49:51.200Z')]));
     await expect(readResumed(testD1() as any, 8_517_987, node)).rejects.toThrow(/cannot be told yet/);
+
+    // the end needs a block not made yet, or none of the blocks after the stretch ends it: two different errors
+    vi.stubGlobal('fetch', answer([meta(8_517_987, '2026-11-02T22:49:51.200Z'), meta(8_517_988, '2026-11-03T21:00:33.000Z')]));
+    await expect(readResumed(testD1() as any, 8_517_988, node)).rejects.toMatchObject({ name: END_NOT_YET });
+    vi.stubGlobal('fetch', answer([meta(8_517_987, '2026-11-02T22:49:51.200Z'), meta(8_517_988, '2026-11-03T21:00:33.000Z'), meta(8_517_989, '2026-11-04T09:00:00.000Z'), meta(8_517_990, '2026-11-11T14:00:07.000Z')]));
+    await expect(readResumed(testD1() as any, 8_518_500, node)).rejects.toMatchObject({ name: END_NONE });
 
     vi.stubGlobal('fetch', vi.fn(async () => new Response('down', { status: 502 })));
     await expect(readResumed(testD1() as any, 8_518_500, node)).rejects.toThrow();
@@ -240,7 +283,7 @@ describe('the shielded pool\'s daily ledger', () => {
 });
 
 describe('the ends the digest takes', () => {
-  const row = (lastBlock: number, ts: number) => ({ key: resumedKv(lastBlock), value: JSON.stringify({ height: lastBlock + 2, ts }) });
+  const row = (lastBlock: number, ts: number) => ({ key: resumedKv(lastBlock), value: JSON.stringify({ height: lastBlock + 2, ts, rule: RESUMED_RULE }) });
   const AGAIN = Date.UTC(2026, 10, 11, 14, 0, 7);
   it('a recorded end is taken; with the scan past the stretch and no end that can be one, none can be relied on', () => {
     expect(measuredEnds([row(8_517_986, AGAIN)], '8518100')).toEqual({ 8_517_986: AGAIN });
@@ -249,6 +292,8 @@ describe('the ends the digest takes', () => {
     // past it with no record, or with a record of the block agreed on seconds after the last one: not relied on
     expect(measuredEnds([], '8517987')).toBeNull();
     expect(measuredEnds([row(8_517_986, Date.UTC(2026, 10, 2, 22, 49, 51))], '8518100')).toBeNull();
+    // a record an earlier rule told is not relied on until the ledger tells it again
+    expect(measuredEnds([{ key: resumedKv(8_517_986), value: JSON.stringify({ height: 8_517_988, ts: AGAIN }) }], '8518100')).toBeNull();
     // a read that failed: the rows, or the cursor
     expect(measuredEnds(null, '8518100')).toBeNull();
     expect(measuredEnds([row(8_517_986, AGAIN)], undefined)).toEqual({ 8_517_986: AGAIN });

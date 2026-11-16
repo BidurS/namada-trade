@@ -33,7 +33,7 @@ import { INDEXER_IBC_STATUS, STUCK_PACKETS_KV, innerTxOfRow, reconcileStuckPacke
 import type { AlertsPending, LiveBondStatus, LiveUnbondStatus, LiveScanStatus } from './live-hub';
 import { SCANNED_KV, scannedOf } from './masp-activity';
 import { noteBlocksSeen, type StatusLike } from './blocks-seen';
-import { acrossDetail, endAfter, noBlocksAcrossTimes, noBlocksBetween, notJudgedAcross, openStretches, resumedKv, validEnd } from '../../shared/halts';
+import { END_GAP_MS, END_SPAN, FOLLOW_GAP_MS, RESUMED_RULE, acrossDetail, endAfter, noBlocksAcrossTimes, noBlocksBetween, notJudgedAcross, openStretches, recordedEnd, resumedKv } from '../../shared/halts';
 import type { AlertsSkipped } from './sources/discord';
 import {
   INTERNAL_ADDRS, BALANCE_LISTING_SRC, BOND_LISTING_SRC, SPAN_EXTEND_MS, HAS_READING, listingTimes, readHolderFigures, refreshHolderFigures, figuresDue,
@@ -935,8 +935,14 @@ export interface MaspLedgerInputs {
 
 /** The stretches whose end this isolate has seen recorded (readResumed in the tick): not asked again. */
 const resumedRecorded = new Set<number>();
+/** When this isolate last found that none of the blocks after a stretch ends it (END_NONE), by last block: asked again only after RESUMED_NONE_RETRY_MS. */
+const resumedNone = new Map<number, number>();
+/** How long the tick waits before asking again after none of the blocks after a stretch ended it. */
+export const RESUMED_NONE_RETRY_MS = 3_600_000;
 /** Forgets what this isolate knows of recorded ends (the tests' fresh isolate). */
-export const resetResumedMemory = () => resumedRecorded.clear();
+export const resetResumedMemory = () => { resumedRecorded.clear(); resumedNone.clear(); };
+/** readResumed's error names: a block the end needs is not made yet (asked again next tick, quietly), or none of the blocks after the stretch ends it. */
+export const END_NOT_YET = 'EndNotYet', END_NONE = 'EndNone';
 /** How far the chain is known to have reached: the block scan's cursor or a node's newest block, whichever is higher (the scan may stand just below the head). */
 export const chainReachedTo = (cursor: { height: number } | null | undefined, headHeight: number | null | undefined): number | null =>
   Math.max(Number.isFinite(cursor?.height) ? cursor!.height : 0, Number.isFinite(headHeight) ? headHeight! : 0) || null;
@@ -944,9 +950,9 @@ export const chainReachedTo = (cursor: { height: number } | null | undefined, he
 /**
  * The end of each stretch whose end is not in the table (shared/halts.ts endAfter), by the stretch's last block: as the
  * block scan recorded it (kv resumedKv), or, when the chain is past the stretch (`pastTo`: the scan's cursor or a
- * node's newest block) and no record that can be an end is there, read from a node now (the headers of the two blocks
- * after it) and recorded. Throws when a record or the read fails, or when the chain is past the stretch and its end
- * cannot be told yet (the block after next not made), so the ledger tries the day again rather than judge it.
+ * node's newest block) and no record the current rule told is there, read from a node now (the headers of the blocks
+ * after it, shared/halts.ts endAfter) and recorded. Throws when a record or the read fails, or when the chain is past the
+ * stretch and its end cannot be told yet (a block it needs not made), so the ledger tries the day again rather than judge it.
  */
 export async function readResumed(db: D1Database, pastTo: number | null, read: ReadOpts): Promise<Record<number, number>> {
   const open = openStretches();
@@ -955,15 +961,17 @@ export async function readResumed(db: D1Database, pastTo: number | null, read: R
   const rows = (await db.prepare(`SELECT key, value FROM kv WHERE key IN (${keys.map(() => '?').join(', ')})`).bind(...keys).all<{ key: string; value: string }>()).results ?? [];
   const out: Record<number, number> = {};
   for (const s of open) {
-    const v = safeParseJson(rows.find((r) => r.key === resumedKv(s.lastBlock))?.value ?? '', null) as { ts?: unknown } | null;
-    if (v && validEnd(s, Number(v.ts))) { out[s.lastBlock] = Number(v.ts); continue; }
+    const ts = recordedEnd(s, rows.find((r) => r.key === resumedKv(s.lastBlock))?.value);
+    if (ts != null) { out[s.lastBlock] = ts; continue; }
     if (pastTo == null || pastTo <= s.lastBlock) continue;
-    const metas = await blockMetas(s.lastBlock + 1, Math.min(s.lastBlock + 2, pastTo), read);
+    const top = Math.min(s.lastBlock + END_SPAN + 1, pastTo);
+    const metas = await blockMetas(s.lastBlock + 1, top, read);
     const end = endAfter(s, (h) => metas.find((x) => x.height === h)?.ts);
-    if (!end) throw new Error(`the end of the stretch after block ${s.lastBlock} cannot be told yet from blocks ${s.lastBlock + 1} to ${Math.min(s.lastBlock + 2, pastTo)}`);
+    if (end === undefined) throw Object.assign(new Error(`the end of the stretch after block ${s.lastBlock} cannot be told yet from blocks ${s.lastBlock + 1} to ${top}`), { name: END_NOT_YET });
+    if (end === null) throw Object.assign(new Error(`none of blocks ${s.lastBlock + 1} to ${s.lastBlock + END_SPAN} after the stretch ends it: each is within ${END_GAP_MS / 60_000} minutes of the last block, or is not followed by the next within ${FOLLOW_GAP_MS / 3_600_000} hours; the end has to be put in shared/halts.ts by hand`), { name: END_NONE });
     out[s.lastBlock] = end.ts;
-    // written over a record that cannot be an end (the block agreed on seconds after the last one)
-    await db.prepare('INSERT OR REPLACE INTO kv (key, value, updated_at) VALUES (?, ?, ?)').bind(resumedKv(s.lastBlock), JSON.stringify({ height: end.height, ts: end.ts }), Date.now()).run();
+    // written over a record that cannot be an end, or one an earlier rule told (it may hold a time from inside the stretch)
+    await db.prepare('INSERT OR REPLACE INTO kv (key, value, updated_at) VALUES (?, ?, ?)').bind(resumedKv(s.lastBlock), JSON.stringify({ height: end.height, ts: end.ts, rule: RESUMED_RULE }), Date.now()).run();
   }
   return out;
 }
@@ -2985,15 +2993,25 @@ export async function runCron(env: Env) {
     }
 
     // The end of a stretch with no blocks whose end is not in the table, recorded within a minute of the block that
-    // tells it (readResumed: the two headers after the stretch, one read), whatever the block scan's runs recorded. Only
-    // while such a stretch has no end recorded here and the chain has reached the second block after it; once each is
-    // recorded the isolate stops asking (resumedRecorded).
+    // tells it (readResumed: the headers of the blocks after the stretch, one read), whatever the block scan's runs
+    // recorded. Only while such a stretch has no end recorded here and the chain has reached the second block after it;
+    // the end can need up to END_SPAN + 1 blocks after it, and until those are made the read is tried next tick without
+    // a log. When none of them ends it, it is logged and asked again only an hour later. Once each is recorded the
+    // isolate stops asking (resumedRecorded).
     if (!late()) {
       const reached = chainReachedTo(ix?.namadaCursor, headHeight);
-      const due = openStretches().filter((s) => !resumedRecorded.has(s.lastBlock) && reached != null && reached > s.lastBlock + 1);
+      const nowMs = Date.now();
+      const due = openStretches().filter((s) => !resumedRecorded.has(s.lastBlock) && reached != null && reached > s.lastBlock + 1
+        && nowMs - (resumedNone.get(s.lastBlock) ?? -Infinity) >= RESUMED_NONE_RETRY_MS);
       if (due.length) {
         await readResumed(env.DB, reached, nread)
-          .then((r) => { for (const s of due) if (r[s.lastBlock] != null) resumedRecorded.add(s.lastBlock); }, (e) => console.error('the end of a halt was not recorded this tick', redact(String(e))));
+          .then((r) => { for (const s of due) if (r[s.lastBlock] != null) resumedRecorded.add(s.lastBlock); }, (e: unknown) => {
+            const name = (e as { name?: string })?.name;
+            // a block the end needs not made yet: the next tick asks again, nothing logged
+            if (name === END_NOT_YET) return;
+            if (name === END_NONE) for (const s of due) resumedNone.set(s.lastBlock, nowMs);
+            console.error('the end of a halt was not recorded this tick', redact(String(e)));
+          });
       }
     }
 

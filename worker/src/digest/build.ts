@@ -5,7 +5,7 @@
 // not read: no field falls back to a default that could print 0), places the attention section, attaches the files
 // the embeds name, and returns each recipient's Discord posts in order. readAndBuildDigest runs every read of one
 // digest with its bounds; nothing here posts anything, claims anything or writes to the database.
-import { openStretches, validEnd } from '../../../shared/halts';
+import { NO_BLOCKS, openStretches, recordedEnd, validEnd } from '../../../shared/halts';
 import {
   collectDigestReads, shapeDigestFigures,
   type Anchors, type DigestFigures as ReadFigures, type DigestReads, type RequestKind,
@@ -887,9 +887,10 @@ export function measuredEnds(rows: readonly { key: string; value: string }[] | n
   const out: Record<number, number> = {};
   for (const r of rows) {
     const lastBlock = Number(r.key.slice('halt.resumed.'.length));
-    let ts = Number.NaN;
-    try { ts = Number(JSON.parse(r.value)?.ts); } catch { /* a record that cannot be read is no end */ }
-    if (Number.isInteger(lastBlock) && Number.isFinite(ts)) out[lastBlock] = ts;
+    // a record that cannot be read, or one an earlier rule told, is no end (the ledger tells it again)
+    const s = NO_BLOCKS.find((x) => x.lastBlock === lastBlock);
+    const ts = s ? recordedEnd(s, r.value) : null;
+    if (ts != null) out[lastBlock] = ts;
   }
   const at = cursor === undefined ? Number.NaN : Number(cursor);
   const past = (s: { lastBlock: number }) => cursor === undefined || (Number.isFinite(at) && at > s.lastBlock);
