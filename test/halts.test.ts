@@ -44,13 +44,14 @@ describe('the table of stretches with no blocks', () => {
       expect(s.lastBlockAt, `${s.lastBlock}`).toBe(header.get(s.lastBlock));
       if (s.resumedAt != null) expect(s.resumedAt, `${s.lastBlock}: end`).toBe(endAfter(s, (h) => header.get(h))?.ts);
     }
-    // after every restart on record the next block came within the window, the slowest 25 minutes after (7,914,107)
+    // after every restart on record the end is followed by the next block within seconds, and three first blocks
+    // after a stretch carried a header 11 to 25 minutes early (the median of their commit's signing times): no end
     const follows = NO_BLOCKS.filter((s) => s.resumedAt != null).map((s) => {
       const end = endAfter(s, (h) => header.get(h))!;
       return header.get(end.height + 1)! - end.ts;
     });
-    expect(Math.max(...follows)).toBeLessThan(26 * MIN);
-    expect(Math.max(...follows)).toBeLessThan(FOLLOW_GAP_MS);
+    expect(Math.max(...follows)).toBeLessThan(MIN);
+    expect(NO_BLOCKS.filter((s) => s.resumedAt != null).map((s) => endAfter(s, (h) => header.get(h))!.height - s.lastBlock)).toEqual([1, 1, 1, 2, 2, 2]);
   });
 
   it('a pair of blocks is across a stretch when one is at its last block or before and the other after it', () => {
@@ -80,7 +81,7 @@ describe('the table of stretches with no blocks', () => {
   });
 
   it('says it in measured words: from when to when no block was made, or for a time after which block', () => {
-    expect(words(notJudgedAcross(stretch(8_200_078)))).toBe('not judged across a halt: Namada made no blocks from 7 Oct 2026, 10:12 UTC (block 8,200,078) to 8 Oct 2026, 17:03 UTC');
+    expect(words(notJudgedAcross(stretch(8_200_078)))).toBe('not judged across a halt: Namada made no blocks from 7 Oct 2026, 10:12 UTC (block 8,200,078) to 8 Oct 2026, 17:14 UTC');
     expect(words(notJudgedAcross(stretch(8_517_986)))).toBe('not judged across a halt: Namada made no blocks for a time after block 8,517,986 (2 Nov 2026, 22:49 UTC)');
   });
 });
@@ -100,13 +101,15 @@ describe('the time blocks were made again after the current stretch', () => {
     const s = { lastBlock: 8_517_986, lastBlockAt: LAST_AT };
     const end = (m: [number, number][]) => endAfter(s, (h) => new Map(m).get(h));
     expect(END_GAP_MS).toBe(10 * MIN);
-    expect(FOLLOW_GAP_MS).toBe(3 * H);
+    expect(FOLLOW_GAP_MS).toBe(5 * MIN);
     expect(END_SPAN).toBe(3);
     expect(end([[8_517_987, AGREED], [8_517_988, AGAIN], [8_517_989, AGAIN + 7000]])).toEqual({ height: 8_517_988, ts: AGAIN });
     // the shape of every stretch before: the last block agreed on only when blocks were made again
     expect(end([[8_517_987, AGAIN], [8_517_988, AGAIN + 7000]])).toEqual({ height: 8_517_987, ts: AGAIN });
-    // a slow restart (the second block 25 minutes after the first, as after 7,914,107) still ends at the first
-    expect(end([[8_517_987, AGAIN], [8_517_988, AGAIN + 25 * MIN]])).toEqual({ height: 8_517_987, ts: AGAIN });
+    // a first header early by the commit's median (the next block 25 minutes after it, as after 7,914,107): the next one is the end
+    expect(end([[8_517_987, AGAIN - 25 * MIN], [8_517_988, AGAIN], [8_517_989, AGAIN + 7000]])).toEqual({ height: 8_517_988, ts: AGAIN });
+    // the header after the old-dated block early by minutes (some validators back before the rest): no end, the next is
+    expect(end([[8_517_987, AGREED], [8_517_988, AGAIN - 60 * MIN], [8_517_989, AGAIN], [8_517_990, AGAIN + 7000]])).toEqual({ height: 8_517_989, ts: AGAIN });
     // the header of the block after next carries the old-dated votes: it is followed only days later, so it is no end
     expect(end([[8_517_987, AGREED], [8_517_988, OLD_VOTES], [8_517_989, AGAIN], [8_517_990, AGAIN + 7000]])).toEqual({ height: 8_517_989, ts: AGAIN });
     // a header needed to tell it not known: cannot be told yet
@@ -115,7 +118,7 @@ describe('the time blocks were made again after the current stretch', () => {
     expect(end([[8_517_987, AGREED], [8_517_988, OLD_VOTES], [8_517_989, AGAIN]])).toBeUndefined();
     // none of the three is an end: none
     expect(end([[8_517_987, AGREED], [8_517_988, AGREED + 7000], [8_517_989, AGREED + 14000]])).toBeNull();
-    expect(end([[8_517_987, AGREED], [8_517_988, OLD_VOTES], [8_517_989, OLD_VOTES + 4 * H], [8_517_990, AGAIN]])).toBeNull();
+    expect(end([[8_517_987, AGREED], [8_517_988, OLD_VOTES], [8_517_989, AGAIN - 30 * MIN], [8_517_990, AGAIN]])).toBeNull();
     // a next header earlier than the candidate (a node answering out of order) does not make it an end
     expect(end([[8_517_987, AGAIN], [8_517_988, AGAIN - 1000], [8_517_989, AGAIN + 7000], [8_517_990, AGAIN + 14000]])).toEqual({ height: 8_517_988, ts: AGAIN - 1000 });
   });
@@ -199,7 +202,7 @@ describe('the mint rule, on the stretch after block 7,914,153', () => {
     expect(across.detail).toMatchObject({ verdict: 'not-judged', why: 'halt', fromHeight: 7_914_153, halt: { lastBlock: 7_914_153 } });
     expect(across.status).not.toBe('warn');
     expect(across.state).toMatchObject({ anchor: { height: 7_914_160 }, pending: null, broke: null, unjudged: null });
-    expect(words(lineOf('supply_mint_rule', across.status, across.detail))).toBe('Not judged across a halt: Namada made no blocks from 6 Sep 2026, 13:45 UTC (block 7,914,153) to 14 Sep 2026, 16:50 UTC');
+    expect(words(lineOf('supply_mint_rule', across.status, across.detail))).toBe('Not judged across a halt: Namada made no blocks from 6 Sep 2026, 13:45 UTC (block 7,914,153) to 14 Sep 2026, 17:04 UTC');
     const next = mintRuleNext(across.state, r(2500, m0 + 5n, 7_914_170, T + 9 * D + MIN), null, T + 9 * D + MIN);
     expect(next.detail).toMatchObject({ verdict: 'same' });
     expect(next.status).toBe('ok');
@@ -239,7 +242,7 @@ describe('the staking account\'s remainder, on the stretch after block 8,200,078
     expect(across.row!.params[1]).toBe('idle');
     expect(d).toMatchObject({ judged: false, notJudged: 'halt', fromHeight: 8_200_000, halt: { lastBlock: 8_200_078 } });
     expect(across.state.last).toMatchObject({ height: 8_200_120 });
-    expect(words(lineOf('pos_remainder', 'idle', d))).toBe('Not judged across a halt: Namada made no blocks from 7 Oct 2026, 10:12 UTC (block 8,200,078) to 8 Oct 2026, 17:03 UTC');
+    expect(words(lineOf('pos_remainder', 'idle', d))).toBe('Not judged across a halt: Namada made no blocks from 7 Oct 2026, 10:12 UTC (block 8,200,078) to 8 Oct 2026, 17:14 UTC');
     // one epoch apart with no stretch between: the inflation is read, as before
     expect(posRemainderReads(first.state, rec({ height: 8_200_050, epoch: 2601 }))).toEqual({ inflation: true });
   });
@@ -261,7 +264,7 @@ describe('the shielded pool\'s daily ledger', () => {
   it('on the stretch after block 8,200,078: the day blocks were made again is not judged, the day after is', () => {
     const across = judge(day(Date.UTC(2026, 9, 8)), {});
     expect(across).toMatchObject({ status: 'idle', detail: { judged: false, notJudged: 'halt', halt: { lastBlock: 8_200_078 } } });
-    expect(words(lineOf('masp_ledger', 'idle', across.detail))).toBe('8 Oct 2026: not judged across a halt: Namada made no blocks from 7 Oct 2026, 10:12 UTC (block 8,200,078) to 8 Oct 2026, 17:03 UTC');
+    expect(words(lineOf('masp_ledger', 'idle', across.detail))).toBe('8 Oct 2026: not judged across a halt: Namada made no blocks from 7 Oct 2026, 10:12 UTC (block 8,200,078) to 8 Oct 2026, 17:14 UTC');
     expect(judge(day(Date.UTC(2026, 9, 9)), {}).detail).toMatchObject({ judged: true });
   });
 
@@ -312,7 +315,7 @@ describe('the digest\'s two balance lines', () => {
     const moved = JSON.parse(JSON.stringify(fig));
     for (const m of [moved.bridge.value.escrow, moved.masp.value.balance]) { m.bases[0].base.at = Date.UTC(2026, 9, 8, 8); m.at = Date.UTC(2026, 9, 9, 8); }
     const said = words(JSON.stringify(renderShared(moved, SURVEY_T, 'daily').embed));
-    const across = '(not judged across a halt: Namada made no blocks from 7 Oct 2026, 10:12 UTC (block 8,200,078) to 8 Oct 2026, 17:03 UTC)';
+    const across = '(not judged across a halt: Namada made no blocks from 7 Oct 2026, 10:12 UTC (block 8,200,078) to 8 Oct 2026, 17:14 UTC)';
     expect(said.split(across).length - 1).toBe(2);
     expect(said).not.toContain('shielded rewards accrue');
 

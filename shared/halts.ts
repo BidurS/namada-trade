@@ -33,21 +33,24 @@ export const NO_BLOCKS: readonly NoBlocks[] = [
   { lastBlock: 4_514_501, lastBlockAt: Date.UTC(2025, 11, 2, 16, 23, 46, 260), resumedAt: Date.UTC(2025, 11, 2, 18, 23, 14, 740) },
   { lastBlock: 7_912_187, lastBlockAt: Date.UTC(2026, 8, 1, 23, 43, 16, 697), resumedAt: Date.UTC(2026, 8, 2, 3, 6, 47, 809) },
   { lastBlock: 7_913_446, lastBlockAt: Date.UTC(2026, 8, 2, 6, 16, 49, 514), resumedAt: Date.UTC(2026, 8, 3, 15, 42, 46, 238) },
-  { lastBlock: 7_914_107, lastBlockAt: Date.UTC(2026, 8, 3, 17, 31, 2, 225), resumedAt: Date.UTC(2026, 8, 6, 13, 12, 47, 329) },
-  { lastBlock: 7_914_153, lastBlockAt: Date.UTC(2026, 8, 6, 13, 45, 22, 59), resumedAt: Date.UTC(2026, 8, 14, 16, 50, 23, 85) },
-  { lastBlock: 8_200_078, lastBlockAt: Date.UTC(2026, 9, 7, 10, 12, 15, 744), resumedAt: Date.UTC(2026, 9, 8, 17, 3, 23, 821) },
+  { lastBlock: 7_914_107, lastBlockAt: Date.UTC(2026, 8, 3, 17, 31, 2, 225), resumedAt: Date.UTC(2026, 8, 6, 13, 37, 42, 436) },
+  { lastBlock: 7_914_153, lastBlockAt: Date.UTC(2026, 8, 6, 13, 45, 22, 59), resumedAt: Date.UTC(2026, 8, 14, 17, 4, 34, 194) },
+  { lastBlock: 8_200_078, lastBlockAt: Date.UTC(2026, 9, 7, 10, 12, 15, 744), resumedAt: Date.UTC(2026, 9, 8, 17, 14, 23, 595) },
   { lastBlock: 8_517_986, lastBlockAt: Date.UTC(2026, 10, 2, 22, 49, 36, 642), resumedAt: null },
 ];
 
 /** A header shorter than this after the last block's is the time the last block was agreed on, never the time blocks were made again (one this long or more can be, endAfter). */
 export const END_GAP_MS = 10 * 60_000;
 /**
- * A header followed by the next block's within this is a time blocks were being made. After every restart on record the
- * second block came at most 25 minutes after the first (the table's stretches, test/fixtures); a header carried from
- * votes signed during a stretch (8,517,987's commit holds precommits dated 3 November 2026, a day into the current one)
- * is followed only when blocks are made again, days later.
+ * A header followed by the next block's within this is a time blocks were being made (Namada makes a block every 6 to 7
+ * seconds). A block's header is the weighted median of the signing times in the commit of the block before it, so the
+ * first block after a restart can carry a time earlier than when blocks moved: signatures made before or during the
+ * stretch count among the earliest (8,517,987's commit holds 21.53% of power precommitted on 3 November 2026), and
+ * after past restarts the first block's header was 11 to 25 minutes before the next one's (7,914,107, 7,914,153,
+ * 8,200,078). Such a header is followed by the next only minutes or days later and is no end; the next one, signed
+ * once blocks move, is.
  */
-export const FOLLOW_GAP_MS = 3 * 3_600_000;
+export const FOLLOW_GAP_MS = 5 * 60_000;
 /** The blocks after a stretch's last block among which its end is looked for. */
 export const END_SPAN = 3;
 /**
@@ -69,7 +72,7 @@ export function endAfter(s: Pick<NoBlocks, 'lastBlock' | 'lastBlockAt'>, timeOf:
   return null;
 }
 /** The version of the rule a recorded end was told by: a record without it (or with an older one) is told again from the chain. */
-export const RESUMED_RULE = 2;
+export const RESUMED_RULE = 3;
 /** Where the block scan records the end of a stretch whose end is not in the table (endAfter: the block and its header time). */
 export const resumedKv = (lastBlock: number): string => `halt.resumed.${lastBlock}`;
 /** The stretches whose end is not in the table: the block scan records it. */
