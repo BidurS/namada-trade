@@ -20,7 +20,7 @@ import { citations, GUIDE_INDEPENDENCE, type GPara } from '../../shared/guide-ty
 import { networkStatus } from '../../shared/halt';
 import { API_CATALOG, API_GROUPS } from '../../shared/api-catalog';
 import { API_LIMITS } from '../../shared/api-limits';
-import { facts, statesFigures, AGENT_NOTES } from './seo';
+import { facts, statesFigures, AGENT_NOTES, SUPPORT_NOTES } from './seo';
 import { clientKey } from './client-key';
 
 type Facts = Awaited<ReturnType<typeof facts>>;
@@ -178,6 +178,8 @@ export async function llmsFullTxt(env: Env | null): Promise<Response> {
 > ${SITE.description} ${SITE.disclaimer}
 
 ${AGENT_NOTES} Every figure below states its source and the time it was read; a figure that was not read is left out.
+
+${SUPPORT_NOTES}
 
 ${order.map((r) => pageMarkdown(r, f).trimEnd()).join('\n\n---\n\n')}
 `;

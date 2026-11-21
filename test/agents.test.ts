@@ -10,7 +10,7 @@ import { GUIDES } from '../shared/guides';
 import { API_CATALOG } from '../shared/api-catalog';
 import { AGENT_ROUTES, documentedPath, notOffered, markdownPath, markdownRoute, pageMarkdown, wantsMarkdown, MCP_VERSIONS } from '../worker/src/agents';
 import { BANNED } from './banned-words';
-import { pageHtml, guideHtml, AGENT_NOTES } from '../worker/src/seo';
+import { pageHtml, guideHtml, AGENT_NOTES, SUPPORT_NOTES } from '../worker/src/seo';
 import { CACHE_PARAMS } from '../worker/src/http';
 import { networkStatus } from '../shared/halt';
 
@@ -138,6 +138,10 @@ describe('pages as Markdown', () => {
     // the tool server is named only once it is live
     for (const t of [llms, full, await (await get('/robots.txt')).text()]) expect(t.includes('/mcp')).toBe(SITE.mcpLive);
     expect(await (await get('/robots.txt')).text()).toContain('/llms-full.txt');
+    // the footer's coffee addresses, exactly as the footer shows them, in all three files
+    for (const t of [llms, full]) for (const a of [SITE.donateShielded, SITE.donateZcash]) expect(t).toContain(`\`${a}\``);
+    expect(llms).toContain(`## Support\n\n${SUPPORT_NOTES}\n`);
+    expect(await (await get('/robots.txt')).text()).toContain('/llms.txt says how to send its maker a gift');
   });
 
   it('the IndexNow key file is the key, and the home page names who publishes the site', async () => {
@@ -181,6 +185,8 @@ describe('a program is told what the pages say, and nothing more', () => {
 > ${SITE.description} ${SITE.disclaimer}
 
 ${AGENT_NOTES} Every figure below states its source and the time it was read; a figure that was not read is left out.
+
+${SUPPORT_NOTES}
 
 ${order.map((r) => pageMarkdown(r, null).trimEnd()).join('\n\n---\n\n')}
 `);
